@@ -4,11 +4,10 @@
 //! reading a terminal and an agent parsing output. `acrypto mcp` turns the
 //! binary into a Model Context Protocol server.
 
-mod json;
 mod mcp;
 mod ops;
 
-use json::Json;
+use ac_json::Json;
 use std::io::Read;
 use std::process::ExitCode;
 
@@ -557,7 +556,7 @@ mod tests {
         assert!(human.contains("must observe"));
 
         let machine = run(&["recommend", "encrypt-message", "--fips", "--json"]).unwrap();
-        let parsed = json::parse(&machine).unwrap();
+        let parsed = ac_json::parse(&machine).unwrap();
         assert_eq!(
             parsed.get("recommended").unwrap().as_str(),
             Some("aes-256-gcm")
@@ -631,7 +630,7 @@ mod tests {
     #[test]
     fn exported_json_parses() {
         let text = run(&["ontology", "export", "json"]).unwrap();
-        let parsed = json::parse(&text).unwrap();
+        let parsed = ac_json::parse(&text).unwrap();
         match parsed.get("algorithms").unwrap() {
             Json::Array(items) => assert_eq!(items.len(), ac_ontology::all().len()),
             _ => panic!("expected an array"),
@@ -646,7 +645,7 @@ mod tests {
         assert!(out.contains("integrity check passed"));
 
         let one = run(&["selftest", "aes-256-gcm", "--json"]).unwrap();
-        assert!(json::parse(&one)
+        assert!(ac_json::parse(&one)
             .unwrap()
             .get("passed")
             .unwrap()
@@ -662,7 +661,7 @@ mod tests {
         assert!(human.contains("NOT been submitted"));
 
         let machine = run(&["capabilities", "--json"]).unwrap();
-        assert!(json::parse(&machine).is_ok());
+        assert!(ac_json::parse(&machine).is_ok());
     }
 
     #[test]

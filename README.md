@@ -202,6 +202,14 @@ $ acrypto capabilities
 
 ---
 
+## Supplying test vectors
+
+Two algorithms are `experimental` only because nobody has checked them against
+values from another implementation. That is a missing *file*, not missing code:
+drop an ACVP or RFC vector file into `testvectors/` and the matching test starts
+running. Without one it skips and says so. `testvectors/README.md` has the
+format, the field names, and `jq` recipes for converting ACVP output.
+
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what

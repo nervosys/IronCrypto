@@ -135,6 +135,10 @@ registered, so adding an algorithm without a self-test fails CI.
 | RSA-PSS | MGF1 against an in-test transcription of RFC 8017 B.2.1; the encoder against the separately written verifier; the CAST signatures are implementation-pinned |
 | RSA keys | the identity `(m^e)^d = m (mod n)`, which holds only if `p` and `q` are prime and `d` inverts `e`; Miller-Rabin is checked against Carmichael numbers, which a Fermat test would pass |
 
+Where a row says a vector is missing, supplying one needs no code: drop a file
+in `testvectors/` and the matching test starts checking against it. See
+`testvectors/README.md` for the format and for how to convert ACVP output.
+
 The DRBG, PBKDF2, and RSA rows are the weak ones, and are called out as such
 rather than being papered over. NIST's ACVP RSA vectors are not reproducible
 offline; the pinned signatures there catch regression rather than establishing

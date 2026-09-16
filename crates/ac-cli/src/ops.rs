@@ -5,8 +5,8 @@
 //! That is deliberate: a human debugging an agent's behaviour should be able to
 //! reproduce it from a shell.
 
-use crate::json::Json;
 use ac_core::traits::{Aead, Digest, Mac};
+use ac_json::Json;
 use ac_ontology::select::{recommend, Intent, NoRecommendation, Policy};
 use ac_ontology::{Entry, ImplStatus};
 
@@ -626,7 +626,7 @@ mod tests {
     fn entry_json_round_trips_through_the_parser() {
         for e in ac_ontology::all() {
             let text = entry_json(e).to_string();
-            let parsed = crate::json::parse(&text)
+            let parsed = ac_json::parse(&text)
                 .unwrap_or_else(|err| panic!("{} produced invalid JSON: {err}", e.id));
             assert_eq!(parsed.get("id").unwrap().as_str(), Some(e.id));
         }

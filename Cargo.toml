@@ -12,6 +12,8 @@ members = [
     "crates/ac-pkix",
     "crates/ac-mlkem",
     "crates/ac-mldsa",
+    "crates/ac-json",
+    "crates/ac-vectors",
     "crates/ac-fips",
     "crates/ac-ontology",
     "crates/agentic-crypto",
@@ -40,6 +42,8 @@ ac-rsa = { path = "crates/ac-rsa", version = "0.1.0", default-features = false }
 ac-pkix = { path = "crates/ac-pkix", version = "0.1.0", default-features = false }
 ac-mlkem = { path = "crates/ac-mlkem", version = "0.1.0", default-features = false }
 ac-mldsa = { path = "crates/ac-mldsa", version = "0.1.0", default-features = false }
+ac-json = { path = "crates/ac-json", version = "0.1.0" }
+ac-vectors = { path = "crates/ac-vectors", version = "0.1.0" }
 ac-fips = { path = "crates/ac-fips", version = "0.1.0", default-features = false }
 ac-ontology = { path = "crates/ac-ontology", version = "0.1.0", default-features = false }
 agentic-crypto = { path = "crates/agentic-crypto", version = "0.1.0", default-features = false }

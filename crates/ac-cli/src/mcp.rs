@@ -18,8 +18,8 @@
 //! the enum of valid `class` values an agent sees is the enum the query engine
 //! actually accepts.
 
-use crate::json::{parse, Json};
 use crate::ops;
+use ac_json::{parse, Json};
 use std::io::{BufRead, Write};
 
 /// The MCP protocol revision this server implements.

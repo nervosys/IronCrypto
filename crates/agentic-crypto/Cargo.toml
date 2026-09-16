@@ -27,3 +27,8 @@ ac-pkix = { workspace = true }
 ac-mlkem = { workspace = true }
 ac-fips = { workspace = true }
 ac-ontology = { workspace = true }
+
+# The vector harness is test-only: it reads files that are not in the
+# repository, and the library must not depend on their presence.
+[dev-dependencies]
+ac-vectors = { workspace = true }

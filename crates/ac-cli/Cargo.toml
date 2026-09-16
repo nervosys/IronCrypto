@@ -18,6 +18,7 @@ path = "src/main.rs"
 agentic-crypto = { workspace = true, features = ["std"] }
 ac-ontology = { workspace = true, features = ["std"] }
 ac-core = { workspace = true, features = ["std"] }
+ac-json = { workspace = true }
 ac-hash = { workspace = true, features = ["std"] }
 ac-mac = { workspace = true, features = ["std"] }
 ac-cipher = { workspace = true, features = ["std"] }

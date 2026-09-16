@@ -1,10 +1,17 @@
 //! A minimal JSON reader and writer.
 //!
-//! The MCP server speaks JSON-RPC, which means the CLI needs to *parse* JSON,
-//! not merely emit it. Rather than take a dependency and break the workspace's
-//! zero-dependency property at the last mile, this is a complete
-//! [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) parser in about two
-//! hundred lines. It is exercised by round-trip and malformed-input tests.
+//! The MCP server speaks JSON-RPC, which means something in this workspace has
+//! to *parse* JSON, not merely emit it. Rather than take a dependency and break
+//! the zero-dependency property at the last mile, this is a complete
+//! [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) parser in a few hundred
+//! lines, exercised by round-trip and malformed-input tests.
+//!
+//! It lived inside the CLI binary until the test-vector harness needed it too.
+//! Parsing JSON is not a command-line concern, and a binary crate is a place
+//! code goes to become unreachable.
+
+#![deny(missing_docs)]
+#![warn(clippy::all)]
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
