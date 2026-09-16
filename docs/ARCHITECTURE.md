@@ -68,11 +68,37 @@ with recovery semantics attached, so a caller can distinguish "retry",
 - **Tag comparison** goes through `ac_core::ct::verify`, which folds differences
   into an accumulator and passes the result through `black_box`.
 
-The cost is throughput. `ac_ontology::runtime::backend()` reports
-`portable-constant-time`, every AES-based entry is marked `performance: slow`,
-and the selector steers away from AES unless you assert hardware support or a
-FIPS requirement. The library tells you about its own slowness rather than
-hiding it.
+The cost is throughput, and it is steep: around 1.4 MiB/s for AES-256.
+
+### ...with an accelerated backend where the CPU offers one
+
+On x86-64 with AES-NI and `PCLMULQDQ`, a second backend is selected at runtime,
+which moves raw AES from roughly 1.4 MiB/s to the low GiB/s and AES-256-GCM to
+around 0.7 GiB/s. Both
+instructions have data-independent latency and touch no tables, so the
+constant-time property is preserved rather than traded away.
+
+Two design choices keep this from becoming a second thing to trust:
+
+* **Key expansion is not duplicated.** The accelerated backend loads the
+  *portable* key schedule into SIMD registers. Expansion happens once per key
+  and is not on the hot path, so a second implementation would buy nothing and
+  risk a divergence — notably for AES-192, whose SIMD key schedule is the
+  fiddliest part of a typical AES-NI implementation.
+* **It is differentially tested, not independently trusted.** Every accelerated
+  path is asserted equal to the portable one, block for block, across all key
+  lengths and every batch boundary; the portable one is validated against the
+  published vectors. The accelerated code is an optimization held to the output
+  of something already known correct.
+
+Accelerating AES alone would have been nearly pointless: the portable GHASH
+costs 128 iterations per block, so it, not the cipher, dominated AES-GCM. That
+is why `PCLMULQDQ` GHASH landed alongside AES-NI rather than after it.
+
+`ac_ontology::runtime::backend()` reports which backend is live, and the
+selector consults it — so on a machine with AES instructions `recommend` picks
+AES-256-GCM, and on one without it picks ChaCha20-Poly1305. The library tells
+you which case you are in rather than assuming.
 
 ### Secrets are erased
 
@@ -104,13 +130,13 @@ behaviour can reproduce it from a shell.
 
 | crate | contents |
 |---|---|
-| `ac-core` | `Error`/`ErrorKind`, the algorithm traits, `ct`, `Zeroizing`, OS entropy, hex/base64 |
+| `ac-core` | `Error`/`ErrorKind`, the algorithm traits, `ct`, `Zeroizing`, OS entropy, CPU detection, hex/base64 |
 | `ac-hash` | SHA-2 (two shared cores, six variants), SHA-3/SHAKE (one sponge) |
 | `ac-mac` | HMAC generic over `Digest`, CMAC generic over `BlockCipher` |
-| `ac-cipher` | GF(2^8) arithmetic, AES, SP 800-38A modes, GCM, ChaCha20, Poly1305 |
+| `ac-cipher` | GF(2^8) arithmetic, AES (portable + AES-NI), SP 800-38A modes, GCM (portable + PCLMULQDQ GHASH), ChaCha20, Poly1305 |
 | `ac-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
 | `ac-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |
-| `ac-ec` | GF(2^255-19) field, scalars mod L, X25519, Ed25519 |
+| `ac-ec` | GF(2^255-19) field, X25519, Ed25519; P-256 Montgomery arithmetic, group law, ECDSA, ECDH |
 | `ac-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
 | `ac-fips` | state machine, approved-mode policy, CAST table, service indicator |
 | `agentic-crypto` | facade, prelude, and the ontology/implementation agreement tests |
@@ -126,7 +152,11 @@ Three layers, each catching what the others cannot:
    boundary; encryption inverts decryption; tampering is rejected; wrong lengths
    are refused; counters carry correctly; `[L]B` is the identity. This catches
    the bugs that vectors miss because vectors use convenient sizes.
-3. **Cross-layer agreement.** The ontology's declared sizes must equal the
+3. **Differential agreement between backends.** Every accelerated path is
+   asserted bit-for-bit equal to the portable one it replaces. This is what
+   makes hand-written SIMD safe to add to a cryptography library: the fast code
+   is never trusted on its own reading.
+4. **Cross-layer agreement.** The ontology's declared sizes must equal the
    implementations' constants; every available entry must have a self-test;
    every relation edge must resolve. This catches documentation drift, which is
    the failure mode a self-describing library is most exposed to.

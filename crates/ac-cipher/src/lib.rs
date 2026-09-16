@@ -30,10 +30,16 @@
 //! belongs here.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
+// Every unsafe operation inside an unsafe fn must be marked explicitly, so the
+// SIMD backends cannot smuggle one in under the function signature.
+#![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::all)]
 
 pub mod aes;
+
 pub mod chacha;
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+mod clmul;
 pub mod gcm;
 pub mod gf;
 pub mod modes;

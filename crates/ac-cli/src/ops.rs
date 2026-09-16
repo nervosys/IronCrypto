@@ -159,11 +159,13 @@ pub fn recommend_json(
     let parsed = Intent::from_id(intent)
         .ok_or_else(|| format!("unknown intent '{intent}'; try one of {}", intent_list()))?;
 
+    // `--aes-hardware` forces the assumption on; otherwise it is detected, so
+    // the recommendation reflects the machine the command is running on.
     let policy = Policy {
         require_fips: fips,
         min_classical_bits: 128,
         min_quantum_bits: if post_quantum { 128 } else { 0 },
-        aes_hardware,
+        aes_hardware: aes_hardware || ac_ontology::runtime::backend().fast_bulk_symmetric(),
     };
 
     match recommend(parsed, policy) {

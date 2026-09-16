@@ -41,8 +41,27 @@ impl GcmLimits {
     pub const RECOMMENDED_NONCE_LEN: usize = 12;
 }
 
+/// Whether GHASH can use the carry-less multiply on this CPU.
+///
+/// Needs `ssse3` for the byte-reversal shuffle as well as `pclmulqdq` for the
+/// multiply itself.
+#[inline]
+pub fn ghash_accelerated() -> bool {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        ac_core::cpu::has_pclmulqdq() && std::arch::is_x86_feature_detected!("ssse3")
+    }
+    #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
+    {
+        false
+    }
+}
+
 /// Multiply `x` by `h` in GF(2^128) using the GCM bit ordering, in place.
-fn ghash_mul(x: &mut [u8; BLOCK_LEN], h: &[u8; BLOCK_LEN]) {
+///
+/// Exposed within the crate so the accelerated backend can be differentially
+/// tested against it.
+pub(crate) fn portable_ghash_mul(x: &mut [u8; BLOCK_LEN], h: &[u8; BLOCK_LEN]) {
     let mut z = [0u8; BLOCK_LEN];
     let mut v = *h;
     for i in 0..128 {
@@ -70,6 +89,13 @@ fn ghash_mul(x: &mut [u8; BLOCK_LEN], h: &[u8; BLOCK_LEN]) {
 struct Ghash {
     h: [u8; BLOCK_LEN],
     acc: [u8; BLOCK_LEN],
+    /// Whether the `PCLMULQDQ` multiply is available. Decided once per value,
+    /// from the CPU alone, so it is not a side channel.
+    ///
+    /// Only exists where an accelerated backend could be compiled in; on other
+    /// targets there is nothing to select between.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    accelerated: bool,
 }
 
 impl Ghash {
@@ -77,7 +103,22 @@ impl Ghash {
         Self {
             h,
             acc: [0u8; BLOCK_LEN],
+            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            accelerated: ghash_accelerated(),
         }
+    }
+
+    /// Multiply the accumulator by `H`, via whichever backend is live.
+    #[inline]
+    fn mul_acc(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if self.accelerated {
+            // SAFETY: `accelerated` is only true when `ghash_accelerated()`
+            // confirmed both `pclmulqdq` and `ssse3`.
+            unsafe { crate::clmul::mul(&mut self.acc, &self.h) };
+            return;
+        }
+        portable_ghash_mul(&mut self.acc, &self.h);
     }
 
     /// Absorb `data`, zero-padding the final partial block.
@@ -88,7 +129,7 @@ impl Ghash {
             for j in 0..BLOCK_LEN {
                 self.acc[j] ^= block[j];
             }
-            ghash_mul(&mut self.acc, &self.h);
+            self.mul_acc();
         }
     }
 
@@ -154,17 +195,22 @@ fn gcm_core<C: BlockCipher>(
         g.update_padded(in_out);
     }
 
-    // CTR starting at inc32(J0).
+    // CTR starting at inc32(J0), batched so an accelerated backend can keep its
+    // pipeline full.
+    const CTR_BATCH: usize = 8;
     let mut counter = j0;
     increment_be32(&mut counter);
-    let mut keystream = [0u8; BLOCK_LEN];
-    for chunk in in_out.chunks_mut(BLOCK_LEN) {
-        keystream.copy_from_slice(&counter);
-        cipher.encrypt_block(&mut keystream)?;
+    let mut keystream = [0u8; BLOCK_LEN * CTR_BATCH];
+    for chunk in in_out.chunks_mut(BLOCK_LEN * CTR_BATCH) {
+        let blocks = chunk.len().div_ceil(BLOCK_LEN);
+        for i in 0..blocks {
+            keystream[i * BLOCK_LEN..(i + 1) * BLOCK_LEN].copy_from_slice(&counter);
+            increment_be32(&mut counter);
+        }
+        cipher.encrypt_blocks(&mut keystream[..blocks * BLOCK_LEN])?;
         for (d, k) in chunk.iter_mut().zip(keystream.iter()) {
             *d ^= k;
         }
-        increment_be32(&mut counter);
     }
     keystream.zeroize();
 

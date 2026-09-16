@@ -127,6 +127,26 @@ pub trait BlockCipher: Algorithm {
 
     /// Decrypt a single block in place.
     fn decrypt_block(&self, block: &mut [u8]) -> Result<()>;
+
+    /// Encrypt a whole number of blocks in place.
+    ///
+    /// The default implementation loops over [`encrypt_block`][Self::encrypt_block].
+    /// Backends with instruction-level parallelism override it: AES-NI has a
+    /// pipelined round instruction, so encrypting eight independent blocks at
+    /// once is several times faster than eight sequential calls. Counter-based
+    /// modes route through here for exactly that reason.
+    ///
+    /// Returns [`crate::ErrorKind::InvalidLength`] if `data` is not a whole
+    /// number of blocks.
+    fn encrypt_blocks(&self, data: &mut [u8]) -> Result<()> {
+        if data.len() % Self::BLOCK_LEN != 0 {
+            return Err(crate::err!(InvalidLength, "batch must be block-aligned"));
+        }
+        for block in data.chunks_mut(Self::BLOCK_LEN) {
+            self.encrypt_block(block)?;
+        }
+        Ok(())
+    }
 }
 
 /// An authenticated cipher with associated data.

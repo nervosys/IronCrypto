@@ -1,201 +1,226 @@
-//! FIPS 197 AES block cipher, in a portable constant-time formulation.
+//! FIPS 197 AES, with a portable constant-time backend and an optional
+//! hardware-accelerated one.
+//!
+//! # Backend selection
+//!
+//! The backend is chosen once, when a key is expanded, and recorded in the
+//! cipher value. On x86-64 with AES-NI that is the accelerated path; everywhere
+//! else it is the portable one. Selection depends only on the CPU, never on key
+//! material, so it leaks nothing.
+//!
+//! Detection is compile-time when the `aes` target feature is already enabled
+//! for the build (`-C target-cpu=native`, say), and runtime otherwise via
+//! `is_x86_feature_detected!`. Under `no_std` only the compile-time path is
+//! available, because runtime detection needs `std`.
+//!
+//! `ac_ontology::runtime::backend()` reports which one is live, so an agent
+//! deciding whether to push a gigabyte through AES-GCM can ask rather than
+//! guess.
+//!
+//! # Trusting the accelerated path
+//!
+//! The portable backend is validated against the FIPS 197 and SP 800-38A
+//! vectors. The accelerated backend is then validated *against the portable
+//! one*, block for block, across every key length and every batch boundary. It
+//! is not an independent reimplementation to be trusted on its own; it is an
+//! optimization held to the output of something already known to be correct.
 
-use crate::gf;
+pub mod portable;
+
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
+pub mod x86;
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    not(feature = "std"),
+    target_feature = "aes"
+))]
+pub mod x86;
+
 use ac_core::traits::{Algorithm, BlockCipher, SelfTest};
-use ac_core::{ensure, Result, Zeroize};
+use ac_core::{ensure, Result};
 
-/// AES block size in bytes.
-pub const BLOCK_LEN: usize = 16;
+pub use portable::BLOCK_LEN;
 
-const MAX_ROUND_KEYS: usize = 15 * BLOCK_LEN;
-
-/// Round-constant sequence for the key schedule, `rcon[i] = x^i` in GF(2^8).
-fn rcon(i: usize) -> u8 {
-    let mut c = 1u8;
-    for _ in 1..i {
-        c = gf::xtime(c);
-    }
-    c
+/// Which implementation a cipher value is using.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    /// Pure Rust, algebraic S-box, no hardware support required.
+    Portable,
+    /// x86-64 AES-NI.
+    Aesni,
 }
 
-/// An expanded AES key schedule, generic over key length.
-///
-/// Dropping the schedule zeroizes it, so round keys never outlive the value.
-#[derive(Clone)]
-struct Schedule {
-    round_keys: [u8; MAX_ROUND_KEYS],
-    rounds: usize,
-}
-
-impl Drop for Schedule {
-    fn drop(&mut self) {
-        self.round_keys.zeroize();
-    }
-}
-
-impl Schedule {
-    fn expand(key: &[u8]) -> Result<Self> {
-        let nk = key.len() / 4;
-        let rounds = match key.len() {
-            16 => 10,
-            24 => 12,
-            32 => 14,
-            _ => {
-                return Err(ac_core::err!(
-                    InvalidLength,
-                    "aes key must be 16, 24, or 32 bytes"
-                ))
-            }
-        };
-        let total_words = (rounds + 1) * 4;
-        let mut rk = [0u8; MAX_ROUND_KEYS];
-        rk[..key.len()].copy_from_slice(key);
-
-        for i in nk..total_words {
-            let mut t = [
-                rk[(i - 1) * 4],
-                rk[(i - 1) * 4 + 1],
-                rk[(i - 1) * 4 + 2],
-                rk[(i - 1) * 4 + 3],
-            ];
-            if i % nk == 0 {
-                t.rotate_left(1);
-                for b in t.iter_mut() {
-                    *b = gf::sbox(*b);
-                }
-                t[0] ^= rcon(i / nk);
-            } else if nk > 6 && i % nk == 4 {
-                for b in t.iter_mut() {
-                    *b = gf::sbox(*b);
-                }
-            }
-            for j in 0..4 {
-                rk[i * 4 + j] = rk[(i - nk) * 4 + j] ^ t[j];
-            }
+impl Backend {
+    /// Stable identifier, matching `ac_ontology::runtime::Backend`.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Portable => "portable-constant-time",
+            Self::Aesni => "aes-ni",
         }
-        Ok(Self {
-            round_keys: rk,
-            rounds,
-        })
+    }
+}
+
+/// Whether the AES-NI backend is usable on this CPU.
+#[inline]
+pub fn aesni_available() -> bool {
+    // Detection lives in `ac-core` so the ontology can report the same answer
+    // without depending on this crate.
+    ac_core::cpu::has_aes()
+}
+
+/// The backend this build will use for AES.
+pub fn active_backend() -> Backend {
+    if aesni_available() {
+        Backend::Aesni
+    } else {
+        Backend::Portable
+    }
+}
+
+/// The key schedule, in whichever representation the active backend wants.
+///
+/// The portable variant holds 240 bytes of round keys and the SIMD variant
+/// holds register state, so the two differ in size. Boxing the larger one would
+/// need an allocator, which this crate deliberately does not require, and a key
+/// schedule is constructed once per key rather than passed around by value —
+/// so the size difference is accepted.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
+enum Keys {
+    Portable(portable::Schedule),
+    #[cfg(any(
+        all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"),
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            not(feature = "std"),
+            target_feature = "aes"
+        )
+    ))]
+    Aesni(x86::Keys),
+}
+
+/// Expand a key using whichever backend is active.
+fn expand(key: &[u8]) -> Result<Keys> {
+    // The portable schedule is always built: the accelerated backend consumes
+    // its output rather than duplicating the expansion.
+    let sched = portable::Schedule::expand(key)?;
+
+    #[cfg(any(
+        all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"),
+        all(
+            any(target_arch = "x86", target_arch = "x86_64"),
+            not(feature = "std"),
+            target_feature = "aes"
+        )
+    ))]
+    if aesni_available() {
+        // SAFETY: `aesni_available()` established the `aes` target feature.
+        let keys = unsafe { x86::Keys::load(&sched) };
+        return Ok(Keys::Aesni(keys));
+    }
+
+    Ok(Keys::Portable(sched))
+}
+
+impl Keys {
+    #[inline]
+    fn encrypt_block(&self, block: &mut [u8]) -> Result<()> {
+        match self {
+            Keys::Portable(s) => portable::encrypt_block(s, block),
+            #[cfg(any(
+                all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"),
+                all(
+                    any(target_arch = "x86", target_arch = "x86_64"),
+                    not(feature = "std"),
+                    target_feature = "aes"
+                )
+            ))]
+            // SAFETY: this variant is only constructed after a feature check.
+            Keys::Aesni(k) => unsafe { x86::encrypt_block(k, block) },
+        }
     }
 
     #[inline]
-    fn round_key(&self, round: usize) -> &[u8] {
-        &self.round_keys[round * BLOCK_LEN..(round + 1) * BLOCK_LEN]
-    }
-}
-
-#[inline]
-fn add_round_key(state: &mut [u8; BLOCK_LEN], rk: &[u8]) {
-    for i in 0..BLOCK_LEN {
-        state[i] ^= rk[i];
-    }
-}
-
-#[inline]
-fn sub_bytes(state: &mut [u8; BLOCK_LEN]) {
-    for b in state.iter_mut() {
-        *b = gf::sbox(*b);
-    }
-}
-
-#[inline]
-fn inv_sub_bytes(state: &mut [u8; BLOCK_LEN]) {
-    for b in state.iter_mut() {
-        *b = gf::inv_sbox(*b);
-    }
-}
-
-/// ShiftRows on the column-major AES state: row `r` rotates left by `r`.
-#[inline]
-fn shift_rows(s: &mut [u8; BLOCK_LEN]) {
-    let t = *s;
-    for c in 0..4 {
-        for r in 0..4 {
-            s[c * 4 + r] = t[((c + r) % 4) * 4 + r];
+    fn decrypt_block(&self, block: &mut [u8]) -> Result<()> {
+        match self {
+            Keys::Portable(s) => portable::decrypt_block(s, block),
+            #[cfg(any(
+                all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"),
+                all(
+                    any(target_arch = "x86", target_arch = "x86_64"),
+                    not(feature = "std"),
+                    target_feature = "aes"
+                )
+            ))]
+            // SAFETY: this variant is only constructed after a feature check.
+            Keys::Aesni(k) => unsafe { x86::decrypt_block(k, block) },
         }
     }
-}
 
-#[inline]
-fn inv_shift_rows(s: &mut [u8; BLOCK_LEN]) {
-    let t = *s;
-    for c in 0..4 {
-        for r in 0..4 {
-            s[((c + r) % 4) * 4 + r] = t[c * 4 + r];
+    #[inline]
+    fn encrypt_blocks(&self, data: &mut [u8]) -> Result<()> {
+        match self {
+            Keys::Portable(s) => {
+                ensure!(
+                    data.len() % BLOCK_LEN == 0,
+                    InvalidLength,
+                    "aes batch must be block-aligned"
+                );
+                for block in data.chunks_exact_mut(BLOCK_LEN) {
+                    portable::encrypt_block(s, block)?;
+                }
+                Ok(())
+            }
+            #[cfg(any(
+                all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"),
+                all(
+                    any(target_arch = "x86", target_arch = "x86_64"),
+                    not(feature = "std"),
+                    target_feature = "aes"
+                )
+            ))]
+            // SAFETY: this variant is only constructed after a feature check.
+            Keys::Aesni(k) => unsafe { x86::encrypt_blocks(k, data) },
         }
     }
-}
 
-#[inline]
-fn mix_columns(s: &mut [u8; BLOCK_LEN]) {
-    for c in 0..4 {
-        let col = [s[c * 4], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]];
-        s[c * 4] = gf::xtime(col[0]) ^ (gf::xtime(col[1]) ^ col[1]) ^ col[2] ^ col[3];
-        s[c * 4 + 1] = col[0] ^ gf::xtime(col[1]) ^ (gf::xtime(col[2]) ^ col[2]) ^ col[3];
-        s[c * 4 + 2] = col[0] ^ col[1] ^ gf::xtime(col[2]) ^ (gf::xtime(col[3]) ^ col[3]);
-        s[c * 4 + 3] = (gf::xtime(col[0]) ^ col[0]) ^ col[1] ^ col[2] ^ gf::xtime(col[3]);
+    fn backend(&self) -> Backend {
+        match self {
+            Keys::Portable(_) => Backend::Portable,
+            #[cfg(any(
+                all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"),
+                all(
+                    any(target_arch = "x86", target_arch = "x86_64"),
+                    not(feature = "std"),
+                    target_feature = "aes"
+                )
+            ))]
+            Keys::Aesni(_) => Backend::Aesni,
+        }
     }
-}
-
-#[inline]
-fn inv_mix_columns(s: &mut [u8; BLOCK_LEN]) {
-    for c in 0..4 {
-        let col = [s[c * 4], s[c * 4 + 1], s[c * 4 + 2], s[c * 4 + 3]];
-        s[c * 4] =
-            gf::mul(col[0], 14) ^ gf::mul(col[1], 11) ^ gf::mul(col[2], 13) ^ gf::mul(col[3], 9);
-        s[c * 4 + 1] =
-            gf::mul(col[0], 9) ^ gf::mul(col[1], 14) ^ gf::mul(col[2], 11) ^ gf::mul(col[3], 13);
-        s[c * 4 + 2] =
-            gf::mul(col[0], 13) ^ gf::mul(col[1], 9) ^ gf::mul(col[2], 14) ^ gf::mul(col[3], 11);
-        s[c * 4 + 3] =
-            gf::mul(col[0], 11) ^ gf::mul(col[1], 13) ^ gf::mul(col[2], 9) ^ gf::mul(col[3], 14);
-    }
-}
-
-fn encrypt_with(sched: &Schedule, block: &mut [u8]) -> Result<()> {
-    ensure!(block.len() == BLOCK_LEN, InvalidLength, "aes block");
-    let mut s = [0u8; BLOCK_LEN];
-    s.copy_from_slice(block);
-    add_round_key(&mut s, sched.round_key(0));
-    for r in 1..sched.rounds {
-        sub_bytes(&mut s);
-        shift_rows(&mut s);
-        mix_columns(&mut s);
-        add_round_key(&mut s, sched.round_key(r));
-    }
-    sub_bytes(&mut s);
-    shift_rows(&mut s);
-    add_round_key(&mut s, sched.round_key(sched.rounds));
-    block.copy_from_slice(&s);
-    s.zeroize();
-    Ok(())
-}
-
-fn decrypt_with(sched: &Schedule, block: &mut [u8]) -> Result<()> {
-    ensure!(block.len() == BLOCK_LEN, InvalidLength, "aes block");
-    let mut s = [0u8; BLOCK_LEN];
-    s.copy_from_slice(block);
-    add_round_key(&mut s, sched.round_key(sched.rounds));
-    for r in (1..sched.rounds).rev() {
-        inv_shift_rows(&mut s);
-        inv_sub_bytes(&mut s);
-        add_round_key(&mut s, sched.round_key(r));
-        inv_mix_columns(&mut s);
-    }
-    inv_shift_rows(&mut s);
-    inv_sub_bytes(&mut s);
-    add_round_key(&mut s, sched.round_key(0));
-    block.copy_from_slice(&s);
-    s.zeroize();
-    Ok(())
 }
 
 macro_rules! aes_variant {
     ($name:ident, $id:literal, $disp:literal, $keylen:literal, $kat_key:literal, $kat_ct:literal) => {
         #[doc = concat!("FIPS 197 ", $disp, ".")]
         #[derive(Clone)]
-        pub struct $name(Schedule);
+        pub struct $name(Keys);
+
+        impl $name {
+            /// Which backend this instance is using.
+            pub fn backend(&self) -> Backend {
+                self.0.backend()
+            }
+
+            /// Force the portable backend, whatever the CPU supports.
+            ///
+            /// Exists so the accelerated path can be differentially tested
+            /// against the portable one in the same process.
+            pub fn new_portable(key: &[u8]) -> Result<Self> {
+                ensure!(key.len() == $keylen, InvalidLength, $id);
+                Ok(Self(Keys::Portable(portable::Schedule::expand(key)?)))
+            }
+        }
 
         impl Algorithm for $name {
             const ID: &'static str = $id;
@@ -208,15 +233,19 @@ macro_rules! aes_variant {
 
             fn new(key: &[u8]) -> Result<Self> {
                 ensure!(key.len() == $keylen, InvalidLength, $id);
-                Ok(Self(Schedule::expand(key)?))
+                Ok(Self(expand(key)?))
             }
 
             fn encrypt_block(&self, block: &mut [u8]) -> Result<()> {
-                encrypt_with(&self.0, block)
+                self.0.encrypt_block(block)
             }
 
             fn decrypt_block(&self, block: &mut [u8]) -> Result<()> {
-                decrypt_with(&self.0, block)
+                self.0.decrypt_block(block)
+            }
+
+            fn encrypt_blocks(&self, data: &mut [u8]) -> Result<()> {
+                self.0.encrypt_blocks(data)
             }
         }
 
@@ -236,6 +265,14 @@ macro_rules! aes_variant {
                 cipher.decrypt_block(&mut block)?;
                 let plain: [u8; 16] = core::array::from_fn(|i| (i * 0x11) as u8);
                 ensure!(ac_core::ct::verify(&plain, &block), SelfTestFailed, $id);
+
+                // The self-test must cover whichever backend is actually live,
+                // and the portable one regardless, so a CPU-dependent fault
+                // cannot pass unnoticed.
+                let reference = Self::new_portable(&key)?;
+                let mut a: [u8; 16] = core::array::from_fn(|i| (i * 0x11) as u8);
+                reference.encrypt_block(&mut a)?;
+                ensure!(ac_core::ct::verify(&want, &a), SelfTestFailed, $id);
                 Ok(())
             }
         }
@@ -335,6 +372,75 @@ mod tests {
         assert!(Aes256::new(&[0u8; 16]).is_err());
         let c = Aes128::new(&[0u8; 16]).unwrap();
         assert!(c.encrypt_block(&mut [0u8; 15]).is_err());
+        assert!(c.encrypt_blocks(&mut [0u8; 17]).is_err());
+    }
+
+    /// Whichever backend is active must agree with the portable one exactly.
+    /// On a CPU without AES-NI this compares the portable backend with itself,
+    /// which is vacuous but harmless; on one with it, this is the check that
+    /// makes the acceleration trustworthy.
+    #[test]
+    fn active_backend_agrees_with_portable() {
+        for key_len in [16usize, 24, 32] {
+            let key: Vec<u8> = (0..key_len).map(|i| (i * 11 + 3) as u8).collect();
+
+            macro_rules! compare {
+                ($ty:ty) => {{
+                    let fast = <$ty>::new(&key).unwrap();
+                    let slow = <$ty>::new_portable(&key).unwrap();
+                    for seed in 0..32u8 {
+                        let original: [u8; 16] = core::array::from_fn(|i| seed ^ (i as u8 * 17));
+                        let mut a = original;
+                        let mut b = original;
+                        fast.encrypt_block(&mut a).unwrap();
+                        slow.encrypt_block(&mut b).unwrap();
+                        assert_eq!(a, b, "encrypt, key_len {}", key_len);
+
+                        let mut a = original;
+                        let mut b = original;
+                        fast.decrypt_block(&mut a).unwrap();
+                        slow.decrypt_block(&mut b).unwrap();
+                        assert_eq!(a, b, "decrypt, key_len {}", key_len);
+                    }
+                }};
+            }
+            match key_len {
+                16 => compare!(Aes128),
+                24 => compare!(Aes192),
+                _ => compare!(Aes256),
+            }
+        }
+    }
+
+    /// The batch path must produce the same bytes as repeated single-block
+    /// calls, at every length including the ones that straddle the eight-block
+    /// boundary.
+    #[test]
+    fn batch_matches_single_block() {
+        let c = Aes256::new(&[0x2bu8; 32]).unwrap();
+        for blocks in 0..20usize {
+            let data: Vec<u8> = (0..blocks * BLOCK_LEN).map(|i| (i * 7) as u8).collect();
+
+            let mut batched = data.clone();
+            c.encrypt_blocks(&mut batched).unwrap();
+
+            let mut singly = data.clone();
+            for block in singly.chunks_exact_mut(BLOCK_LEN) {
+                c.encrypt_block(block).unwrap();
+            }
+            assert_eq!(batched, singly, "{blocks} blocks");
+        }
+    }
+
+    #[test]
+    fn backend_is_reported_consistently() {
+        let c = Aes128::new(&[0u8; 16]).unwrap();
+        assert_eq!(c.backend(), active_backend());
+        assert_eq!(
+            Aes128::new_portable(&[0u8; 16]).unwrap().backend(),
+            Backend::Portable
+        );
+        assert_eq!(Backend::Portable.id(), "portable-constant-time");
     }
 
     #[test]

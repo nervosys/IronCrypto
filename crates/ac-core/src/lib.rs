@@ -8,6 +8,7 @@
 //! * [`Zeroizing`] — scope-bound secret erasure with a compiler-fence barrier.
 //! * [`traits`] — the object-safe algorithm contracts (`Digest`, `Mac`, `Aead`, …).
 //! * [`codec`] — hex / base64 encoding used by the agent-facing surfaces.
+//! * [`cpu`] — CPU feature detection, shared by the backends and the ontology.
 //! * [`entropy`] — OS entropy acquisition (SP 800-90B conditioned input).
 //!
 //! Every public function in this crate is total: it returns `Result` rather than
@@ -19,6 +20,7 @@
 #![warn(clippy::all)]
 
 pub mod codec;
+pub mod cpu;
 pub mod ct;
 pub mod entropy;
 pub mod traits;

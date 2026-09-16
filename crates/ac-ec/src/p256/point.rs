@@ -476,11 +476,8 @@ mod tests {
         bad[64] ^= 1;
         assert!(AffinePoint::from_sec1(&bad).is_none());
 
-        // An x with no corresponding y.
-        let mut bad = g.to_compressed();
-        bad[1] ^= 0xff;
-        // Roughly half of all x values are not on the curve; find one that is
-        // definitely rejected.
+        // An x with no corresponding y. Roughly half of all x values are not
+        // on the curve, so search for one that is definitely rejected.
         let mut rejected_one = false;
         for tweak in 1..32u8 {
             let mut probe = g.to_compressed();

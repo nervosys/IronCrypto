@@ -159,6 +159,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
+| Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
 
 ## What isn't — and why that's written down
 
@@ -167,6 +168,8 @@ The ontology registers algorithms this library does **not** provide, marked
 
 - **P-384, P-521, RSA** — `planned`. P-256 covers the overwhelming majority of
   deployed use, but a CNSA-aligned profile wants P-384 and legacy PKI wants RSA.
+- **ARMv8 crypto extensions** — `planned`. Apple Silicon and modern ARM servers
+  have AES instructions this build does not yet use.
 - **ML-KEM, ML-DSA** (FIPS 203/204) — `planned`. No post-quantum schemes yet.
 - **Argon2id** — `planned`. PBKDF2 is available and approved, but it is not
   memory-hard.
@@ -179,7 +182,7 @@ $ acrypto capabilities
   [x] zero-dependencies
   [x] constant-time-symmetric
   [x] approved-asymmetric
-  [ ] hardware-acceleration
+  [x] hardware-acceleration      # on this machine; portable elsewhere
   [ ] fips-validated
   [ ] post-quantum
 ```
@@ -194,14 +197,33 @@ known-answer tests, a latching error state, service indicators) and what
 validation would still require. `acrypto capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.
 
-**The portable backend is slow.** AES computes its S-box algebraically and
-GHASH multiplies bit by bit, so neither indexes memory with a secret — the
-cache-timing channel that table-driven AES leaves open is closed by
-construction. The cost is throughput: expect single-digit MB/s for AES, not the
-GB/s an AES-NI backend delivers. The ontology marks every AES-based algorithm
-`performance: slow`, and `recommend` will steer you to ChaCha20-Poly1305 unless
-you pass `--fips` or `--aes-hardware`. If you need bulk AES throughput today,
-use a hardware-backed module.
+**Throughput depends on the CPU, and the library tells you which case you are
+in.** On x86-64 with AES-NI and `PCLMULQDQ` the accelerated backend is selected
+automatically. Everywhere else — ARM, RISC-V, WebAssembly, any bare-metal target
+— AES falls back to the portable path, which computes its S-box algebraically
+and multiplies GHASH bit by bit so that neither indexes memory with a secret.
+That closes the cache-timing channel table-driven AES leaves open, and it is
+slow:
+
+| | portable | AES-NI + PCLMULQDQ |
+|---|---|---|
+| AES-256, raw blocks | ~1.4 MiB/s | ~1.5–3 GiB/s |
+| AES-256-GCM | ~1 MiB/s | ~0.7 GiB/s |
+| ChaCha20-Poly1305 | ~0.2–0.4 GiB/s | unchanged (no AES path) |
+
+Indicative figures from a Ryzen 9 9900X, and they move by a factor of two
+between runs depending on clocks and load — treat them as orders of magnitude,
+not benchmarks. Reproduce with `cargo test --release -p ac-cipher --test
+throughput -- --ignored --nocapture`.
+
+This is why `recommend` asks the CPU rather than assuming: without AES
+instructions it steers you to ChaCha20-Poly1305, and with them it picks
+AES-256-GCM, which is then the faster of the two. `ac_ontology::runtime::backend()`
+reports which backend is live.
+
+The accelerated paths are not independently trusted — they are differentially
+tested against the portable ones, block for block, and the portable ones are
+validated against the FIPS 197, SP 800-38A, and GCM specification vectors.
 
 **This code has not been independently audited.** It is correct against its
 test vectors; that is not the same as being reviewed by cryptographers. See

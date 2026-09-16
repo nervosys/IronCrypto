@@ -200,7 +200,14 @@ impl ImplStatus {
     }
 }
 
-/// Rough throughput expectation for the portable backend.
+/// Rough throughput expectation on the **portable** backend.
+///
+/// This is deliberately a static, backend-independent property: the same
+/// algorithm is `Slow` on a microcontroller and fast on a server with AES-NI,
+/// and an entry cannot be both. Consult
+/// [`runtime::backend()`][crate::runtime::backend] for what the machine in
+/// front of you will actually do — a `Slow` AES entry on a
+/// `HardwareAccelerated` backend runs at GB/s, not MB/s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Performance {
     /// Fast enough for bulk data on any target.

@@ -18,9 +18,10 @@ reproduction if you have one.
 
 ### In scope
 
-- **Cache-timing and address-bus leakage.** AES computes its S-box
-  algebraically; GHASH multiplies bit by bit; neither indexes memory with a
-  secret. Curve25519 uses constant-time ladders and complete formulas. Tag
+- **Cache-timing and address-bus leakage.** The portable AES computes its S-box
+  algebraically and GHASH multiplies bit by bit, so neither indexes memory with
+  a secret. The accelerated backend uses `AESENC` and `PCLMULQDQ`, single
+  instructions with data-independent latency and no table at all. Curve25519 uses constant-time ladders and complete formulas. Tag
   comparison is constant time.
 - **Memory disclosure after use.** Secrets are wrapped in `Zeroizing`, which
   wipes on drop with volatile writes plus a compiler fence. AEAD decryption
@@ -52,7 +53,7 @@ reproduction if you have one.
 |---|---|
 | Limited asymmetric coverage | P-256 ECDSA and ECDH are implemented. P-384, P-521, and RSA are not. |
 | No post-quantum schemes | ML-KEM and ML-DSA are registered as planned. X25519, Ed25519, and P-256 all fall to Shor. |
-| Slow symmetric throughput | The portable backend trades speed for the absence of secret-dependent memory access. Single-digit MB/s for AES. |
+| Slow symmetric throughput off x86-64 | The portable backend trades speed for the absence of secret-dependent memory access: single-digit MB/s for AES. x86-64 with AES-NI uses the accelerated path instead. |
 | PBKDF2 is not memory-hard | It is the only *approved* password KDF, not the strongest one. Argon2id is planned. |
 | Two weak vector sources | The CTR_DRBG and PBKDF2 known-answer tests are property-based rather than CAVP-derived. Documented in `docs/FIPS.md`. |
 

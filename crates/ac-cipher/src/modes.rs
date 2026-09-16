@@ -22,19 +22,32 @@ pub fn ctr_xor<C: BlockCipher>(cipher: &C, iv: &[u8], data: &mut [u8]) -> Result
     );
     let mut counter = [0u8; BLOCK_LEN];
     counter.copy_from_slice(iv);
-    let mut keystream = [0u8; BLOCK_LEN];
 
-    for chunk in data.chunks_mut(BLOCK_LEN) {
-        keystream.copy_from_slice(&counter);
-        cipher.encrypt_block(&mut keystream)?;
+    // Counter blocks are generated in batches so an accelerated backend can
+    // encrypt them in parallel; on the portable backend the batch size only
+    // affects the size of this scratch buffer.
+    let mut keystream = [0u8; BLOCK_LEN * CTR_BATCH];
+
+    for chunk in data.chunks_mut(BLOCK_LEN * CTR_BATCH) {
+        let blocks = chunk.len().div_ceil(BLOCK_LEN);
+        for i in 0..blocks {
+            keystream[i * BLOCK_LEN..(i + 1) * BLOCK_LEN].copy_from_slice(&counter);
+            increment_be(&mut counter);
+        }
+        cipher.encrypt_blocks(&mut keystream[..blocks * BLOCK_LEN])?;
         for (d, k) in chunk.iter_mut().zip(keystream.iter()) {
             *d ^= k;
         }
-        increment_be(&mut counter);
     }
     keystream.zeroize();
     Ok(())
 }
+
+/// How many counter blocks are generated per batch.
+///
+/// Matches the AES-NI backend's parallel width so a batch fills its pipeline
+/// exactly.
+const CTR_BATCH: usize = 8;
 
 /// Increment a big-endian counter block in place, with wraparound.
 #[inline]

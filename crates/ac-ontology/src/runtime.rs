@@ -13,10 +13,12 @@ pub enum Backend {
     /// AES computes its S-box algebraically and GHASH multiplies bit by bit, so
     /// neither indexes memory with a secret. Correct and portable; not fast.
     PortableConstantTime,
-    /// A hardware-accelerated backend (AES-NI, ARMv8 crypto extensions).
+    /// Hardware-accelerated: x86-64 AES-NI for the cipher and `PCLMULQDQ` for
+    /// GHASH.
     ///
-    /// Not yet implemented; the variant exists so consumers can already match
-    /// on it.
+    /// Selected automatically when the CPU supports both. The accelerated
+    /// paths are differentially tested against the portable ones, so this is a
+    /// speed choice rather than a trust choice.
     HardwareAccelerated,
 }
 
@@ -35,9 +37,20 @@ impl Backend {
     }
 }
 
-/// The backend this build uses.
-pub const fn backend() -> Backend {
-    Backend::PortableConstantTime
+/// The backend this build is using, determined from the CPU.
+///
+/// This is a runtime query rather than a constant: the same binary reports
+/// `HardwareAccelerated` on a CPU with AES-NI and `PortableConstantTime` on one
+/// without, and an agent sizing a workload needs the answer for the machine it
+/// is actually on.
+pub fn backend() -> Backend {
+    // AES-GCM is only fast when *both* are present: without the carry-less
+    // multiply, GHASH dominates and the AES speedup is invisible.
+    if ac_core::cpu::has_aes() && ac_core::cpu::has_pclmulqdq() {
+        Backend::HardwareAccelerated
+    } else {
+        Backend::PortableConstantTime
+    }
 }
 
 /// A capability an agent may want to check before relying on it.
@@ -75,8 +88,8 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         },
         Capability {
             id: "hardware-acceleration",
-            present: false,
-            note: "No AES-NI or ARMv8 crypto path yet. Expect single-digit MB/s for AES, not GB/s.",
+            present: backend().fast_bulk_symmetric(),
+            note: "x86-64 AES-NI and PCLMULQDQ, selected at runtime and validated against the                    portable backend. Absent on other targets, where AES falls back to the                    constant-time portable path at single-digit MB/s.",
         },
         Capability {
             id: "fips-validated",
@@ -114,10 +127,21 @@ pub fn has(id: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The backend reported must match what the cipher crate actually selects.
+    /// A disagreement would make the ontology lie about the binary it ships in.
     #[test]
-    fn backend_is_the_portable_one() {
-        assert_eq!(backend(), Backend::PortableConstantTime);
-        assert!(!backend().fast_bulk_symmetric());
+    fn backend_matches_the_cpu() {
+        let accelerated = ac_core::cpu::has_aes() && ac_core::cpu::has_pclmulqdq();
+        assert_eq!(
+            backend(),
+            if accelerated {
+                Backend::HardwareAccelerated
+            } else {
+                Backend::PortableConstantTime
+            }
+        );
+        assert_eq!(backend().fast_bulk_symmetric(), accelerated);
+        assert_eq!(has("hardware-acceleration"), accelerated);
     }
 
     #[test]
@@ -137,7 +161,6 @@ mod tests {
     #[test]
     fn unimplemented_capabilities_report_false() {
         assert!(!has("fips-validated"));
-        assert!(!has("hardware-acceleration"));
         assert!(!has("post-quantum"));
     }
 

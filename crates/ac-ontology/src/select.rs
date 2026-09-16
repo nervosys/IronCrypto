@@ -130,6 +130,26 @@ impl Policy {
         aes_hardware: false,
     };
 
+    /// The default policy, with `aes_hardware` filled in from the CPU.
+    ///
+    /// Prefer this over [`Policy::DEFAULT`] in a running program: on a machine
+    /// with AES-NI it flips the authenticated-encryption recommendation from
+    /// ChaCha20-Poly1305 to AES-256-GCM, which is the faster answer there.
+    pub fn detected() -> Policy {
+        Policy {
+            aes_hardware: crate::runtime::backend().fast_bulk_symmetric(),
+            ..Policy::DEFAULT
+        }
+    }
+
+    /// A FIPS policy with `aes_hardware` filled in from the CPU.
+    pub fn detected_fips() -> Policy {
+        Policy {
+            aes_hardware: crate::runtime::backend().fast_bulk_symmetric(),
+            ..Policy::FIPS_APPROVED
+        }
+    }
+
     /// Resist a future quantum adversary.
     pub const POST_QUANTUM: Policy = Policy {
         require_fips: false,
@@ -242,14 +262,14 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
             match (policy.require_fips, policy.aes_hardware, chacha, aes) {
                 (false, false, Some(c), a) => (
                     c,
-                    "ChaCha20-Poly1305 is authenticated, needs no hardware support, and is much \
-                     faster than this build's portable constant-time AES.",
+                    "ChaCha20-Poly1305 is authenticated, needs no hardware support, and on a CPU \
+                     without AES instructions is far faster than the portable constant-time AES.",
                     a,
                     [
                         Some(Rejected {
                             id: "aes-256-gcm",
-                            reason: "Approved and equally secure, but slow without AES hardware in \
-                                     this build.",
+                            reason: "Approved and equally secure, but this CPU has no AES \
+                                     instructions, so the portable backend is far slower.",
                         }),
                         Some(Rejected {
                             id: "aes-cbc",
