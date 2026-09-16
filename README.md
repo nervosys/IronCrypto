@@ -178,9 +178,11 @@ The ontology registers algorithms this library does **not** provide, marked
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
   `SubjectPublicKeyInfo` from any X.509 parser to `ac_pkix::PublicKeyInfo`.
-- **ML-DSA** (FIPS 204) — `planned`. The ring arithmetic and NTT exist in
-  `ac-mldsa` and are checked against schoolbook multiplication, but there is no
-  signature scheme on top of them yet, so nothing is registered as available.
+- **ML-DSA** (FIPS 204) — `planned`. Two layers exist in `ac-mldsa`: the ring
+  arithmetic and NTT, checked against schoolbook multiplication, and the
+  rounding and hint functions of algorithms 35 through 40, checked against the
+  equations that define them. There is no signature scheme on top of them yet,
+  so nothing is registered as available.
   ML-KEM-768 is implemented but
   `experimental`: every component is checked against an independent oracle,
   yet no ACVP vector confirms the assembly interoperates. It is excluded from
