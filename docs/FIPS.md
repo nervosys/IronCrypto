@@ -73,7 +73,7 @@ a mode), `NotApproved`.
 
 ### Cryptographic algorithm self-tests
 
-52 known-answer tests, one per implemented algorithm, run by `initialize()` and
+56 known-answer tests, one per implemented algorithm, run by `initialize()` and
 individually addressable:
 
 ```console
@@ -87,7 +87,7 @@ $ acrypto selftest
   PASS ecdh-p384
   PASS ecdsa-p384-sha384
 
-52 passed, 0 failed; integrity check passed
+56 passed, 0 failed; integrity check passed
 ```
 
 Each test is the algorithm's own `SelfTest::self_test()` — the same code path
@@ -115,6 +115,7 @@ registered, so adding an algorithm without a self-test fails CI.
 | Ed25519 | RFC 8032 §7.1 |
 | BLAKE2b | RFC 7693 Appendix A |
 | cSHAKE | checked against a Keccak written from FIPS 202 in-test and anchored to the published SHA3-256 answer, plus SP 800-185 section 3.3's identity with SHAKE; no published cSHAKE vector is wired in |
+| TupleHash, ParallelHash | rebuilt in-test from SP 800-185 sections 5.1 and 6.2 over cSHAKE, the same way KMAC is |
 | KMAC | rebuilt in-test from SP 800-185's own definition over cSHAKE, so the key encoding, padding width and trailing length are each checked against the specification rather than against a value this code produced |
 | Argon2id, Argon2i, Argon2d | RFC 9106 §5.1–5.3, all three variants |
 | ECDSA P-256 | RFC 6979 A.2.5 (`sample` and `test`), including the published `k` and public key |

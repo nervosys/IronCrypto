@@ -605,6 +605,38 @@ const CSHAKE_P: [Param; 2] = [
     },
 ];
 
+const TUPLEHASH_P: [Param; 2] = [
+    Param {
+        name: "customization",
+        unit: Unit::Bytes,
+        min: 0,
+        max: u64::MAX,
+        recommended: 0,
+        note: "Domain separator.",
+    },
+    Param {
+        name: "output",
+        unit: Unit::Bytes,
+        min: 1,
+        max: u64::MAX,
+        recommended: 32,
+        note: "Bound into the computation, so a short digest is not a prefix of a long one.",
+    },
+];
+
+const PARALLELHASH_P: [Param; 3] = [
+    TUPLEHASH_P[0],
+    Param {
+        name: "block-size",
+        unit: Unit::Bytes,
+        min: 1,
+        max: u64::MAX,
+        recommended: 8192,
+        note: "Part of the computation, not a tuning knob: two block sizes give two digests.",
+    },
+    TUPLEHASH_P[1],
+];
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
 
@@ -1694,6 +1726,119 @@ pub static REGISTRY: &[Entry] = &[
                 deployments. FIPS 186-5 approves EdDSA, but this implementation is not validated; \
                 the ontology reports it as not-approved so approved mode blocks it rather than \
                 implying a validation that does not exist.",
+    },
+    Entry {
+        id: "tuplehash128",
+        name: "TupleHash128",
+        aliases: &["tuplehash"],
+        summary: "Hashes a sequence of strings so that no two sequences collide.",
+        class: Class::Hash,
+        family: "SHA-3",
+        purposes: &[Purpose::Integrity, Purpose::Commitment],
+        strength: Strength { classical: 128, quantum: 64 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &TUPLEHASH_P,
+        constraints: &[Constraint {
+            id: "do-not-concatenate-before-hashing",
+            requirement: "Pass each field as its own element rather than joining them first.",
+            consequence: "Joining loses the boundaries, so (\"abc\", \"d\") and (\"ab\", \"cd\") \
+                          hash alike and a signature over one transfers to the other.",
+            severity: Severity::Serious,
+        }],
+        edges: &[Edge { relation: Relation::BuiltOn, target: "cshake128" }],
+        performance: Performance::Fast,
+        rust_path: "ac_hash::TupleHash128",
+        example: "let mut out = [0u8; 32];\nac_hash::TupleHash128::hash(b\"my app\", &[field_a, field_b], &mut out);",
+        notes: "Reach for this wherever a protocol hashes several fields together. Every element \
+                is length-prefixed, so distinct tuples always hash distinctly, which plain \
+                concatenation cannot promise.",
+    },
+    Entry {
+        id: "tuplehash256",
+        name: "TupleHash256",
+        aliases: &[],
+        summary: "TupleHash at the 256-bit security level.",
+        class: Class::Hash,
+        family: "SHA-3",
+        purposes: &[Purpose::Integrity, Purpose::Commitment],
+        strength: Strength { classical: 256, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &TUPLEHASH_P,
+        constraints: &[Constraint {
+            id: "do-not-concatenate-before-hashing",
+            requirement: "Pass each field as its own element rather than joining them first.",
+            consequence: "Joining loses the boundaries, so distinct field splits hash alike.",
+            severity: Severity::Serious,
+        }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "cshake256" },
+            Edge { relation: Relation::Supersedes, target: "tuplehash128" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ac_hash::TupleHash256",
+        example: "ac_hash::TupleHash256::hash(b\"my app\", &[a, b], &mut out);",
+        notes: "Same construction as TupleHash128 over the wider sponge.",
+    },
+    Entry {
+        id: "parallelhash128",
+        name: "ParallelHash128",
+        aliases: &["parallelhash"],
+        summary: "Hashes fixed-size blocks independently, then hashes their digests.",
+        class: Class::Hash,
+        family: "SHA-3",
+        purposes: &[Purpose::Integrity],
+        strength: Strength { classical: 128, quantum: 64 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &PARALLELHASH_P,
+        constraints: &[Constraint {
+            id: "block-size-is-part-of-the-digest",
+            requirement: "Fix the block size in the protocol and never vary it per message.",
+            consequence: "Two parties using different block sizes compute different digests over \
+                          identical input, and neither can tell why.",
+            severity: Severity::Serious,
+        }],
+        edges: &[Edge { relation: Relation::BuiltOn, target: "cshake128" }],
+        performance: Performance::Fast,
+        rust_path: "ac_hash::ParallelHash128",
+        example: "ac_hash::ParallelHash128::hash(b\"my app\", 8192, data, &mut out);",
+        notes: "The structure allows the per-block work to be spread across cores. This build \
+                does the blocks in order, since the workspace has no threading and a no_std \
+                target has no threads to spread onto, so what it buys here is interoperability \
+                rather than speed. The digest is the same either way.",
+    },
+    Entry {
+        id: "parallelhash256",
+        name: "ParallelHash256",
+        aliases: &[],
+        summary: "ParallelHash at the 256-bit security level.",
+        class: Class::Hash,
+        family: "SHA-3",
+        purposes: &[Purpose::Integrity],
+        strength: Strength { classical: 256, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &PARALLELHASH_P,
+        constraints: &[Constraint {
+            id: "block-size-is-part-of-the-digest",
+            requirement: "Fix the block size in the protocol and never vary it per message.",
+            consequence: "Two parties using different block sizes compute different digests.",
+            severity: Severity::Serious,
+        }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "cshake256" },
+            Edge { relation: Relation::Supersedes, target: "parallelhash128" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ac_hash::ParallelHash256",
+        example: "ac_hash::ParallelHash256::hash(b\"my app\", 8192, data, &mut out);",
+        notes: "Uses a 64-byte inner digest per block where ParallelHash128 uses 32.",
     },
     Entry {
         id: "kmac128",

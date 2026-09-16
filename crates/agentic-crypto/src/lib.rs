@@ -94,6 +94,7 @@ pub mod prelude {
     pub use ac_ec::{Ed25519, X25519};
     pub use ac_hash::Blake2b;
     pub use ac_hash::{CShake128, CShake256};
+    pub use ac_hash::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256};
     pub use ac_hash::{Sha256, Sha384, Sha3_256, Sha3_512, Sha512, Shake128, Shake256};
     pub use ac_kdf::argon2::{argon2, Argon2Params, Variant};
     pub use ac_kdf::{pbkdf2, Hkdf};

@@ -66,6 +66,10 @@ static CASTS: &[Cast] = &[
     ("shake256", ac_hash::Shake256::self_test),
     ("cshake128", ac_hash::CShake128::self_test),
     ("cshake256", ac_hash::CShake256::self_test),
+    ("tuplehash128", ac_hash::TupleHash128::self_test),
+    ("tuplehash256", ac_hash::TupleHash256::self_test),
+    ("parallelhash128", ac_hash::ParallelHash128::self_test),
+    ("parallelhash256", ac_hash::ParallelHash256::self_test),
     // MACs
     ("hmac-sha2-256", ac_mac::HmacSha256::self_test),
     ("hmac-sha2-384", ac_mac::HmacSha384::self_test),
@@ -165,7 +169,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 52;
+pub const TEST_COUNT: usize = 56;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -256,7 +260,7 @@ pub fn integrity_check() -> Result<()> {
 }
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "9d30f744aa77b8c51658d8cd4cd653bdf71b23fc573255f8171755d3d463a62c";
+const INTEGRITY_TAG: &str = "fb27b0a35e6c72a740c24a87b8b78c67baf60bc389ae235450ef188948f60d48";
 
 #[cfg(test)]
 mod tests {
