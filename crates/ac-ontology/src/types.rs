@@ -182,7 +182,25 @@ impl FipsStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ImplStatus {
     /// Implemented, vector-tested, and callable today.
+    ///
+    /// "Vector-tested" is the load-bearing word: the implementation has been
+    /// checked against values produced by something other than itself, so it
+    /// interoperates. See [`ImplStatus::Experimental`] for the case where that
+    /// evidence does not exist.
     Available,
+    /// Implemented and property-tested, but never checked against a published
+    /// vector or a second implementation.
+    ///
+    /// The distinction matters more than it sounds. A cryptographic primitive
+    /// can be internally consistent — encrypt and decrypt round-trip, every
+    /// component behaves — and still compute something no other implementation
+    /// agrees with, because one constant or one byte order is wrong. Such a
+    /// build passes every test you can write against it alone.
+    ///
+    /// Anything marked this way is safe to experiment with and unsafe to
+    /// interoperate with. It is excluded from the FIPS approved mode and from
+    /// [`crate::select::recommend`] regardless of what its `fips` field says.
+    Experimental,
     /// Specified in the ontology, not yet implemented.
     Planned,
     /// Deliberately excluded; see the entry's `notes`.
@@ -194,6 +212,7 @@ impl ImplStatus {
     pub const fn id(self) -> &'static str {
         match self {
             Self::Available => "available",
+            Self::Experimental => "experimental",
             Self::Planned => "planned",
             Self::Excluded => "excluded",
         }

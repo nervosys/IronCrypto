@@ -89,6 +89,23 @@ const HASH_TRANSCRIPT: Constraint = Constraint {
     severity: Severity::Serious,
 };
 
+/// The nonce statement for a misuse-resistant AEAD.
+///
+/// Every AEAD in the registry must say something about nonce reuse, because it
+/// is the question that decides whether a design is safe. For GCM and
+/// ChaCha20-Poly1305 the answer is the critical `unique-nonce-per-key` rule.
+/// For GCM-SIV the answer is genuinely different, and saying "keep nonces
+/// unique" would misrepresent the algorithm an agent chose precisely because it
+/// does not need that.
+const NONCE_MISUSE_RESISTANT: Constraint = Constraint {
+    id: "nonce-reuse-degrades-gracefully",
+    requirement: "Prefer unique nonces, but do not treat reuse as a breach.",
+    consequence: "A repeated nonce reveals only whether two plaintexts were equal. It does not \
+                  expose their XOR and does not compromise the authentication key, which is \
+                  what the same mistake costs under GCM.",
+    severity: Severity::Advisory,
+};
+
 const NOT_COLLISION_RESISTANT: Constraint = Constraint {
     id: "no-collision-resistance",
     requirement: "Do not rely on this for collision resistance.",
@@ -635,6 +652,41 @@ const PARALLELHASH_P: [Param; 3] = [
         note: "Part of the computation, not a tuning knob: two block sizes give two digests.",
     },
     TUPLEHASH_P[1],
+];
+
+const GCM_SIV_P: [Param; 4] = [
+    Param {
+        name: "key",
+        unit: Unit::Bytes,
+        min: 16,
+        max: 32,
+        recommended: 32,
+        note: "16 or 32 bytes.",
+    },
+    Param {
+        name: "nonce",
+        unit: Unit::Bytes,
+        min: 12,
+        max: 12,
+        recommended: 12,
+        note: "96 bits, fixed by RFC 8452. Reuse degrades security gracefully rather than fatally.",
+    },
+    Param {
+        name: "tag",
+        unit: Unit::Bytes,
+        min: 16,
+        max: 16,
+        recommended: 16,
+        note: "Doubles as the CTR counter, which is what ties the keystream to the plaintext.",
+    },
+    Param {
+        name: "plaintext",
+        unit: Unit::Bytes,
+        min: 0,
+        max: u64::MAX,
+        recommended: 0,
+        note: "Must be held whole: authentication precedes encryption, so this cannot stream.",
+    },
 ];
 
 const NO_PARAMS: [Param; 0] = [];
@@ -1728,6 +1780,84 @@ pub static REGISTRY: &[Entry] = &[
                 implying a validation that does not exist.",
     },
     Entry {
+        id: "aes-256-gcm-siv",
+        name: "AES-256-GCM-SIV",
+        aliases: &["gcm-siv", "aes-gcm-siv"],
+        summary: "Authenticated encryption that degrades gracefully when a nonce repeats.",
+        class: Class::Aead,
+        family: "AES",
+        purposes: &[Purpose::Confidentiality, Purpose::Authentication],
+        strength: Strength { classical: 256, quantum: 128 },
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Experimental,
+        standards: &["RFC 8452"],
+        params: &GCM_SIV_P,
+        constraints: &[
+            NONCE_MISUSE_RESISTANT,
+            Constraint {
+                id: "not-interoperability-tested",
+                requirement: "Do not use this to talk to another implementation until a vector \
+                              from RFC 8452 Appendix C has been wired in and passes.",
+                consequence: "The components are verified but their assembly is not. Code that \
+                              is wrong in one byte order still round-trips against itself and \
+                              interoperates with nothing.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "equal-plaintexts-are-visible",
+                requirement: "Accept that two identical messages under one nonce produce \
+                              identical ciphertexts.",
+                consequence: "Encryption is deterministic by design. That is the trade for \
+                              misuse resistance, and it does leak equality.",
+                severity: Severity::Advisory,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "aes-256" },
+            Edge { relation: Relation::Supersedes, target: "aes-256-gcm" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_cipher::Aes256GcmSiv",
+        example: "use ac_core::traits::Aead;\nlet c = ac_cipher::Aes256GcmSiv::new(key)?;\nc.seal_detached(nonce, aad, &mut buf, &mut tag)?;",
+        notes: "Reach for this when nonces come from somewhere you do not control. GCM loses \
+                everything on a repeated nonce — the keystream and the authentication key both \
+                — while GCM-SIV leaks only whether two plaintexts were equal. The cost is two \
+                passes over the plaintext, so it cannot stream, and it is not FIPS-approved: \
+                RFC 8452 is an IETF document, not a NIST one. This build is marked experimental \
+                because no published vector is wired in; see the crate docs.",
+    },
+    Entry {
+        id: "aes-128-gcm-siv",
+        name: "AES-128-GCM-SIV",
+        aliases: &[],
+        summary: "AES-GCM-SIV at the 128-bit key size.",
+        class: Class::Aead,
+        family: "AES",
+        purposes: &[Purpose::Confidentiality, Purpose::Authentication],
+        strength: Strength { classical: 128, quantum: 64 },
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Experimental,
+        standards: &["RFC 8452"],
+        params: &GCM_SIV_P,
+        constraints: &[
+            NONCE_MISUSE_RESISTANT,
+            Constraint {
+            id: "not-interoperability-tested",
+            requirement: "Do not use this to talk to another implementation until a published \
+                          vector has been wired in and passes.",
+            consequence: "The components are verified but their assembly is not.",
+            severity: Severity::Critical,
+        }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "aes-128" },
+            Edge { relation: Relation::SupersededBy, target: "aes-256-gcm-siv" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_cipher::Aes128GcmSiv",
+        example: "let c = ac_cipher::Aes128GcmSiv::new(key)?;",
+        notes: "See aes-256-gcm-siv. Same construction, smaller key.",
+    },
+    Entry {
         id: "tuplehash128",
         name: "TupleHash128",
         aliases: &["tuplehash"],
@@ -2300,9 +2430,13 @@ mod tests {
 
     #[test]
     fn unavailable_entries_explain_themselves() {
+        // Planned and Excluded entries have no code behind them, so a rust_path
+        // would be a lie. Experimental entries *do* have code — that is the
+        // difference between "not written" and "written but not vouched for" —
+        // so they are held to the Available rule instead, below.
         for e in REGISTRY
             .iter()
-            .filter(|e| e.status != ImplStatus::Available)
+            .filter(|e| matches!(e.status, ImplStatus::Planned | ImplStatus::Excluded))
         {
             assert!(
                 e.rust_path.is_empty(),
@@ -2310,6 +2444,26 @@ mod tests {
                 e.id
             );
             assert!(!e.notes.is_empty(), "{} must explain its absence", e.id);
+        }
+    }
+
+    /// An experimental entry has real code, so it must name it — and it must
+    /// say why it is not simply available.
+    #[test]
+    fn experimental_entries_name_their_code_and_their_caveat() {
+        for e in REGISTRY
+            .iter()
+            .filter(|e| e.status == ImplStatus::Experimental)
+        {
+            assert!(!e.rust_path.is_empty(), "{} has no rust_path", e.id);
+            assert!(!e.example.is_empty(), "{} has no example", e.id);
+            assert!(
+                e.constraints
+                    .iter()
+                    .any(|c| c.id == "not-interoperability-tested"),
+                "{} is experimental but does not say what is unverified",
+                e.id
+            );
         }
     }
 
@@ -2332,12 +2486,21 @@ mod tests {
         }
     }
 
+    /// Every AEAD must state what a repeated nonce costs, because that is the
+    /// question that decides whether a design is safe to deploy.
+    ///
+    /// Two answers are acceptable, and they are not interchangeable: the
+    /// critical `unique-nonce-per-key` rule for GCM and ChaCha20-Poly1305,
+    /// where reuse is catastrophic, or `nonce-reuse-degrades-gracefully` for a
+    /// misuse-resistant construction. What is not acceptable is silence.
     #[test]
-    fn aeads_all_carry_the_nonce_constraint() {
+    fn aeads_all_state_what_nonce_reuse_costs() {
         for e in REGISTRY.iter().filter(|e| e.class == Class::Aead) {
             assert!(
-                e.constraints.iter().any(|c| c.id == "unique-nonce-per-key"),
-                "{} must warn about nonce reuse",
+                e.constraints.iter().any(|c| {
+                    c.id == "unique-nonce-per-key" || c.id == "nonce-reuse-degrades-gracefully"
+                }),
+                "{} says nothing about nonce reuse",
                 e.id
             );
         }

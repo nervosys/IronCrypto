@@ -323,6 +323,15 @@ pub fn capabilities_json() -> Json {
                     ),
                 ),
                 (
+                    "experimental",
+                    Json::num(
+                        ac_ontology::all()
+                            .iter()
+                            .filter(|e| e.status == ImplStatus::Experimental)
+                            .count() as f64,
+                    ),
+                ),
+                (
                     "planned",
                     Json::num(
                         ac_ontology::all()

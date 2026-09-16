@@ -41,12 +41,15 @@ pub mod chacha;
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 mod clmul;
 pub mod gcm;
+pub mod gcm_siv;
 pub mod gf;
 pub mod modes;
+pub mod polyval;
 
 pub use aes::{Aes128, Aes192, Aes256};
 pub use chacha::{chacha20_xor, ChaCha20Poly1305, Poly1305};
 pub use gcm::{Aes128Gcm, Aes192Gcm, Aes256Gcm, GcmLimits};
+pub use gcm_siv::{Aes128GcmSiv, Aes256GcmSiv};
 pub use modes::{cbc_decrypt, cbc_encrypt, ctr_xor, pkcs7_pad, pkcs7_unpad};
 
 /// Ontology identifiers for the AEADs this crate provides.

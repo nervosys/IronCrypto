@@ -220,7 +220,7 @@ mod tests {
         ];
         for e in REGISTRY
             .iter()
-            .filter(|e| e.status == ImplStatus::Available)
+            .filter(|e| matches!(e.status, ImplStatus::Available | ImplStatus::Experimental))
         {
             assert!(
                 prefixes.iter().any(|p| e.rust_path.starts_with(p)),
