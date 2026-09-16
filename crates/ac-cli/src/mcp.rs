@@ -121,6 +121,42 @@ fn tools() -> Vec<Tool> {
             },
         },
         Tool {
+            name: "key_inspect",
+            description:
+                "Identify a cryptographic key. Give it the contents of a PEM or DER key file and \
+                 it reports the algorithm, whether the key is public or private, the size, and \
+                 the ontology entry to look up next. It parses structure only — no private \
+                 material is used and nothing is signed or decrypted — so it is safe to run on \
+                 an unknown file.",
+            schema: || {
+                schema(
+                    vec![(
+                        "key",
+                        string_prop(
+                            "The key file's contents. PEM text, or DER as a hex string.",
+                        ),
+                    )],
+                    &["key"],
+                )
+            },
+            call: |args| {
+                let text = required(args, "key")?;
+                // A PEM document is text; a DER file has to arrive as hex,
+                // since JSON has no byte string.
+                let bytes = if text.contains("-----BEGIN ") {
+                    text.as_bytes().to_vec()
+                } else {
+                    let trimmed: String =
+                        text.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+                    let mut out = vec![0u8; trimmed.len() / 2];
+                    ac_core::codec::hex_decode(trimmed.as_bytes(), &mut out)
+                        .map_err(|_| "key must be PEM text or a hex-encoded DER file".to_string())?;
+                    out
+                };
+                ops::key_json(&bytes)
+            },
+        },
+        Tool {
             name: "ontology_list",
             description:
                 "List algorithms, optionally filtered by class, purpose, FIPS approval, and \

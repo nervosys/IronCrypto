@@ -23,3 +23,4 @@ ac-mac = { workspace = true, features = ["std"] }
 ac-cipher = { workspace = true, features = ["std"] }
 ac-drbg = { workspace = true, features = ["std"] }
 ac-fips = { workspace = true, features = ["std"] }
+ac-pkix = { workspace = true, features = ["std"] }

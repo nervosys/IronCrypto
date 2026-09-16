@@ -106,8 +106,15 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         Capability {
             id: "approved-asymmetric",
             present: true,
-            note: "ECDSA and ECDH over P-256 are implemented. P-384, P-521, and RSA are not; the \
-                   ontology registers them as planned.",
+            note: "ECDSA and ECDH over P-256 and P-384, and RSA signatures in both PKCS#1 v1.5 \
+                   and PSS. P-521 is not implemented; the ontology registers it as planned.",
+        },
+        Capability {
+            id: "key-encoding",
+            present: true,
+            note: "Keys and signatures read and write as DER and PEM: SubjectPublicKeyInfo, \
+                   PKCS#8, SEC1, and Ecdsa-Sig-Value, through ac_pkix. X.509 certificate parsing \
+                   is not included.",
         },
     ]
     .into_iter()
@@ -170,6 +177,7 @@ mod tests {
         assert!(has("zero-dependencies"));
         assert!(has("constant-time-symmetric"));
         assert!(has("approved-asymmetric"));
+        assert!(has("key-encoding"));
     }
 
     #[test]

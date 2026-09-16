@@ -161,6 +161,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | Curves | P-256 and P-384 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation |
 | Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
+| Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
 
 ## What isn't — and why that's written down
 
@@ -174,6 +175,10 @@ The ontology registers algorithms this library does **not** provide, marked
   *signatures* are implemented, because certificate chains are made of them.
 - **ARMv8 crypto extensions** — `planned`. Apple Silicon and modern ARM servers
   have AES instructions this build does not yet use.
+- **X.509 certificate parsing** — out of scope. Names, validity, extensions, and
+  path validation are a far larger surface than key encoding, and a partial
+  implementation is worse than none. Keys and signatures do parse: hand the
+  `SubjectPublicKeyInfo` from any X.509 parser to `ac_pkix::PublicKeyInfo`.
 - **ML-KEM, ML-DSA** (FIPS 203/204) — `planned`. No post-quantum schemes yet.
 - **SHA-1, MD5, Triple DES** — `excluded`, permanently. They are in the registry
   only so that a request for them resolves to a refusal with a reason.
@@ -185,6 +190,7 @@ $ acrypto capabilities
   [x] constant-time-symmetric
   [x] approved-asymmetric
   [x] hardware-acceleration      # on this machine; portable elsewhere
+  [x] key-encoding
   [ ] fips-validated
   [ ] post-quantum
 ```

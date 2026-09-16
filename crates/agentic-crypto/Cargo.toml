@@ -12,7 +12,7 @@ categories.workspace = true
 
 [features]
 default = ["std"]
-std = ["ac-core/std", "ac-hash/std", "ac-mac/std", "ac-kdf/std", "ac-cipher/std", "ac-drbg/std", "ac-ec/std", "ac-rsa/std", "ac-fips/std", "ac-ontology/std"]
+std = ["ac-core/std", "ac-hash/std", "ac-mac/std", "ac-kdf/std", "ac-cipher/std", "ac-drbg/std", "ac-ec/std", "ac-rsa/std", "ac-pkix/std", "ac-fips/std", "ac-ontology/std"]
 
 [dependencies]
 ac-core = { workspace = true }
@@ -23,5 +23,6 @@ ac-cipher = { workspace = true }
 ac-drbg = { workspace = true }
 ac-ec = { workspace = true }
 ac-rsa = { workspace = true }
+ac-pkix = { workspace = true }
 ac-fips = { workspace = true }
 ac-ontology = { workspace = true }

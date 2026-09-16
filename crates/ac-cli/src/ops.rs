@@ -439,6 +439,166 @@ pub fn seal_hex(
 }
 
 /// Generate `n` random bytes from the OS-seeded DRBG, as hex.
+use std::collections::BTreeMap;
+
+/// Describe a key given as DER or PEM, without doing anything with it.
+///
+/// This is the first question anyone has about a key file, human or agent:
+/// what is it? Answering it needs no private material and no cryptography, so
+/// it is safe to run on anything.
+pub fn key_json(input: &[u8]) -> Result<Json, String> {
+    let (der, container, label) = unwrap_pem(input)?;
+
+    // Try the public form first, then the private one. A file is one or the
+    // other, and the two structures are distinguishable: PrivateKeyInfo starts
+    // with a version INTEGER where SubjectPublicKeyInfo starts with a SEQUENCE.
+    if let Ok(key) = ac_pkix::PublicKeyInfo::from_der(&der) {
+        return Ok(public_key_json(&key, container, label.as_deref()));
+    }
+    match ac_pkix::PrivateKeyInfo::from_der(&der) {
+        Ok(key) => Ok(private_key_json(&key, container, label.as_deref())),
+        Err(e) => Err(format!("not a recognizable key: {}", e.kind().id())),
+    }
+}
+
+/// Strip a PEM wrapper if there is one, returning the DER plus what was around
+/// it.
+fn unwrap_pem(input: &[u8]) -> Result<(Vec<u8>, &'static str, Option<String>), String> {
+    let text = core::str::from_utf8(input).unwrap_or("");
+    let Some(begin) = text.find("-----BEGIN ") else {
+        return Ok((input.to_vec(), "der", None));
+    };
+    let rest = &text[begin + 11..];
+    let end = rest.find("-----").ok_or("malformed pem header")?;
+    let label = rest[..end].to_string();
+
+    let mut out = vec![0u8; input.len()];
+    let n = ac_pkix::pem::decode(&label, input, &mut out)
+        .map_err(|e| format!("pem: {}", e.kind().id()))?;
+    out.truncate(n);
+    Ok((out, "pem", Some(label)))
+}
+
+fn key_common(
+    algorithm: ac_pkix::KeyAlgorithm,
+    container: &str,
+    label: Option<&str>,
+) -> BTreeMap<String, Json> {
+    let mut fields = BTreeMap::new();
+    fields.insert("algorithm".to_string(), Json::str(algorithm.id()));
+    fields.insert("container".to_string(), Json::str(container));
+    if let Some(label) = label {
+        fields.insert("pem_label".to_string(), Json::str(label));
+    }
+    fields
+}
+
+fn public_key_json(key: &ac_pkix::PublicKeyInfo<'_>, container: &str, label: Option<&str>) -> Json {
+    let mut fields = key_common(key.algorithm(), container, label);
+    fields.insert("kind".to_string(), Json::str("public"));
+    match key {
+        ac_pkix::PublicKeyInfo::Rsa { modulus, exponent } => {
+            fields.insert("bits".to_string(), Json::num(modulus_bits(modulus) as f64));
+            fields.insert("public_exponent".to_string(), Json::num(*exponent as f64));
+        }
+        ac_pkix::PublicKeyInfo::Ec { point, .. } => {
+            fields.insert("point_bytes".to_string(), Json::num(point.len() as f64));
+        }
+        ac_pkix::PublicKeyInfo::Unsupported { oid } => {
+            fields.insert("oid".to_string(), Json::str(dotted_oid(oid)));
+        }
+        _ => {}
+    }
+    if let Some(entry) = ontology_entry(key.algorithm()) {
+        fields.insert("ontology_id".to_string(), Json::str(entry));
+    }
+    Json::Object(fields)
+}
+
+fn private_key_json(
+    key: &ac_pkix::PrivateKeyInfo<'_>,
+    container: &str,
+    label: Option<&str>,
+) -> Json {
+    let mut fields = key_common(key.algorithm(), container, label);
+    fields.insert("kind".to_string(), Json::str("private"));
+    match key {
+        ac_pkix::PrivateKeyInfo::Rsa {
+            modulus,
+            public_exponent,
+            ..
+        } => {
+            fields.insert("bits".to_string(), Json::num(modulus_bits(modulus) as f64));
+            fields.insert(
+                "public_exponent".to_string(),
+                Json::num(*public_exponent as f64),
+            );
+        }
+        ac_pkix::PrivateKeyInfo::Ec { public_key, .. } => {
+            fields.insert(
+                "has_public_key".to_string(),
+                Json::Bool(public_key.is_some()),
+            );
+        }
+        ac_pkix::PrivateKeyInfo::Unsupported { oid } => {
+            fields.insert("oid".to_string(), Json::str(dotted_oid(oid)));
+        }
+        _ => {}
+    }
+    if let Some(entry) = ontology_entry(key.algorithm()) {
+        fields.insert("ontology_id".to_string(), Json::str(entry));
+    }
+    Json::Object(fields)
+}
+
+/// Bit length of a minimal big-endian integer.
+fn modulus_bits(modulus: &[u8]) -> usize {
+    match modulus.iter().position(|b| *b != 0) {
+        Some(first) => (modulus.len() - first) * 8 - modulus[first].leading_zeros() as usize,
+        None => 0,
+    }
+}
+
+/// Render OID content bytes as a dotted string, so an unrecognized algorithm
+/// can be looked up rather than merely reported as unknown.
+fn dotted_oid(oid: &[u8]) -> String {
+    let mut arcs: Vec<u64> = Vec::new();
+    let mut value = 0u64;
+    for (i, byte) in oid.iter().enumerate() {
+        value = (value << 7) | (*byte & 0x7f) as u64;
+        if byte & 0x80 == 0 {
+            if i == 0 || arcs.is_empty() {
+                // The first byte encodes two arcs: 40 * first + second.
+                let first = core::cmp::min(value / 40, 2);
+                arcs.push(first);
+                arcs.push(value - first * 40);
+            } else {
+                arcs.push(value);
+            }
+            value = 0;
+        }
+    }
+    arcs.iter()
+        .map(|a| a.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// The ontology entry a key algorithm points at, where there is exactly one.
+///
+/// RSA deliberately has none: a key does not fix the padding, so `rsa-pss-*`
+/// and `rsa-pkcs1-*` are both reachable from the same key and the caller has to
+/// choose.
+fn ontology_entry(algorithm: ac_pkix::KeyAlgorithm) -> Option<&'static str> {
+    match algorithm {
+        ac_pkix::KeyAlgorithm::EcP256 => Some("ecdsa-p256-sha256"),
+        ac_pkix::KeyAlgorithm::EcP384 => Some("ecdsa-p384-sha384"),
+        ac_pkix::KeyAlgorithm::Ed25519 => Some("ed25519"),
+        ac_pkix::KeyAlgorithm::X25519 => Some("x25519"),
+        ac_pkix::KeyAlgorithm::Rsa | ac_pkix::KeyAlgorithm::Unknown => None,
+    }
+}
+
 pub fn random_hex(n: usize) -> Result<String, String> {
     if n == 0 || n > 1024 {
         return Err("request between 1 and 1024 bytes".to_string());
@@ -593,5 +753,125 @@ mod tests {
             }
             _ => panic!("expected an array"),
         }
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    /// An Ed25519 public key in SPKI form. The base64 prefix `MCowBQYDK2Vw` is
+    /// what every Ed25519 public key starts with, which makes this vector
+    /// checkable against any other implementation's output.
+    const ED25519_PUB: &str = "-----BEGIN PUBLIC KEY-----
+        MCowBQYDK2VwAyEAyFOtDwzSthmuqSzuxP1Wok1kmdWEznklfkXP2BObYKc=
+        -----END PUBLIC KEY-----
+";
+
+    fn field(json: &Json, key: &str) -> String {
+        json.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn a_pem_public_key_is_identified() {
+        let json = key_json(ED25519_PUB.as_bytes()).unwrap();
+        assert_eq!(field(&json, "algorithm"), "ed25519");
+        assert_eq!(field(&json, "kind"), "public");
+        assert_eq!(field(&json, "container"), "pem");
+        assert_eq!(field(&json, "pem_label"), "PUBLIC KEY");
+        assert_eq!(field(&json, "ontology_id"), "ed25519");
+    }
+
+    /// The same key without its PEM wrapper must identify the same way.
+    #[test]
+    fn a_bare_der_key_is_identified() {
+        let mut der = vec![0u8; 256];
+        let n = ac_pkix::pem::decode("PUBLIC KEY", ED25519_PUB.as_bytes(), &mut der).unwrap();
+        let json = key_json(&der[..n]).unwrap();
+        assert_eq!(field(&json, "algorithm"), "ed25519");
+        assert_eq!(field(&json, "container"), "der");
+        assert!(json.get("pem_label").is_none());
+    }
+
+    #[test]
+    fn a_private_key_is_reported_as_private() {
+        let seed = [0x42u8; 32];
+        let mut der = [0u8; 128];
+        let n = ac_pkix::PrivateKeyInfo::Ed25519(&seed)
+            .to_der(&mut der)
+            .unwrap();
+        let json = key_json(&der[..n]).unwrap();
+        assert_eq!(field(&json, "kind"), "private");
+        assert_eq!(field(&json, "algorithm"), "ed25519");
+    }
+
+    /// RSA reports its size, and deliberately reports no single ontology entry:
+    /// the key does not choose between PSS and PKCS#1 v1.5.
+    #[test]
+    fn an_rsa_key_reports_its_size_but_not_a_padding() {
+        let mut modulus = [0xa7u8; 256];
+        modulus[0] = 0xd1;
+        let mut der = [0u8; 512];
+        let n = ac_pkix::PublicKeyInfo::Rsa {
+            modulus: &modulus,
+            exponent: 65537,
+        }
+        .to_der(&mut der)
+        .unwrap();
+
+        let json = key_json(&der[..n]).unwrap();
+        assert_eq!(field(&json, "algorithm"), "rsa");
+        assert_eq!(json.get("bits").unwrap().as_i64(), Some(2048));
+        assert_eq!(json.get("public_exponent").unwrap().as_i64(), Some(65537));
+        assert!(
+            json.get("ontology_id").is_none(),
+            "an rsa key does not name a padding"
+        );
+    }
+
+    #[test]
+    fn modulus_bits_counts_from_the_top_set_bit() {
+        assert_eq!(modulus_bits(&[0x80]), 8);
+        assert_eq!(modulus_bits(&[0x01]), 1);
+        assert_eq!(modulus_bits(&[0x00, 0x01]), 1);
+        assert_eq!(modulus_bits(&[0xff, 0xff]), 16);
+        assert_eq!(modulus_bits(&[]), 0);
+        assert_eq!(modulus_bits(&[0x00, 0x00]), 0);
+    }
+
+    /// The dotted form is what makes an unrecognized algorithm actionable: the
+    /// caller can look the number up. Checked against arcs whose encoding is
+    /// documented in X.690 and RFC 5480.
+    #[test]
+    fn unknown_algorithms_report_a_dotted_oid() {
+        // DSA, 1.2.840.10040.4.1.
+        let dsa: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x38, 0x04, 0x01];
+        assert_eq!(dotted_oid(dsa), "1.2.840.10040.4.1");
+        assert_eq!(dotted_oid(&[0x2b, 0x65, 0x70]), "1.3.101.112");
+        assert_eq!(dotted_oid(&[0x88, 0x37, 0x03]), "2.999.3");
+
+        let spki: &[u8] = &[
+            0x30, 0x10, 0x30, 0x09, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x38, 0x04, 0x01, 0x03,
+            0x03, 0x00, 0x01, 0x02,
+        ];
+        let json = key_json(spki).unwrap();
+        assert_eq!(field(&json, "algorithm"), "unknown");
+        assert_eq!(field(&json, "oid"), "1.2.840.10040.4.1");
+    }
+
+    #[test]
+    fn rubbish_is_an_error_not_a_guess() {
+        assert!(key_json(b"not a key at all").is_err());
+        assert!(key_json(&[]).is_err());
+        assert!(key_json(
+            b"-----BEGIN PUBLIC KEY-----
+zzzz
+-----END PUBLIC KEY-----
+"
+        )
+        .is_err());
     }
 }

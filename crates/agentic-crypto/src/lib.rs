@@ -70,6 +70,7 @@ pub use ac_hash as hash;
 pub use ac_kdf as kdf;
 pub use ac_mac as mac;
 pub use ac_ontology as ontology;
+pub use ac_pkix as pkix;
 pub use ac_rsa as rsa;
 
 /// Everything needed for ordinary use, in one import.
@@ -92,6 +93,8 @@ pub mod prelude {
     pub use ac_mac::{CmacAes256, HmacSha256, HmacSha384, HmacSha512};
     pub use ac_rsa::{Pkcs1Sha256, Pkcs1Sha384, Pkcs1Sha512, PssSha256, PssSha384, PssSha512};
     pub use ac_rsa::{RsaPrivateKey, RsaPublicKey};
+
+    pub use ac_pkix::{pem, PrivateKeyInfo, PublicKeyInfo};
 
     #[cfg(feature = "std")]
     pub use ac_drbg::Rng;

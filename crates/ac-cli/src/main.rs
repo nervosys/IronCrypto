@@ -41,6 +41,9 @@ OPERATIONS
                                 Encrypt stdin, print ciphertext and tag
     random <bytes>              Random bytes from the DRBG, as hex
 
+KEYS
+    key inspect                 Identify a DER or PEM key on stdin
+
 INTEGRATION
     mcp                         Serve the Model Context Protocol on stdio
 
@@ -287,6 +290,45 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                 }
                 _ => Ok(report.to_string()),
             }
+        }
+
+        "key" => {
+            let sub = pos.get(1).copied().unwrap_or("");
+            if sub != "inspect" {
+                return Err("usage: acrypto key inspect".to_string());
+            }
+            let data = read_stdin()?;
+            let json = ops::key_json(&data)?;
+            Ok(if want_json {
+                json.to_string()
+            } else {
+                let get = |k: &str| {
+                    json.get(k)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
+                let mut out = String::new();
+                out.push_str(&format!("{} {} key\n", get("algorithm"), get("kind")));
+                out.push_str(&format!("  container:  {}\n", get("container")));
+                if let Some(label) = json.get("pem_label").and_then(|v| v.as_str()) {
+                    out.push_str(&format!("  pem label:  {label}\n"));
+                }
+                if let Some(bits) = json.get("bits").and_then(|v| v.as_i64()) {
+                    out.push_str(&format!("  size:       {bits} bits\n"));
+                }
+                if let Some(e) = json.get("public_exponent").and_then(|v| v.as_i64()) {
+                    out.push_str(&format!("  exponent:   {e}\n"));
+                }
+                if let Some(oid) = json.get("oid").and_then(|v| v.as_str()) {
+                    out.push_str(&format!("  oid:        {oid}\n"));
+                }
+                if let Some(id) = json.get("ontology_id").and_then(|v| v.as_str()) {
+                    out.push_str(&format!("  ontology:   {id}\n"));
+                    out.push_str(&format!("  explain:    acrypto ontology show {id}\n"));
+                }
+                out.trim_end().to_string()
+            })
         }
 
         "digest" => {

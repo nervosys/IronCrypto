@@ -9,6 +9,7 @@ members = [
     "crates/ac-drbg",
     "crates/ac-ec",
     "crates/ac-rsa",
+    "crates/ac-pkix",
     "crates/ac-fips",
     "crates/ac-ontology",
     "crates/agentic-crypto",
@@ -34,6 +35,7 @@ ac-cipher = { path = "crates/ac-cipher", version = "0.1.0", default-features = f
 ac-drbg = { path = "crates/ac-drbg", version = "0.1.0", default-features = false }
 ac-ec = { path = "crates/ac-ec", version = "0.1.0", default-features = false }
 ac-rsa = { path = "crates/ac-rsa", version = "0.1.0", default-features = false }
+ac-pkix = { path = "crates/ac-pkix", version = "0.1.0", default-features = false }
 ac-fips = { path = "crates/ac-fips", version = "0.1.0", default-features = false }
 ac-ontology = { path = "crates/ac-ontology", version = "0.1.0", default-features = false }
 agentic-crypto = { path = "crates/agentic-crypto", version = "0.1.0", default-features = false }
