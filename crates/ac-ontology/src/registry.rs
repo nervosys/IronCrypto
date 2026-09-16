@@ -1866,7 +1866,7 @@ pub static REGISTRY: &[Entry] = &[
                               and never signal that a ciphertext was malformed.",
                 consequence: "Implicit rejection exists so an attacker cannot tell a bad \
                               ciphertext from a good one. Reporting the difference rebuilds the \
-                              decryption oracle the transform removes.",
+                              decryption oracle the transform removes. Note the boundary: \n                              decapsulation can still return an error for a malformed \n                              *key*, and that one should be surfaced, because its \n                              answer does not depend on the ciphertext and so reveals \n                              nothing about it.",
                 severity: Severity::Critical,
             },
         ],
@@ -1883,7 +1883,7 @@ pub static REGISTRY: &[Entry] = &[
                 samplers against the specification's pseudocode, and the key and ciphertext \
                 sizes come out at the widths FIPS 203 fixes — but nothing checks the assembly \
                 against another implementation. Deploy it in a hybrid with X25519 rather than \
-                alone, so a flaw in either leaves the other standing.",
+                alone, so a flaw in either leaves the other standing. Both of FIPS \n                203 section 7's input checks are enforced on the paths that need them: \n                encapsulation runs the modulus check on the peer's key, and \n                decapsulation runs the hash check on its own, so a caller gets them \n                without having to know to ask.",
     },
     // -- Signatures ---------------------------------------------------------
     Entry {

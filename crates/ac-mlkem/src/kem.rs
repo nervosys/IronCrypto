@@ -327,12 +327,19 @@ impl MlKem768 {
     }
 
     /// Encapsulate, producing a shared secret and a ciphertext.
+    ///
+    /// The encapsulation key is the one input here an attacker may choose, so
+    /// it gets the modulus check FIPS 203 section 7.2 requires before any of it
+    /// is used. Without that, a key with coefficients at or above `q` is
+    /// silently reinterpreted as a different key, and the peer that supplied it
+    /// controls the reinterpretation.
     pub fn encapsulate<R: RandomSource + ?Sized>(
         rng: &mut R,
         ek: &[u8; ENCAPS_KEY_LEN],
         ct: &mut [u8; CIPHERTEXT_LEN],
         shared: &mut [u8; SHARED_SECRET_LEN],
     ) -> Result<()> {
+        Self::validate_encapsulation_key(ek)?;
         let mut m = [0u8; 32];
         rng.fill(&mut m)?;
         Self::encapsulate_deterministic(&m, ek, ct, shared);
@@ -341,6 +348,13 @@ impl MlKem768 {
     }
 
     /// Encapsulate with an explicit message, for tests and vectors.
+    ///
+    /// # This does not validate the encapsulation key
+    ///
+    /// It is the raw primitive, so that an ACVP vector can drive it with
+    /// whatever bytes the vector file contains. Anything handling a key that
+    /// came from a peer wants [`Self::encapsulate`], which performs the check,
+    /// or must call [`Self::validate_encapsulation_key`] itself first.
     pub fn encapsulate_deterministic(
         m: &[u8; 32],
         ek: &[u8; ENCAPS_KEY_LEN],
@@ -371,6 +385,18 @@ impl MlKem768 {
         let hash = &dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32];
         let z = &dk[384 * K + ENCAPS_KEY_LEN + 32..];
 
+        // FIPS 203 section 7.3's hash check. This is a check on the *key*, not
+        // on the ciphertext, so failing it loudly is right and creates no
+        // decryption oracle: the answer does not depend on `ct` at all. A
+        // decapsulation key whose embedded hash does not match its own public
+        // half has been corrupted or spliced together from two key pairs, and
+        // continuing would produce secrets that silently never agree.
+        ensure!(
+            bool::from(ac_core::ct::eq(&h(ek), hash)),
+            MalformedEncoding,
+            "decapsulation key's embedded hash does not match its public key"
+        );
+
         let m = pke_decrypt(dk_pke, ct);
         let (k, r) = g(&[&m, hash]);
         let reject = j(&[z, ct]);
@@ -386,6 +412,29 @@ impl MlKem768 {
             *out = ac_core::ct::select_u8(matched, k[i], reject[i]);
         }
         recomputed.zeroize();
+        Ok(())
+    }
+
+    /// Check that a decapsulation key is internally consistent.
+    ///
+    /// FIPS 203 section 7.3 calls this the hash check: the key carries a copy
+    /// of its own public half and a hash of it, and the two must agree. It
+    /// catches corruption and catches a key assembled from mismatched halves,
+    /// which would otherwise fail only as secrets that never agree.
+    ///
+    /// [`Self::decapsulate`] performs this itself; it is public so that a
+    /// caller loading a key from storage can check it once rather than on
+    /// every use.
+    pub fn validate_decapsulation_key(dk: &[u8; DECAPS_KEY_LEN]) -> Result<()> {
+        let ek: &[u8; ENCAPS_KEY_LEN] = dk[384 * K..384 * K + ENCAPS_KEY_LEN]
+            .try_into()
+            .map_err(|_| ac_core::err!(Internal, "decapsulation key layout"))?;
+        let stored = &dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32];
+        ensure!(
+            bool::from(ac_core::ct::eq(&h(ek), stored)),
+            MalformedEncoding,
+            "decapsulation key's embedded hash does not match its public key"
+        );
         Ok(())
     }
 
@@ -548,6 +597,134 @@ mod tests {
         let mut wrong = [0u8; 32];
         MlKem768::decapsulate(&dk_b, &ct, &mut wrong).unwrap();
         assert_ne!(secret, wrong);
+    }
+
+    /// The modulus check must run on the path that actually takes a peer key.
+    ///
+    /// `validate_encapsulation_key` existed before this test did, and nothing
+    /// called it outside its own unit test — so a caller doing the obvious
+    /// thing got no validation at all. That is the gap this pins shut.
+    #[test]
+    fn encapsulate_refuses_a_non_canonical_key() {
+        let mut r = rng(b"encaps-validates");
+        let mut ek = [0u8; ENCAPS_KEY_LEN];
+        let mut dk = [0u8; DECAPS_KEY_LEN];
+        MlKem768::keygen(&mut r, &mut ek, &mut dk).unwrap();
+
+        let mut ct = [0u8; CIPHERTEXT_LEN];
+        let mut secret = [0u8; SHARED_SECRET_LEN];
+        MlKem768::encapsulate(&mut r, &ek, &mut ct, &mut secret).unwrap();
+
+        // Force a coefficient to q or above, which ByteDecode12 would silently
+        // fold back into range.
+        let mut bad = ek;
+        bad[0] = 0xff;
+        bad[1] = 0xff;
+        assert!(
+            MlKem768::validate_encapsulation_key(&bad).is_err(),
+            "the fixture must actually be non-canonical"
+        );
+        assert!(
+            MlKem768::encapsulate(&mut r, &bad, &mut ct, &mut secret).is_err(),
+            "encapsulate accepted a key it was required to reject"
+        );
+    }
+
+    /// The hash check, on a key whose halves do not belong together.
+    ///
+    /// This is the failure it exists to catch: two valid key pairs spliced
+    /// together produce a key that decapsulates without complaint and yields
+    /// secrets that never agree with the peer, which is a miserable thing to
+    /// debug from the far end.
+    #[test]
+    fn decapsulate_refuses_a_spliced_key() {
+        let mut r = rng(b"hash-check");
+        let mut ek1 = [0u8; ENCAPS_KEY_LEN];
+        let mut dk1 = [0u8; DECAPS_KEY_LEN];
+        MlKem768::keygen(&mut r, &mut ek1, &mut dk1).unwrap();
+        let mut ek2 = [0u8; ENCAPS_KEY_LEN];
+        let mut dk2 = [0u8; DECAPS_KEY_LEN];
+        MlKem768::keygen(&mut r, &mut ek2, &mut dk2).unwrap();
+
+        let mut ct = [0u8; CIPHERTEXT_LEN];
+        let mut secret = [0u8; SHARED_SECRET_LEN];
+        MlKem768::encapsulate(&mut r, &ek1, &mut ct, &mut secret).unwrap();
+
+        // The baseline works.
+        let mut got = [0u8; SHARED_SECRET_LEN];
+        MlKem768::decapsulate(&dk1, &ct, &mut got).unwrap();
+        assert_eq!(got, secret);
+        MlKem768::validate_decapsulation_key(&dk1).unwrap();
+
+        // Splice the second key's public half into the first key.
+        let mut spliced = dk1;
+        spliced[384 * K..384 * K + ENCAPS_KEY_LEN].copy_from_slice(&ek2);
+        assert!(
+            MlKem768::validate_decapsulation_key(&spliced).is_err(),
+            "the validator must reject a spliced key"
+        );
+        assert!(
+            MlKem768::decapsulate(&spliced, &ct, &mut got).is_err(),
+            "decapsulate must reject a spliced key"
+        );
+
+        // And a single flipped bit in the stored hash.
+        let mut corrupted = dk1;
+        corrupted[384 * K + ENCAPS_KEY_LEN] ^= 1;
+        assert!(MlKem768::validate_decapsulation_key(&corrupted).is_err());
+        assert!(MlKem768::decapsulate(&corrupted, &ct, &mut got).is_err());
+    }
+
+    /// The new key check must not have created a *ciphertext* failure path.
+    ///
+    /// Implicit rejection is the whole security argument for decapsulation: a
+    /// bad ciphertext must yield a pseudorandom secret, never an error, or the
+    /// error itself is the decryption oracle the transform exists to remove.
+    /// Adding a check on the key is safe precisely because its answer does not
+    /// depend on the ciphertext — and this is what holds that line.
+    #[test]
+    fn no_ciphertext_can_make_decapsulation_fail() {
+        let mut r = rng(b"implicit-rejection-holds");
+        let mut ek = [0u8; ENCAPS_KEY_LEN];
+        let mut dk = [0u8; DECAPS_KEY_LEN];
+        MlKem768::keygen(&mut r, &mut ek, &mut dk).unwrap();
+
+        let mut secret = [0u8; SHARED_SECRET_LEN];
+        let mut seen_distinct = 0;
+        let mut previous = [0u8; SHARED_SECRET_LEN];
+
+        for trial in 0..64u32 {
+            let mut ct = [0u8; CIPHERTEXT_LEN];
+            match trial % 4 {
+                0 => {} // all zeros
+                1 => ct.iter_mut().for_each(|b| *b = 0xff),
+                2 => r.fill(&mut ct).unwrap(),
+                _ => {
+                    // A valid ciphertext with one byte disturbed.
+                    let mut good = [0u8; CIPHERTEXT_LEN];
+                    let mut s = [0u8; SHARED_SECRET_LEN];
+                    MlKem768::encapsulate(&mut r, &ek, &mut good, &mut s).unwrap();
+                    ct = good;
+                    ct[(trial as usize) % CIPHERTEXT_LEN] ^= 0x40;
+                }
+            }
+            MlKem768::decapsulate(&dk, &ct, &mut secret)
+                .unwrap_or_else(|e| panic!("decapsulation failed on trial {trial}: {e}"));
+            if secret != previous {
+                seen_distinct += 1;
+            }
+            previous = secret;
+
+            // Determinism: the same ciphertext must give the same secret, or
+            // the rejection path is not a function of (dk, ct).
+            let mut again = [0u8; SHARED_SECRET_LEN];
+            MlKem768::decapsulate(&dk, &ct, &mut again).unwrap();
+            assert_eq!(
+                secret, again,
+                "rejection is not deterministic, trial {trial}"
+            );
+        }
+        assert!(seen_distinct > 32, "the secrets look degenerate");
     }
 
     #[test]
