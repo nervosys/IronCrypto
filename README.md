@@ -178,7 +178,10 @@ The ontology registers algorithms this library does **not** provide, marked
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
   `SubjectPublicKeyInfo` from any X.509 parser to `ac_pkix::PublicKeyInfo`.
-- **ML-KEM, ML-DSA** (FIPS 203/204) — `planned`. No post-quantum schemes yet.
+- **ML-DSA** (FIPS 204) — `planned`. ML-KEM-768 is implemented but
+  `experimental`: every component is checked against an independent oracle,
+  yet no ACVP vector confirms the assembly interoperates. It is excluded from
+  the approved mode and from `recommend`.
 - **SHA-1, MD5, Triple DES** — `excluded`, permanently. They are in the registry
   only so that a request for them resolves to a refusal with a reason.
 

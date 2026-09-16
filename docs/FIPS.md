@@ -113,6 +113,7 @@ registered, so adding an algorithm without a self-test fails CI.
 | ChaCha20, Poly1305, ChaCha20-Poly1305 | RFC 8439 |
 | X25519 | RFC 7748 §5.2 and §6.1 |
 | Ed25519 | RFC 8032 §7.1 |
+| ML-KEM-768 | **not vector-tested.** NTT against schoolbook multiplication, packing against a bit buffer, samplers against FIPS 203's pseudocode, sizes against the standard's fixed widths — but the assembly is unverified. Registered `experimental` |
 | POLYVAL | checked against the GHASH construction of RFC 8452 Appendix A, over a GHASH the published GCM vectors validate |
 | AES-GCM-SIV | **not vector-tested.** Components are verified; their assembly is not. Registered `experimental`, excluded from the approved mode, and carrying a `Critical` constraint saying so |
 | BLAKE2b | RFC 7693 Appendix A |

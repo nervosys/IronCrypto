@@ -17,3 +17,7 @@ std = ["ac-core/std", "ac-hash/std"]
 [dependencies]
 ac-core = { workspace = true }
 ac-hash = { workspace = true }
+
+# Only the tests need a DRBG; the library takes any `RandomSource`.
+[dev-dependencies]
+ac-drbg = { workspace = true, features = ["std"] }

@@ -2,7 +2,7 @@
 //!
 //! The registry includes algorithms this library does **not** implement. That
 //! is deliberate. An agent asking for post-quantum key agreement needs to learn
-//! that ML-KEM is the answer *and* that it is not available here — otherwise it
+//! that ML-KEM is the answer *and* what its status here is — otherwise it
 //! will reach for X25519 and quietly miss the requirement. Entries carry
 //! [`ImplStatus`] so the difference is never ambiguous.
 
@@ -686,6 +686,41 @@ const GCM_SIV_P: [Param; 4] = [
         max: u64::MAX,
         recommended: 0,
         note: "Must be held whole: authentication precedes encryption, so this cannot stream.",
+    },
+];
+
+const MLKEM768_P: [Param; 4] = [
+    Param {
+        name: "encapsulation-key",
+        unit: Unit::Bytes,
+        min: 1184,
+        max: 1184,
+        recommended: 1184,
+        note: "384 * k + 32, with k = 3.",
+    },
+    Param {
+        name: "decapsulation-key",
+        unit: Unit::Bytes,
+        min: 2400,
+        max: 2400,
+        recommended: 2400,
+        note: "Carries the public key and a rejection secret as well as the private one.",
+    },
+    Param {
+        name: "ciphertext",
+        unit: Unit::Bytes,
+        min: 1088,
+        max: 1088,
+        recommended: 1088,
+        note: "Far larger than an elliptic-curve exchange; budget for it in protocol design.",
+    },
+    Param {
+        name: "shared-secret",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "Run it through a KDF with the transcript, as with any key agreement.",
     },
 ];
 
@@ -1738,16 +1773,51 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::KeyEstablishment],
         strength: Strength { classical: 192, quantum: 192 },
         fips: FipsStatus::Approved,
-        status: ImplStatus::Planned,
+        status: ImplStatus::Experimental,
         standards: &["FIPS 203"],
-        params: &NO_PARAMS,
-        constraints: &NO_CONSTRAINTS,
-        edges: &[Edge { relation: Relation::Supersedes, target: "x25519" }],
+        params: &MLKEM768_P,
+        constraints: &[
+            Constraint {
+                id: "not-interoperability-tested",
+                requirement: "Do not use this to talk to another implementation until an ACVP \
+                              vector has been wired in and passes.",
+                consequence: "Every component is checked against an independent oracle, but the \
+                              assembly is not. A KEM with transposed matrix indices encapsulates \
+                              and decapsulates against itself perfectly and against nobody else.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "deploy-post-quantum-in-a-hybrid",
+                requirement: "Combine the shared secret with one from X25519 or a NIST curve, \
+                              and derive the session key from both.",
+                consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either \
+                              half survives; ML-KEM alone bets everything on the newer one.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "do-not-reveal-decapsulation-failures",
+                requirement: "Return the shared secret decapsulation gives you, whatever it is, \
+                              and never signal that a ciphertext was malformed.",
+                consequence: "Implicit rejection exists so an attacker cannot tell a bad \
+                              ciphertext from a good one. Reporting the difference rebuilds the \
+                              decryption oracle the transform removes.",
+                severity: Severity::Critical,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::Supersedes, target: "x25519" },
+            Edge { relation: Relation::PairsWith, target: "x25519" },
+            Edge { relation: Relation::BuiltOn, target: "shake128" },
+        ],
         performance: Performance::Fast,
-        rust_path: "",
-        example: "",
-        notes: "Not implemented yet. Deploy it alongside X25519 in a hybrid rather than alone, so a \
-                flaw in either leaves the other standing.",
+        rust_path: "ac_mlkem::MlKem768",
+        example: "let mut ek = [0u8; 1184];\nlet mut dk = [0u8; 2400];\nac_mlkem::MlKem768::keygen(&mut rng, &mut ek, &mut dk)?;\nac_mlkem::MlKem768::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;",
+        notes: "Implemented but not vector-tested, hence experimental: the ring arithmetic is \
+                checked against schoolbook multiplication, the packing against a bit buffer, the \
+                samplers against the specification's pseudocode, and the key and ciphertext \
+                sizes come out at the widths FIPS 203 fixes — but nothing checks the assembly \
+                against another implementation. Deploy it in a hybrid with X25519 rather than \
+                alone, so a flaw in either leaves the other standing.",
     },
     // -- Signatures ---------------------------------------------------------
     Entry {

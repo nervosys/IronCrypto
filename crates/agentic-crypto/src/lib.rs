@@ -52,9 +52,11 @@
 //! * **An RSA private key is about five kilobytes**, because every integer
 //!   inside is a fixed-capacity 4096-bit buffer. That is what keeps the crate
 //!   allocation free; box it on a small stack.
-//! * **No post-quantum schemes yet.** ML-KEM and ML-DSA are registered as
-//!   planned, not implemented, and [`recommend`] says so rather than
-//!   substituting a classical scheme.
+//! * **ML-KEM is experimental, not available.** It is implemented and its
+//!   components are each checked against an independent oracle, but no ACVP
+//!   vector is wired in, so nothing confirms it interoperates. It is excluded
+//!   from the approved mode and from [`recommend`]. ML-DSA is not implemented
+//!   at all.
 //! * **No ARM crypto extensions.** Registered as planned. x86-64 gets AES-NI
 //!   and PCLMULQDQ, selected at run time; everywhere else runs the portable
 //!   constant-time code.
@@ -74,6 +76,7 @@ pub use ac_fips as fips;
 pub use ac_hash as hash;
 pub use ac_kdf as kdf;
 pub use ac_mac as mac;
+pub use ac_mlkem as mlkem;
 pub use ac_ontology as ontology;
 pub use ac_pkix as pkix;
 pub use ac_rsa as rsa;

@@ -194,6 +194,28 @@ macro_rules! sha3_hash {
     };
 }
 
+/// A finished sponge that can be squeezed repeatedly.
+///
+/// [`Xof::finalize_xof`] consumes the hasher and produces a fixed number of
+/// bytes, which is the right shape for most callers. Rejection sampling is the
+/// exception: it cannot know in advance how much output it needs, because that
+/// depends on how many candidates it throws away. ML-KEM's `SampleNTT` is
+/// exactly this case.
+///
+/// Reading is continuous — reading 32 bytes twice gives the same stream as
+/// reading 64 once — which is what makes the sampler's output independent of
+/// the chunk size it happens to ask for.
+pub struct XofReader {
+    sponge: Sponge,
+}
+
+impl XofReader {
+    /// Squeeze the next `out.len()` bytes.
+    pub fn read(&mut self, out: &mut [u8]) {
+        self.sponge.squeeze(out);
+    }
+}
+
 macro_rules! shake {
     ($name:ident, $id:literal, $disp:literal, $cap:literal, $kat:literal) => {
         #[doc = concat!("FIPS 202 ", $disp, " extendable-output function.")]
@@ -225,6 +247,15 @@ macro_rules! shake {
         }
 
         impl $name {
+            /// Finish absorbing and return a reader for an unbounded stream.
+            ///
+            /// For callers that cannot size their output in advance; see
+            /// [`XofReader`].
+            pub fn finalize_reader(mut self) -> XofReader {
+                self.0.finish();
+                XofReader { sponge: self.0 }
+            }
+
             /// One-shot: absorb `data` and squeeze `out.len()` bytes.
             pub fn xof(data: &[u8], out: &mut [u8]) {
                 let mut x = Self::default();
