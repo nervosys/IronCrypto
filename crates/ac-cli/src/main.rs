@@ -253,8 +253,9 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                 let t = json.get("totals").unwrap();
                 out.push_str(&format!(
                     "
-{} met, {} unmet, {} not applicable",
+{} met, {} partial, {} unmet, {} not applicable",
                     t.get("met").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    t.get("partial").and_then(|v| v.as_f64()).unwrap_or(0.0),
                     t.get("unmet").and_then(|v| v.as_f64()).unwrap_or(0.0),
                     t.get("not_applicable")
                         .and_then(|v| v.as_f64())
@@ -599,16 +600,19 @@ Requirements
                 ));
                 match cg("state") {
                     "met" => out.push_str(&format!(
-                        "    Evidence: {} in {}
-",
+                        "    Evidence: {} in {}\n",
                         cg("evidence"),
                         cg("file")
                     )),
-                    _ => out.push_str(&format!(
-                        "    Reason: {}
-",
-                        cg("reason")
+                    // A partial answer is the one worth reading closely, so it
+                    // shows both what is there and what is not.
+                    "partial" => out.push_str(&format!(
+                        "    Evidence: {} in {}\n    Gap: {}\n",
+                        cg("evidence"),
+                        cg("file"),
+                        cg("gap")
                     )),
+                    _ => out.push_str(&format!("    Reason: {}\n", cg("reason"))),
                 }
             }
         }

@@ -195,7 +195,10 @@ fn ml_dsa_keygen_vectors_from_file() {
 
         let mut pk = [0u8; mldsa::sign::PUBLIC_KEY_LEN];
         let mut sk = [0u8; mldsa::sign::SECRET_KEY_LEN];
-        mldsa::sign::keygen(seed[..].try_into().unwrap(), &mut pk, &mut sk);
+        assert!(
+            mldsa::sign::keygen(seed[..].try_into().unwrap(), &mut pk, &mut sk),
+            "case {index}: the generated key failed its consistency test"
+        );
 
         assert_eq!(hex(&pk), hex(&want_pk), "verification key, case {index}");
         assert_eq!(hex(&sk), hex(&want_sk), "signing key, case {index}");

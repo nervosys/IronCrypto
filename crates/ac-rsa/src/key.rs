@@ -653,7 +653,10 @@ pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<Rs
             );
             p_bytes.zeroize();
             q_bytes.zeroize();
-            return key;
+            // FIPS 140-3 requires a pairwise consistency test on a generated
+            // key pair before it is used. It runs here rather than being
+            // offered as a separate function a caller has to know to invoke.
+            return key.and_then(|k| pairwise_consistency(&k).map(|()| k));
         }
     }
 
@@ -661,6 +664,48 @@ pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<Rs
         Internal,
         "rsa key generation did not converge"
     ))
+}
+
+/// The pairwise consistency test FIPS 140-3 requires on a generated key pair.
+///
+/// Applies the private operation to a fixed value and the public operation to
+/// the result, and requires the original back. That is the whole content of
+/// "these two halves are each other's inverse", and it is the check that
+/// catches a keygen corrupted after the primality tests passed — a faulted
+/// exponent, a mis-assembled CRT parameter, a bit flipped in memory.
+///
+/// It is not redundant with the per-operation CRT verification. That one proves
+/// a single private operation was computed correctly; this proves the public
+/// key published alongside it is the matching one. A key whose `d` does not
+/// correspond to its `n` and `e` would pass the former on every operation and
+/// still be useless, and the failure would appear at the far end as signatures
+/// that never verify.
+///
+/// The test value is `2`, which is a valid input in `[0, n)` and is not a
+/// fixed point of exponentiation the way `0` and `1` are. Those two satisfy
+/// `m^(ed) = m` for *any* exponents at all, so a test using them would pass for
+/// a completely broken key.
+fn pairwise_consistency(key: &RsaPrivateKey) -> Result<()> {
+    let size = key.size();
+    let mut m = [0u8; MAX_BYTES];
+    m[size - 1] = 2;
+
+    let mut signed = [0u8; MAX_BYTES];
+    key.raw_private(&m[..size], &mut signed[..size])?;
+
+    let mut recovered = [0u8; MAX_BYTES];
+    key.public_key()
+        .raw_public(&signed[..size], &mut recovered[..size])?;
+
+    let matched = ac_core::ct::verify(&m[..size], &recovered[..size]);
+    signed.zeroize();
+    recovered.zeroize();
+    ensure!(
+        matched,
+        SelfTestFailed,
+        "rsa key failed its pairwise consistency test; the key is withheld"
+    );
+    Ok(())
 }
 
 /// Modular inverse of a small odd `a` modulo an even `m`.
@@ -771,6 +816,39 @@ fn div_small(a: &mut Uint, b: u64, limbs: usize) -> Option<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pairwise consistency test must reject a key whose halves disagree.
+    ///
+    /// Built by taking a real key and replacing `d` with a value that is not
+    /// the inverse of `e`. Every structural check still passes -- the modulus
+    /// is the right size, the exponent is right, nothing is malformed -- and
+    /// only applying both operations in turn reveals it. That is the failure
+    /// mode the test exists for, and it would otherwise surface at the far end
+    /// as signatures nobody can verify.
+    #[test]
+    fn the_pairwise_consistency_test_rejects_a_mismatched_key() {
+        let good = crate::testkey::test_private_key();
+        let size = good.size();
+        let mut n = vec![0u8; size];
+        good.public_key().modulus_bytes(&mut n).unwrap();
+        let mut d = vec![0u8; size];
+        good.exponent_bytes(&mut d).unwrap();
+
+        // The genuine key passes, including when rebuilt from its components
+        // (which takes the non-CRT path, so both paths are covered).
+        pairwise_consistency(&good).expect("a real key must pass");
+        let rebuilt = RsaPrivateKey::from_components(&n, good.public_key().exponent(), &d).unwrap();
+        pairwise_consistency(&rebuilt).expect("the rebuilt key must pass too");
+
+        // Disturb d, leaving every structural property intact.
+        let last = d.len() - 1;
+        d[last] ^= 0x02;
+        let bad = RsaPrivateKey::from_components(&n, good.public_key().exponent(), &d).unwrap();
+        assert!(
+            pairwise_consistency(&bad).is_err(),
+            "a key whose d does not match e passed the consistency test"
+        );
+    }
 
     #[test]
     fn small_modular_inverse() {

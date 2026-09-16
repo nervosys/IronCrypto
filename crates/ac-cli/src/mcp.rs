@@ -258,7 +258,7 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "crypto_requirements",
             description:
-                "The conformance view: every normative obligation drawn from the standards,                  with whether this library meets it, does not, or is not bound by it -- and                  why. Filter by state or algorithm. Nothing here asserts FIPS validation; a                  met requirement means the code does what the document asks, not that a                  laboratory has agreed.",
+                "The conformance view: every normative obligation drawn from the standards,                  with whether this library meets it, meets it partially, does not, or is not                  bound by it -- and why. A partial answer names the gap, which is the one a                  binary yes/no would misreport in either direction. Filter by state or algorithm. Nothing here asserts FIPS validation; a                  met requirement means the code does what the document asks, not that a                  laboratory has agreed.",
             schema: || {
                 schema(
                     vec![
@@ -266,7 +266,7 @@ fn tools() -> Vec<Tool> {
                             "state",
                             enum_prop(
                                 "Narrow to one compliance state.",
-                                "met, unmet, not-applicable",
+                                "met, partial, unmet, not-applicable",
                             ),
                         ),
                         (

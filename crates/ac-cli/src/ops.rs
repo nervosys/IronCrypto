@@ -902,6 +902,12 @@ pub fn requirement_json(doc: &Standard, r: &Requirement) -> Json {
             ("file", Json::str(file)),
             ("evidence", Json::str(symbol)),
         ]),
+        Compliance::Partial { file, symbol, gap } => Json::object([
+            ("state", Json::str("partial")),
+            ("file", Json::str(file)),
+            ("evidence", Json::str(symbol)),
+            ("gap", Json::str(gap)),
+        ]),
         Compliance::NotApplicable { why } => Json::object([
             ("state", Json::str("not-applicable")),
             ("reason", Json::str(why)),
@@ -932,6 +938,7 @@ pub fn standard_json(s: &Standard) -> Json {
         ("id", Json::str(s.id)),
         ("title", Json::str(s.title)),
         ("body", Json::str(s.body.id())),
+        ("scope", Json::str(s.scope.id())),
         ("year", Json::Number(s.year as f64)),
         ("status", Json::str(s.status.id())),
         ("current", Json::Bool(s.status.is_current())),
@@ -988,17 +995,18 @@ pub fn standard_lookup_json(id: &str) -> Result<Json, String> {
 /// tally it themselves invites them to tally it differently.
 pub fn requirements_json(state: Option<&str>, algorithm: Option<&str>) -> Result<Json, String> {
     if let Some(s) = state {
-        if !["met", "unmet", "not-applicable"].contains(&s) {
+        if !["met", "partial", "unmet", "not-applicable"].contains(&s) {
             return Err(format!(
-                "unknown compliance state '{s}'; try met, unmet or not-applicable"
+                "unknown compliance state '{s}'; try met, partial, unmet or not-applicable"
             ));
         }
     }
     let mut items = Vec::new();
-    let (mut met, mut unmet, mut na) = (0usize, 0usize, 0usize);
+    let (mut met, mut partial, mut unmet, mut na) = (0usize, 0usize, 0usize, 0usize);
     for (doc, r) in standards::requirements() {
         match r.compliance.id() {
             "met" => met += 1,
+            "partial" => partial += 1,
             "unmet" => unmet += 1,
             _ => na += 1,
         }
@@ -1022,6 +1030,7 @@ pub fn requirements_json(state: Option<&str>, algorithm: Option<&str>) -> Result
             "totals",
             Json::object([
                 ("met", Json::Number(met as f64)),
+                ("partial", Json::Number(partial as f64)),
                 ("unmet", Json::Number(unmet as f64)),
                 ("not_applicable", Json::Number(na as f64)),
             ]),

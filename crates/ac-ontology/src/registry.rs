@@ -720,7 +720,7 @@ const MLDSA65_P: [Param; 4] = [
         min: 0,
         max: 255,
         recommended: 0,
-        note: "The context string is length-prefixed with one byte, so 255 is a hard ceiling.                Signing refuses anything longer rather than truncating it.",
+        note: "The context string is length-prefixed with one byte, so 255 is a hard ceiling. Signing refuses anything longer rather than truncating it.",
     },
 ];
 
@@ -1866,7 +1866,7 @@ pub static REGISTRY: &[Entry] = &[
                               and never signal that a ciphertext was malformed.",
                 consequence: "Implicit rejection exists so an attacker cannot tell a bad \
                               ciphertext from a good one. Reporting the difference rebuilds the \
-                              decryption oracle the transform removes. Note the boundary: \n                              decapsulation can still return an error for a malformed \n                              *key*, and that one should be surfaced, because its \n                              answer does not depend on the ciphertext and so reveals \n                              nothing about it.",
+                              decryption oracle the transform removes. Note the boundary: decapsulation can still return an error for a malformed *key*, and that one should be surfaced, because its answer does not depend on the ciphertext and so reveals nothing about it.",
                 severity: Severity::Critical,
             },
         ],
@@ -1883,7 +1883,7 @@ pub static REGISTRY: &[Entry] = &[
                 samplers against the specification's pseudocode, and the key and ciphertext \
                 sizes come out at the widths FIPS 203 fixes — but nothing checks the assembly \
                 against another implementation. Deploy it in a hybrid with X25519 rather than \
-                alone, so a flaw in either leaves the other standing. Both of FIPS \n                203 section 7's input checks are enforced on the paths that need them: \n                encapsulation runs the modulus check on the peer's key, and \n                decapsulation runs the hash check on its own, so a caller gets them \n                without having to know to ask.",
+                alone, so a flaw in either leaves the other standing. Both of FIPS 203 section 7's input checks are enforced on the paths that need them: encapsulation runs the modulus check on the peer's key, and decapsulation runs the hash check on its own, so a caller gets them without having to know to ask.",
     },
     // -- Signatures ---------------------------------------------------------
     Entry {
@@ -2482,20 +2482,20 @@ pub static REGISTRY: &[Entry] = &[
         constraints: &[
             Constraint {
                 id: "not-interoperability-tested",
-                requirement: "Do not use this to talk to another implementation, or to produce                               a signature anything else must verify, until an ACVP vector has                               been wired in and passes.",
-                consequence: "Every layer beneath the scheme is checked against an independent                               oracle, but the assembly is checked only against itself. A                               signature scheme with a misread domain separator signs and                               verifies against itself perfectly and against nobody else.",
+                requirement: "Do not use this to talk to another implementation, or to produce a signature anything else must verify, until an ACVP vector has been wired in and passes.",
+                consequence: "Every layer beneath the scheme is checked against an independent oracle, but the assembly is checked only against itself. A signature scheme with a misread domain separator signs and verifies against itself perfectly and against nobody else.",
                 severity: Severity::Critical,
             },
             Constraint {
                 id: "deploy-post-quantum-in-a-hybrid",
-                requirement: "Sign with a classical scheme alongside this one and require both                               signatures to check.",
-                consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either                               half survives; ML-DSA alone bets everything on the newer one.",
+                requirement: "Sign with a classical scheme alongside this one and require both signatures to check.",
+                consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either half survives; ML-DSA alone bets everything on the newer one.",
                 severity: Severity::Serious,
             },
             Constraint {
                 id: "supply-randomness-or-choose-determinism",
-                requirement: "Pass 32 fresh random bytes for the hedged variant, or use the                               deterministic one deliberately. Do not pass a constant you                               believe to be random.",
-                consequence: "The hedged and deterministic variants are both sound; a third                               case, where a caller thinks it is hedging but is not, gives the                               determinism without the intent and can mask a broken entropy                               source elsewhere in the system.",
+                requirement: "Pass 32 fresh random bytes for the hedged variant, or use the deterministic one deliberately. Do not pass a constant you believe to be random.",
+                consequence: "The hedged and deterministic variants are both sound; a third case, where a caller thinks it is hedging but is not, gives the determinism without the intent and can mask a broken entropy source elsewhere in the system.",
                 severity: Severity::Serious,
             },
         ],
@@ -2512,7 +2512,7 @@ ac_mldsa::sign::keygen(&seed, &mut pk, &mut sk);
 let mut sig = [0u8; ac_mldsa::sign::SIGNATURE_LEN];
 ac_mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig);
 ac_mldsa::sign::verify(&pk, msg, ctx, &sig);",
-        notes: "Implemented but not vector-tested, hence experimental: the NTT is checked                 against schoolbook multiplication, the packing against a bit-at-a-time                 reference, the rounding and hints against the equations that define them, the                 samplers against the specification's pseudocode, and the key and signature                 sizes come out at the widths FIPS 204 fixes — but nothing checks the assembly                 against another implementation. Only the 65 parameter set exists; shipping                 three unverified variants would triple what a vector has to confirm.                 Verification refuses non-canonical hint blocks, so one signature has one                 encoding.",
+        notes: "Implemented but not vector-tested, hence experimental: the NTT is checked against schoolbook multiplication, the packing against a bit-at-a-time reference, the rounding and hints against the equations that define them, the samplers against the specification's pseudocode, and the key and signature sizes come out at the widths FIPS 204 fixes — but nothing checks the assembly against another implementation. Only the 65 parameter set exists; shipping three unverified variants would triple what a vector has to confirm. Verification refuses non-canonical hint blocks, so one signature has one encoding.",
     },
     Entry {
         id: "rsa-pkcs1-sha256",

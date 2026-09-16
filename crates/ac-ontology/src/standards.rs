@@ -13,8 +13,8 @@
 //! So the tests here couple the two in both directions:
 //!
 //! - Every standard cited by a registry entry must exist here, and every
-//!   standard here must be cited by an entry or explicitly marked as context.
-//!   Neither list can grow without the other noticing.
+//!   standard here must be cited by an entry or declared as governing the
+//!   module. Neither list can grow without the other noticing.
 //! - Every requirement's `applies_to` must name real algorithms.
 //! - **A requirement claiming to be met must name a file that exists and a
 //!   symbol that appears in it.** Rename the function and the knowledgebase
@@ -22,6 +22,8 @@
 //!   that makes the difference between a document and a fixture.
 //! - A superseded or withdrawn document cannot be the sole basis of an
 //!   algorithm the library presents as available.
+//! - Prose carries no embedded whitespace runs, because these strings are what
+//!   the CLI and the MCP responses print.
 //!
 //! # What is claimed here, and what is not
 //!
@@ -39,6 +41,30 @@
 //! has agreed, and no amount of this file changes that.
 
 use crate::registry::REGISTRY;
+
+/// Whether a document governs one algorithm or the module as a whole.
+///
+/// This exists so the "every document must be cited by an entry" rule can have
+/// a principled exception rather than a hardcoded identifier. FIPS 140-3 binds
+/// the module and names no algorithm; neither does SP 800-131A, which is about
+/// transitions rather than constructions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Defines constructions that registry entries implement.
+    Algorithm,
+    /// Governs the module as a whole, and is cited by no entry.
+    Module,
+}
+
+impl Scope {
+    /// Stable identifier used in every serialized form.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Algorithm => "algorithm",
+            Self::Module => "module",
+        }
+    }
+}
 
 /// Who published a document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +166,21 @@ pub enum Compliance {
         /// A symbol or phrase that must appear in that file.
         symbol: &'static str,
     },
+    /// Implemented as far as a pure-source library can, with the gap named.
+    ///
+    /// This variant exists because forcing a binary answer produces a false
+    /// one. The module integrity test is the case that motivated it: what runs
+    /// is a real check over the embedded constant pool, but it is not a check
+    /// over the executable image, and calling that either met or unmet would
+    /// mislead in opposite directions.
+    Partial {
+        /// Workspace-relative path to what is implemented.
+        file: &'static str,
+        /// A symbol or phrase that must appear in that file.
+        symbol: &'static str,
+        /// What is still missing, and what closing it would take.
+        gap: &'static str,
+    },
     /// Out of scope, with a reason.
     NotApplicable {
         /// Why this library is not obliged.
@@ -157,6 +198,7 @@ impl Compliance {
     pub const fn id(self) -> &'static str {
         match self {
             Self::Met { .. } => "met",
+            Self::Partial { .. } => "partial",
             Self::NotApplicable { .. } => "not-applicable",
             Self::Unmet { .. } => "unmet",
         }
@@ -191,6 +233,8 @@ pub struct Standard {
     pub title: &'static str,
     /// Publisher.
     pub body: Body,
+    /// Whether it governs an algorithm or the whole module.
+    pub scope: Scope,
     /// Year of the edition this describes.
     pub year: u16,
     /// Whether it is still in force.
@@ -303,7 +347,7 @@ const FIPS203_REQS: [Requirement; 3] = [
     },
 ];
 
-const FIPS204_REQS: [Requirement; 2] = [
+const FIPS204_REQS: [Requirement; 3] = [
     Requirement {
         id: "fips-204-hint-decoding",
         section: "7.2",
@@ -317,6 +361,17 @@ const FIPS204_REQS: [Requirement; 2] = [
         compliance: Compliance::Met {
             file: "crates/ac-mldsa/src/encode.rs",
             symbol: "hint_unpack",
+        },
+    },
+    Requirement {
+        id: "fips-204-prehash-variant",
+        section: "5.4",
+        obligation: Obligation::May,
+        statement: "An implementation may offer HashML-DSA, which signs a digest of the message rather than the message itself.",
+        rationale: "The two variants use different domain separator bytes, so they are not interchangeable. A caller that needs the pre-hash variant must not approximate it by handing a digest to pure ML-DSA: the result verifies against nothing.",
+        applies_to: &["ml-dsa-65"],
+        compliance: Compliance::Unmet {
+            why: "Only the pure variant is implemented. This is recorded rather than omitted because the obvious workaround is wrong, and a caller who assumes the variants differ only in where the hashing happens will produce signatures no conforming verifier accepts.",
         },
     },
     Requirement {
@@ -371,7 +426,7 @@ const FIPS186_REQS: [Requirement; 2] = [
     },
 ];
 
-const FIPS140_REQS: [Requirement; 3] = [
+const FIPS140_REQS: [Requirement; 6] = [
     Requirement {
         id: "fips-140-3-cast-before-use",
         section: "AS10.35",
@@ -401,6 +456,43 @@ const FIPS140_REQS: [Requirement; 3] = [
         },
     },
     Requirement {
+        id: "fips-140-3-pairwise-consistency",
+        section: "AS10.35 / IG 10.3.A",
+        obligation: Obligation::Shall,
+        statement: "A generated asymmetric key pair shall pass a pairwise consistency test before the key is used.",
+        rationale: "Catches a key pair whose halves do not correspond: a faulted exponent, a mis-assembled CRT parameter, a bit flipped after the primality tests passed. Every structural check still passes on such a key, and only applying both operations in turn reveals it. Otherwise the failure appears at the far end, as signatures nobody can verify.",
+        applies_to: &["rsa-pkcs1-sha256", "ml-kem-768", "ml-dsa-65"],
+        compliance: Compliance::Met {
+            file: "crates/ac-mlkem/src/kem.rs",
+            symbol: "the_pairwise_consistency_test_rejects_a_mismatched_pair",
+        },
+    },
+    Requirement {
+        id: "fips-140-3-software-integrity",
+        section: "AS10.32",
+        obligation: Obligation::Shall,
+        statement: "The module shall verify the integrity of its executable image before providing any cryptographic service.",
+        rationale: "A corrupted or partially linked binary looks exactly like a correct one until it computes the wrong answer.",
+        applies_to: &[],
+        compliance: Compliance::Partial {
+            file: "crates/ac-fips/src/selftest.rs",
+            symbol: "integrity_check",
+            gap: "What runs is an HMAC over the self-test vector table. That detects a corrupted constant pool and is a real check: flip a byte in any embedded vector and it fails. It is not a check over the executable image. Doing that needs a post-link step that patches a digest into the binary, which is a property of the build system rather than of any source file, so no amount of work in this repository alone closes it.",
+        },
+    },
+    Requirement {
+        id: "fips-140-3-zeroization",
+        section: "AS09.28",
+        obligation: Obligation::Shall,
+        statement: "Secret and private key material shall be zeroized when no longer needed.",
+        rationale: "Key material left in freed memory outlives the operation that needed it, and can be recovered from a core dump, a swapped page or a reused allocation.",
+        applies_to: &[],
+        compliance: Compliance::Met {
+            file: "crates/ac-core/src/zeroize.rs",
+            symbol: "Zeroize",
+        },
+    },
+    Requirement {
         id: "fips-140-3-validation-claim",
         section: "General",
         obligation: Obligation::ShallNot,
@@ -417,7 +509,7 @@ const FIPS140_REQS: [Requirement; 3] = [
     },
 ];
 
-const SP80090A_REQS: [Requirement; 2] = [
+const SP80090A_REQS: [Requirement; 3] = [
     Requirement {
         id: "sp-800-90a-reseed-interval",
         section: "10.2.1",
@@ -430,6 +522,19 @@ const SP80090A_REQS: [Requirement; 2] = [
         compliance: Compliance::Met {
             file: "crates/ac-drbg/src/ctr.rs",
             symbol: "reseed_counter",
+        },
+    },
+    Requirement {
+        id: "sp-800-90a-health-tests",
+        section: "11.3",
+        obligation: Obligation::Shall,
+        statement: "A DRBG shall perform health testing on its instantiate, generate and reseed functions.",
+        rationale: "A generator that has silently stopped generating, returning a constant or repeating a state, produces output indistinguishable from success to every caller.",
+        applies_to: &["ctr-drbg-aes-256", "hmac-drbg-sha2-256"],
+        compliance: Compliance::Partial {
+            file: "crates/ac-fips/src/selftest.rs",
+            symbol: "ctr-drbg-aes-256",
+            gap: "Known-answer tests run on both DRBGs as part of the pre-operational self tests, which covers the on-demand half of the requirement. Continuous health testing during operation, re-running a known answer periodically as output is drawn, is not implemented.",
         },
     },
     Requirement {
@@ -478,6 +583,33 @@ const RFC8017_REQS: [Requirement; 1] = [Requirement {
     },
 }];
 
+const SP800131A_REQS: [Requirement; 2] = [
+    Requirement {
+        id: "sp-800-131a-rsa-minimum",
+        section: "3",
+        obligation: Obligation::ShallNot,
+        statement: "RSA keys shorter than 2048 bits shall not be used for new signatures.",
+        rationale: "A 1024-bit modulus is within reach of a well-resourced adversary. The floor is enforced at construction rather than documented as advice, so a short key cannot be loaded and then used.",
+        applies_to: &["rsa-pkcs1-sha256", "rsa-pss-sha256"],
+        compliance: Compliance::Met {
+            file: "crates/ac-rsa/src/key.rs",
+            symbol: "MIN_MODULUS_BITS",
+        },
+    },
+    Requirement {
+        id: "sp-800-131a-disallowed-algorithms",
+        section: "1.1",
+        obligation: Obligation::ShallNot,
+        statement: "Algorithms whose transition has completed, among them Triple DES and SHA-1 for signature generation, shall not be used to protect new data.",
+        rationale: "This library keeps them in the registry so a request resolves to a refusal with a reason, rather than to silence a caller might read as not-implemented-yet and work around.",
+        applies_to: &["3des", "sha-1"],
+        compliance: Compliance::Met {
+            file: "crates/ac-ontology/src/types.rs",
+            symbol: "Excluded",
+        },
+    },
+];
+
 const NO_REQS: [Requirement; 0] = [];
 
 // ---------------------------------------------------------------------------
@@ -490,6 +622,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 140-3",
         title: "Security Requirements for Cryptographic Modules",
         body: Body::Nist,
+        scope: Scope::Module,
         year: 2019,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -504,6 +637,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 180-4",
         title: "Secure Hash Standard (SHS)",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2015,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -517,6 +651,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 186-5",
         title: "Digital Signature Standard (DSS)",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2023,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -529,6 +664,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 197",
         title: "Advanced Encryption Standard (AES)",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2001,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -541,6 +677,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 198-1",
         title: "The Keyed-Hash Message Authentication Code (HMAC)",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2008,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -553,6 +690,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 202",
         title: "SHA-3 Standard: Permutation-Based Hash and Extendable-Output Functions",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2015,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -565,6 +703,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 203",
         title: "Module-Lattice-Based Key-Encapsulation Mechanism Standard",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2024,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -578,6 +717,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "FIPS 204",
         title: "Module-Lattice-Based Digital Signature Standard",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2024,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -591,6 +731,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "SP 800-38A",
         title: "Recommendation for Block Cipher Modes of Operation: Methods and Techniques",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2001,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -604,6 +745,7 @@ pub static STANDARDS: &[Standard] = &[
         title: "Recommendation for Block Cipher Modes of Operation: The CMAC Mode for \
                 Authentication",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2005,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -617,6 +759,7 @@ pub static STANDARDS: &[Standard] = &[
         title: "Recommendation for Block Cipher Modes of Operation: Galois/Counter Mode (GCM) \
                 and GMAC",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2007,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -629,6 +772,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "SP 800-38F",
         title: "Recommendation for Block Cipher Modes of Operation: Methods for Key Wrapping",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2012,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -642,6 +786,7 @@ pub static STANDARDS: &[Standard] = &[
         title: "Recommendation for Pair-Wise Key-Establishment Schemes Using Discrete \
                 Logarithm Cryptography",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2018,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -654,6 +799,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "SP 800-56C",
         title: "Recommendation for Key-Derivation Methods in Key-Establishment Schemes",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2020,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -666,6 +812,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "SP 800-67",
         title: "Recommendation for the Triple Data Encryption Algorithm (TDEA) Block Cipher",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2017,
         status: StandardStatus::Withdrawn,
         superseded_by: &["FIPS 197"],
@@ -680,6 +827,7 @@ pub static STANDARDS: &[Standard] = &[
         title: "Recommendation for Random Number Generation Using Deterministic Random Bit \
                 Generators",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2015,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -692,6 +840,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "SP 800-108r1",
         title: "Recommendation for Key Derivation Using Pseudorandom Functions",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2022,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -704,6 +853,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "SP 800-132",
         title: "Recommendation for Password-Based Key Derivation",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2010,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -713,9 +863,22 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "SP 800-131A",
+        title: "Transitioning the Use of Cryptographic Algorithms and Key Lengths",
+        body: Body::Nist,
+        scope: Scope::Module,
+        year: 2019,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://doi.org/10.6028/NIST.SP.800-131A",
+        summary: "What has stopped being acceptable, and when. It defines no construction of its own, which is why no registry entry cites it: it constrains the ones defined elsewhere. The key-length floors here are enforced at construction rather than left as advice.",
+        requirements: &SP800131A_REQS,
+    },
+    Standard {
         id: "SP 800-185",
         title: "SHA-3 Derived Functions: cSHAKE, KMAC, TupleHash and ParallelHash",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2016,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -729,6 +892,7 @@ pub static STANDARDS: &[Standard] = &[
         title: "Recommendations for Discrete Logarithm-based Cryptography: Elliptic Curve \
                 Domain Parameters",
         body: Body::Nist,
+        scope: Scope::Algorithm,
         year: 2023,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -741,6 +905,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 1321",
         title: "The MD5 Message-Digest Algorithm",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 1992,
         status: StandardStatus::Informational,
         superseded_by: &[],
@@ -753,6 +918,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 2104",
         title: "HMAC: Keyed-Hashing for Message Authentication",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 1997,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -764,6 +930,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 3394",
         title: "Advanced Encryption Standard (AES) Key Wrap Algorithm",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2002,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -776,6 +943,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 5649",
         title: "Advanced Encryption Standard (AES) Key Wrap with Padding Algorithm",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2009,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -787,6 +955,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 5869",
         title: "HMAC-based Extract-and-Expand Key Derivation Function (HKDF)",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2010,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -800,6 +969,7 @@ pub static STANDARDS: &[Standard] = &[
         title: "Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic \
                 Curve Digital Signature Algorithm (ECDSA)",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2013,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -813,6 +983,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 7693",
         title: "The BLAKE2 Cryptographic Hash and Message Authentication Code (MAC)",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2015,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -824,6 +995,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 7748",
         title: "Elliptic Curves for Security",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2016,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -835,6 +1007,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 8017",
         title: "PKCS #1: RSA Cryptography Specifications Version 2.2",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2016,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -847,6 +1020,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 8018",
         title: "PKCS #5: Password-Based Cryptography Specification Version 2.1",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2017,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -858,6 +1032,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 8032",
         title: "Edwards-Curve Digital Signature Algorithm (EdDSA)",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2017,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -870,6 +1045,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 8439",
         title: "ChaCha20 and Poly1305 for IETF Protocols",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2018,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -882,6 +1058,7 @@ pub static STANDARDS: &[Standard] = &[
         id: "RFC 8452",
         title: "AES-GCM-SIV: Nonce Misuse-Resistant Authenticated Encryption",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2019,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -896,6 +1073,7 @@ pub static STANDARDS: &[Standard] = &[
         title: "Argon2 Memory-Hard Function for Password Hashing and Proof-of-Work \
                 Applications",
         body: Body::Ietf,
+        scope: Scope::Algorithm,
         year: 2021,
         status: StandardStatus::Current,
         superseded_by: &[],
@@ -958,17 +1136,24 @@ mod tests {
                 continue;
             }
             // The only uncited documents allowed are the ones that govern the
-            // module rather than an algorithm, and they must say so.
-            assert!(
-                s.id == "FIPS 140-3",
-                "{} is in the knowledgebase but no entry cites it",
+            // module rather than an algorithm, and they must declare it.
+            assert_eq!(
+                s.scope,
+                Scope::Module,
+                "{} is in the knowledgebase but no entry cites it, and it is not declared as governing the module",
                 s.id
             );
-            assert!(
-                s.summary.contains("context"),
-                "{} is uncited and must explain why",
-                s.id
-            );
+        }
+        // And the converse: a module-scoped document must not be cited by an
+        // entry, or the distinction has stopped meaning anything.
+        for s in STANDARDS {
+            if s.scope == Scope::Module {
+                assert!(
+                    !s.is_cited(),
+                    "{} is declared module-scoped but an entry cites it",
+                    s.id
+                );
+            }
         }
     }
 
@@ -982,8 +1167,20 @@ mod tests {
         let root = workspace_root();
         let mut checked = 0;
         for (std_doc, req) in requirements() {
-            let Compliance::Met { file, symbol } = req.compliance else {
-                continue;
+            let (file, symbol) = match req.compliance {
+                Compliance::Met { file, symbol } => (file, symbol),
+                // A partial claim names code too, and is held to the same
+                // standard. Otherwise "partial" becomes the place unverifiable
+                // claims go to hide.
+                Compliance::Partial { file, symbol, gap } => {
+                    assert!(
+                        gap.len() > 40,
+                        "{} is partial and must say what is missing",
+                        req.id
+                    );
+                    (file, symbol)
+                }
+                _ => continue,
             };
             let path = root.join(file);
             assert!(
@@ -1144,6 +1341,56 @@ mod tests {
                 "{} appears to claim validation",
                 s.id
             );
+        }
+    }
+
+    /// Prose must not carry the wreckage of its own line wrapping.
+    ///
+    /// These strings reach the CLI, the MCP responses and every export. When a
+    /// wrapped literal goes wrong, the source indentation ends up *inside* the
+    /// string, and it surfaces as a stray gap in the middle of a sentence that
+    /// looks like a bug in whatever is displaying it rather than a data problem
+    /// here.
+    ///
+    /// This has now happened twice, which is why it is a test rather than a
+    /// resolution to be careful. It covers the registry as well, since the same
+    /// prose fields and the same wrapping style are used there, and the first
+    /// thing it caught was damage already committed in that file.
+    #[test]
+    fn prose_has_no_embedded_whitespace_runs() {
+        fn check(what: &str, text: &str) {
+            // Two spaces. Written via a constant so a whitespace-normalising
+            // pass over this file cannot quietly turn the check into "contains
+            // a space", which every string does.
+            const RUN: &str = "  ";
+            assert_eq!(RUN.len(), 2, "the guard's own pattern was rewritten");
+            assert!(!text.contains(RUN), "{what} has a run of spaces: {text:?}");
+            assert!(!text.contains('\t'), "{what} has a tab: {text:?}");
+            assert!(!text.contains('\n'), "{what} has a newline: {text:?}");
+        }
+
+        for s in STANDARDS {
+            check(&format!("{} title", s.id), s.title);
+            check(&format!("{} summary", s.id), s.summary);
+        }
+        for (_, r) in requirements() {
+            check(&format!("{} statement", r.id), r.statement);
+            check(&format!("{} rationale", r.id), r.rationale);
+            match r.compliance {
+                Compliance::Partial { gap, .. } => check(&format!("{} gap", r.id), gap),
+                Compliance::NotApplicable { why } | Compliance::Unmet { why } => {
+                    check(&format!("{} reason", r.id), why)
+                }
+                Compliance::Met { .. } => {}
+            }
+        }
+        for e in REGISTRY {
+            check(&format!("{} summary", e.id), e.summary);
+            check(&format!("{} notes", e.id), e.notes);
+            for c in e.constraints {
+                check(&format!("{}/{} requirement", e.id, c.id), c.requirement);
+                check(&format!("{}/{} consequence", e.id, c.id), c.consequence);
+            }
         }
     }
 

@@ -59,7 +59,10 @@ fn keypair(seed: u8) -> ([u8; PUBLIC_KEY_LEN], [u8; SECRET_KEY_LEN]) {
     }
     let mut pk = [0u8; PUBLIC_KEY_LEN];
     let mut sk = [0u8; SECRET_KEY_LEN];
-    keygen(&xi, &mut pk, &mut sk);
+    assert!(
+        keygen(&xi, &mut pk, &mut sk),
+        "keygen consistency test failed"
+    );
     (pk, sk)
 }
 

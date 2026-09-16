@@ -191,7 +191,36 @@ fn message_prefix(ctx: &[u8]) -> ([u8; 2], bool) {
 ///
 /// Deterministic in `xi`: the same seed always gives the same key, which is
 /// what makes a future ACVP key generation vector able to check this at all.
-pub fn keygen(xi: &[u8; SEED_LEN], pk: &mut [u8; PUBLIC_KEY_LEN], sk: &mut [u8; SECRET_KEY_LEN]) {
+///
+/// Returns `false` if the pairwise consistency test fails, in which case the
+/// buffers are cleared rather than left holding a key that does not work. That
+/// test is why this returns anything at all; FIPS 140-3 requires it on a
+/// generated asymmetric key pair, and a function that performed it but gave the
+/// caller no way to learn the answer would be performing it for nobody.
+#[must_use = "a false return means the key pair failed its consistency test"]
+pub fn keygen(
+    xi: &[u8; SEED_LEN],
+    pk: &mut [u8; PUBLIC_KEY_LEN],
+    sk: &mut [u8; SECRET_KEY_LEN],
+) -> bool {
+    keygen_inner(xi, pk, sk);
+
+    // Sign a fixed message and verify it. For a signature scheme that is the
+    // whole meaning of "these two halves belong together", and it is the check
+    // that catches a public key that does not correspond to the secret one --
+    // a failure that would otherwise appear only at the far end, as signatures
+    // that never verify.
+    const PROBE: &[u8] = b"ac-mldsa/pairwise-consistency";
+    let mut sig = [0u8; SIGNATURE_LEN];
+    let ok = sign_deterministic(sk, PROBE, b"", &mut sig) && verify(pk, PROBE, b"", &sig);
+    if !ok {
+        pk.fill(0);
+        sk.fill(0);
+    }
+    ok
+}
+
+fn keygen_inner(xi: &[u8; SEED_LEN], pk: &mut [u8; PUBLIC_KEY_LEN], sk: &mut [u8; SECRET_KEY_LEN]) {
     // The k and l bytes are part of the hash input: two parameter sets with the
     // same seed must not share an expansion.
     let mut expanded = [0u8; 128];
@@ -529,7 +558,10 @@ mod tests {
         }
         let mut pk = [0u8; PUBLIC_KEY_LEN];
         let mut sk = [0u8; SECRET_KEY_LEN];
-        keygen(&xi, &mut pk, &mut sk);
+        assert!(
+            keygen(&xi, &mut pk, &mut sk),
+            "keygen consistency test failed"
+        );
         (pk, sk)
     }
 

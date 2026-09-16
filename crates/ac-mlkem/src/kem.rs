@@ -305,6 +305,44 @@ impl MlKem768 {
         Self::keygen_deterministic(&d, &z, ek, dk);
         d.zeroize();
         z.zeroize();
+        // FIPS 140-3 requires a pairwise consistency test on a generated key
+        // pair. It runs here, inside generation, rather than being a function a
+        // caller has to know to call.
+        Self::pairwise_consistency(ek, dk)
+    }
+
+    /// The pairwise consistency test for a generated key pair.
+    ///
+    /// Encapsulates to the public half and decapsulates with the private half,
+    /// requiring the same shared secret. For a KEM that is the whole meaning of
+    /// "these two belong together".
+    ///
+    /// The subtlety is that decapsulation *never fails*: a mismatched key pair
+    /// yields the implicit-rejection secret rather than an error. So the test
+    /// cannot check for an error, it must compare the secrets — which is
+    /// exactly the check that distinguishes a working pair from one that will
+    /// silently disagree with every peer it ever talks to.
+    ///
+    /// The message is derived from the public key rather than drawn from the
+    /// RNG. That keeps the test deterministic, costs no entropy, and means a
+    /// failure reproduces.
+    fn pairwise_consistency(ek: &[u8; ENCAPS_KEY_LEN], dk: &[u8; DECAPS_KEY_LEN]) -> Result<()> {
+        let m = h(ek);
+        let mut ct = [0u8; CIPHERTEXT_LEN];
+        let mut sent = [0u8; SHARED_SECRET_LEN];
+        Self::encapsulate_deterministic(&m, ek, &mut ct, &mut sent);
+
+        let mut received = [0u8; SHARED_SECRET_LEN];
+        Self::decapsulate(dk, &ct, &mut received)?;
+
+        let matched = ac_core::ct::verify(&sent, &received);
+        sent.zeroize();
+        received.zeroize();
+        ensure!(
+            matched,
+            SelfTestFailed,
+            "ml-kem key pair failed its pairwise consistency test; the key is withheld"
+        );
         Ok(())
     }
 
@@ -634,6 +672,38 @@ mod tests {
     /// together produce a key that decapsulates without complaint and yields
     /// secrets that never agree with the peer, which is a miserable thing to
     /// debug from the far end.
+    /// The pairwise consistency test must actually reject a mismatched pair.
+    ///
+    /// Without this the test would be code that runs on every key generation
+    /// and has never been shown to detect anything -- which is precisely the
+    /// shape of dead validator this library has already been caught carrying.
+    ///
+    /// The case is subtle for a KEM: decapsulation never fails, so a mismatched
+    /// pair produces the implicit-rejection secret rather than an error. The
+    /// test has to compare secrets, and this proves it does.
+    #[test]
+    fn the_pairwise_consistency_test_rejects_a_mismatched_pair() {
+        let mut r = rng(b"pct-negative");
+        let mut ek1 = [0u8; ENCAPS_KEY_LEN];
+        let mut dk1 = [0u8; DECAPS_KEY_LEN];
+        MlKem768::keygen(&mut r, &mut ek1, &mut dk1).unwrap();
+        let mut ek2 = [0u8; ENCAPS_KEY_LEN];
+        let mut dk2 = [0u8; DECAPS_KEY_LEN];
+        MlKem768::keygen(&mut r, &mut ek2, &mut dk2).unwrap();
+
+        // Each pair is consistent with itself.
+        MlKem768::pairwise_consistency(&ek1, &dk1).unwrap();
+        MlKem768::pairwise_consistency(&ek2, &dk2).unwrap();
+
+        // Crossed, they are not. Decapsulation still succeeds here -- it always
+        // does -- so only the secret comparison can catch this.
+        let crossed = MlKem768::pairwise_consistency(&ek2, &dk1);
+        assert!(
+            crossed.is_err(),
+            "a mismatched pair passed the consistency test"
+        );
+    }
+
     #[test]
     fn decapsulate_refuses_a_spliced_key() {
         let mut r = rng(b"hash-check");
