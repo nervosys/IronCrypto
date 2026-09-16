@@ -689,6 +689,41 @@ const GCM_SIV_P: [Param; 4] = [
     },
 ];
 
+const MLDSA65_P: [Param; 4] = [
+    Param {
+        name: "verification-key",
+        unit: Unit::Bytes,
+        min: 1952,
+        max: 1952,
+        recommended: 1952,
+        note: "32 + 320 * k, with k = 6.",
+    },
+    Param {
+        name: "signing-key",
+        unit: Unit::Bytes,
+        min: 4032,
+        max: 4032,
+        recommended: 4032,
+        note: "128 + 128 * (k + l) + 416 * k, with k = 6 and l = 5.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 3309,
+        max: 3309,
+        recommended: 3309,
+        note: "48 + 640 * l + omega + k, with omega = 55.",
+    },
+    Param {
+        name: "context",
+        unit: Unit::Bytes,
+        min: 0,
+        max: 255,
+        recommended: 0,
+        note: "The context string is length-prefixed with one byte, so 255 is a hard ceiling.                Signing refuses anything longer rather than truncating it.",
+    },
+];
+
 const MLKEM768_P: [Param; 4] = [
     Param {
         name: "encapsulation-key",
@@ -752,7 +787,11 @@ const KEYWRAP_P: [Param; 3] = [
 ];
 
 const NO_PARAMS: [Param; 0] = [];
-const NO_CONSTRAINTS: [Constraint; 0] = [];
+
+// There is deliberately no NO_CONSTRAINTS. Promoting ML-DSA-65 out of `planned`
+// left no entry with an empty constraint list, and an entry that has nothing to
+// warn about is nearly always an entry nobody has thought about yet. Anything
+// that genuinely needs one can write `&[]` and be visible doing it.
 
 // ---------------------------------------------------------------------------
 // Entry construction helpers
@@ -2437,15 +2476,43 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
         strength: Strength { classical: 192, quantum: 192 },
         fips: FipsStatus::Approved,
-        status: ImplStatus::Planned,
+        status: ImplStatus::Experimental,
         standards: &["FIPS 204"],
-        params: &NO_PARAMS,
-        constraints: &NO_CONSTRAINTS,
-        edges: &[Edge { relation: Relation::Supersedes, target: "ecdsa-p256-sha256" }],
+        params: &MLDSA65_P,
+        constraints: &[
+            Constraint {
+                id: "not-interoperability-tested",
+                requirement: "Do not use this to talk to another implementation, or to produce                               a signature anything else must verify, until an ACVP vector has                               been wired in and passes.",
+                consequence: "Every layer beneath the scheme is checked against an independent                               oracle, but the assembly is checked only against itself. A                               signature scheme with a misread domain separator signs and                               verifies against itself perfectly and against nobody else.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "deploy-post-quantum-in-a-hybrid",
+                requirement: "Sign with a classical scheme alongside this one and require both                               signatures to check.",
+                consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either                               half survives; ML-DSA alone bets everything on the newer one.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "supply-randomness-or-choose-determinism",
+                requirement: "Pass 32 fresh random bytes for the hedged variant, or use the                               deterministic one deliberately. Do not pass a constant you                               believe to be random.",
+                consequence: "The hedged and deterministic variants are both sound; a third                               case, where a caller thinks it is hedging but is not, gives the                               determinism without the intent and can mask a broken entropy                               source elsewhere in the system.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::Supersedes, target: "ecdsa-p256-sha256" },
+            Edge { relation: Relation::PairsWith, target: "ecdsa-p256-sha256" },
+            Edge { relation: Relation::BuiltOn, target: "shake256" },
+        ],
         performance: Performance::Moderate,
-        rust_path: "",
-        example: "",
-        notes: "Not implemented yet.",
+        rust_path: "ac_mldsa::sign",
+        example: "let mut pk = [0u8; ac_mldsa::sign::PUBLIC_KEY_LEN];
+let mut sk = [0u8; ac_mldsa::sign::SECRET_KEY_LEN];
+ac_mldsa::sign::keygen(&seed, &mut pk, &mut sk);
+let mut sig = [0u8; ac_mldsa::sign::SIGNATURE_LEN];
+ac_mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig);
+ac_mldsa::sign::verify(&pk, msg, ctx, &sig);",
+        notes: "Implemented but not vector-tested, hence experimental: the NTT is checked                 against schoolbook multiplication, the packing against a bit-at-a-time                 reference, the rounding and hints against the equations that define them, the                 samplers against the specification's pseudocode, and the key and signature                 sizes come out at the widths FIPS 204 fixes — but nothing checks the assembly                 against another implementation. Only the 65 parameter set exists; shipping                 three unverified variants would triple what a vector has to confirm.                 Verification refuses non-canonical hint blocks, so one signature has one                 encoding.",
     },
     Entry {
         id: "rsa-pkcs1-sha256",

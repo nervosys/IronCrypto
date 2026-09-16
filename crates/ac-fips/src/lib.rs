@@ -351,8 +351,17 @@ mod tests {
             check("nonsense").unwrap_err().kind(),
             ErrorKind::Unsupported
         );
+        // Both experimental entries are refused here even though they are
+        // FIPS-approved *algorithms* with working code. That is the point of
+        // the status: approval is about the algorithm, availability is about
+        // whether this implementation has been shown to be that algorithm, and
+        // only the second one gates use.
         assert_eq!(
             check("ml-kem-768").unwrap_err().kind(),
+            ErrorKind::Unsupported
+        );
+        assert_eq!(
+            check("ml-dsa-65").unwrap_err().kind(),
             ErrorKind::Unsupported
         );
 

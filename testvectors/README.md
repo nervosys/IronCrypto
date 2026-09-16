@@ -4,16 +4,17 @@ Files here are read by the test suite at run time. Drop one in and the matching
 test starts checking against it; leave it out and that test prints a skip
 notice and passes.
 
-That arrangement exists for a specific reason. Two algorithms in this workspace
-are registered `experimental` rather than `available`:
+That arrangement exists for a specific reason. Three algorithms in this
+workspace are registered `experimental` rather than `available`:
 
 | algorithm | what is verified | what is not |
 |---|---|---|
 | `ml-kem-768` | NTT against schoolbook multiplication, packing against a bit buffer, samplers against FIPS 203's pseudocode, key and ciphertext sizes against the standard | that the assembly computes what other implementations compute |
 | `aes-256-gcm-siv` | POLYVAL against the GHASH construction of RFC 8452 Appendix A, AES against FIPS 197 | the same |
+| `ml-dsa-65` | NTT against schoolbook multiplication, packing against a bit-at-a-time reference, rounding and hints against their defining equations, samplers against FIPS 204's pseudocode, key and signature sizes against the standard | the same |
 
-Neither gap is a code problem. Both are missing *files*, and supplying one
-promotes the algorithm without anybody writing code.
+None of those gaps is a code problem. Each is a missing *file*, and supplying
+one promotes the algorithm without anybody writing code.
 
 ## Format
 
@@ -43,6 +44,8 @@ that effort in the most confusing way available.
 | `aes-gcm-siv.json` | `key`, `nonce`, `aad`, `pt`, `ct` (ciphertext with the tag appended) | RFC 8452 Appendix C |
 | `ml-kem-768-keygen.json` | `d`, `z`, `ek`, `dk` | ACVP `ML-KEM-keyGen-FIPS203`, `AFT` groups |
 | `ml-kem-768-encap.json` | `ek`, `m`, `c`, `k` | ACVP `ML-KEM-encapDecap-FIPS203`, encapsulation `AFT` groups |
+| `ml-dsa-65-keygen.json` | `seed`, `pk`, `sk` | ACVP `ML-DSA-keyGen-FIPS204`, `AFT` groups, `ML-DSA-65` only |
+| `ml-dsa-65-siggen.json` | `sk`, `message`, `context`, `rnd`, `signature` | ACVP `ML-DSA-sigGen-FIPS204`. Use the deterministic groups, or supply `rnd` for hedged ones |
 
 ## Converting ACVP files
 

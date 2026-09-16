@@ -1,4 +1,4 @@
-//! ML-DSA (FIPS 204) — **incomplete**: everything below the signature scheme.
+//! ML-DSA-65 (FIPS 204) — **experimental**: implemented, not vector-tested.
 //!
 //! This crate currently provides `Z_q[X]/(X^256 + 1)` with `q = 8380417`, the
 //! number-theoretic transform over it, the rejection-bound check that ML-DSA's
@@ -36,3 +36,5 @@
 pub mod encode;
 pub mod poly;
 pub mod rounding;
+pub mod sample;
+pub mod sign;

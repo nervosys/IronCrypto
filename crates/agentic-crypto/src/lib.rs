@@ -76,6 +76,7 @@ pub use ac_fips as fips;
 pub use ac_hash as hash;
 pub use ac_kdf as kdf;
 pub use ac_mac as mac;
+pub use ac_mldsa as mldsa;
 pub use ac_mlkem as mlkem;
 pub use ac_ontology as ontology;
 pub use ac_pkix as pkix;

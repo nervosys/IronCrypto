@@ -10,7 +10,7 @@
 
 use ac_vectors::{hex, hex_field, optional_hex_field, VectorFile};
 use agentic_crypto::prelude::*;
-use agentic_crypto::{cipher, mlkem};
+use agentic_crypto::{cipher, mldsa, mlkem};
 
 /// RFC 3394, loaded from the bundled file rather than inlined.
 ///
@@ -173,6 +173,62 @@ fn ml_kem_encap_vectors_from_file() {
 
         assert_eq!(hex(&ct), hex(&want_ct), "ciphertext, case {index}");
         assert_eq!(hex(&shared), hex(&want_k), "shared secret, case {index}");
+    }
+}
+
+/// ACVP ML-DSA key generation, when someone supplies it.
+///
+/// As with ML-KEM, key generation is the right place to start: it is
+/// deterministic in the seed, so one case pins `ExpandA`, `ExpandS`, the NTT,
+/// `Power2Round` and the whole key encoding at once.
+#[test]
+fn ml_dsa_keygen_vectors_from_file() {
+    let Some(file) = VectorFile::load_or_report("ml-dsa-65-keygen") else {
+        return;
+    };
+
+    for (index, case) in file.cases.iter().enumerate() {
+        let seed = hex_field(case, "seed");
+        let want_pk = hex_field(case, "pk");
+        let want_sk = hex_field(case, "sk");
+        assert_eq!(seed.len(), 32, "case {index}: seed");
+
+        let mut pk = [0u8; mldsa::sign::PUBLIC_KEY_LEN];
+        let mut sk = [0u8; mldsa::sign::SECRET_KEY_LEN];
+        mldsa::sign::keygen(seed[..].try_into().unwrap(), &mut pk, &mut sk);
+
+        assert_eq!(hex(&pk), hex(&want_pk), "verification key, case {index}");
+        assert_eq!(hex(&sk), hex(&want_sk), "signing key, case {index}");
+    }
+}
+
+/// ACVP ML-DSA signature generation, when someone supplies it.
+///
+/// `rnd` is optional: absent means the deterministic variant, which is the
+/// same code path with zeros.
+#[test]
+fn ml_dsa_siggen_vectors_from_file() {
+    let Some(file) = VectorFile::load_or_report("ml-dsa-65-siggen") else {
+        return;
+    };
+
+    for (index, case) in file.cases.iter().enumerate() {
+        let sk = hex_field(case, "sk");
+        let message = hex_field(case, "message");
+        let ctx = optional_hex_field(case, "context").unwrap_or_default();
+        let rnd = optional_hex_field(case, "rnd").unwrap_or_else(|| vec![0u8; 32]);
+        let want = hex_field(case, "signature");
+
+        let sk: &[u8; mldsa::sign::SECRET_KEY_LEN] = sk[..]
+            .try_into()
+            .unwrap_or_else(|_| panic!("case {index}: sk is the wrong length"));
+
+        let mut sig = [0u8; mldsa::sign::SIGNATURE_LEN];
+        assert!(
+            mldsa::sign::sign(sk, &message, &ctx, rnd[..].try_into().unwrap(), &mut sig),
+            "case {index}: signing failed"
+        );
+        assert_eq!(hex(&sig), hex(&want), "signature, case {index}");
     }
 }
 

@@ -178,17 +178,17 @@ The ontology registers algorithms this library does **not** provide, marked
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
   `SubjectPublicKeyInfo` from any X.509 parser to `ac_pkix::PublicKeyInfo`.
-- **ML-DSA** (FIPS 204) — `planned`. Everything below the signature scheme
-  exists in `ac-mldsa`: the ring arithmetic and NTT, checked against schoolbook
-  multiplication; the rounding and hint functions of algorithms 35 through 40,
-  checked against the equations that define them; and the bit packing of
-  algorithms 16 through 21, checked against a bit-at-a-time reference. There is
-  no signing or verification on top of them yet, so nothing is registered as
-  available.
-  ML-KEM-768 is implemented but
-  `experimental`: every component is checked against an independent oracle,
-  yet no ACVP vector confirms the assembly interoperates. It is excluded from
-  the approved mode and from `recommend`.
+- **ML-DSA-65** (FIPS 204) — `experimental`, for the same reason as ML-KEM and
+  with the same caveat. Every layer is independently checked: the NTT against
+  schoolbook multiplication, the packing against a bit-at-a-time reference, the
+  rounding and hints against the equations that define them, the samplers
+  against the specification's pseudocode, and the key and signature sizes
+  against the widths FIPS 204 fixes. The scheme on top of them is checked only
+  by signing and verifying — which is not nothing, since signing computes
+  `A*y` and verification computes `A*z - c*t1*2^d` and the two must meet through
+  the hints, but it cannot catch a convention misread consistently. Only the 65
+  parameter set exists. ML-KEM-768 is `experimental` on the same terms. Both are
+  excluded from the approved mode and from `recommend`.
 - **SHA-1, MD5, Triple DES** — `excluded`, permanently. They are in the registry
   only so that a request for them resolves to a refusal with a reason.
 

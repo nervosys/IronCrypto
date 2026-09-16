@@ -218,6 +218,7 @@ mod tests {
             "ac_ec::",
             "ac_rsa::",
             "ac_mlkem::",
+            "ac_mldsa::",
         ];
         for e in REGISTRY
             .iter()
