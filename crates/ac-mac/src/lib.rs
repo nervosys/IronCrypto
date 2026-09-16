@@ -22,12 +22,14 @@
 
 mod cmac;
 mod hmac;
+mod kmac;
 
 pub use ac_cipher::Poly1305;
 pub use cmac::{CmacAes128, CmacAes192, CmacAes256};
 pub use hmac::{
     Hmac, HmacSha256, HmacSha384, HmacSha3_256, HmacSha3_512, HmacSha512, HmacSha512_256,
 };
+pub use kmac::{Kmac128, Kmac256};
 
 /// Ontology identifiers for the MACs this crate provides.
 pub const MAC_IDS: &[&str] = &[

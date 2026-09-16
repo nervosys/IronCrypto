@@ -559,6 +559,52 @@ const P521_KA_P: [Param; 3] = [
     },
 ];
 
+const KMAC_P: [Param; 3] = [
+    Param {
+        name: "key",
+        unit: Unit::Bytes,
+        min: 16,
+        max: u64::MAX,
+        recommended: 32,
+        note: "Any length. A sponge absorbs the key directly, so there is no block-size rule.",
+    },
+    Param {
+        name: "customization",
+        unit: Unit::Bytes,
+        min: 0,
+        max: u64::MAX,
+        recommended: 0,
+        note: "Domain separator. Give two uses of one key different strings.",
+    },
+    Param {
+        name: "tag",
+        unit: Unit::Bytes,
+        min: 16,
+        max: 64,
+        recommended: 32,
+        note: "Caller-chosen, and bound into the computation: a short tag is not a prefix of a long one.",
+    },
+];
+
+const CSHAKE_P: [Param; 2] = [
+    Param {
+        name: "customization",
+        unit: Unit::Bytes,
+        min: 0,
+        max: u64::MAX,
+        recommended: 0,
+        note: "Empty means this is exactly SHAKE, including the domain separator.",
+    },
+    Param {
+        name: "output",
+        unit: Unit::Bytes,
+        min: 1,
+        max: u64::MAX,
+        recommended: 32,
+        note: "Any length; the sponge is squeezed for as long as asked.",
+    },
+];
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
 
@@ -1648,6 +1694,118 @@ pub static REGISTRY: &[Entry] = &[
                 deployments. FIPS 186-5 approves EdDSA, but this implementation is not validated; \
                 the ontology reports it as not-approved so approved mode blocks it rather than \
                 implying a validation that does not exist.",
+    },
+    Entry {
+        id: "kmac128",
+        name: "KMAC128",
+        aliases: &["kmac"],
+        summary: "The SHA-3 family's MAC: a keyed sponge, with no HMAC nesting needed.",
+        class: Class::Mac,
+        family: "SHA-3",
+        purposes: &[Purpose::Authentication, Purpose::Integrity],
+        strength: Strength { classical: 128, quantum: 64 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &KMAC_P,
+        constraints: &[
+            Constraint {
+                id: "compare-tags-in-constant-time",
+                requirement: "Verify with the provided constant-time check, never with ==.",
+                consequence: "An early-exit comparison leaks how many leading bytes matched, \
+                              which recovers a valid tag one byte at a time.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "separate-domains-with-customization",
+                requirement: "Give two uses of the same key different customization strings.",
+                consequence: "A tag produced for one purpose verifies for the other, so a \
+                              message can be replayed across contexts.",
+                severity: Severity::Advisory,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "cshake128" },
+            Edge { relation: Relation::PairsWith, target: "sha3-256" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ac_mac::Kmac128",
+        example: "let mut tag = [0u8; 32];\nac_mac::Kmac128::mac(key, b\"my app\", msg, &mut tag);\nac_mac::Kmac128::verify(key, b\"my app\", msg, &tag)?;",
+        notes: "Unlike HMAC, the tag length is an input to the computation rather than a \
+                truncation of it, so a 32-byte tag is unrelated to the first 32 bytes of a \
+                64-byte one and cannot be forged by truncating it. The XOF variant encodes zero \
+                instead and does produce a real stream.",
+    },
+    Entry {
+        id: "kmac256",
+        name: "KMAC256",
+        aliases: &[],
+        summary: "KMAC at the 256-bit security level, for CNSA-style profiles.",
+        class: Class::Mac,
+        family: "SHA-3",
+        purposes: &[Purpose::Authentication, Purpose::Integrity],
+        strength: Strength { classical: 256, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &KMAC_P,
+        constraints: &[Constraint {
+            id: "compare-tags-in-constant-time",
+            requirement: "Verify with the provided constant-time check, never with ==.",
+            consequence: "An early-exit comparison leaks how many leading bytes matched.",
+            severity: Severity::Critical,
+        }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "cshake256" },
+            Edge { relation: Relation::Supersedes, target: "kmac128" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ac_mac::Kmac256",
+        example: "ac_mac::Kmac256::mac(key, b\"my app\", msg, &mut tag);",
+        notes: "A smaller rate than KMAC128, so it absorbs fewer bytes per permutation and runs \
+                proportionally slower. Choose it to meet a profile.",
+    },
+    Entry {
+        id: "cshake128",
+        name: "cSHAKE128",
+        aliases: &[],
+        summary: "SHAKE128 with a customization string, and the substrate KMAC is built on.",
+        class: Class::Xof,
+        family: "SHA-3",
+        purposes: &[Purpose::Integrity],
+        strength: Strength { classical: 128, quantum: 64 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &CSHAKE_P,
+        constraints: &[NOT_COLLISION_RESISTANT],
+        edges: &[Edge { relation: Relation::Specializes, target: "shake128" }],
+        performance: Performance::Fast,
+        rust_path: "ac_hash::CShake128",
+        example: "let mut out = [0u8; 32];\nac_hash::CShake128::xof(b\"\", b\"my app\", msg, &mut out);",
+        notes: "With an empty customization string this is bit-for-bit SHAKE128, which is how \
+                SP 800-185 defines it and how the self-test checks it. Reach for it when two \
+                protocols hash the same bytes and must not agree on the result.",
+    },
+    Entry {
+        id: "cshake256",
+        name: "cSHAKE256",
+        aliases: &[],
+        summary: "SHAKE256 with a customization string.",
+        class: Class::Xof,
+        family: "SHA-3",
+        purposes: &[Purpose::Integrity],
+        strength: Strength { classical: 256, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-185"],
+        params: &CSHAKE_P,
+        constraints: &[NOT_COLLISION_RESISTANT],
+        edges: &[Edge { relation: Relation::Specializes, target: "shake256" }],
+        performance: Performance::Fast,
+        rust_path: "ac_hash::CShake256",
+        example: "ac_hash::CShake256::xof(b\"\", b\"my app\", msg, &mut out);",
+        notes: "With an empty customization string this is bit-for-bit SHAKE256.",
     },
     Entry {
         id: "ecdsa-p521-sha512",

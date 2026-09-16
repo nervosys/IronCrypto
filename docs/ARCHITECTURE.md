@@ -132,7 +132,7 @@ behaviour can reproduce it from a shell.
 |---|---|
 | `ac-core` | `Error`/`ErrorKind`, the algorithm traits, `ct`, `Zeroizing`, OS entropy, CPU detection, hex/base64 |
 | `ac-hash` | SHA-2 (two shared cores, six variants), SHA-3/SHAKE (one sponge) |
-| `ac-mac` | HMAC generic over `Digest`, CMAC generic over `BlockCipher` |
+| `ac-mac` | HMAC generic over `Digest`, CMAC generic over `BlockCipher`, KMAC over cSHAKE |
 | `ac-cipher` | GF(2^8) arithmetic, AES (portable + AES-NI), SP 800-38A modes, GCM (portable + PCLMULQDQ GHASH), ChaCha20, Poly1305 |
 | `ac-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
 | `ac-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |

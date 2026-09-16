@@ -93,10 +93,12 @@ pub mod prelude {
     pub use ac_ec::p521::{EcdhP521, EcdsaP521Sha512};
     pub use ac_ec::{Ed25519, X25519};
     pub use ac_hash::Blake2b;
+    pub use ac_hash::{CShake128, CShake256};
     pub use ac_hash::{Sha256, Sha384, Sha3_256, Sha3_512, Sha512, Shake128, Shake256};
     pub use ac_kdf::argon2::{argon2, Argon2Params, Variant};
     pub use ac_kdf::{pbkdf2, Hkdf};
     pub use ac_mac::{CmacAes256, HmacSha256, HmacSha384, HmacSha512};
+    pub use ac_mac::{Kmac128, Kmac256};
     pub use ac_rsa::{Pkcs1Sha256, Pkcs1Sha384, Pkcs1Sha512, PssSha256, PssSha384, PssSha512};
     pub use ac_rsa::{RsaPrivateKey, RsaPublicKey};
 

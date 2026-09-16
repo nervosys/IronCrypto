@@ -82,7 +82,7 @@ fn keccak_f1600(a: &mut [u64; 25]) {
 
 /// A sponge over Keccak-f[1600] with a configurable rate and domain separator.
 #[derive(Clone)]
-struct Sponge {
+pub(crate) struct Sponge {
     state: [u64; 25],
     rate: usize,
     pos: usize,
@@ -90,7 +90,7 @@ struct Sponge {
 }
 
 impl Sponge {
-    const fn new(rate: usize, pad: u8) -> Self {
+    pub(crate) const fn new(rate: usize, pad: u8) -> Self {
         Self {
             state: [0u64; 25],
             rate,
@@ -99,7 +99,7 @@ impl Sponge {
         }
     }
 
-    fn absorb(&mut self, data: &[u8]) {
+    pub(crate) fn absorb(&mut self, data: &[u8]) {
         for &byte in data {
             let lane = self.pos / 8;
             let shift = 8 * (self.pos % 8);
@@ -112,7 +112,7 @@ impl Sponge {
         }
     }
 
-    fn finish(&mut self) {
+    pub(crate) fn finish(&mut self) {
         let lane = self.pos / 8;
         let shift = 8 * (self.pos % 8);
         self.state[lane] ^= (self.pad as u64) << shift;
@@ -122,7 +122,7 @@ impl Sponge {
         self.pos = 0;
     }
 
-    fn squeeze(&mut self, out: &mut [u8]) {
+    pub(crate) fn squeeze(&mut self, out: &mut [u8]) {
         let mut produced = 0;
         while produced < out.len() {
             if self.pos == self.rate {
