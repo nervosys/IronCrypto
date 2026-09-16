@@ -73,7 +73,7 @@ a mode), `NotApproved`.
 
 ### Cryptographic algorithm self-tests
 
-56 known-answer tests, one per implemented algorithm, run by `initialize()` and
+60 known-answer tests, one per implemented algorithm, run by `initialize()` and
 individually addressable:
 
 ```console
@@ -87,7 +87,7 @@ $ acrypto selftest
   PASS ecdh-p384
   PASS ecdsa-p384-sha384
 
-56 passed, 0 failed; integrity check passed
+60 passed, 0 failed; integrity check passed
 ```
 
 Each test is the algorithm's own `SelfTest::self_test()` — the same code path
@@ -106,6 +106,8 @@ registered, so adding an algorithm without a self-test fails CI.
 | SHA-2, SHA-3, SHAKE | FIPS 180-4 / FIPS 202 published values |
 | AES | FIPS 197 Appendix C, SP 800-38A F.1.1 |
 | AES-CBC, AES-CTR | SP 800-38A F.2 / F.5 |
+| AES Key Wrap | RFC 3394 sections 4.1 through 4.6, all six published vectors across three KEK sizes |
+| AES Key Wrap with padding | RFC 5649 section 6, both published vectors, including the single-block path |
 | AES-GCM | the McGrew–Viega specification test cases |
 | CMAC | SP 800-38B examples for all three key sizes |
 | HMAC | RFC 4231; NIST HMAC-SHA3 samples |

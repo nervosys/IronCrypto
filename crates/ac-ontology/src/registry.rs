@@ -724,6 +724,33 @@ const MLKEM768_P: [Param; 4] = [
     },
 ];
 
+const KEYWRAP_P: [Param; 3] = [
+    Param {
+        name: "kek",
+        unit: Unit::Bytes,
+        min: 16,
+        max: 32,
+        recommended: 32,
+        note: "The key-encryption key: 16, 24 or 32 bytes.",
+    },
+    Param {
+        name: "plaintext",
+        unit: Unit::Bytes,
+        min: 16,
+        max: 1024,
+        recommended: 32,
+        note: "A whole number of 64-bit blocks, at least two. Use the padded variant otherwise.",
+    },
+    Param {
+        name: "ciphertext",
+        unit: Unit::Bytes,
+        min: 24,
+        max: 1032,
+        recommended: 40,
+        note: "Eight bytes longer than the input; the extra block carries the integrity check.",
+    },
+];
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
 
@@ -1850,6 +1877,143 @@ pub static REGISTRY: &[Entry] = &[
                 implying a validation that does not exist.",
     },
     Entry {
+        id: "aes-256-kw",
+        name: "AES-256 Key Wrap",
+        aliases: &["kw", "aes-kw", "rfc3394"],
+        summary: "Deterministic key wrapping that needs no nonce.",
+        class: Class::CipherMode,
+        family: "AES",
+        purposes: &[Purpose::Confidentiality, Purpose::Integrity],
+        strength: Strength { classical: 256, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-38F", "RFC 3394"],
+        params: &KEYWRAP_P,
+        constraints: &[
+            Constraint {
+                id: "not-a-general-purpose-aead",
+                requirement: "Use this for keys, and an AEAD for anything else.",
+                consequence: "There is no associated data and the integrity check is 64 bits \
+                              rather than 128. SP 800-38F scopes it to key wrapping and the \
+                              security argument is written for that use.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "aes-256" },
+            Edge { relation: Relation::PairsWith, target: "aes-256-kwp" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_cipher::Aes256Kw",
+        example: "let mut wrapped = [0u8; 40];\nac_cipher::Aes256Kw::wrap(kek, &key, &mut wrapped)?;\nac_cipher::Aes256Kw::unwrap(kek, &wrapped, &mut key)?;",
+        notes: "Reach for this wherever a key has to be encrypted under another key and there is \
+                nowhere sensible to put a nonce: a hardware token with no clock, a backup read \
+                years later, a JOSE header. It is deterministic, so identical keys wrap \
+                identically — which is the trade for needing no nonce at all. Six passes make \
+                every output block depend on every input block.",
+    },
+    Entry {
+        id: "aes-256-kwp",
+        name: "AES-256 Key Wrap with Padding",
+        aliases: &["kwp", "aes-kwp", "rfc5649"],
+        summary: "Key wrapping for data that is not a whole number of 64-bit blocks.",
+        class: Class::CipherMode,
+        family: "AES",
+        purposes: &[Purpose::Confidentiality, Purpose::Integrity],
+        strength: Strength { classical: 256, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-38F", "RFC 5649"],
+        params: &KEYWRAP_P,
+        constraints: &[
+            Constraint {
+                id: "not-a-general-purpose-aead",
+                requirement: "Use this for keys, and an AEAD for anything else.",
+                consequence: "There is no associated data and the integrity check is 64 bits \
+                              rather than 128. SP 800-38F scopes it to key wrapping and the \
+                              security argument is written for that use.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "aes-256" },
+            Edge { relation: Relation::Specializes, target: "aes-256-kw" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_cipher::Aes256Kwp",
+        example: "let n = ac_cipher::Aes256Kwp::wrapped_len(secret.len());\nac_cipher::Aes256Kwp::wrap(kek, secret, &mut out[..n])?;",
+        notes: "The exact length is carried in the check value and recovered on unwrap, but it \
+                is not hidden: the ciphertext size reveals it to within eight bytes. Prefer the \
+                unpadded form when the input is already block-aligned, which every symmetric key \
+                is.",
+    },
+    Entry {
+        id: "aes-128-kw",
+        name: "AES-128 Key Wrap",
+        aliases: &[],
+        summary: "Key wrapping under a 128-bit key-encryption key.",
+        class: Class::CipherMode,
+        family: "AES",
+        purposes: &[Purpose::Confidentiality, Purpose::Integrity],
+        strength: Strength { classical: 128, quantum: 64 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-38F", "RFC 3394"],
+        params: &KEYWRAP_P,
+        constraints: &[
+            Constraint {
+                id: "not-a-general-purpose-aead",
+                requirement: "Use this for keys, and an AEAD for anything else.",
+                consequence: "There is no associated data and the integrity check is 64 bits \
+                              rather than 128. SP 800-38F scopes it to key wrapping and the \
+                              security argument is written for that use.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "aes-128" },
+            Edge { relation: Relation::SupersededBy, target: "aes-256-kw" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_cipher::Aes128Kw",
+        example: "ac_cipher::Aes128Kw::wrap(kek, &key, &mut wrapped)?;",
+        notes: "See aes-256-kw. A wrapping key should be at least as strong as what it wraps, so \
+                prefer the 256-bit form unless an existing interface fixes this one.",
+    },
+    Entry {
+        id: "aes-192-kwp",
+        name: "AES-192 Key Wrap with Padding",
+        aliases: &[],
+        summary: "Padded key wrapping under a 192-bit key-encryption key.",
+        class: Class::CipherMode,
+        family: "AES",
+        purposes: &[Purpose::Confidentiality, Purpose::Integrity],
+        strength: Strength { classical: 192, quantum: 96 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-38F", "RFC 5649"],
+        params: &KEYWRAP_P,
+        constraints: &[
+            Constraint {
+                id: "not-a-general-purpose-aead",
+                requirement: "Use this for keys, and an AEAD for anything else.",
+                consequence: "There is no associated data and the integrity check is 64 bits \
+                              rather than 128. SP 800-38F scopes it to key wrapping and the \
+                              security argument is written for that use.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "aes-192" },
+            Edge { relation: Relation::SupersededBy, target: "aes-256-kwp" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_cipher::Aes192Kwp",
+        example: "ac_cipher::Aes192Kwp::wrap(kek, secret, &mut out)?;",
+        notes: "The parameter set RFC 5649's published vectors use, which is why this one carries \
+                the padded construction's known-answer test.",
+    },
+    Entry {
         id: "aes-256-gcm-siv",
         name: "AES-256-GCM-SIV",
         aliases: &["gcm-siv", "aes-gcm-siv"],
@@ -2576,14 +2740,22 @@ mod tests {
         }
     }
 
+    /// Every cipher mode must state what integrity it provides, because that is
+    /// the question that decides whether it is safe to use alone.
+    ///
+    /// Two answers are acceptable and they are not interchangeable. CBC and CTR
+    /// provide none and must say `requires-separate-mac`. Key Wrap provides its
+    /// own, from a 64-bit check value rather than a full tag, and says
+    /// `not-a-general-purpose-aead` instead — telling a caller to bolt a MAC
+    /// onto it would be wrong, and telling them nothing would be worse.
     #[test]
-    fn unauthenticated_modes_are_flagged() {
+    fn cipher_modes_state_their_integrity() {
         for e in REGISTRY.iter().filter(|e| e.class == Class::CipherMode) {
             assert!(
-                e.constraints
-                    .iter()
-                    .any(|c| c.id == "requires-separate-mac"),
-                "{} must warn that it is unauthenticated",
+                e.constraints.iter().any(|c| {
+                    c.id == "requires-separate-mac" || c.id == "not-a-general-purpose-aead"
+                }),
+                "{} says nothing about whether it authenticates",
                 e.id
             );
         }

@@ -155,7 +155,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | XOFs | SHAKE128, SHAKE256 |
 | MACs | HMAC (SHA-2 and SHA-3), CMAC-AES-128/192/256, KMAC128/256, Poly1305 |
 | Block ciphers | AES-128/192/256 |
-| Modes | CBC, CTR, PKCS#7 |
+| Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV (experimental) |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
@@ -202,7 +202,7 @@ $ acrypto capabilities
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 56 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 60 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `acrypto capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.

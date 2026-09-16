@@ -92,6 +92,10 @@ static CASTS: &[Cast] = &[
     ("aes-192-gcm", ac_cipher::Aes192Gcm::self_test),
     ("aes-256-gcm", ac_cipher::Aes256Gcm::self_test),
     ("chacha20-poly1305", ac_cipher::ChaCha20Poly1305::self_test),
+    ("aes-128-kw", ac_cipher::Aes128Kw::self_test),
+    ("aes-256-kw", ac_cipher::Aes256Kw::self_test),
+    ("aes-192-kwp", ac_cipher::Aes192Kwp::self_test),
+    ("aes-256-kwp", ac_cipher::Aes256Kwp::self_test),
     // KDFs
     (
         "hkdf-sha2-256",
@@ -169,7 +173,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 56;
+pub const TEST_COUNT: usize = 60;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -260,7 +264,7 @@ pub fn integrity_check() -> Result<()> {
 }
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "fb27b0a35e6c72a740c24a87b8b78c67baf60bc389ae235450ef188948f60d48";
+const INTEGRITY_TAG: &str = "950b23f07e98353fa0e427cb992fe420db12718cb54041f07d2e44f8aebbc85c";
 
 #[cfg(test)]
 mod tests {

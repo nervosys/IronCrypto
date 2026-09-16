@@ -92,6 +92,7 @@ pub mod prelude {
     pub use ac_cipher::{Aes128, Aes192, Aes256};
     pub use ac_cipher::{Aes128Gcm, Aes192Gcm, Aes256Gcm, ChaCha20Poly1305};
     pub use ac_cipher::{Aes128GcmSiv, Aes256GcmSiv};
+    pub use ac_cipher::{Aes128Kw, Aes192Kwp, Aes256Kw, Aes256Kwp};
     pub use ac_ec::p256::{EcdhP256, EcdsaP256Sha256};
     pub use ac_ec::p384::{EcdhP384, EcdsaP384Sha384};
     pub use ac_ec::p521::{EcdhP521, EcdsaP521Sha512};
