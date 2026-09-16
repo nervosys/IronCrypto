@@ -1,0 +1,26 @@
+[package]
+name = "agentic-crypto"
+description = "Agentic-first, FIPS-oriented, pure-Rust cryptography with a machine-readable ontology"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ac-core/std", "ac-hash/std", "ac-mac/std", "ac-kdf/std", "ac-cipher/std", "ac-drbg/std", "ac-ec/std", "ac-fips/std", "ac-ontology/std"]
+
+[dependencies]
+ac-core = { workspace = true }
+ac-hash = { workspace = true }
+ac-mac = { workspace = true }
+ac-kdf = { workspace = true }
+ac-cipher = { workspace = true }
+ac-drbg = { workspace = true }
+ac-ec = { workspace = true }
+ac-fips = { workspace = true }
+ac-ontology = { workspace = true }

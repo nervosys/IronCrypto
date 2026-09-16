@@ -1,0 +1,10 @@
+# Normalize to LF in the repository and in every working copy. Without this,
+# a Windows checkout gets CRLF while CI on Linux gets LF, and `cargo fmt
+# --check` disagrees with itself across platforms.
+* text=auto eol=lf
+
+*.rs      text eol=lf
+*.toml    text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.json    text eol=lf

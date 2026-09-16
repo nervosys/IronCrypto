@@ -1,0 +1,18 @@
+[package]
+name = "ac-cipher"
+description = "AES, AES-GCM, ChaCha20-Poly1305, and block modes for AgenticCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ac-core/std"]
+
+[dependencies]
+ac-core = { workspace = true }

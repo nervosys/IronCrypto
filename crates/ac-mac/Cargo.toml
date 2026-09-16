@@ -1,0 +1,20 @@
+[package]
+name = "ac-mac"
+description = "HMAC, CMAC, KMAC, and Poly1305 message authentication for AgenticCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ac-core/std", "ac-hash/std", "ac-cipher/std"]
+
+[dependencies]
+ac-core = { workspace = true }
+ac-hash = { workspace = true }
+ac-cipher = { workspace = true }

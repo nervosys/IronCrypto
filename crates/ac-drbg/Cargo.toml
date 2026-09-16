@@ -1,0 +1,21 @@
+[package]
+name = "ac-drbg"
+description = "SP 800-90A HMAC_DRBG and CTR_DRBG for AgenticCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ac-core/std", "ac-hash/std", "ac-mac/std", "ac-cipher/std"]
+
+[dependencies]
+ac-core = { workspace = true }
+ac-hash = { workspace = true }
+ac-mac = { workspace = true }
+ac-cipher = { workspace = true }

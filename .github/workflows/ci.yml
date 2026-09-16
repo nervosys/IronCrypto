@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --workspace --all-features
+      - run: cargo test --workspace --release
+
+  lint:
+    name: fmt and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features
+
+  no-std:
+    name: no_std (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - thumbv7em-none-eabihf   # Cortex-M4F
+          - thumbv6m-none-eabi      # Cortex-M0, no atomic CAS
+          - riscv32imac-unknown-none-elf
+          - wasm32-unknown-unknown
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # A --no-default-features build on a host with std proves nothing; these
+      # targets have no std at all, so they are the real check.
+      - run: cargo build -p agentic-crypto --no-default-features --target ${{ matrix.target }}
+
+  dependencies:
+    name: zero dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # The workspace must depend on nothing outside itself. `cargo tree`
+      # listing any crate whose name is not one of ours fails the build.
+      - name: Assert no third-party crates
+        run: |
+          external=$(cargo tree --workspace --prefix none --no-dedupe \
+            | awk '{print $1}' | sort -u \
+            | grep -vE '^(ac-(core|hash|mac|kdf|cipher|drbg|ec|fips|ontology|cli)|agentic-crypto)$' \
+            | grep -v '^$' || true)
+          if [ -n "$external" ]; then
+            echo "Third-party dependencies introduced:"
+            echo "$external"
+            exit 1
+          fi
+          echo "No third-party dependencies."
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
