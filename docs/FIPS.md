@@ -73,7 +73,7 @@ a mode), `NotApproved`.
 
 ### Cryptographic algorithm self-tests
 
-34 known-answer tests, one per implemented algorithm, run by `initialize()` and
+36 known-answer tests, one per implemented algorithm, run by `initialize()` and
 individually addressable:
 
 ```console
@@ -82,8 +82,10 @@ $ acrypto selftest
   PASS sha2-256
   ...
   PASS ed25519
+  PASS ecdh-p256
+  PASS ecdsa-p256-sha256
 
-34 passed, 0 failed; integrity check passed
+36 passed, 0 failed; integrity check passed
 ```
 
 Each test is the algorithm's own `SelfTest::self_test()` — the same code path
@@ -109,6 +111,8 @@ registered, so adding an algorithm without a self-test fails CI.
 | ChaCha20, Poly1305, ChaCha20-Poly1305 | RFC 8439 |
 | X25519 | RFC 7748 §5.2 and §6.1 |
 | Ed25519 | RFC 8032 §7.1 |
+| ECDSA P-256 | RFC 6979 A.2.5 (`sample` and `test`), including the published `k` and public key |
+| ECDH P-256 | NIST CAVP ECC CDH, first published case |
 | HMAC_DRBG | validated against an independent in-test transcription of the SP 800-90A §10.1.2 pseudocode; the CAST vector is an implementation-pinned integrity value |
 | CTR_DRBG | determinism and independence properties; no published vector wired in |
 | PBKDF2 | reconstructed from the PRF XOR chain (RFC 6070 publishes HMAC-SHA1 only, which this library does not implement) |
@@ -132,9 +136,10 @@ so its name cannot imply more than it delivers.
 
 In rough order of effort:
 
-1. **Approved asymmetric algorithms.** ECDSA and ECDH over P-256/384/521, and
-   RSA. This is the largest gap: a module without them cannot serve most real
-   FIPS use cases. They are registered in the ontology as `planned`.
+1. **The remaining approved asymmetric algorithms.** P-256 ECDSA and ECDH are
+   implemented and vector-tested. P-384, P-521, and RSA are not, and are
+   registered in the ontology as `planned`. A CNSA-aligned profile requires
+   P-384; legacy PKI requires RSA.
 2. **CAVP algorithm certificates.** Every approved algorithm must pass the ACVP
    test harness, including Monte Carlo and large-data tests, not just the sample
    vectors bundled here.
@@ -155,14 +160,14 @@ amount of code changes them.
 
 If you have a genuine FIPS obligation:
 
-- Use a validated module (aws-lc-rs, the OpenSSL FIPS provider, a platform
-  module) for **signatures and key agreement**. AgenticCrypto has no approved
-  option there, and `acrypto recommend sign-data --fips` will tell you so rather
-  than offering Ed25519.
-- AgenticCrypto's symmetric side — AES-GCM, HMAC, CMAC, HKDF, PBKDF2,
-  SP 800-108, the DRBGs — implements approved algorithms correctly against their
-  vectors, but *correct* and *validated* are different words, and only the
-  second satisfies an auditor.
+- **Validation, not coverage, is the blocker now.** AgenticCrypto implements
+  approved algorithms across the board — AES-GCM, HMAC, CMAC, HKDF, PBKDF2,
+  SP 800-108, the DRBGs, and ECDSA and ECDH over P-256 — correctly against their
+  published vectors. But *correct* and *validated* are different words, and only
+  the second satisfies an auditor. Where a certificate is the actual
+  requirement, use a validated module.
+- Where you need P-384, P-521, or RSA, this module has nothing to offer, and
+  `acrypto recommend` will say so rather than substituting P-256.
 - Use the approved-mode policy engine and the ontology to keep your own code
   honest regardless of which module does the arithmetic. The registry is useful
   even when the implementation behind it is somebody else's.

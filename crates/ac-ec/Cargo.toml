@@ -12,8 +12,9 @@ categories.workspace = true
 
 [features]
 default = ["std"]
-std = ["ac-core/std", "ac-hash/std"]
+std = ["ac-core/std", "ac-hash/std", "ac-mac/std"]
 
 [dependencies]
 ac-core = { workspace = true }
 ac-hash = { workspace = true }
+ac-mac = { workspace = true }

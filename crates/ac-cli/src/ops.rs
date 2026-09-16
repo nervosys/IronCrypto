@@ -478,14 +478,25 @@ mod tests {
         assert_eq!(ok.get("status").unwrap().as_str(), Some("ok"));
         assert_eq!(ok.get("recommended").unwrap().as_str(), Some("aes-256-gcm"));
 
-        let unavailable = recommend_json("sign-data", true, false, false).unwrap();
+        // Under a FIPS policy the approved scheme is chosen, never the
+        // available-but-unapproved Ed25519.
+        let signing = recommend_json("sign-data", true, false, false).unwrap();
+        assert_eq!(signing.get("status").unwrap().as_str(), Some("ok"));
+        assert_eq!(
+            signing.get("recommended").unwrap().as_str(),
+            Some("ecdsa-p256-sha256")
+        );
+
+        // Post-quantum key agreement has no implementation here, so the
+        // selector declines rather than offering X25519.
+        let unavailable = recommend_json("agree-key", false, true, false).unwrap();
         assert_eq!(
             unavailable.get("status").unwrap().as_str(),
             Some("unavailable")
         );
         assert_eq!(
             unavailable.get("correctAnswer").unwrap().as_str(),
-            Some("ecdsa-p256-sha256")
+            Some("ml-kem-768")
         );
         assert_eq!(unavailable.get("recommended"), Some(&Json::Null));
 

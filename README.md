@@ -60,18 +60,32 @@ Ask for something this library cannot do, and it says so — instead of handing
 back the nearest available substitute:
 
 ```console
-$ acrypto recommend sign-data --fips
+$ acrypto recommend agree-key --post-quantum
 no recommendation.
 
-The correct algorithm for this request is ecdsa-p256-sha256, which is not
-implemented in this build.
+The correct algorithm for this request is ml-kem-768, which is not implemented
+in this build.
 Do not substitute a different algorithm to work around this.
 ```
 
-Ed25519 *is* implemented and *is* a signature scheme. A library that optimizes
-for "always return something" would have returned it, silently breaking the
-caller's FIPS requirement. An honest "no" is worth more to an autonomous caller
-than a plausible "yes".
+X25519 *is* implemented and *is* a key agreement scheme. A library that
+optimizes for "always return something" would have returned it, silently missing
+the requirement the caller actually stated. An honest "no" is worth more to an
+autonomous caller than a plausible "yes".
+
+The same discipline applies when an approved option *does* exist — it wins on
+the merits, and the one passed over is named:
+
+```console
+$ acrypto recommend sign-data --fips
+use: ecdsa-p256-sha256
+  ECDSA P-256 is the approved signature scheme. This implementation derives its
+  nonce per RFC 6979, so the usual ECDSA nonce-reuse failure cannot occur.
+  call: ac_ec::p256::EcdsaP256Sha256
+
+considered and rejected:
+  ed25519: Not approved for the FIPS approved mode of operation.
+```
 
 ---
 
@@ -144,16 +158,15 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305 |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
-| Curves | X25519, Ed25519 |
+| Curves | P-256 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 
 ## What isn't — and why that's written down
 
 The ontology registers algorithms this library does **not** provide, marked
 `planned` or `excluded`, so that querying for them yields an honest answer:
 
-- **ECDSA / ECDH over NIST curves, RSA** — `planned`. These are the FIPS-approved
-  asymmetric algorithms. Not having them is the single largest gap; under a FIPS
-  requirement, use a validated module for signatures and key agreement.
+- **P-384, P-521, RSA** — `planned`. P-256 covers the overwhelming majority of
+  deployed use, but a CNSA-aligned profile wants P-384 and legacy PKI wants RSA.
 - **ML-KEM, ML-DSA** (FIPS 203/204) — `planned`. No post-quantum schemes yet.
 - **Argon2id** — `planned`. PBKDF2 is available and approved, but it is not
   memory-hard.
@@ -165,10 +178,10 @@ $ acrypto capabilities
   [x] no-std
   [x] zero-dependencies
   [x] constant-time-symmetric
+  [x] approved-asymmetric
   [ ] hardware-acceleration
   [ ] fips-validated
   [ ] post-quantum
-  [ ] approved-asymmetric
 ```
 
 ---
@@ -176,7 +189,7 @@ $ acrypto capabilities
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 34 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 36 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `acrypto capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.
@@ -198,10 +211,11 @@ test vectors; that is not the same as being reviewed by cryptographers. See
 
 Against aws-lc-rs, BoringSSL, and OpenSSL, AgenticCrypto leads on portability
 (zero dependencies, no C toolchain, genuine bare-metal `no_std`) and on the
-agent-facing ontology, which none of them has. It trails badly on asymmetric
-algorithm coverage, on raw throughput, and on validation status. Pick
-accordingly — and note that the ontology will tell you which case you're in
-without your having to read this paragraph.
+agent-facing ontology, which none of them has. With P-256 in place it covers the
+algorithms most deployments actually reach for. It still trails on post-quantum
+schemes, on RSA and the larger NIST curves, on raw throughput, and — decisively
+— on validation status. Pick accordingly, and note that the ontology will tell
+you which case you're in without your having to read this paragraph.
 
 ---
 
@@ -224,4 +238,18 @@ $ cargo build -p agentic-crypto --no-default-features --target thumbv7em-none-ea
 
 ## License
 
-Apache-2.0 OR MIT, at your option.
+AgenticCrypto is dual-licensed:
+
+- **[AGPL-3.0-or-later](LICENSE)** for open-source use. Note that the network
+  clause has real reach for a crypto library: linking this into a service that
+  terminates TLS, signs tokens, or encrypts customer data makes that service a
+  derivative work.
+- **[Commercial](LICENSE-COMMERCIAL.md)** for proprietary, embedded, or SaaS use
+  without AGPL obligations. Contact licensing@nervosys.com.
+
+Contributions require agreement to the [CLA](CLA.md); see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+Neither license is a statement about cryptographic assurance: there is no CMVP
+certificate and no independent audit. See [docs/FIPS.md](docs/FIPS.md) and
+[SECURITY.md](SECURITY.md).

@@ -524,10 +524,16 @@ mod tests {
 
     #[test]
     fn recommend_declines_rather_than_substituting() {
+        // With an approved implementation present, the FIPS policy selects it.
         let out = run(&["recommend", "sign-data", "--fips"]).unwrap();
-        assert!(out.contains("no recommendation"));
-        assert!(out.contains("ecdsa-p256-sha256"));
+        assert!(out.contains("use: ecdsa-p256-sha256"));
         assert!(!out.contains("use: ed25519"));
+
+        // With none present, it declines instead of substituting.
+        let out = run(&["recommend", "agree-key", "--post-quantum"]).unwrap();
+        assert!(out.contains("no recommendation"));
+        assert!(out.contains("ml-kem-768"));
+        assert!(!out.contains("use: x25519"));
     }
 
     #[test]

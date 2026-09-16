@@ -50,8 +50,8 @@ reproduction if you have one.
 
 | | |
 |---|---|
-| No approved asymmetric algorithms | ECDSA, ECDH over NIST curves, and RSA are absent. Under a FIPS obligation you need another module for signatures and key agreement. |
-| No post-quantum schemes | ML-KEM and ML-DSA are registered as planned. X25519 and Ed25519 fall to Shor. |
+| Limited asymmetric coverage | P-256 ECDSA and ECDH are implemented. P-384, P-521, and RSA are not. |
+| No post-quantum schemes | ML-KEM and ML-DSA are registered as planned. X25519, Ed25519, and P-256 all fall to Shor. |
 | Slow symmetric throughput | The portable backend trades speed for the absence of secret-dependent memory access. Single-digit MB/s for AES. |
 | PBKDF2 is not memory-hard | It is the only *approved* password KDF, not the strongest one. Argon2id is planned. |
 | Two weak vector sources | The CTR_DRBG and PBKDF2 known-answer tests are property-based rather than CAVP-derived. Documented in `docs/FIPS.md`. |

@@ -1,11 +1,10 @@
 //! The algorithm registry: every entry the ontology knows about.
 //!
 //! The registry includes algorithms this library does **not** implement. That
-//! is deliberate. An agent asking "what approved signature scheme should I
-//! use?" needs to learn that ECDSA-P256 is the answer *and* that it is not
-//! available here — otherwise it will reach for Ed25519 and quietly break the
-//! caller's FIPS requirement. Entries carry [`ImplStatus`] so the difference is
-//! never ambiguous.
+//! is deliberate. An agent asking for post-quantum key agreement needs to learn
+//! that ML-KEM is the answer *and* that it is not available here — otherwise it
+//! will reach for X25519 and quietly miss the requirement. Entries carry
+//! [`ImplStatus`] so the difference is never ambiguous.
 
 use crate::types::*;
 
@@ -283,9 +282,62 @@ const ED25519_P: [Param; 3] = [
     },
 ];
 
+const P256_KA_P: [Param; 3] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "A scalar in [1, n-1]; zero and values at or above n are rejected.",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 33,
+        max: 65,
+        recommended: 65,
+        note: "SEC1: 65 bytes uncompressed (0x04 || X || Y), or 33 compressed.",
+    },
+    Param {
+        name: "shared-secret",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "The x-coordinate of the shared point. Not a key; derive from it.",
+    },
+];
+
+const P256_SIG_P: [Param; 3] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "A scalar in [1, n-1].",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 33,
+        max: 65,
+        recommended: 65,
+        note: "SEC1 uncompressed or compressed; both are accepted on verification.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 64,
+        max: 64,
+        recommended: 64,
+        note: "Fixed-width r || s, each 32 bytes. Not DER-encoded.",
+    },
+];
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
-const NO_EDGES: [Edge; 0] = [];
 
 // ---------------------------------------------------------------------------
 // Entry construction helpers
@@ -1210,22 +1262,23 @@ pub static REGISTRY: &[Entry] = &[
         id: "ecdh-p256",
         name: "ECDH P-256",
         aliases: &["ecdh-secp256r1"],
-        summary: "The FIPS-approved key agreement scheme.",
+        summary: "The FIPS-approved key agreement scheme, and the one TLS uses most.",
         class: Class::KeyAgreement,
         family: "NIST P-curves",
         purposes: &[Purpose::KeyEstablishment],
         strength: Strength::classical_only(128),
         fips: FipsStatus::Approved,
-        status: ImplStatus::Planned,
+        status: ImplStatus::Available,
         standards: &["SP 800-56A", "SP 800-186"],
-        params: &NO_PARAMS,
+        params: &P256_KA_P,
         constraints: &[VALIDATE_PEER_KEY, HASH_TRANSCRIPT],
-        edges: &NO_EDGES,
+        edges: &[Edge { relation: Relation::PairsWith, target: "hkdf-sha2-256" }],
         performance: Performance::Moderate,
-        rust_path: "",
-        example: "",
-        notes: "Not implemented here. Under a FIPS requirement, use a validated module such as \
-                aws-lc-rs for key agreement; X25519 is not a substitute.",
+        rust_path: "ac_ec::p256::EcdhP256",
+        example: "use ac_core::traits::KeyAgreement;\nac_ec::p256::EcdhP256::agree(&my_sk, &peer_pk, &mut shared)?;",
+        notes: "Public keys are SEC1; both the 65-byte uncompressed and the 33-byte compressed \
+                form are accepted, and a peer key is checked against the curve equation before \
+                use. The shared secret is a coordinate, not a key: run it through a KDF.",
     },
     Entry {
         id: "ml-kem-768",
@@ -1288,21 +1341,37 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
         strength: Strength::classical_only(128),
         fips: FipsStatus::Approved,
-        status: ImplStatus::Planned,
-        standards: &["FIPS 186-5", "SP 800-186"],
-        params: &NO_PARAMS,
-        constraints: &[Constraint {
-            id: "unique-signing-nonce",
-            requirement: "Generate a fresh random k per signature, or derive it deterministically \
-                          per RFC 6979.",
-            consequence: "A repeated or predictable k reveals the private key from two signatures.",
-            severity: Severity::Critical,
-        }],
-        edges: &NO_EDGES,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "SP 800-186", "RFC 6979"],
+        params: &P256_SIG_P,
+        constraints: &[
+            Constraint {
+                id: "unique-signing-nonce",
+                requirement: "Generate a fresh random k per signature, or derive it \
+                              deterministically per RFC 6979.",
+                consequence: "A repeated or predictable k reveals the private key from two \
+                              signatures.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "ecdsa-is-malleable",
+                requirement: "Normalize to low-s, or do not treat a signature as a unique \
+                              identifier.",
+                consequence: "Both (r, s) and (r, n - s) verify, so a signature used as a \
+                              database key or transaction id can be duplicated.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-256" },
+            Edge { relation: Relation::PairsWith, target: "ecdh-p256" },
+        ],
         performance: Performance::Moderate,
-        rust_path: "",
-        example: "",
-        notes: "Not implemented here. Under a FIPS requirement, use a validated module.",
+        rust_path: "ac_ec::p256::EcdsaP256Sha256",
+        example: "use ac_core::traits::SignatureScheme;\nac_ec::p256::EcdsaP256Sha256::sign(&sk, msg, &mut sig)?;\nac_ec::p256::EcdsaP256Sha256::verify(&pk, msg, &sig)?;",
+        notes: "This implementation derives k deterministically per RFC 6979, so the \
+                unique-signing-nonce constraint is satisfied by construction and there is no RNG \
+                in the signing path. Signatures are fixed-width r || s, not DER.",
     },
     Entry {
         id: "ml-dsa-65",

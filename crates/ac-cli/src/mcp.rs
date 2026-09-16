@@ -563,6 +563,7 @@ mod tests {
     /// tool must decline rather than hand back Ed25519.
     #[test]
     fn recommend_tool_declines_rather_than_substituting() {
+        // A FIPS policy must yield the approved scheme, not the convenient one.
         let r = call(
             "crypto_recommend",
             Json::object([
@@ -571,12 +572,24 @@ mod tests {
             ]),
         );
         let b = body(&r);
-        assert_eq!(b.get("status").unwrap().as_str(), Some("unavailable"));
-        assert_eq!(b.get("recommended"), Some(&Json::Null));
+        assert_eq!(b.get("status").unwrap().as_str(), Some("ok"));
         assert_eq!(
-            b.get("correctAnswer").unwrap().as_str(),
+            b.get("recommended").unwrap().as_str(),
             Some("ecdsa-p256-sha256")
         );
+
+        // And where nothing suitable is implemented, it declines outright.
+        let r = call(
+            "crypto_recommend",
+            Json::object([
+                ("intent", Json::str("agree-key")),
+                ("post_quantum", Json::Bool(true)),
+            ]),
+        );
+        let b = body(&r);
+        assert_eq!(b.get("status").unwrap().as_str(), Some("unavailable"));
+        assert_eq!(b.get("recommended"), Some(&Json::Null));
+        assert_eq!(b.get("correctAnswer").unwrap().as_str(), Some("ml-kem-768"));
     }
 
     #[test]

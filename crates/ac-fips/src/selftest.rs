@@ -94,10 +94,12 @@ static CASTS: &[Cast] = &[
     // Elliptic curve
     ("x25519", ac_ec::X25519::self_test),
     ("ed25519", ac_ec::Ed25519::self_test),
+    ("ecdh-p256", ac_ec::p256::EcdhP256::self_test),
+    ("ecdsa-p256-sha256", ac_ec::p256::EcdsaP256Sha256::self_test),
 ];
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 34;
+pub const TEST_COUNT: usize = 36;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -188,7 +190,7 @@ pub fn integrity_check() -> Result<()> {
 }
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "4ea6090cc1dc057ccc79248bb54ef98b0a014282c3b2b5b3641b0bda4fc88202";
+const INTEGRITY_TAG: &str = "6b8eeaf5a36c85be2ca284442f241de27be2f297b189dc375d24e7e174088c47";
 
 #[cfg(test)]
 mod tests {

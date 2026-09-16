@@ -92,9 +92,9 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         },
         Capability {
             id: "approved-asymmetric",
-            present: false,
-            note: "No ECDSA, ECDH over NIST curves, or RSA. Only Curve25519, which is not FIPS \
-                   approved.",
+            present: true,
+            note: "ECDSA and ECDH over P-256 are implemented. P-384, P-521, and RSA are not; the \
+                   ontology registers them as planned.",
         },
     ]
     .into_iter()
@@ -139,7 +139,6 @@ mod tests {
         assert!(!has("fips-validated"));
         assert!(!has("hardware-acceleration"));
         assert!(!has("post-quantum"));
-        assert!(!has("approved-asymmetric"));
     }
 
     #[test]
@@ -147,6 +146,7 @@ mod tests {
         assert!(has("no-std"));
         assert!(has("zero-dependencies"));
         assert!(has("constant-time-symmetric"));
+        assert!(has("approved-asymmetric"));
     }
 
     #[test]

@@ -30,10 +30,12 @@
 //! ```
 //! use ac_ontology::select::{recommend, Intent, NoRecommendation, Policy};
 //!
-//! let outcome = recommend(Intent::SignData, Policy::FIPS_APPROVED);
+//! // ML-KEM is the right answer for post-quantum key agreement, and is not
+//! // implemented here, so the selector declines rather than offering X25519.
+//! let outcome = recommend(Intent::AgreeKey, Policy::POST_QUANTUM);
 //! assert_eq!(
 //!     outcome.unwrap_err(),
-//!     NoRecommendation::KnownButUnavailable { id: "ecdsa-p256-sha256" }
+//!     NoRecommendation::KnownButUnavailable { id: "ml-kem-768" }
 //! );
 //! ```
 //!

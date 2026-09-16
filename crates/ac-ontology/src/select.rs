@@ -384,45 +384,93 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
             ),
             None => fallback(base),
         },
-        Intent::AgreeKey => match available("x25519") {
-            Some(a) => (
-                a,
-                "X25519 is fast and hard to misuse. Run the shared secret through HKDF together \
-                 with both public keys before using it.",
-                None,
-                [
-                    Some(Rejected {
-                        id: "ecdh-p256",
-                        reason: "The approved scheme, but not implemented in this build.",
-                    }),
-                    Some(Rejected {
-                        id: "ml-kem-768",
-                        reason: "Post-quantum, but not implemented in this build.",
-                    }),
+        Intent::AgreeKey => {
+            let x25519 = available("x25519");
+            let p256 = available("ecdh-p256");
+            match (x25519, p256) {
+                // Outside a FIPS policy, X25519 is the safer default: no point
+                // validation to get wrong, and no invalid-curve attack surface.
+                (Some(x), p) => (
+                    x,
+                    "X25519 is fast and hard to misuse. Run the shared secret through HKDF \
+                     together with both public keys before using it.",
+                    p,
+                    [
+                        Some(Rejected {
+                            id: "ecdh-p256",
+                            reason: "Approved and implemented here, but it needs peer-key \
+                                     validation that X25519 does not.",
+                        }),
+                        Some(Rejected {
+                            id: "ml-kem-768",
+                            reason: "Post-quantum, but not implemented in this build.",
+                        }),
+                        None,
+                    ],
+                ),
+                (None, Some(p)) => (
+                    p,
+                    "ECDH P-256 is the approved key agreement scheme. Peer public keys are \
+                     validated against the curve equation, and the shared secret must go through \
+                     a KDF before use.",
                     None,
-                ],
-            ),
-            None => fallback(base),
-        },
-        Intent::SignData => match available("ed25519") {
-            Some(a) => (
-                a,
-                "Ed25519 signs deterministically, so there is no nonce to leak or repeat.",
-                None,
-                [
-                    Some(Rejected {
-                        id: "ecdsa-p256-sha256",
-                        reason: "The approved scheme, but not implemented in this build.",
-                    }),
-                    Some(Rejected {
-                        id: "ml-dsa-65",
-                        reason: "Post-quantum, but not implemented in this build.",
-                    }),
+                    [
+                        Some(Rejected {
+                            id: "x25519",
+                            reason: "Not approved for the FIPS approved mode of operation.",
+                        }),
+                        Some(Rejected {
+                            id: "ml-kem-768",
+                            reason: "Post-quantum, but not implemented in this build.",
+                        }),
+                        None,
+                    ],
+                ),
+                _ => fallback(base),
+            }
+        }
+        Intent::SignData => {
+            let ed = available("ed25519");
+            let ecdsa = available("ecdsa-p256-sha256");
+            match (ed, ecdsa) {
+                (Some(e), other) => (
+                    e,
+                    "Ed25519 signs deterministically, so there is no nonce to leak or repeat, and \
+                     it has no point-validation step to get wrong.",
+                    other,
+                    [
+                        Some(Rejected {
+                            id: "ecdsa-p256-sha256",
+                            reason: "Approved and implemented here; choose it when you need FIPS \
+                                     approval or interoperability with X.509 and TLS.",
+                        }),
+                        Some(Rejected {
+                            id: "ml-dsa-65",
+                            reason: "Post-quantum, but not implemented in this build.",
+                        }),
+                        None,
+                    ],
+                ),
+                (None, Some(p)) => (
+                    p,
+                    "ECDSA P-256 is the approved signature scheme. This implementation derives \
+                     its nonce per RFC 6979, so the usual ECDSA nonce-reuse failure cannot occur.",
                     None,
-                ],
-            ),
-            None => fallback(base),
-        },
+                    [
+                        Some(Rejected {
+                            id: "ed25519",
+                            reason: "Not approved for the FIPS approved mode of operation.",
+                        }),
+                        Some(Rejected {
+                            id: "ml-dsa-65",
+                            reason: "Post-quantum, but not implemented in this build.",
+                        }),
+                        None,
+                    ],
+                ),
+                _ => fallback(base),
+            }
+        }
         Intent::GenerateRandom => match available("hmac-drbg-sha2-256") {
             Some(a) => (
                 a,
@@ -514,21 +562,48 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_approved_schemes_are_reported_not_substituted() {
-        // Ed25519 is available but not approved; ECDSA is approved but absent.
-        // The answer must be "go elsewhere", never "here is Ed25519".
-        let err = recommend(Intent::SignData, Policy::FIPS_APPROVED).unwrap_err();
+    fn fips_policy_never_substitutes_an_unapproved_scheme() {
+        // Ed25519 and X25519 are available but unapproved; the approved
+        // alternatives must be chosen, never the convenient ones.
+        let r = recommend(Intent::SignData, Policy::FIPS_APPROVED).unwrap();
+        assert_eq!(r.primary.id, "ecdsa-p256-sha256");
+        assert!(r
+            .rejected()
+            .any(|x| x.id == "ed25519" && x.reason.contains("approved mode")));
+
+        let r = recommend(Intent::AgreeKey, Policy::FIPS_APPROVED).unwrap();
+        assert_eq!(r.primary.id, "ecdh-p256");
+        assert!(r
+            .rejected()
+            .any(|x| x.id == "x25519" && x.reason.contains("approved mode")));
+    }
+
+    /// Outside a FIPS policy the Curve25519 options stay the default, with the
+    /// approved alternatives offered rather than hidden.
+    #[test]
+    fn default_policy_prefers_curve25519_but_offers_the_approved_option() {
+        let r = recommend(Intent::SignData, Policy::DEFAULT).unwrap();
+        assert_eq!(r.primary.id, "ed25519");
+        assert_eq!(r.alternative.map(|e| e.id), Some("ecdsa-p256-sha256"));
+
+        let r = recommend(Intent::AgreeKey, Policy::DEFAULT).unwrap();
+        assert_eq!(r.primary.id, "x25519");
+        assert_eq!(r.alternative.map(|e| e.id), Some("ecdh-p256"));
+    }
+
+    /// The "honest no" path still exists for algorithms genuinely absent.
+    #[test]
+    fn unavailable_schemes_are_reported_not_substituted() {
+        let err = recommend(Intent::AgreeKey, Policy::POST_QUANTUM).unwrap_err();
         assert_eq!(
             err,
-            NoRecommendation::KnownButUnavailable {
-                id: "ecdsa-p256-sha256"
-            }
+            NoRecommendation::KnownButUnavailable { id: "ml-kem-768" }
         );
 
-        let err = recommend(Intent::AgreeKey, Policy::FIPS_APPROVED).unwrap_err();
+        let err = recommend(Intent::SignData, Policy::POST_QUANTUM).unwrap_err();
         assert_eq!(
             err,
-            NoRecommendation::KnownButUnavailable { id: "ecdh-p256" }
+            NoRecommendation::KnownButUnavailable { id: "ml-dsa-65" }
         );
     }
 
