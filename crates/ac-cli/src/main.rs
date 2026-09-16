@@ -192,6 +192,76 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     render_entry(e)
                 })
             }
+            "standards" => {
+                let json = ops::standards_json(opt(args, "--algorithm"))?;
+                if want_json {
+                    return Ok(json.to_string());
+                }
+                let mut out = String::new();
+                let docs = json.get("standards").and_then(|d| d.as_array()).unwrap();
+                for d in docs {
+                    let status = d.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    let reqs = d
+                        .get("requirements")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    out.push_str(&format!(
+                        "{:<14} {:<14} {}  ({} requirement(s))
+",
+                        d.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                        status,
+                        d.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                        reqs
+                    ));
+                }
+                out.push_str(&format!(
+                    "
+{} document(s)",
+                    docs.len()
+                ));
+                Ok(out)
+            }
+            "standard" => {
+                let name = pos
+                    .get(2)
+                    .copied()
+                    .ok_or("ontology standard needs a citation, e.g. 'FIPS 203'")?;
+                let json = ops::standard_lookup_json(name)?;
+                if want_json {
+                    return Ok(json.to_string());
+                }
+                Ok(render_standard(&json))
+            }
+            "requirements" => {
+                let json = ops::requirements_json(opt(args, "--state"), opt(args, "--algorithm"))?;
+                if want_json {
+                    return Ok(json.to_string());
+                }
+                let mut out = String::new();
+                for r in json.get("requirements").and_then(|v| v.as_array()).unwrap() {
+                    let c = r.get("compliance").unwrap();
+                    out.push_str(&format!(
+                        "{:<36} {:<10} {:<16} {}
+",
+                        r.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("obligation").and_then(|v| v.as_str()).unwrap_or(""),
+                        c.get("state").and_then(|v| v.as_str()).unwrap_or(""),
+                        r.get("statement").and_then(|v| v.as_str()).unwrap_or("")
+                    ));
+                }
+                let t = json.get("totals").unwrap();
+                out.push_str(&format!(
+                    "
+{} met, {} unmet, {} not applicable",
+                    t.get("met").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    t.get("unmet").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    t.get("not_applicable")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0),
+                ));
+                Ok(out)
+            }
             "export" => {
                 let format = pos.get(2).copied().unwrap_or("json");
                 match format {
@@ -200,8 +270,9 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     "turtle" | "ttl" => Ok(ac_ontology::export::to_turtle()),
                     "schema" => Ok(ac_ontology::export::to_json_schema()),
                     "markdown" | "md" => Ok(ac_ontology::export::to_markdown()),
+                    "standards" => Ok(ops::standards_json(None)?.to_string()),
                     other => Err(format!(
-                        "unknown format '{other}'; try json, jsonld, turtle, schema, or markdown"
+                        "unknown format '{other}'; try json, jsonld, turtle, schema, markdown,                          or standards"
                     )),
                 }
             }
@@ -455,6 +526,94 @@ fn render_recommendation(r: &Json) -> String {
         ),
         _ => format!("no recommendation.\n{}", s("explanation")),
     }
+}
+
+/// Render one standard for a human.
+///
+/// Requirements are shown with their compliance state and, where met, the file
+/// that evidences it — so a reader can go and look rather than take the word of
+/// this tool.
+fn render_standard(d: &Json) -> String {
+    let get = |k: &str| d.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{}  {}
+",
+        get("id"),
+        get("title")
+    ));
+    out.push_str(&format!(
+        "  {} / {} / {}
+  {}
+
+",
+        get("body"),
+        d.get("year")
+            .and_then(|v| v.as_f64())
+            .map(|y| (y as u32).to_string())
+            .unwrap_or_default(),
+        get("status"),
+        get("url")
+    ));
+    out.push_str(&format!(
+        "{}
+",
+        get("summary")
+    ));
+
+    if let Some(algs) = d.get("algorithms").and_then(|v| v.as_array()) {
+        if !algs.is_empty() {
+            let names: Vec<&str> = algs.iter().filter_map(|a| a.as_str()).collect();
+            out.push_str(&format!(
+                "
+Defines: {}
+",
+                names.join(", ")
+            ));
+        }
+    }
+
+    if let Some(reqs) = d.get("requirements").and_then(|v| v.as_array()) {
+        if !reqs.is_empty() {
+            out.push_str(
+                "
+Requirements
+",
+            );
+            for r in reqs {
+                let rg = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("");
+                let c = r.get("compliance").unwrap();
+                let cg = |k: &str| c.get(k).and_then(|v| v.as_str()).unwrap_or("");
+                out.push_str(&format!(
+                    "
+  [{}] {} ({} {})
+    {}
+    Why: {}
+",
+                    cg("state"),
+                    rg("id"),
+                    rg("obligation"),
+                    format_args!("§{}", rg("section")),
+                    rg("statement"),
+                    rg("rationale"),
+                ));
+                match cg("state") {
+                    "met" => out.push_str(&format!(
+                        "    Evidence: {} in {}
+",
+                        cg("evidence"),
+                        cg("file")
+                    )),
+                    _ => out.push_str(&format!(
+                        "    Reason: {}
+",
+                        cg("reason")
+                    )),
+                }
+            }
+        }
+    }
+    out
 }
 
 fn render_entry(e: &ac_ontology::Entry) -> String {

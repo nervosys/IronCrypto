@@ -189,6 +189,33 @@ The ontology registers algorithms this library does **not** provide, marked
   the hints, but it cannot catch a convention misread consistently. Only the 65
   parameter set exists. ML-KEM-768 is `experimental` on the same terms. Both are
   excluded from the approved mode and from `recommend`.
+### The standards knowledgebase
+
+The registry says what algorithms exist. `ac_ontology::standards` says what
+*documents* define them and what those documents require:
+
+```sh
+acrypto ontology standards                    # every document, with status
+acrypto ontology standard "FIPS 203"          # one document and its obligations
+acrypto ontology requirements --state unmet   # the conformance view
+acrypto ontology requirements --algorithm ml-kem-768
+```
+
+Agents get the same through the `crypto_standard` and `crypto_requirements`
+MCP tools.
+
+It is coupled to the code rather than merely filed beside it. A requirement
+marked met names a file and a symbol, and the tests check both exist — rename
+the function and the knowledgebase fails the build instead of going quietly out
+of date. Every document a registry entry cites must be described, and every
+document described must be cited or say why not, so neither list can drift from
+the other. An algorithm the library offers cannot rest solely on a withdrawn
+document.
+
+A met requirement means the code does what the document asks, as far as the
+tests can show. It does not mean a laboratory has agreed, and nothing here
+claims otherwise — see `has("fips-validated")`, which returns `false`.
+
 - **SHA-1, MD5, Triple DES** — `excluded`, permanently. They are in the registry
   only so that a request for them resolves to a refusal with a reason.
 

@@ -58,6 +58,29 @@ impl Json {
         }
     }
 
+    /// Read as a slice of elements, if this is an array.
+    ///
+    /// Returns `None` for a non-array rather than an empty slice, so a caller
+    /// can tell "not an array" from "an array with nothing in it" — a
+    /// distinction that matters when the value came from somewhere else.
+    pub fn as_array(&self) -> Option<&[Json]> {
+        match self {
+            Json::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// Read as an `f64`, if this is a number.
+    ///
+    /// [`Json::as_i64`] truncates; this does not, so a caller that needs the
+    /// value as written has somewhere to get it.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Json::Number(n) => Some(*n),
+            _ => None,
+        }
+    }
+
     /// Read as a bool, if this is one.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
@@ -357,6 +380,31 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The new accessors, including the distinction that motivates them.
+    #[test]
+    fn array_and_number_accessors_report_the_right_shape() {
+        let v = parse(r#"{"xs":[1,2],"empty":[],"n":1.5,"s":"t"}"#).unwrap();
+
+        assert_eq!(
+            v.get("xs").and_then(|x| x.as_array()).map(|a| a.len()),
+            Some(2)
+        );
+        // An empty array is still an array, and must not read as absent.
+        assert_eq!(
+            v.get("empty").and_then(|x| x.as_array()).map(|a| a.len()),
+            Some(0)
+        );
+        assert!(
+            v.get("s").unwrap().as_array().is_none(),
+            "a string is not an array"
+        );
+
+        assert_eq!(v.get("n").and_then(|x| x.as_f64()), Some(1.5));
+        // as_i64 truncates where as_f64 does not; both are offered for that reason.
+        assert_eq!(v.get("n").and_then(|x| x.as_i64()), Some(1));
+        assert!(v.get("s").unwrap().as_f64().is_none());
+    }
 
     #[test]
     fn parses_scalars() {

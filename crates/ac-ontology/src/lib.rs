@@ -51,6 +51,7 @@ extern crate std;
 pub mod query;
 pub mod registry;
 pub mod select;
+pub mod standards;
 pub mod types;
 
 #[cfg(feature = "std")]

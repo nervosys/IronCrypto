@@ -8,6 +8,7 @@
 use ac_core::traits::{Aead, Digest, Mac};
 use ac_json::Json;
 use ac_ontology::select::{recommend, Intent, NoRecommendation, Policy};
+use ac_ontology::standards::{self, Compliance, Requirement, Standard};
 use ac_ontology::{Entry, ImplStatus};
 
 /// Render an ontology entry as JSON.
@@ -883,4 +884,148 @@ zzzz
         )
         .is_err());
     }
+}
+
+// ---------------------------------------------------------------------------
+// The standards knowledgebase.
+// ---------------------------------------------------------------------------
+
+/// One requirement, as JSON.
+///
+/// `compliance` is a tagged object rather than a bare string because the three
+/// cases carry different payloads, and flattening them would lose the reason a
+/// requirement is not applicable — which is the part a reader actually needs.
+pub fn requirement_json(doc: &Standard, r: &Requirement) -> Json {
+    let compliance = match r.compliance {
+        Compliance::Met { file, symbol } => Json::object([
+            ("state", Json::str("met")),
+            ("file", Json::str(file)),
+            ("evidence", Json::str(symbol)),
+        ]),
+        Compliance::NotApplicable { why } => Json::object([
+            ("state", Json::str("not-applicable")),
+            ("reason", Json::str(why)),
+        ]),
+        Compliance::Unmet { why } => {
+            Json::object([("state", Json::str("unmet")), ("reason", Json::str(why))])
+        }
+    };
+    Json::object([
+        ("id", Json::str(r.id)),
+        ("standard", Json::str(doc.id)),
+        ("section", Json::str(r.section)),
+        ("obligation", Json::str(r.obligation.id())),
+        ("mandatory", Json::Bool(r.obligation.is_mandatory())),
+        ("statement", Json::str(r.statement)),
+        ("rationale", Json::str(r.rationale)),
+        (
+            "applies_to",
+            Json::Array(r.applies_to.iter().map(|a| Json::str(*a)).collect()),
+        ),
+        ("compliance", compliance),
+    ])
+}
+
+/// One document, as JSON.
+pub fn standard_json(s: &Standard) -> Json {
+    Json::object([
+        ("id", Json::str(s.id)),
+        ("title", Json::str(s.title)),
+        ("body", Json::str(s.body.id())),
+        ("year", Json::Number(s.year as f64)),
+        ("status", Json::str(s.status.id())),
+        ("current", Json::Bool(s.status.is_current())),
+        (
+            "superseded_by",
+            Json::Array(s.superseded_by.iter().map(|x| Json::str(*x)).collect()),
+        ),
+        ("url", Json::str(s.url)),
+        ("summary", Json::str(s.summary)),
+        (
+            "algorithms",
+            Json::Array(s.algorithms().map(Json::str).collect()),
+        ),
+        (
+            "requirements",
+            Json::Array(
+                s.requirements
+                    .iter()
+                    .map(|r| requirement_json(s, r))
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+/// Every document, optionally narrowed to those a given algorithm cites.
+pub fn standards_json(algorithm: Option<&str>) -> Result<Json, String> {
+    let docs: Vec<Json> = match algorithm {
+        None => standards::STANDARDS.iter().map(standard_json).collect(),
+        Some(id) => {
+            if !ac_ontology::registry::REGISTRY.iter().any(|e| e.id == id) {
+                return Err(format!("unknown algorithm '{id}'"));
+            }
+            standards::standards_for(id).map(standard_json).collect()
+        }
+    };
+    Ok(Json::object([
+        ("count", Json::Number(docs.len() as f64)),
+        ("standards", Json::Array(docs)),
+    ]))
+}
+
+/// Look one document up by its citation.
+pub fn standard_lookup_json(id: &str) -> Result<Json, String> {
+    standards::standard(id)
+        .map(standard_json)
+        .ok_or_else(|| format!("unknown standard '{id}'"))
+}
+
+/// Every requirement, optionally narrowed by compliance state or algorithm.
+///
+/// The counts come back alongside the list because the first question anyone
+/// asks of a conformance view is "how much is outstanding", and making a caller
+/// tally it themselves invites them to tally it differently.
+pub fn requirements_json(state: Option<&str>, algorithm: Option<&str>) -> Result<Json, String> {
+    if let Some(s) = state {
+        if !["met", "unmet", "not-applicable"].contains(&s) {
+            return Err(format!(
+                "unknown compliance state '{s}'; try met, unmet or not-applicable"
+            ));
+        }
+    }
+    let mut items = Vec::new();
+    let (mut met, mut unmet, mut na) = (0usize, 0usize, 0usize);
+    for (doc, r) in standards::requirements() {
+        match r.compliance.id() {
+            "met" => met += 1,
+            "unmet" => unmet += 1,
+            _ => na += 1,
+        }
+        if let Some(s) = state {
+            if r.compliance.id() != s {
+                continue;
+            }
+        }
+        if let Some(a) = algorithm {
+            // An empty applies_to means the whole library, so it matches every
+            // algorithm rather than none.
+            if !r.applies_to.is_empty() && !r.applies_to.contains(&a) {
+                continue;
+            }
+        }
+        items.push(requirement_json(doc, r));
+    }
+    Ok(Json::object([
+        ("count", Json::Number(items.len() as f64)),
+        (
+            "totals",
+            Json::object([
+                ("met", Json::Number(met as f64)),
+                ("unmet", Json::Number(unmet as f64)),
+                ("not_applicable", Json::Number(na as f64)),
+            ]),
+        ),
+        ("requirements", Json::Array(items)),
+    ]))
 }

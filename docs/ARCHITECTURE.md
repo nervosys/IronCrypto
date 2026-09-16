@@ -144,6 +144,7 @@ behaviour can reproduce it from a shell.
 | `ac-mlkem` | ML-KEM-768: the ring Z_q[X]/(X^256+1), NTT, packing, samplers, K-PKE and the FO transform. Experimental |
 | `ac-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ac-core` and performs no cryptography |
 | `ac-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
+| `ac-ontology::standards` | The standards knowledgebase: the documents the registry cites, and the obligations they impose. Coupled to the code by tests - a met requirement names a file and a symbol, and both must exist |
 | `ac-fips` | state machine, approved-mode policy, CAST table, service indicator |
 | `agentic-crypto` | facade, prelude, and the ontology/implementation agreement tests |
 | `ac-cli` | JSON reader/writer, shared ops, CLI, MCP server |

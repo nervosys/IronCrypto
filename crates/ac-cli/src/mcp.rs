@@ -230,6 +230,58 @@ fn tools() -> Vec<Tool> {
             call: |_| Ok(ops::errors_json()),
         },
         Tool {
+            name: "crypto_standard",
+            description:
+                "Look up the standards that define an algorithm, or one document by its                  citation. Returns the title, publisher, year, whether it is still current,                  what it covers, and the obligations it imposes on an implementation -- each                  with whether this library meets it and the file that evidences it. Use this                  to answer 'what does FIPS 203 require here' without guessing.",
+            schema: || {
+                schema(
+                    vec![
+                        (
+                            "standard",
+                            string_prop("A citation such as 'FIPS 203' or 'RFC 8439'."),
+                        ),
+                        (
+                            "algorithm",
+                            string_prop(
+                                "An algorithm id; returns every document that defines it.",
+                            ),
+                        ),
+                    ],
+                    &[],
+                )
+            },
+            call: |args| match arg(args, "standard") {
+                Some(id) => ops::standard_lookup_json(id),
+                None => ops::standards_json(arg(args, "algorithm")),
+            },
+        },
+        Tool {
+            name: "crypto_requirements",
+            description:
+                "The conformance view: every normative obligation drawn from the standards,                  with whether this library meets it, does not, or is not bound by it -- and                  why. Filter by state or algorithm. Nothing here asserts FIPS validation; a                  met requirement means the code does what the document asks, not that a                  laboratory has agreed.",
+            schema: || {
+                schema(
+                    vec![
+                        (
+                            "state",
+                            enum_prop(
+                                "Narrow to one compliance state.",
+                                "met, unmet, not-applicable",
+                            ),
+                        ),
+                        (
+                            "algorithm",
+                            string_prop(
+                                "Narrow to obligations bearing on this algorithm id.                                  Library-wide obligations always match.",
+                            ),
+                        ),
+                    ],
+                    &[],
+                )
+            },
+            call: |args| ops::requirements_json(arg(args, "state"), arg(args, "algorithm")),
+        },
+        Tool {
             name: "crypto_capabilities",
             description:
                 "What this build can and cannot do: backend, module state, algorithm counts, and \
@@ -721,6 +773,103 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("NOT been submitted"));
+    }
+
+    /// The knowledgebase is reachable over MCP, with the evidence attached.
+    ///
+    /// An agent asking "what does FIPS 203 require of this" should get the
+    /// obligations *and* where to look, otherwise it has to take the server's
+    /// word for it.
+    #[test]
+    fn the_standards_tool_returns_obligations_with_evidence() {
+        let r = call(
+            "crypto_standard",
+            Json::object([("standard", Json::str("FIPS 203"))]),
+        );
+        assert!(!is_error(&r));
+        let b = body(&r);
+        assert_eq!(b.get("id").unwrap().as_str(), Some("FIPS 203"));
+        assert_eq!(b.get("status").unwrap().as_str(), Some("current"));
+
+        let reqs = b.get("requirements").unwrap().as_array().unwrap();
+        assert!(!reqs.is_empty(), "FIPS 203 must carry requirements");
+        let met = reqs
+            .iter()
+            .find(|r| r.get("id").unwrap().as_str() == Some("fips-203-encaps-key-check"))
+            .expect("the section 7.2 check must be listed");
+        let c = met.get("compliance").unwrap();
+        assert_eq!(c.get("state").unwrap().as_str(), Some("met"));
+        assert!(
+            c.get("file").unwrap().as_str().unwrap().contains("kem.rs"),
+            "a met requirement must say where to look"
+        );
+
+        // By algorithm rather than by citation.
+        let r = call(
+            "crypto_standard",
+            Json::object([("algorithm", Json::str("ml-kem-768"))]),
+        );
+        assert!(!is_error(&r));
+        let docs = body(&r).get("standards").unwrap().as_array().unwrap().len();
+        assert!(docs >= 1, "ml-kem-768 must cite at least one document");
+
+        // An unknown citation is a tool error the agent can correct.
+        let r = call(
+            "crypto_standard",
+            Json::object([("standard", Json::str("FIPS 999"))]),
+        );
+        assert!(is_error(&r));
+    }
+
+    /// The conformance view totals, and the filter.
+    #[test]
+    fn the_requirements_tool_reports_totals_and_filters() {
+        let r = call("crypto_requirements", Json::object([]));
+        assert!(!is_error(&r));
+        let b = body(&r);
+        let totals = b.get("totals").unwrap();
+        let met = totals.get("met").unwrap().as_f64().unwrap();
+        assert!(
+            met >= 12.0,
+            "most requirements should be wired to code: {met}"
+        );
+
+        // Filtering must actually narrow, not silently return everything.
+        let all = b.get("count").unwrap().as_f64().unwrap();
+        let r = call(
+            "crypto_requirements",
+            Json::object([("algorithm", Json::str("ml-kem-768"))]),
+        );
+        let narrowed = body(&r).get("count").unwrap().as_f64().unwrap();
+        assert!(narrowed < all, "a filter must narrow: {narrowed} vs {all}");
+        assert!(narrowed > 0.0, "and must not narrow to nothing");
+
+        // Library-wide obligations match every algorithm, which is the case a
+        // naive filter gets wrong by dropping them.
+        let r = call(
+            "crypto_requirements",
+            Json::object([("algorithm", Json::str("ml-kem-768"))]),
+        );
+        let scoped = body(&r);
+        let ids: Vec<&str> = scoped
+            .get("requirements")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|x| x.get("id").and_then(|v| v.as_str()))
+            .collect();
+        assert!(
+            ids.iter().any(|i| i.starts_with("fips-140-3")),
+            "module-wide obligations must match too, got {ids:?}"
+        );
+
+        // A bad state is correctable, not a crash.
+        let r = call(
+            "crypto_requirements",
+            Json::object([("state", Json::str("nonsense"))]),
+        );
+        assert!(is_error(&r));
     }
 
     #[test]
