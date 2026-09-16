@@ -25,12 +25,12 @@
 //!   where a partial implementation is worse than none. Hand the
 //!   `SubjectPublicKeyInfo` bytes from an existing X.509 parser to
 //!   [`PublicKeyInfo::from_der`].
-//! - **No RSA private key serialization.** PKCS#1 `RSAPrivateKey` requires the
-//!   primes and the CRT parameters; [`ac_rsa::RsaPrivateKey`] keeps only `n`,
-//!   `e`, and `d`, because it does not use the CRT. Parsing such a key works
-//!   and ignores the CRT fields after checking they are well formed.
 //! - **No encrypted PKCS#8.** `EncryptedPrivateKeyInfo` needs PBES2 and a
 //!   password. Decrypt it elsewhere and pass the plaintext here.
+//! - **No key validation.** Parsing checks structure, not mathematics. A
+//!   `SubjectPublicKeyInfo` whose point is off the curve parses cleanly and
+//!   fails when something tries to verify with it, which is where that check
+//!   belongs.
 //!
 //! # No allocation
 //!

@@ -6,25 +6,16 @@
 //! about it on every run, so a mistranscribed digit fails loudly rather than
 //! quietly weakening the tests.
 
-use crate::kat::{KAT_D, KAT_E, KAT_N};
 use crate::key::{RsaPrivateKey, RsaPublicKey};
-
-fn unhex(s: &str) -> Vec<u8> {
-    assert!(s.len() % 2 == 0, "hex string has an odd length");
-    (0..s.len() / 2)
-        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).expect("valid hex"))
-        .collect()
-}
 
 /// The pinned 2048-bit private key.
 pub fn test_private_key() -> RsaPrivateKey {
-    RsaPrivateKey::from_components(&unhex(KAT_N), KAT_E, &unhex(KAT_D))
-        .expect("the pinned test key is well formed")
+    crate::kat::kat_key().expect("the pinned test key is well formed")
 }
 
 /// The matching public key.
 pub fn test_public_key() -> RsaPublicKey {
-    RsaPublicKey::from_components(&unhex(KAT_N), KAT_E).expect("the pinned test key is well formed")
+    *test_private_key().public_key()
 }
 
 #[cfg(test)]
@@ -71,15 +62,14 @@ mod tests {
         let mut rng = ac_drbg::Rng::from_os().expect("system entropy");
         let key = crate::key::generate(2048, &mut rng).expect("key generation");
 
-        let mut n = [0u8; 256];
-        key.public_key().modulus_bytes(&mut n).unwrap();
-        let mut d = [0u8; 256];
-        key.exponent_bytes(&mut d).unwrap();
+        let mut p = [0u8; 128];
+        let mut q = [0u8; 128];
+        key.prime_bytes(&mut p, &mut q).unwrap();
 
         let hex = |bytes: &[u8]| -> String {
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
         };
-        println!("TEST_N = \"{}\"", hex(&n));
-        println!("TEST_D = \"{}\"", hex(&d));
+        println!("KAT_P {}", hex(&p));
+        println!("KAT_Q {}", hex(&q));
     }
 }

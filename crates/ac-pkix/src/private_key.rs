@@ -22,13 +22,13 @@
 //! [`ac_core::Zeroize::zeroize`] on it once the key material has been moved
 //! into a key type.
 //!
-//! # RSA is parse-only
+//! # RSA carries eight integers
 //!
-//! `RSAPrivateKey` carries the primes and the three CRT parameters. Deriving
-//! them requires modular inversion this crate does not have, and
-//! [`ac_rsa::RsaPrivateKey`] does not retain them because it does not use the
-//! CRT. So an RSA private key parses — with its CRT fields checked for shape —
-//! and does not re-serialize.
+//! `RSAPrivateKey` holds `n`, `e`, `d`, the two primes, and the three CRT
+//! parameters. All eight are parsed and all eight are kept, because
+//! [`ac_rsa::RsaPrivateKey`] uses the CRT and can supply them. A key that
+//! reaches here without them is malformed, not merely inconvenient: the
+//! structure has no optional fields before `otherPrimeInfos`.
 
 use crate::der::{self, Reader, Writer};
 use crate::oid::{self, KeyAlgorithm};
@@ -37,7 +37,8 @@ use ac_core::{ensure, Result};
 /// A parsed private key, borrowing from the DER it was read out of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivateKeyInfo<'a> {
-    /// An RSA private key. The CRT parameters are parsed and discarded.
+    /// An RSA private key, with every field PKCS#1 defines for the two-prime
+    /// case.
     Rsa {
         /// Modulus, big-endian and minimal.
         modulus: &'a [u8],
@@ -45,10 +46,16 @@ pub enum PrivateKeyInfo<'a> {
         public_exponent: u64,
         /// Private exponent, big-endian and minimal.
         private_exponent: &'a [u8],
-        /// First prime factor.
+        /// First prime factor, conventionally the larger.
         prime1: &'a [u8],
         /// Second prime factor.
         prime2: &'a [u8],
+        /// `d mod (p - 1)`.
+        exponent1: &'a [u8],
+        /// `d mod (q - 1)`.
+        exponent2: &'a [u8],
+        /// `q^-1 mod p`.
+        coefficient: &'a [u8],
     },
     /// An elliptic-curve private key, with the public key when the encoding
     /// carried one.
@@ -147,11 +154,35 @@ impl<'a> PrivateKeyInfo<'a> {
         let start = w.len();
 
         match self {
-            Self::Rsa { .. } => {
-                return Err(ac_core::err!(
-                    Unsupported,
-                    "rsa private keys need the crt parameters, which are not retained"
-                ))
+            Self::Rsa {
+                modulus,
+                public_exponent,
+                private_exponent,
+                prime1,
+                prime2,
+                exponent1,
+                exponent2,
+                coefficient,
+            } => {
+                // RSAPrivateKey, innermost first because the writer runs
+                // backwards. The field order is RFC 8017 A.1.2 read upwards.
+                let inner_start = w.len();
+                w.push_unsigned_integer(coefficient)?;
+                w.push_unsigned_integer(exponent2)?;
+                w.push_unsigned_integer(exponent1)?;
+                w.push_unsigned_integer(prime2)?;
+                w.push_unsigned_integer(prime1)?;
+                w.push_unsigned_integer(private_exponent)?;
+                w.push_unsigned_u64(*public_exponent)?;
+                w.push_unsigned_integer(modulus)?;
+                w.push_unsigned_u64(0)?; // two-prime version
+                w.push_wrapper(der::SEQUENCE, inner_start)?;
+                w.push_wrapper(der::OCTET_STRING, inner_start)?;
+
+                let alg_start = w.len();
+                w.push_null()?;
+                w.push_oid(oid::RSA_ENCRYPTION)?;
+                w.push_wrapper(der::SEQUENCE, alg_start)?;
             }
             Self::Ec {
                 algorithm,
@@ -224,11 +255,9 @@ fn parse_rsa_private_key(input: &[u8]) -> Result<PrivateKeyInfo<'_>> {
     let private_exponent = seq.unsigned_integer()?;
     let prime1 = seq.unsigned_integer()?;
     let prime2 = seq.unsigned_integer()?;
-    // exponent1, exponent2, coefficient: read so that a truncated key is
-    // rejected here rather than accepted as valid, then discarded.
-    let _exponent1 = seq.unsigned_integer()?;
-    let _exponent2 = seq.unsigned_integer()?;
-    let _coefficient = seq.unsigned_integer()?;
+    let exponent1 = seq.unsigned_integer()?;
+    let exponent2 = seq.unsigned_integer()?;
+    let coefficient = seq.unsigned_integer()?;
     seq.finish()?;
 
     ensure!(!modulus.is_empty(), MalformedEncoding, "empty rsa modulus");
@@ -238,6 +267,9 @@ fn parse_rsa_private_key(input: &[u8]) -> Result<PrivateKeyInfo<'_>> {
         private_exponent,
         prime1,
         prime2,
+        exponent1,
+        exponent2,
+        coefficient,
     })
 }
 
@@ -493,7 +525,7 @@ mod tests {
     /// An RSA private key parses, including its CRT fields, and does not
     /// re-serialize.
     #[test]
-    fn rsa_private_keys_parse_but_do_not_serialize() {
+    fn rsa_private_keys_round_trip() {
         // A miniature RSAPrivateKey: p = 61, q = 53, n = 3233, e = 17, d = 413,
         // dP = 53, dQ = 49, qInv = 38. The textbook worked example, chosen so
         // the whole structure fits in a readable literal.
@@ -527,15 +559,19 @@ mod tests {
                 private_exponent: &[0x01, 0x9d],
                 prime1: &[0x3d],
                 prime2: &[0x35],
+                exponent1: &[0x35],
+                exponent2: &[0x31],
+                coefficient: &[0x26],
             }
         );
         assert_eq!(parsed.algorithm(), KeyAlgorithm::Rsa);
 
+        // And it re-serializes to exactly the bytes it came from, which is the
+        // property a parser and an encoder written separately can most easily
+        // fail to have.
         let mut out = [0u8; 256];
-        assert!(
-            parsed.to_der(&mut out).is_err(),
-            "no crt parameters retained"
-        );
+        let n = parsed.to_der(&mut out).unwrap();
+        assert_eq!(&out[..n], &pkcs8[..], "round trip is byte-identical");
 
         // Dropping the last CRT field must fail rather than silently produce a
         // key from the fields it did manage to read.

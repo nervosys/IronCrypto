@@ -137,7 +137,7 @@ behaviour can reproduce it from a shell.
 | `ac-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
 | `ac-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |
 | `ac-ec` | GF(2^255-19) field, X25519, Ed25519; a limb-generic Montgomery field, one Jacobian group law, ECDSA and ECDH, instantiated for P-256 and P-384 |
-| `ac-rsa` | fixed-capacity bignums, Montgomery modular exponentiation, PKCS#1 v1.5 and PSS signatures, Miller-Rabin key generation |
+| `ac-rsa` | fixed-capacity bignums, Montgomery modular exponentiation, CRT private operations with output verification, PKCS#1 v1.5 and PSS signatures, Miller-Rabin key generation |
 | `ac-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ac-core` and performs no cryptography |
 | `ac-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
 | `ac-fips` | state machine, approved-mode policy, CAST table, service indicator |

@@ -29,28 +29,27 @@ use crate::{Pkcs1Sha256, Pkcs1Sha384, Pkcs1Sha512, PssSha256, PssSha384, PssSha5
 use ac_core::traits::SelfTest;
 use ac_core::{ensure, Result};
 
-/// Modulus of the known-answer-test key, big-endian hex.
-pub(crate) const KAT_N: &str = concat!(
-    "9d4fdb97a4fb6ad3f667bada5130728d6032c8ed18b4df7c6d04829b0ed93d2a",
-    "1144099bd1d1811b7b7eb5b4460ab6fb5ed160f259137153ab53aef230bae1b9",
-    "e1820634c433535b76645075477d0264e911c8f9adb36b75ab65637e4202ebd2",
-    "5e794583d18b611b4315123711e0b1278970d2361d5343e21a56c26fd41ba313",
-    "9d6b9ec616e144c817f3e0751a9026afd5c250fa214af4f68189c273a723e873",
-    "224c7b5338edd4fad2c827b20eaf13ac7450ff6608309feb36dd70617779bd0e",
-    "c81fac0869675b99767ab0600b825868d6fb0d6b170284b812e3a954c2332aef",
-    "085b6bf175e8233b164a5ff6c7c1568aca10d651748e69ed831774dcb3c3f0ab",
+/// First prime of the known-answer-test key, big-endian hex.
+///
+/// The key is pinned as its two factors rather than as `n` and `d`. Everything
+/// else — the modulus, the private exponent, and the three CRT parameters — is
+/// derived from these by [`crate::RsaPrivateKey::from_primes`], so there is one
+/// source of truth and no chance of pinning a `d` that does not match its `n`.
+/// The signatures below are what that derivation produces, so a change in any
+/// derived value shows up as a failed known-answer test.
+pub(crate) const KAT_P: &str = concat!(
+    "ebacdab5daa6a18014e9afa81e8ee48b0ecf9a12c044da47b69efaa88129332b",
+    "f5b52321abd6bc90a6eb3803dacfc77550c4a3bd7762bea37e0c2544e9385c86",
+    "7269d1a2f738194313299806efe1be0d29fbab167c00318c0021c615a4038d07",
+    "b9358c11204162138e2cf185199304b3758447fda80c47c98c0ce3138250c453",
 );
 
-/// Private exponent of the known-answer-test key, big-endian hex.
-pub(crate) const KAT_D: &str = concat!(
-    "2eed49965d12daf54c05f98972babf1149671ce50d7fb74348ca15a3e7b40a38",
-    "e859a17c2805153c7b847af3c2092438ac3a4d6f3dff3cc936cc89dd9987c61a",
-    "4b191c7cd52272755045f0726bd6f0c5e578f6b8f48617424cd4bbef4805d30f",
-    "383b78ef2fad22549d98458cc3fa811e4833ada192f1e9c8230f4a854d82c90c",
-    "731f2e72822791c891f9fd48677a364fc38b3e9a422f62b8c4feced2bf8c1af9",
-    "61c8e3dcf76b5eeb487983405bf1477ef88662d079e8a84c0e24d001283abda8",
-    "af63aaed3a00d76074373b81d20eadf708553442cc7b1f7ebdcaec03e97b12f6",
-    "41e5c711c10e1c00325c945251b91a4d58071cab6cfe5f87092c7020e6ceaac1",
+/// Second prime of the known-answer-test key, big-endian hex.
+pub(crate) const KAT_Q: &str = concat!(
+    "d79b690b2d3c79c895ae7e745ad060ce003c2f262a95a0e32a275805e360b869",
+    "3d02754abc909e152e85393257ffd6f8f88a2d77d90f5e60f2d7971be9ccf63b",
+    "587c7d126ce02434f5baf0718a6eaf08129670b01f9c71571a4d3fa71de28c19",
+    "bd556af631ebd4cd0b4b4dc01a2dcce5c43b36ef589c88fd755083a2f452acc5",
 );
 
 /// Public exponent of the known-answer-test key.
@@ -61,74 +60,74 @@ const KAT_MESSAGE: &[u8] = b"agentic-crypto rsa known answer test";
 
 /// Expected RSASSA-PKCS1-v1_5-SHA-256 signature over [`KAT_MESSAGE`].
 const KAT_PKCS1_SHA256: &str = concat!(
-    "6f06ea90c42d359a3cd5c9f7888ee321234e4629a9ba4ba156274db325d74335",
-    "f0eab8abbb45e18c57670eb3efc0c018161b1d5f27ce02e1ac61dbdd5e03d5f5",
-    "678b5315c50e6ea91ed6f60045ab104966bb54e4e5bcca0a44c1197498852b5d",
-    "4be5290102582a5ac2251f5cd0d62d18a7de61d7d12c2173e9250513fb39bf27",
-    "1bedd5ea75fabeb6a6e209c60d3f2c7ebacc1f3fc017e4b808e87a56215c1877",
-    "3d39616dc7f6d2463ed0fd50b988750ba6de404570a081ff4615f03445c055ee",
-    "92c6401fa61e8ab3b2e9c63a8282484e91fcad779e6a7a01e1e56d7953390dde",
-    "a1c8adbf3e19aea075a8f7b593f3973098178b0a926eb51795624a81779a5832",
+    "3ba68bdab5a076ce3d00a5fd4c1104d0bd8923b6fa0dab85cf8887a9cb49ae76",
+    "9ef147d7fb42a95360709626f6b955c6e2bff09729d935993320f91a70ea8d3a",
+    "7868a2f5f9cbc048cf2d9a9b1c68d5843e5989ab5e90e7d69099d1dd451281da",
+    "fac4f292d0609125aff363db1f233c9a381d44e88ab4c61271ef0421f0b5c631",
+    "f9fa9612b8977f260435ec524bc2a20e251af7a35dc5c94c8352c3063a39728a",
+    "46ec59654ff913848abda4590784c8e25c0f56a898722ceaddbfe5b0fd4672ac",
+    "211bf35ae73c95cae0f352442337114971e69a53aea6b462f75ffcda5d2a8896",
+    "a30cbf93e9dee4148ec597646afbe0810c2a863463ef4fbd88ee5df9b472aab0",
 );
 
 /// Expected RSASSA-PKCS1-v1_5-SHA-384 signature over [`KAT_MESSAGE`].
 const KAT_PKCS1_SHA384: &str = concat!(
-    "0a83d64fdda467c6c8a2fb77ca738f7fe9f3acc18a1d40ea2c61264d4499bc29",
-    "b1089f249a61f29a0a7fed00faa21620b78308c44edd2932273f85e7a809efd4",
-    "4e1a738350666a2176d7b6e3346a1938c66870c29372837f89a62f380b6d5c8d",
-    "72cf15ca8f33a0b7f018b8500287b33744ce5a1a85ee0196ea8305f83bc796e3",
-    "559aa3453a4e28d9b54c015ff25fd72ffef4efb67d0522dcecf0faeb5ceae3dc",
-    "b3e8399095b46d2f4ac46aaa8a6ee064cba60d03e591676c667815e17b19c52b",
-    "8cbd851c34057739df881133e9a8873bd8153547493094763cde5e22f4165baa",
-    "c51a4ab4e631ccd8cf55fb898b8dbad6104ca4cf8d60ae07ac606775858712a3",
+    "56f93d706507e6648ac1bc2d7165d104f7c8c756d49b2011bcc563e2b9dfd201",
+    "282da420ffe64ebd12a019e85c3dc32517c97bbd656f50bcbf8a690969f6f141",
+    "8077486f90a323ec8d31512b78ec74ae3a2db2d90720c89bf46f19b15b96705f",
+    "db59249c3844a406025fba2ddd8ecc51e51087278149106a13eee3db0348455b",
+    "546c15459c6fe422e7204fa1fe6a99c16cbdce75e75065a743ea662060dc7f57",
+    "a075add40716f5dcf71940f7230de4c886e4e91ac5a2e4a705b6d51aaef67284",
+    "e7802779ba1cde8a305ed391c83e2af1c965f8637d81ab8debf52f2b9af8be75",
+    "242df5de754f12bdb34ca136200a8dcfeeb972aa7b7435836e4e333bd61e5234",
 );
 
 /// Expected RSASSA-PKCS1-v1_5-SHA-512 signature over [`KAT_MESSAGE`].
 const KAT_PKCS1_SHA512: &str = concat!(
-    "98bdc8d17a9e7a84547076c8894c7a9aec35cf3656fe043e1ca0ae45b59ec6d6",
-    "821fd6df24e254499a5796dd7151df672d4bfb9470114ddfa2d9c10378831a62",
-    "eba92f2ba6a08a6ea512ead2ec96d9aa2a5f80559c5e771103bbe5c31ce154f2",
-    "fa21794013333ef040506a8adb3245da3d3d8a3d8f9ddc442f95ac16af8864b1",
-    "4b6ff4055c4af460a990b130493a129c7a1860b76b8e9adbddd0e871a0c919a2",
-    "d76b61db1a8276b3498c76b68e21abba6fb2ff2d62991a243f09ce999a9feeff",
-    "f44943a049ef636a4eba3181c63856277048f56b8a0a63602b420bf9febff876",
-    "ba8039aad3b1845797a9cfc6c35188d0193427ac4f28a0f93a4a72e9a322affb",
+    "46bac65c6abf5651c40f62929ed7898036a30eee479601622ecc63c969e16055",
+    "232367cb9e485521fe570bec67d8539227d9f38011c9770ecda3b9b7c33ca208",
+    "9b6c8c7f1ffdee65600d9bfade2ec3280025c9a0518a6f30be0909dc9b8a787c",
+    "9a92a5d17134d9bbcb1f6c20c4f95af2cd3bd746ca544b09fba89520ca136788",
+    "4d86d9a90224a8bcef1a567ea6eb87e161c8e0bda522110b80a67acfe035d1bc",
+    "621da4ca9bd43ce04c55eec6ffc5b9f5aac3f4bdbdb970d6ff80a983f193ec4c",
+    "c56efbca0c01cdc3c3e385b1eaccebbafc76b6448c3e04be32ad713bd858b377",
+    "2d44d6e1f0928403795a569bb30018fbf7870a158af7b9601f434edffdcb63ab",
 );
 
 /// Expected RSASSA-PSS-SHA-256 signature over [`KAT_MESSAGE`].
 const KAT_PSS_SHA256: &str = concat!(
-    "141617a4608a7122a8967ecb03a43ba60cde07b7b0b2c8be954b806bdaf91bf6",
-    "9c9c8803b6a5ec5ab7ae54ea7120f6cad744050c85d466d2ed8c0ddeec9815a6",
-    "f6ce8f67bc329e56db9cb1fc75e55fbfda4e94fb3e13cc0f76b32cc229823799",
-    "f05b6065c3ee7170424dc3558a84036f51d970cdab29d77c412a03e3ffcdcf34",
-    "1aa5f5f884ce409e2885e20044933ee244bad6f1f269bd7ce3ce8888a4cdf937",
-    "7e8e529c785f99a89df6b5a67cbfa57d6e13cbea7fa652299cd7f1519205180f",
-    "9029e9990f7109747dfc2b7e5b8bf7ba24685fe7b3ee4a141753e2fe2b7ff915",
-    "9069737c482bc42a54308e8800aba0020ed39e1bbee27dd58af2794c3df48928",
+    "6acf9de561e7c594205946683700e8e4d844b3b8ddeaed659ac52c88f9f839e4",
+    "b539eba0e987fd833f2253c3ebce5349a72f5fe1bf615e4857023695186e6133",
+    "b12ccf0d38e112faa5b5833e24b174db0548eee954939edf8bad604a87a77f59",
+    "97a08b8968101e27e9e9966c493fcebf32c0b975a6899f83e270d579834265c4",
+    "621dd2eb4bdb1c21f3b3c94e82c67d1e08e872f45f65e8a5fec6cadfc6d7212a",
+    "e01c732ebcc4722ac61fb7b505061bd393e99797ab4387313c2aeea8568bb1ee",
+    "d36e4b0a9d4cc8ac98e095c9f9355795e5d1daba280b9dc8f43d21828221ce8b",
+    "4ea96132a3b1631607244d986c9ae0f1c2c3472ad3c06feabaf358c07873bdb6",
 );
 
 /// Expected RSASSA-PSS-SHA-384 signature over [`KAT_MESSAGE`].
 const KAT_PSS_SHA384: &str = concat!(
-    "47077fc2914c4bb7c38d0161a99ba774560e7cbb5d064ed0ce9c8560c7803fe2",
-    "b1223b6e45920cc82f1fa8b9072b587f5d93bc7286ab555b9faab279d0f13ca8",
-    "1a8547963f648222a26cdcd5c016bd9c72e0532e1e3d2f897eba8d92b28b4367",
-    "45abb5d5076a8013757b346b52117caf209b549f7c3bd6613d9355fd379c34ab",
-    "fff71a79be91d082aa9fa0ddadb7526174c9a85dc088aad0d1dd4328ec646d94",
-    "60359dd6faac3187c192179f248481e1abc99e529cb5348c8be36a419631ddb4",
-    "ba0ef37e385c20decd80570f15a344054fc0d06163f30e987b87b9c0cacc2622",
-    "6039f15b21b18518708468a579f29f5dcedf564a7c652ad9db9d767dc583e464",
+    "826743e05b8cde99bb99cbd6243fe9718f04ec1ecd6fd82cf96da1798685906d",
+    "238fa22362296911fc06ac2dc3e01b6f7d1753d9e3345351f435528b814d9a3a",
+    "2f4c0ff46c285edfb2b37a8b867ad25f6cd70c9c607c859dbdad497eb58ae19c",
+    "93e22283633153607fd0485ea241822bce0a5078332ca66a63b6d29953d12559",
+    "7d7f17b8c1cfeae90431950970845cef5d289ec0c825b700c9c0e492c52dbd45",
+    "386d69107e88c62ad33ccb80b23e11c5310df73272b710f5eeef37d4a32ad012",
+    "f0f7c2e9bc5bda5ec91733e41647b52ad64cb5127c0d31b03b8743f35583107f",
+    "b401d302f14af99d35300566be30dec54d28bb8d1d0b4c14802e0ef8c307d586",
 );
 
 /// Expected RSASSA-PSS-SHA-512 signature over [`KAT_MESSAGE`].
 const KAT_PSS_SHA512: &str = concat!(
-    "120c86884b9a05b6940ac2ac29b1e5c05b323c86f3af77bf979361081e688740",
-    "25b2e97514cd6cd66749e5e59bcdc3177de78d79f5f5026c71c7862c5f782b1b",
-    "bd6dfb14731fbd7eafb4d84b79d95c4a6270f83ac6ac576642b183f7e3360e88",
-    "040ae57ba68088c7e6c3119f61477f6fd937a1e47ef1edd4fa5c2b72916a1305",
-    "b78969a65803e5d1c8d7bec77d2ef4a67489a0714487b5c3c5b24772a346f5ff",
-    "a3998029d5278551c47824a57dddd12b3cfbe16d40b1bc996c1b83fde29037fa",
-    "928977f3e67d064bfd9b23ea505b1affc657c56e9fed25ebb589c48a8d5dd2b5",
-    "cda4f6b6831ebea58745ea068f81f9ebed3e8d46613bf6d09373607a8744c3e5",
+    "b6b8f150883cc3a6944dd4bda62bd5a9e89408f46c7d851e6395feb07cabd35b",
+    "658c45d4292892694d8f8beb9bfc6a7244f2dbbcd9abc81c666e3246a38a137b",
+    "7f9c9209055375d4932ff68b8851a33634a6375db6908983cf3230464bc66da3",
+    "e6ea49b049204e2da76967aa2b44d96ff218d3a8083d5b9d7cf9aae1879f320e",
+    "c6e9e01084d819541204fab34076bb0083a956c6007a337c43525cc59b388028",
+    "f0a02e9521a4b6a5b7822b2286bb05bb4cb8d29f9412f8582f885d052b21bda4",
+    "41d586b9c4d9e041fbdbe00f7b9a4650b07c3b945608a8aedb73d8120cac8157",
+    "abc2d6645a64a1e3ac5b753e15a7f8f22ce29f38874595f862ef71d94299b4ce",
 );
 
 /// The PSS salt, fixed so the signatures are reproducible. Production signing
@@ -148,14 +147,25 @@ fn unhex_256(hex: &str) -> Result<[u8; 256]> {
     Ok(out)
 }
 
+/// Decode a 256-character hex constant into 128 bytes.
+fn unhex_128(hex: &str) -> Result<[u8; 128]> {
+    let mut out = [0u8; 128];
+    ac_core::codec::hex_decode(hex.as_bytes(), &mut out)?;
+    Ok(out)
+}
+
 /// The known-answer-test key pair.
-fn kat_key() -> Result<RsaPrivateKey> {
-    RsaPrivateKey::from_components(&unhex_256(KAT_N)?, KAT_E, &unhex_256(KAT_D)?)
+///
+/// Built from the primes, so the self-tests run the Chinese-remainder path —
+/// the one production takes for any generated key. A known-answer test that
+/// exercised a path no caller uses would be worth very little.
+pub(crate) fn kat_key() -> Result<RsaPrivateKey> {
+    RsaPrivateKey::from_primes(&unhex_128(KAT_P)?, &unhex_128(KAT_Q)?, KAT_E)
 }
 
 /// The public half of the known-answer-test key.
 fn kat_public() -> Result<RsaPublicKey> {
-    RsaPublicKey::from_components(&unhex_256(KAT_N)?, KAT_E)
+    Ok(*kat_key()?.public_key())
 }
 
 /// A known-answer test for one PKCS#1 v1.5 scheme.

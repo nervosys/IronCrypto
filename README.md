@@ -159,7 +159,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256 and P-384 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
-| RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation |
+| RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
 | Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
 
@@ -243,9 +243,8 @@ Against aws-lc-rs, BoringSSL, and OpenSSL, AgenticCrypto leads on portability
 (zero dependencies, no C toolchain, genuine bare-metal `no_std`) and on the
 agent-facing ontology, which none of them has. With the NIST curves and RSA
 signatures in place it covers the algorithms most deployments actually reach
-for. It still trails on post-quantum schemes, on P-521, on RSA encryption and
-CRT-accelerated RSA, on raw throughput, and — decisively — on validation
-status. Pick accordingly, and note that the ontology will tell
+for. It still trails on post-quantum schemes, on P-521, on RSA encryption, on
+X.509 certificate handling, and — decisively — on validation status. Pick accordingly, and note that the ontology will tell
 you which case you're in without your having to read this paragraph.
 
 ---

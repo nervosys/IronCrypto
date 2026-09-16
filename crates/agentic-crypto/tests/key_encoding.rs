@@ -267,6 +267,151 @@ fn rsa_public_keys_survive_spki() {
     rsa::PssSha256::verify(&rebuilt, b"message", &signature).unwrap();
 }
 
+/// The full private-key round trip: generate, export as PKCS#8, parse, rebuild
+/// from the parsed primes, and sign with the result. This is the property that
+/// makes an exported key file actually usable somewhere else.
+#[test]
+fn rsa_private_keys_survive_pkcs8() {
+    let mut r = rng(b"rsa-pkcs8");
+    let key = rsa::generate(2048, &mut r).expect("key generation");
+    assert!(key.uses_crt(), "a generated key carries its primes");
+
+    // Gather every field PKCS#1 wants.
+    let mut modulus = [0u8; 256];
+    key.public_key().modulus_bytes(&mut modulus).unwrap();
+    let mut d = [0u8; 256];
+    key.exponent_bytes(&mut d).unwrap();
+    let mut p = [0u8; 128];
+    let mut q = [0u8; 128];
+    key.prime_bytes(&mut p, &mut q).unwrap();
+    let mut dp = [0u8; 128];
+    let mut dq = [0u8; 128];
+    let mut qinv = [0u8; 128];
+    key.crt_exponent_bytes(&mut dp, &mut dq, &mut qinv).unwrap();
+
+    let mut pkcs8 = [0u8; 2048];
+    let n = PrivateKeyInfo::Rsa {
+        modulus: &modulus,
+        public_exponent: 65537,
+        private_exponent: &d,
+        prime1: &p,
+        prime2: &q,
+        exponent1: &dp,
+        exponent2: &dq,
+        coefficient: &qinv,
+    }
+    .to_der(&mut pkcs8)
+    .unwrap();
+
+    // Parse it back and rebuild the key from the parsed primes alone.
+    let PrivateKeyInfo::Rsa {
+        prime1,
+        prime2,
+        public_exponent,
+        modulus: parsed_modulus,
+        ..
+    } = PrivateKeyInfo::from_der(&pkcs8[..n]).unwrap()
+    else {
+        panic!("expected an rsa private key");
+    };
+    assert_eq!(public_exponent, 65537);
+    assert_eq!(parsed_modulus, &modulus[..], "the modulus survived");
+
+    let rebuilt = RsaPrivateKey::from_primes(prime1, prime2, public_exponent).unwrap();
+    assert!(rebuilt.uses_crt());
+
+    // A signature from the rebuilt key verifies under the original public key.
+    let mut signature = [0u8; 256];
+    rsa::Pkcs1Sha256::sign(&rebuilt, b"message", &mut signature).unwrap();
+    rsa::Pkcs1Sha256::verify(key.public_key(), b"message", &signature)
+        .expect("the rebuilt key is the same key");
+
+    // And it is byte-identical to a signature from the original, since PKCS#1
+    // v1.5 is deterministic.
+    let mut original_signature = [0u8; 256];
+    rsa::Pkcs1Sha256::sign(&key, b"message", &mut original_signature).unwrap();
+    assert_eq!(signature, original_signature);
+}
+
+/// PEM in, PEM out, through the private-key path, with a label check.
+#[test]
+fn an_rsa_private_key_survives_pem() {
+    let mut r = rng(b"rsa-pem");
+    let key = rsa::generate(2048, &mut r).expect("key generation");
+
+    let mut modulus = [0u8; 256];
+    key.public_key().modulus_bytes(&mut modulus).unwrap();
+    let mut d = [0u8; 256];
+    key.exponent_bytes(&mut d).unwrap();
+    let mut p = [0u8; 128];
+    let mut q = [0u8; 128];
+    key.prime_bytes(&mut p, &mut q).unwrap();
+    let mut dp = [0u8; 128];
+    let mut dq = [0u8; 128];
+    let mut qinv = [0u8; 128];
+    key.crt_exponent_bytes(&mut dp, &mut dq, &mut qinv).unwrap();
+
+    let info = PrivateKeyInfo::Rsa {
+        modulus: &modulus,
+        public_exponent: 65537,
+        private_exponent: &d,
+        prime1: &p,
+        prime2: &q,
+        exponent1: &dp,
+        exponent2: &dq,
+        coefficient: &qinv,
+    };
+    let mut der = [0u8; 2048];
+    let n = info.to_der(&mut der).unwrap();
+
+    let mut text = std::vec![0u8; pem::encoded_len(pem::PRIVATE_KEY, n)];
+    let m = pem::encode(pem::PRIVATE_KEY, &der[..n], &mut text).unwrap();
+    let document = core::str::from_utf8(&text[..m]).unwrap();
+    assert!(document.starts_with(
+        "-----BEGIN PRIVATE KEY-----
+"
+    ));
+
+    // Every 2048-bit PKCS#8 RSA private key contains this base64 fragment: it
+    // is the rsaEncryption AlgorithmIdentifier and the privateKey OCTET STRING
+    // header, at the byte alignment a 2048-bit key produces. Matching it is a
+    // check against other implementations that the round-trip tests, which only
+    // compare this library against itself, cannot give.
+    assert!(
+        document.contains("ANBgkqhkiG9w0BAQEFAASCBK"),
+        "the encoding does not match the shape every other tool emits"
+    );
+
+    let mut back = [0u8; 2048];
+    let back_len = pem::decode(pem::PRIVATE_KEY, document.as_bytes(), &mut back).unwrap();
+    assert_eq!(&back[..back_len], &der[..n]);
+    assert_eq!(PrivateKeyInfo::from_der(&back[..back_len]).unwrap(), info);
+}
+
+/// The CRT path and the plain path must produce identical signatures, checked
+/// here through the public API rather than the internals.
+#[test]
+fn crt_and_plain_keys_sign_identically() {
+    let mut r = rng(b"crt-vs-plain");
+    let crt_key = rsa::generate(2048, &mut r).expect("key generation");
+
+    let mut modulus = [0u8; 256];
+    crt_key.public_key().modulus_bytes(&mut modulus).unwrap();
+    let mut d = [0u8; 256];
+    crt_key.exponent_bytes(&mut d).unwrap();
+    let plain_key = RsaPrivateKey::from_components(&modulus, 65537, &d).unwrap();
+    assert!(crt_key.uses_crt() && !plain_key.uses_crt());
+
+    for message in [&b""[..], b"a", b"the quick brown fox", &[0x5au8; 500][..]] {
+        let mut a = [0u8; 256];
+        let mut b = [0u8; 256];
+        rsa::Pkcs1Sha256::sign(&crt_key, message, &mut a).unwrap();
+        rsa::Pkcs1Sha256::sign(&plain_key, message, &mut b).unwrap();
+        assert_eq!(a, b, "the two paths agree");
+        rsa::Pkcs1Sha256::verify(crt_key.public_key(), message, &a).unwrap();
+    }
+}
+
 /// `ac_rsa` takes a fixed-width modulus; the parser returns a minimal one.
 /// Those differ whenever the top byte is below 0x80 — which cannot happen for a
 /// key from `generate`, since it forces the top two bits, but can for a key

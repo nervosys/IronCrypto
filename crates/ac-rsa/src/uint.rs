@@ -367,6 +367,154 @@ impl Modulus {
         self.from_mont(&acc)
     }
 
+    /// Reduce a double-width value modulo `n`, without general division.
+    ///
+    /// The CRT path needs `c mod p` where `c` is as wide as the modulus of the
+    /// whole key and `p` is half that. There is no division here, so the
+    /// reduction is done by splitting:
+    ///
+    /// ```text
+    /// c = c_hi * 2^(64*limbs) + c_lo  =  c_hi * R + c_lo   (mod p)
+    /// ```
+    ///
+    /// and `c_hi * R mod p` is exactly what a Montgomery multiplication by
+    /// `R^2` computes. Both halves start below `2 * p` — `p` has its top two
+    /// bits set, so `2^(64*limbs) < 2p` — which one conditional subtraction
+    /// fixes.
+    ///
+    /// `wide` must be less than `n^2`, and `n` must occupy the full `limbs`
+    /// words, which is what [`Modulus::is_full_width`] checks.
+    pub fn reduce_wide(&self, wide: &Uint) -> Uint {
+        let limbs = self.limbs;
+
+        let mut lo = Uint::ZERO;
+        lo.0[..limbs].copy_from_slice(&wide.0[..limbs]);
+        let mut hi = Uint::ZERO;
+        for i in 0..limbs {
+            hi.0[i] = wide.0.get(limbs + i).copied().unwrap_or(0);
+        }
+
+        let lo = self.reduce_once(&lo);
+        let hi = self.reduce_once(&hi);
+
+        // hi * R mod n, then add the low half.
+        let mut acc = self.mont_mul(&hi, &self.r2);
+        let carry = acc.add_assign(&lo, limbs);
+        let mut reduced = acc;
+        let borrow = reduced.sub_assign(&self.n, limbs);
+        let need = Choice::from_u8((carry | (1 - borrow)) as u8);
+        Uint::cmov(&mut acc, &reduced, need, limbs);
+        acc
+    }
+
+    /// Whether the modulus fills its top limb, which [`Modulus::reduce_wide`]
+    /// relies on.
+    ///
+    /// A prime from [`crate::key::generate`] always does, because the candidate
+    /// search forces the top two bits. A prime from somewhere else might not,
+    /// and then the CRT path is declined rather than silently given a value it
+    /// cannot reduce.
+    pub fn is_full_width(&self) -> bool {
+        self.n.bits() == self.limbs * 64
+    }
+
+    /// `a - b mod n`, for `a, b < n`.
+    pub fn sub_mod(&self, a: &Uint, b: &Uint) -> Uint {
+        let mut out = *a;
+        let borrow = out.sub_assign(b, self.limbs);
+        // On underflow, add the modulus back. Both branches run; the choice is
+        // a conditional move.
+        let mut wrapped = out;
+        wrapped.add_assign(&self.n, self.limbs);
+        Uint::cmov(
+            &mut out,
+            &wrapped,
+            Choice::from_u8(borrow as u8),
+            self.limbs,
+        );
+        out
+    }
+
+    /// `a * b mod n`, for `a, b < n`.
+    pub fn mul_mod(&self, a: &Uint, b: &Uint) -> Uint {
+        // Two Montgomery multiplications: the R factors cancel.
+        let a_mont = self.to_mont(a);
+        self.mont_mul(&a_mont, b)
+    }
+}
+
+impl Modulus {
+    /// Modular inverse of `a` modulo this odd modulus, by the binary extended
+    /// GCD. Variable time.
+    ///
+    /// Used once per key, to derive `qInv` during generation. Never on a
+    /// message. Returns `None` when `a` and the modulus are not coprime.
+    pub fn invert_vartime(&self, a: &Uint) -> Option<Uint> {
+        let limbs = self.limbs;
+        let m = &self.n;
+
+        // The accumulators need one word more than the modulus. Halving a value
+        // modulo an odd `m` goes through `x + m`, and when `m` fills its top
+        // limb — which every prime from `generate` does — that sum carries out
+        // of the modulus width. The extra word returns to zero after the shift,
+        // since `(x + m) / 2 < m`.
+        let wide = limbs + 1;
+        if wide > MAX_LIMBS {
+            return None;
+        }
+
+        // Halving modulo an odd modulus: if x is odd, adding m makes it even
+        // without changing its residue.
+        fn half_mod(x: &mut Uint, m: &Uint, limbs: usize) {
+            if x.is_odd() {
+                x.add_assign(m, limbs);
+            }
+            x.shr1(limbs);
+        }
+        fn sub_mod_vartime(x: &mut Uint, y: &Uint, m: &Uint, limbs: usize) {
+            if x.sub_assign(y, limbs) == 1 {
+                x.add_assign(m, limbs);
+            }
+        }
+
+        let mut u = self.reduce_once(a);
+        let mut v = *m;
+        let mut x1 = Uint::one();
+        let mut x2 = Uint::ZERO;
+        let one = Uint::one();
+
+        // Bounded so a non-coprime input terminates rather than spinning.
+        for _ in 0..(limbs * 64 * 4) {
+            if u.cmp_vartime(&one) == core::cmp::Ordering::Equal {
+                return Some(x1);
+            }
+            if v.cmp_vartime(&one) == core::cmp::Ordering::Equal {
+                return Some(x2);
+            }
+            if u.cmp_vartime(&Uint::ZERO) == core::cmp::Ordering::Equal {
+                return None;
+            }
+
+            while !u.is_odd() {
+                u.shr1(limbs);
+                half_mod(&mut x1, m, wide);
+            }
+            while !v.is_odd() {
+                v.shr1(limbs);
+                half_mod(&mut x2, m, wide);
+            }
+
+            if u.cmp_vartime(&v) != core::cmp::Ordering::Less {
+                u.sub_assign(&v, limbs);
+                sub_mod_vartime(&mut x1, &x2, m, wide);
+            } else {
+                v.sub_assign(&u, limbs);
+                sub_mod_vartime(&mut x2, &x1, m, wide);
+            }
+        }
+        None
+    }
+
     /// `base^e mod n` for a small public exponent.
     ///
     /// The public exponent is not secret, so this may branch on it.
@@ -522,6 +670,88 @@ mod tests {
                 let _ = got;
             }
         }
+    }
+
+    /// `reduce_wide` has to agree with an ordinary remainder. Checked against
+    /// u128 arithmetic on moduli small enough for the reference to be obvious.
+    #[test]
+    fn wide_reduction_matches_the_reference() {
+        for &m in &[
+            0x8000_0000_0000_0001u128,
+            0xffff_ffff_ffff_fffbu128,
+            0xc000_0000_0000_0007u128,
+        ] {
+            let modulus = Modulus::new(uint(m)).unwrap();
+            assert!(modulus.is_full_width(), "the top bit is set");
+            for &c in &[
+                0u128,
+                1,
+                m - 1,
+                m,
+                m + 1,
+                m * 2,
+                0xffff_ffff_ffff_ffff_ffff_ffff_ffff_fffeu128,
+                (m - 1) * (m - 1) % u128::MAX,
+            ] {
+                let got = modulus.reduce_wide(&uint(c));
+                assert_eq!(to_u128(&got), c % m, "{c} mod {m}");
+            }
+        }
+    }
+
+    /// A modulus whose top limb is not full cannot use the split reduction, and
+    /// says so rather than returning a wrong answer.
+    #[test]
+    fn a_short_modulus_declines_wide_reduction() {
+        let m = Modulus::new(uint(0x0000_0000_ffff_fffbu128)).unwrap();
+        assert!(!m.is_full_width());
+        let full = Modulus::new(uint(0xffff_ffff_ffff_fffbu128)).unwrap();
+        assert!(full.is_full_width());
+    }
+
+    #[test]
+    fn modular_subtraction_and_multiplication_match_the_reference() {
+        let m = 0xffff_ffff_ffff_fffbu128;
+        let modulus = Modulus::new(uint(m)).unwrap();
+        for a in [0u128, 1, 2, 999, m / 2, m - 1] {
+            for b in [0u128, 1, 3, 65537, m / 2, m - 1] {
+                assert_eq!(
+                    to_u128(&modulus.sub_mod(&uint(a), &uint(b))),
+                    (a + m - b) % m,
+                    "{a} - {b} mod {m}"
+                );
+                assert_eq!(
+                    to_u128(&modulus.mul_mod(&uint(a), &uint(b))),
+                    a * b % m,
+                    "{a} * {b} mod {m}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn modular_inversion_round_trips() {
+        for &m in &[
+            65537u128,
+            0xffff_ffff_ffff_fffbu128,
+            0x7fff_ffff_ffff_ffffu128,
+        ] {
+            let modulus = Modulus::new(uint(m)).unwrap();
+            for a in [1u128, 2, 3, 65536, m - 1] {
+                let inv = modulus.invert_vartime(&uint(a)).expect("coprime");
+                assert_eq!(
+                    to_u128(&modulus.mul_mod(&uint(a), &inv)),
+                    1,
+                    "{a} * {a}^-1 mod {m}"
+                );
+            }
+        }
+
+        // Not coprime: 2 has no inverse modulo an even number, and 0 has none
+        // modulo anything.
+        let m = Modulus::new(uint(15)).unwrap();
+        assert!(m.invert_vartime(&uint(3)).is_none(), "gcd(3, 15) = 3");
+        assert!(m.invert_vartime(&Uint::ZERO).is_none());
     }
 
     #[test]

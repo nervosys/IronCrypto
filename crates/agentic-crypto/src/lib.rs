@@ -45,9 +45,13 @@
 //!
 //! * **Not CMVP validated.** The FIPS machinery is real; the certificate does
 //!   not exist. See [`ac_fips::VALIDATION_STATEMENT`].
-//! * **No RSA CRT.** The RSA private operation is a single exponentiation
-//!   modulo `n`, roughly four times slower than the Chinese-remainder form.
-//!   RSA key generation is variable time by design; generate keys offline.
+//! * **RSA key generation is variable time**, by design and like every other
+//!   implementation: the prime search branches on candidate values. Generate
+//!   keys somewhere an attacker is not measuring. Signing and decryption are
+//!   constant time in the exponent.
+//! * **An RSA private key is about five kilobytes**, because every integer
+//!   inside is a fixed-capacity 4096-bit buffer. That is what keeps the crate
+//!   allocation free; box it on a small stack.
 //! * **No post-quantum schemes yet.** ML-KEM and ML-DSA are registered as
 //!   planned, not implemented, and [`recommend`] says so rather than
 //!   substituting a classical scheme.

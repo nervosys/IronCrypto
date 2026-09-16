@@ -1695,7 +1695,9 @@ pub static REGISTRY: &[Entry] = &[
         notes: "Verification re-encodes the expected block and compares it in constant time; it \
                 never parses the recovered block, which is where the Bleichenbacher 2006 \
                 forgeries came from. The DigestInfo prefix is built from the algorithm OID at \
-                run time rather than pasted in as a constant.",
+                run time rather than pasted in as a constant. Signing uses the Chinese \
+                remainder theorem and verifies its own output before returning it, so a faulted \
+                half cannot leak the factorization.",
     },
     Entry {
         id: "rsa-pkcs1-sha384",

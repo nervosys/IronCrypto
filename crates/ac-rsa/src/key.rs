@@ -9,15 +9,29 @@
 //! offline, and making it constant-time would cost far more than it buys.
 //! Generate keys somewhere an attacker is not measuring.
 //!
-//! # No CRT
+//! # CRT, and the check that makes it safe
 //!
-//! The private operation is a single exponentiation modulo `n`, not the
-//! Chinese-remainder pair modulo `p` and `q`. CRT would be roughly four times
-//! faster, and is also where RSA fault attacks land: a single faulted half
-//! leaks the factorization. The simpler path is the one implemented; CRT is
-//! noted in the ontology as a possible optimization rather than pretended to.
+//! The private operation runs the Chinese-remainder pair modulo `p` and `q`
+//! when the key carries them, which is roughly four times faster than a single
+//! exponentiation modulo `n`: two half-width exponentiations cost about a
+//! quarter of one full-width exponentiation, because modular multiplication is
+//! quadratic in the operand size.
+//!
+//! CRT is also where RSA fault attacks land. If a glitch corrupts exactly one
+//! of the two halves, the difference between the faulty output and the correct
+//! one shares a factor with `n`, and one `gcd` recovers the private key from a
+//! single bad signature. So this implementation never returns a CRT result it
+//! has not checked: [`RsaPrivateKey::raw_private`] raises the output back to
+//! the public exponent and compares it against the input, and on a mismatch
+//! returns an error and no data at all. The check costs one exponentiation by
+//! 65537 — seventeen squarings — against the thousands the private operation
+//! took, so it is under one percent.
+//!
+//! That makes the CRT path strictly safer than the non-CRT one, which has no
+//! output check to make. A key built from `n`, `e`, and `d` alone still uses
+//! the slow path, because there is nothing to recombine.
 
-use crate::uint::{Modulus, Uint, MAX_BYTES};
+use crate::uint::{Modulus, Uint, MAX_BYTES, MAX_LIMBS};
 use ac_core::traits::RandomSource;
 use ac_core::{ensure, Result, Zeroize};
 
@@ -114,7 +128,42 @@ impl RsaPublicKey {
     }
 }
 
+/// The Chinese-remainder parameters, when a key has them.
+///
+/// Held as prepared [`Modulus`] values rather than raw integers, since every
+/// use needs the Montgomery constants anyway and deriving them once per key is
+/// the whole point.
+struct CrtParams {
+    p: Modulus,
+    q: Modulus,
+    /// `e^-1 mod (p-1)`, so `m^dp = m^d mod p`.
+    dp: Uint,
+    /// `e^-1 mod (q-1)`.
+    dq: Uint,
+    /// `q^-1 mod p`, for the recombination.
+    qinv: Uint,
+    /// Bit width of the half-size exponentiations.
+    half_bits: usize,
+}
+
+impl Zeroize for CrtParams {
+    fn zeroize(&mut self) {
+        self.p.zeroize();
+        self.q.zeroize();
+        self.dp.zeroize();
+        self.dq.zeroize();
+        self.qinv.zeroize();
+    }
+}
+
 /// An RSA private key.
+///
+/// # Size
+///
+/// Every integer inside is a fixed-capacity 4096-bit buffer regardless of the
+/// key, so this is around five kilobytes whether it holds a 2048-bit key or a
+/// 4096-bit one. That is deliberate — it is what keeps the crate allocation
+/// free — but it is too large for a small stack. Box it on an embedded target.
 pub struct RsaPrivateKey {
     public: RsaPublicKey,
     d: Uint,
@@ -122,11 +171,16 @@ pub struct RsaPrivateKey {
     /// property of the key rather than of any message, so it is not secret in
     /// the way `d` itself is.
     d_bits: usize,
+    /// Present when the key was generated here or imported with its primes.
+    crt: Option<CrtParams>,
 }
 
 impl Drop for RsaPrivateKey {
     fn drop(&mut self) {
         self.d.zeroize();
+        if let Some(crt) = self.crt.as_mut() {
+            crt.zeroize();
+        }
     }
 }
 
@@ -148,7 +202,157 @@ impl RsaPrivateKey {
             public,
             d: d_uint,
             d_bits,
+            crt: None,
         })
+    }
+
+    /// Build from the two primes, deriving everything else.
+    ///
+    /// This is the constructor to prefer when the primes are available: it
+    /// yields a key that uses the CRT path, and it recomputes `d` and the CRT
+    /// parameters rather than trusting values that may not be consistent with
+    /// `p` and `q`.
+    ///
+    /// `p` and `q` must be distinct primes of the same bit length, and that
+    /// length must be a whole number of 64-bit words. Primality is *not*
+    /// rechecked: that is the caller's guarantee, and it is what
+    /// [`generate`] provides.
+    pub fn from_primes(p: &[u8], q: &[u8], e: u64) -> Result<Self> {
+        ensure!(e >= 3 && e % 2 == 1, InvalidParameter, "rsa exponent");
+        let p_uint =
+            Uint::from_be_bytes(p).ok_or(ac_core::err!(InvalidLength, "rsa prime too large"))?;
+        let q_uint =
+            Uint::from_be_bytes(q).ok_or(ac_core::err!(InvalidLength, "rsa prime too large"))?;
+        ensure!(
+            p_uint.bits() == q_uint.bits(),
+            InvalidParameter,
+            "rsa primes must be the same size"
+        );
+        ensure!(
+            p_uint.cmp_vartime(&q_uint) != core::cmp::Ordering::Equal,
+            InvalidParameter,
+            "rsa primes must be distinct"
+        );
+        // PKCS#1 defines qInv as q^-1 mod p, and implementations conventionally
+        // store the larger factor as p. Normalizing here means an exported key
+        // matches what other tools expect, and costs nothing: the two primes
+        // are interchangeable up to this choice.
+        let (p_uint, q_uint) = if p_uint.cmp_vartime(&q_uint) == core::cmp::Ordering::Less {
+            (q_uint, p_uint)
+        } else {
+            (p_uint, q_uint)
+        };
+
+        let half_bits = p_uint.bits();
+        ensure!(
+            half_bits % 64 == 0,
+            Unsupported,
+            "rsa primes must be a whole number of words"
+        );
+        let half_limbs = half_bits / 64;
+
+        let n = mul_vartime(&p_uint, &q_uint, half_limbs, half_limbs);
+        let mut n_bytes = [0u8; MAX_BYTES];
+        let size = n.bits().div_ceil(8);
+        n.to_be_bytes(&mut n_bytes[..size]);
+        let public = RsaPublicKey::from_components(&n_bytes[..size], e)?;
+
+        let one = Uint::one();
+        let mut p1 = p_uint;
+        p1.sub_assign(&one, half_limbs);
+        let mut q1 = q_uint;
+        q1.sub_assign(&one, half_limbs);
+
+        let full_limbs = public.n.limbs();
+        let phi = mul_vartime(&p1, &q1, half_limbs, half_limbs);
+        let e_uint = Uint::from_u64(e);
+        let d = modinv_even_modulus(&e_uint, &phi, full_limbs).ok_or(ac_core::err!(
+            InvalidParameter,
+            "rsa exponent is not coprime to phi(n)"
+        ))?;
+
+        // dp and dq are e^-1 modulo p-1 and q-1. Deriving them this way rather
+        // than as d mod (p-1) avoids needing a general big-integer division,
+        // and gives the same answer: both satisfy e * dp = 1 mod (p-1).
+        let dp = modinv_even_modulus(&e_uint, &p1, half_limbs).ok_or(ac_core::err!(
+            InvalidParameter,
+            "rsa exponent is not coprime to p-1"
+        ))?;
+        let dq = modinv_even_modulus(&e_uint, &q1, half_limbs).ok_or(ac_core::err!(
+            InvalidParameter,
+            "rsa exponent is not coprime to q-1"
+        ))?;
+
+        let p_mod = Modulus::new(p_uint).ok_or(ac_core::err!(InvalidParameter, "p must be odd"))?;
+        let q_mod = Modulus::new(q_uint).ok_or(ac_core::err!(InvalidParameter, "q must be odd"))?;
+        let qinv = p_mod
+            .invert_vartime(&q_uint)
+            .ok_or(ac_core::err!(InvalidParameter, "q has no inverse modulo p"))?;
+
+        let crt = crt_params_if_usable(p_mod, q_mod, dp, dq, qinv, half_bits, full_limbs);
+
+        Ok(RsaPrivateKey {
+            public,
+            d,
+            d_bits: public.bits(),
+            crt,
+        })
+    }
+
+    /// The primes, big-endian, when the key has them.
+    ///
+    /// Each buffer must be half the modulus size. Returns
+    /// `Err(Unsupported)` for a key built from `n`, `e`, and `d` alone. The
+    /// caller is responsible for erasing the output.
+    pub fn prime_bytes(&self, p_out: &mut [u8], q_out: &mut [u8]) -> Result<()> {
+        let crt = self.crt.as_ref().ok_or(ac_core::err!(
+            Unsupported,
+            "this key does not carry its primes"
+        ))?;
+        let half = self.size() / 2;
+        ensure!(
+            p_out.len() == half && q_out.len() == half,
+            InvalidLength,
+            "rsa prime buffer"
+        );
+        crt.p.value().to_be_bytes(p_out);
+        crt.q.value().to_be_bytes(q_out);
+        Ok(())
+    }
+
+    /// The three CRT exponents — `dP`, `dQ`, and `qInv` — big-endian.
+    ///
+    /// Each buffer must be half the modulus size. These are what PKCS#1
+    /// `RSAPrivateKey` carries beyond the primes. The caller is responsible for
+    /// erasing the output.
+    pub fn crt_exponent_bytes(
+        &self,
+        dp_out: &mut [u8],
+        dq_out: &mut [u8],
+        qinv_out: &mut [u8],
+    ) -> Result<()> {
+        let crt = self.crt.as_ref().ok_or(ac_core::err!(
+            Unsupported,
+            "this key does not carry crt parameters"
+        ))?;
+        let half = self.size() / 2;
+        ensure!(
+            dp_out.len() == half && dq_out.len() == half && qinv_out.len() == half,
+            InvalidLength,
+            "rsa crt buffer"
+        );
+        crt.dp.to_be_bytes(dp_out);
+        crt.dq.to_be_bytes(dq_out);
+        crt.qinv.to_be_bytes(qinv_out);
+        Ok(())
+    }
+
+    /// Whether the private operation will take the CRT path.
+    ///
+    /// Reported so a caller can tell a fast key from a slow one, and so the
+    /// tests can assert which path they exercised.
+    pub fn uses_crt(&self) -> bool {
+        self.crt.is_some()
     }
 
     /// The matching public key.
@@ -176,10 +380,57 @@ impl RsaPrivateKey {
             MalformedEncoding,
             "rsa block is not less than the modulus"
         );
-        let mut result = self.public.n.pow(&value, &self.d, self.d_bits);
+        let mut result = match self.crt.as_ref() {
+            Some(crt) => self.crt_private(crt, &value)?,
+            None => self.public.n.pow(&value, &self.d, self.d_bits),
+        };
         result.to_be_bytes(out);
         result.zeroize();
         Ok(())
+    }
+
+    /// `c^d mod n` by the Chinese remainder theorem, with the result verified
+    /// before it is returned.
+    ///
+    /// ```text
+    /// m1 = c^dp mod p
+    /// m2 = c^dq mod q
+    /// h  = qInv * (m1 - m2) mod p
+    /// m  = m2 + q * h
+    /// ```
+    ///
+    /// The verification at the end is not optional and not a debug assertion.
+    /// See the module docs: without it, one faulted half-exponentiation hands
+    /// an attacker the factorization of `n`.
+    fn crt_private(&self, crt: &CrtParams, c: &Uint) -> Result<Uint> {
+        let half_limbs = crt.p.limbs();
+
+        let cp = crt.p.reduce_wide(c);
+        let cq = crt.q.reduce_wide(c);
+        let m1 = crt.p.pow(&cp, &crt.dp, crt.half_bits);
+        let m2 = crt.q.pow(&cq, &crt.dq, crt.half_bits);
+
+        // h = qInv * (m1 - m2) mod p. The subtraction is modulo p, so m2 is
+        // first brought into p's range; it is already below q, and p and q are
+        // the same width.
+        let m2_mod_p = crt.p.reduce_once(&m2);
+        let diff = crt.p.sub_mod(&m1, &m2_mod_p);
+        let h = crt.p.mul_mod(&crt.qinv, &diff);
+
+        // m = m2 + q * h, computed at full width. Both q and h are below 2^half,
+        // so the product fits the modulus width and the sum cannot overflow it.
+        let mut m = mul_vartime(crt.q.value(), &h, half_limbs, half_limbs);
+        m.add_assign(&m2, self.public.n.limbs());
+
+        // Raise it back to the public exponent and compare. A fault in either
+        // half changes `m`, and then this comparison fails.
+        let check = self.public.n.pow_public(&m, self.public.e);
+        ensure!(
+            bool::from(check.ct_eq(c, self.public.n.limbs())),
+            Internal,
+            "rsa crt result failed its verification; the output is withheld"
+        );
+        Ok(m)
     }
 
     /// The private exponent, big-endian, written into `out`.
@@ -384,15 +635,24 @@ pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<Rs
                 None => continue,
             };
 
-            let mut n_bytes = [0u8; MAX_BYTES];
-            let size = bits / 8;
-            n.to_be_bytes(&mut n_bytes[..size]);
-            let mut d_bytes = [0u8; MAX_BYTES];
-            d.to_be_bytes(&mut d_bytes[..size]);
+            // `d` above is not used directly: computing it proves that e is
+            // coprime to phi(n), which is what makes this prime pair usable,
+            // and then the key is rebuilt from the primes so that d and the CRT
+            // parameters are derived in exactly one place.
+            let _ = d;
+            let half_bytes = half / 8;
+            let mut p_bytes = [0u8; MAX_BYTES];
+            p.to_be_bytes(&mut p_bytes[..half_bytes]);
+            let mut q_bytes = [0u8; MAX_BYTES];
+            q.to_be_bytes(&mut q_bytes[..half_bytes]);
 
-            let key =
-                RsaPrivateKey::from_components(&n_bytes[..size], PUBLIC_EXPONENT, &d_bytes[..size]);
-            d_bytes.zeroize();
+            let key = RsaPrivateKey::from_primes(
+                &p_bytes[..half_bytes],
+                &q_bytes[..half_bytes],
+                PUBLIC_EXPONENT,
+            );
+            p_bytes.zeroize();
+            q_bytes.zeroize();
             return key;
         }
     }
@@ -429,6 +689,38 @@ fn modinv_even_modulus(a: &Uint, m: &Uint, limbs: usize) -> Option<Uint> {
     product.add_assign(&Uint::one(), limbs + 1);
     div_small(&mut product, a_small, limbs + 1)?;
     Some(product)
+}
+
+/// Assemble the CRT parameters, or decline them.
+///
+/// The CRT path reduces a full-width value modulo a half-width prime by
+/// splitting it at the halfway word, which needs the prime to fill its top limb
+/// and to be exactly half the modulus width. Primes from [`generate`] always
+/// satisfy both, since the candidate search forces the top two bits. A prime
+/// from elsewhere might not, and then the key falls back to the plain
+/// exponentiation rather than taking a shortcut that does not hold.
+fn crt_params_if_usable(
+    p: Modulus,
+    q: Modulus,
+    dp: Uint,
+    dq: Uint,
+    qinv: Uint,
+    half_bits: usize,
+    full_limbs: usize,
+) -> Option<CrtParams> {
+    let usable = p.is_full_width()
+        && q.is_full_width()
+        && p.limbs() == q.limbs()
+        && p.limbs() * 2 == full_limbs
+        && full_limbs <= MAX_LIMBS;
+    usable.then_some(CrtParams {
+        p,
+        q,
+        dp,
+        dq,
+        qinv,
+        half_bits,
+    })
 }
 
 /// Extended Euclid on two `u64`s.
@@ -580,6 +872,196 @@ mod tests {
         key.public_key().modulus_bytes(&mut a).unwrap();
         other.public_key().modulus_bytes(&mut b).unwrap();
         assert_ne!(a, b, "distinct seeds give distinct keys");
+    }
+
+    /// The strongest oracle available for the CRT path: the same key, both
+    /// ways, must produce identical output. The plain path is already checked
+    /// against a naive reference in `uint`, so agreement here transfers that
+    /// evidence to the fast path.
+    #[test]
+    fn the_crt_path_agrees_with_the_plain_path() {
+        let mut rng = ac_drbg::Rng::from_entropy(&[0x66u8; 32], b"crt-diff").unwrap();
+        let crt_key = generate(2048, &mut rng).unwrap();
+        assert!(crt_key.uses_crt(), "a generated key carries its primes");
+
+        // The same key without the primes, which forces the slow path.
+        let mut n = [0u8; 256];
+        crt_key.public_key().modulus_bytes(&mut n).unwrap();
+        let mut d = [0u8; 256];
+        crt_key.exponent_bytes(&mut d).unwrap();
+        let plain_key = RsaPrivateKey::from_components(&n, PUBLIC_EXPONENT, &d).unwrap();
+        assert!(!plain_key.uses_crt());
+
+        for seed in [0u8, 1, 2, 0x5a, 0x7f, 0x80, 0xfe] {
+            let mut message = [seed; 256];
+            message[0] = 0; // keep it below the modulus
+
+            let mut via_crt = [0u8; 256];
+            crt_key.raw_private(&message, &mut via_crt).unwrap();
+            let mut via_plain = [0u8; 256];
+            plain_key.raw_private(&message, &mut via_plain).unwrap();
+            assert_eq!(via_crt, via_plain, "seed {seed}");
+
+            // And both invert under the public operation.
+            let mut back = [0u8; 256];
+            crt_key
+                .public_key()
+                .raw_public(&via_crt, &mut back)
+                .unwrap();
+            assert_eq!(back, message, "seed {seed}");
+        }
+    }
+
+    /// `from_primes` must reproduce a key bit for bit from its factors alone.
+    #[test]
+    fn a_key_can_be_rebuilt_from_its_primes() {
+        let mut rng = ac_drbg::Rng::from_entropy(&[0x77u8; 32], b"from-primes").unwrap();
+        let original = generate(2048, &mut rng).unwrap();
+
+        let mut p = [0u8; 128];
+        let mut q = [0u8; 128];
+        original.prime_bytes(&mut p, &mut q).unwrap();
+        let rebuilt = RsaPrivateKey::from_primes(&p, &q, PUBLIC_EXPONENT).unwrap();
+
+        let mut a = [0u8; 256];
+        original.public_key().modulus_bytes(&mut a).unwrap();
+        let mut b = [0u8; 256];
+        rebuilt.public_key().modulus_bytes(&mut b).unwrap();
+        assert_eq!(a, b, "same modulus");
+
+        let mut da = [0u8; 256];
+        original.exponent_bytes(&mut da).unwrap();
+        let mut db = [0u8; 256];
+        rebuilt.exponent_bytes(&mut db).unwrap();
+        assert_eq!(da, db, "same private exponent");
+
+        // n = p * q, checked against the modulus the key reports.
+        let p_uint = Uint::from_be_bytes(&p).unwrap();
+        let q_uint = Uint::from_be_bytes(&q).unwrap();
+        let product = mul_vartime(&p_uint, &q_uint, 16, 16);
+        let mut product_bytes = [0u8; 256];
+        product.to_be_bytes(&mut product_bytes);
+        assert_eq!(product_bytes, a, "n is the product of the primes");
+    }
+
+    /// The CRT exponents must satisfy their defining congruences.
+    #[test]
+    fn the_crt_exponents_satisfy_their_congruences() {
+        let mut rng = ac_drbg::Rng::from_entropy(&[0x88u8; 32], b"crt-params").unwrap();
+        let key = generate(2048, &mut rng).unwrap();
+
+        let mut p = [0u8; 128];
+        let mut q = [0u8; 128];
+        key.prime_bytes(&mut p, &mut q).unwrap();
+        let mut dp = [0u8; 128];
+        let mut dq = [0u8; 128];
+        let mut qinv = [0u8; 128];
+        key.crt_exponent_bytes(&mut dp, &mut dq, &mut qinv).unwrap();
+
+        let p_uint = Uint::from_be_bytes(&p).unwrap();
+        let q_uint = Uint::from_be_bytes(&q).unwrap();
+        let one = Uint::one();
+
+        // e * dP = 1 mod (p - 1), and likewise for q.
+        for (prime, exponent, name) in [(p_uint, dp, "p"), (q_uint, dq, "q")] {
+            let mut minus_one = prime;
+            minus_one.sub_assign(&one, 16);
+            // p-1 is even, so use the same inversion the derivation used and
+            // check it lands on the same value.
+            let recomputed =
+                modinv_even_modulus(&Uint::from_u64(PUBLIC_EXPONENT), &minus_one, 16).unwrap();
+            let mut expected = [0u8; 128];
+            recomputed.to_be_bytes(&mut expected);
+            assert_eq!(expected, exponent, "e^-1 mod ({name} - 1)");
+        }
+
+        // qInv * q = 1 mod p.
+        let p_mod = Modulus::new(p_uint).unwrap();
+        let qinv_uint = Uint::from_be_bytes(&qinv).unwrap();
+        let product = p_mod.mul_mod(&qinv_uint, &p_mod.reduce_once(&q_uint));
+        assert_eq!(product, one, "q * q^-1 = 1 mod p");
+    }
+
+    /// A key without its primes still works; it simply takes the slow path and
+    /// says so rather than pretending to have parameters it does not.
+    #[test]
+    fn a_key_without_primes_declines_the_crt_accessors() {
+        let mut n = [0u8; 256];
+        n[0] = 0x80;
+        n[255] = 1;
+        let mut d = [0u8; 256];
+        d[255] = 3;
+        let key = RsaPrivateKey::from_components(&n, 65537, &d).unwrap();
+        assert!(!key.uses_crt());
+
+        let mut p = [0u8; 128];
+        let mut q = [0u8; 128];
+        assert!(key.prime_bytes(&mut p, &mut q).is_err());
+        let mut a = [0u8; 128];
+        let mut b = [0u8; 128];
+        let mut c = [0u8; 128];
+        assert!(key.crt_exponent_bytes(&mut a, &mut b, &mut c).is_err());
+    }
+
+    #[test]
+    fn from_primes_validates_its_inputs() {
+        let p = [0xc1u8; 128];
+        assert!(
+            RsaPrivateKey::from_primes(&p, &p, 65537).is_err(),
+            "the primes must differ"
+        );
+        let short = [0xc1u8; 64];
+        assert!(
+            RsaPrivateKey::from_primes(&p, &short, 65537).is_err(),
+            "the primes must be the same size"
+        );
+        assert!(
+            RsaPrivateKey::from_primes(&p, &p, 4).is_err(),
+            "the exponent must be odd"
+        );
+    }
+
+    /// Report the actual CRT speedup rather than asserting a claimed one.
+    ///
+    /// Ignored, because a timing assertion on a shared machine is a flaky test.
+    /// Run it with `--release -- --ignored --nocapture` when the number in the
+    /// documentation needs checking.
+    #[test]
+    #[ignore = "timing; run manually with --release"]
+    fn report_the_crt_speedup() {
+        use std::time::Instant;
+
+        let mut rng = ac_drbg::Rng::from_entropy(&[0x99u8; 32], b"bench").unwrap();
+        let crt_key = generate(2048, &mut rng).unwrap();
+        let mut n = [0u8; 256];
+        crt_key.public_key().modulus_bytes(&mut n).unwrap();
+        let mut d = [0u8; 256];
+        crt_key.exponent_bytes(&mut d).unwrap();
+        let plain_key = RsaPrivateKey::from_components(&n, PUBLIC_EXPONENT, &d).unwrap();
+
+        let mut message = [0x5au8; 256];
+        message[0] = 0;
+        let mut out = [0u8; 256];
+        let rounds = 20;
+
+        let start = Instant::now();
+        for _ in 0..rounds {
+            crt_key.raw_private(&message, &mut out).unwrap();
+        }
+        let with_crt = start.elapsed();
+
+        let start = Instant::now();
+        for _ in 0..rounds {
+            plain_key.raw_private(&message, &mut out).unwrap();
+        }
+        let without = start.elapsed();
+
+        println!(
+            "2048-bit private operation: {:?} with CRT, {:?} without, {:.2}x",
+            with_crt / rounds,
+            without / rounds,
+            without.as_secs_f64() / with_crt.as_secs_f64()
+        );
     }
 
     #[test]
