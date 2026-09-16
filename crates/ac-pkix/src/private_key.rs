@@ -104,11 +104,19 @@ impl<'a> PrivateKeyInfo<'a> {
         let mut alg = pki.sequence()?;
         let algorithm_oid = alg.oid()?;
         let inner = pki.octet_string()?;
-        // Any remaining field is the optional [0] attributes set. It is
-        // skipped, not rejected, since it carries no key material.
-        if pki.peek_tag() == Some(der::context(0)) {
-            pki.expect(der::context(0))?;
-        }
+        // RFC 5208's optional [0] attributes set is refused rather than
+        // skipped. Skipping it would mean this parser accepts a document it
+        // cannot re-emit: the attributes would vanish on the way out, and a
+        // caller who read a key and wrote it back would get different bytes
+        // than it started with. That is the encoding ambiguity this crate
+        // exists to avoid, so a document carrying attributes is rejected and
+        // said so, rather than silently normalized. Key-file tooling does not
+        // produce them; they belong to PKCS#12.
+        ensure!(
+            pki.peek_tag() != Some(der::context(0)),
+            Unsupported,
+            "pkcs#8 attributes are not supported, and are refused rather than dropped"
+        );
         pki.finish()?;
 
         if algorithm_oid == oid::RSA_ENCRYPTION {
@@ -292,6 +300,19 @@ pub fn parse_ec_private_key(
 
     let mut algorithm = expected.unwrap_or(KeyAlgorithm::Unknown);
     if seq.peek_tag() == Some(der::context(0)) {
+        // RFC 5915 section 3: inside a PKCS#8 PrivateKeyInfo the parameters
+        // field is omitted, because the container's AlgorithmIdentifier already
+        // names the curve. A key that carries it in both places is refused
+        // rather than accepted and re-emitted without it — that asymmetry means
+        // reading a key and writing it back produces different bytes, which is
+        // the ambiguity this crate exists to avoid. A *bare* ECPrivateKey is
+        // the opposite case: there the field is the only statement of which
+        // curve the key is on, and it is required.
+        ensure!(
+            expected.is_none(),
+            MalformedEncoding,
+            "ec private key repeats its curve inside a pkcs#8 container, where              rfc 5915 omits it"
+        );
         let mut params = seq.expect_nested(der::context(0))?;
         let curve = params.oid()?;
         params.finish()?;
@@ -300,13 +321,6 @@ pub fn parse_ec_private_key(
             named != KeyAlgorithm::Unknown,
             Unsupported,
             "unsupported named curve"
-        );
-        // When both say which curve it is, they have to agree. A mismatch is a
-        // malformed key, not a preference to resolve.
-        ensure!(
-            expected.is_none() || expected == Some(named),
-            MalformedEncoding,
-            "ec private key names a different curve than its container"
         );
         algorithm = named;
     }
@@ -506,9 +520,11 @@ mod tests {
         assert!(parse_ec_private_key(&seq(&bare), None).is_err());
     }
 
-    /// When both the container and the key name a curve, they must agree.
+    /// Inside a PKCS#8 container the inner parameters field must be absent, so
+    /// a key that states its curve twice is refused. Bare, the same bytes are
+    /// the only statement of the curve and are required.
     #[test]
-    fn a_curve_mismatch_between_container_and_key_is_rejected() {
+    fn inner_ec_parameters_are_refused_inside_a_container() {
         let scalar = [0x44u8; 32];
         let mut fields = std::vec![0x02, 0x01, 0x01, 0x04, 0x20];
         fields.extend_from_slice(&scalar);
@@ -516,10 +532,19 @@ mod tests {
             0xa0, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07,
         ]);
         let inner = seq(&fields);
-        // The inner structure says P-256; tell the parser the container said
-        // P-384.
-        assert!(parse_ec_private_key(&inner, Some(KeyAlgorithm::EcP384)).is_err());
-        assert!(parse_ec_private_key(&inner, Some(KeyAlgorithm::EcP256)).is_ok());
+
+        assert!(
+            parse_ec_private_key(&inner, Some(KeyAlgorithm::EcP256)).is_err(),
+            "a container already names the curve"
+        );
+        assert!(
+            parse_ec_private_key(&inner, Some(KeyAlgorithm::EcP384)).is_err(),
+            "and disagreeing about it is no better"
+        );
+        assert!(
+            parse_ec_private_key(&inner, None).is_ok(),
+            "bare, the field is what names the curve"
+        );
     }
 
     /// An RSA private key parses, including its CRT fields, and does not

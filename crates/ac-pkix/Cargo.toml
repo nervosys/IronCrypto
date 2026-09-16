@@ -16,3 +16,7 @@ std = ["ac-core/std"]
 
 [dependencies]
 ac-core = { workspace = true }
+
+# The fuzz harness base64-encodes its own PEM inputs.
+[dev-dependencies]
+ac-core = { workspace = true, features = ["std"] }

@@ -27,6 +27,10 @@
 //!   [`PublicKeyInfo::from_der`].
 //! - **No encrypted PKCS#8.** `EncryptedPrivateKeyInfo` needs PBES2 and a
 //!   password. Decrypt it elsewhere and pass the plaintext here.
+//! - **No PKCS#8 attributes.** The optional `[0] attributes` field is refused
+//!   rather than skipped, because skipping it would mean accepting a document
+//!   this crate cannot re-emit unchanged. Key-file tooling does not produce
+//!   them.
 //! - **No key validation.** Parsing checks structure, not mathematics. A
 //!   `SubjectPublicKeyInfo` whose point is off the curve parses cleanly and
 //!   fails when something tries to verify with it, which is where that check
