@@ -38,7 +38,32 @@ pub trait EcdsaCurve: Curve {
 }
 
 /// Widest scalar this module handles, for stack buffers.
-const MAX_SCALAR: usize = 64;
+const MAX_SCALAR: usize = 66;
+
+/// Widest `T` accumulator RFC 6979 can need, in bytes.
+///
+/// `T` grows by one HMAC output per round until it covers `qlen` bits. The
+/// worst case here is P-521: HMAC-SHA-512 gives 512 bits a round and the order
+/// is 521, so it takes two rounds and 128 bytes.
+const MAX_T: usize = 128;
+
+/// RFC 6979 `bits2int`: keep the leftmost `order_bits` bits of `t`.
+///
+/// When `t` is at least as wide as the order, that means taking the first
+/// `ceil(order_bits / 8)` bytes and shifting right by however many bits the
+/// byte boundary overshot. For P-256 and P-384 the overshoot is zero and this
+/// is a straight copy; for P-521 it is seven bits, and skipping the shift would
+/// produce nonces that are wrong by a factor of 128 — which still verifies
+/// against itself and against nothing else.
+fn bits2int(t: &[u8], order_bits: usize, out: &mut [u8]) {
+    let m = order_bits.div_ceil(8);
+    let shift = m * 8 - order_bits;
+    for i in 0..m {
+        let hi = if i == 0 { 0 } else { t[i - 1] };
+        let carry = if shift == 0 { 0 } else { hi << (8 - shift) };
+        out[i] = (t[i] >> shift) | carry;
+    }
+}
 
 /// Derive the RFC 6979 nonce for a given attempt.
 ///
@@ -86,18 +111,33 @@ fn rfc6979_nonce<C: EcdsaCurve>(
     v.copy_from_slice(t.as_ref());
 
     let mut found = 0usize;
+    let mut t_buf = [0u8; MAX_T];
+    let mut candidate_buf = [0u8; MAX_SCALAR];
+
     // Bounded so a pathological key cannot spin forever.
     for _ in 0..(attempt + 1) * 8 + 16 {
-        // T = HMAC_K(V), which is exactly qlen bits for every pairing here.
-        let t = C::Hmac::mac(k, v)?;
-        v.copy_from_slice(t.as_ref());
+        // RFC 6979 3.2 step h: T = T || HMAC_K(V) until T covers qlen bits,
+        // then k = bits2int(T). One round is enough for P-256 and P-384, where
+        // the HMAC output is exactly the order width; P-521 needs two, because
+        // SHA-512 gives 512 bits against a 521-bit order.
+        let mut tlen = 0usize;
+        while tlen * 8 < C::ORDER_BITS {
+            let block = C::Hmac::mac(k, v)?;
+            v.copy_from_slice(block.as_ref());
+            let take = core::cmp::min(tag_len, MAX_T - tlen);
+            t_buf[tlen..tlen + take].copy_from_slice(&v[..take]);
+            tlen += take;
+        }
+        bits2int(&t_buf[..tlen], C::ORDER_BITS, &mut candidate_buf);
 
         // Accept only a canonical, non-zero scalar.
-        if let Some(candidate) = C::scalar_from_slice(&v[..n]) {
+        if let Some(candidate) = C::scalar_from_slice(&candidate_buf[..n]) {
             if !bool::from(candidate.is_zero()) {
                 if found == attempt {
                     k_buf.zeroize();
                     v_buf.zeroize();
+                    t_buf.zeroize();
+                    candidate_buf.zeroize();
                     return Ok(candidate);
                 }
                 found += 1;
@@ -115,6 +155,8 @@ fn rfc6979_nonce<C: EcdsaCurve>(
 
     k_buf.zeroize();
     v_buf.zeroize();
+    t_buf.zeroize();
+    candidate_buf.zeroize();
     Err(ac_core::err!(
         Internal,
         "rfc6979 nonce generation did not converge"

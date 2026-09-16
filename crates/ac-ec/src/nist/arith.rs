@@ -18,8 +18,13 @@
 
 use ac_core::ct::Choice;
 
-/// The widest curve supported here, in 64-bit limbs (P-521 would need 9).
-pub const MAX_LIMBS: usize = 8;
+/// The widest curve supported here, in 64-bit limbs.
+///
+/// Nine, for P-521: 521 bits needs nine 64-bit words, and the top one carries
+/// only nine significant bits. Nothing here requires the modulus to fill its
+/// top limb — see [`from_be_bytes`] and [`to_be_bytes`], which is where that
+/// assumption used to live.
+pub const MAX_LIMBS: usize = 9;
 
 /// Add two multi-limb values, returning the sum and the carry out.
 #[inline]
@@ -90,6 +95,32 @@ pub(crate) const fn compute_r2<const N: usize>(m: [u64; N]) -> [u64; N] {
     x
 }
 
+/// Decode big-endian bytes into little-endian limbs.
+///
+/// The byte width need not be `8 * N`: P-521's field elements are 66 bytes in
+/// nine limbs, so the top limb takes only two of them. Indexing from the least
+/// significant end rather than slicing fixed eight-byte windows is what makes
+/// that work, and it is why this is a helper rather than four lines inlined in
+/// the macro.
+#[inline]
+pub(crate) fn from_be_bytes<const N: usize>(bytes: &[u8]) -> [u64; N] {
+    let mut limbs = [0u64; N];
+    for (i, byte) in bytes.iter().rev().enumerate() {
+        limbs[i / 8] |= (*byte as u64) << (8 * (i % 8));
+    }
+    limbs
+}
+
+/// Encode little-endian limbs as big-endian bytes, zero-padded on the left.
+#[inline]
+pub(crate) fn to_be_bytes<const N: usize>(limbs: &[u64; N], out: &mut [u8]) {
+    let n = out.len();
+    for (i, slot) in out.iter_mut().rev().enumerate() {
+        *slot = (limbs[i / 8] >> (8 * (i % 8))) as u8;
+    }
+    let _ = n;
+}
+
 /// `-m^-1 mod 2^64`, by Newton iteration.
 ///
 /// `x_{k+1} = x_k * (2 - m * x_k)` doubles the number of correct bits each
@@ -158,9 +189,11 @@ pub trait Field: Copy + Clone + core::fmt::Debug + PartialEq + Eq + Sized {
 
 /// Generate a constant-time Montgomery residue ring.
 ///
-/// `$limbs` is the width in 64-bit words and `$bytes` is `8 * $limbs`; both are
-/// passed explicitly because Rust cannot yet compute one from the other in a
-/// type position.
+/// `$limbs` is the width in 64-bit words and `$bytes` is the width of the
+/// canonical encoding. They are passed separately because they are not always
+/// related by a factor of eight: P-521 is 66 bytes in nine limbs. Both are
+/// explicit because Rust cannot yet compute one from the other in a type
+/// position.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! mont_field {
@@ -346,13 +379,7 @@ macro_rules! mont_field {
             }
 
             fn from_bytes(bytes: &Self::Bytes) -> Option<Self> {
-                let mut limbs = [0u64; $limbs];
-                for i in 0..$limbs {
-                    let hi = $bytes - i * 8;
-                    let mut b = [0u8; 8];
-                    b.copy_from_slice(&bytes[hi - 8..hi]);
-                    limbs[i] = u64::from_be_bytes(b);
-                }
+                let limbs: [u64; $limbs] = $crate::nist::arith::from_be_bytes(bytes.as_ref());
                 let (_, borrow) = $crate::nist::arith::sbb(limbs, Self::MODULUS);
                 if borrow == 0 {
                     return None;
@@ -361,13 +388,7 @@ macro_rules! mont_field {
             }
 
             fn from_bytes_reduced(bytes: &Self::Bytes) -> Self {
-                let mut limbs = [0u64; $limbs];
-                for i in 0..$limbs {
-                    let hi = $bytes - i * 8;
-                    let mut b = [0u8; 8];
-                    b.copy_from_slice(&bytes[hi - 8..hi]);
-                    limbs[i] = u64::from_be_bytes(b);
-                }
+                let limbs: [u64; $limbs] = $crate::nist::arith::from_be_bytes(bytes.as_ref());
                 let (reduced, borrow) = $crate::nist::arith::sbb(limbs, Self::MODULUS);
                 let limbs = $crate::nist::arith::select(borrow.wrapping_neg(), limbs, reduced);
                 Self::to_mont(limbs)
@@ -376,10 +397,7 @@ macro_rules! mont_field {
             fn to_bytes(&self) -> Self::Bytes {
                 let limbs = self.from_mont();
                 let mut out = [0u8; $bytes];
-                for i in 0..$limbs {
-                    let hi = $bytes - i * 8;
-                    out[hi - 8..hi].copy_from_slice(&limbs[i].to_be_bytes());
-                }
+                $crate::nist::arith::to_be_bytes(&limbs, &mut out);
                 out
             }
 

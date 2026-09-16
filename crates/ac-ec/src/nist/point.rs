@@ -32,6 +32,12 @@ pub trait Curve: Sized {
     const FIELD_BYTES: usize;
     /// Width of an encoded scalar.
     const SCALAR_BYTES: usize;
+    /// Bit length of the group order, `qlen` in RFC 6979.
+    ///
+    /// Not always `8 * SCALAR_BYTES`: P-521's order is 521 bits in a 66-byte
+    /// encoding. RFC 6979's `bits2int` needs the true bit length, because that
+    /// is how many leading bits it keeps.
+    const ORDER_BITS: usize;
 
     /// The curve coefficient `b`.
     const B: Self::Field;

@@ -57,6 +57,7 @@ impl Curve for P384 {
     const NAME: &'static str = "P-384";
     const FIELD_BYTES: usize = 48;
     const SCALAR_BYTES: usize = 48;
+    const ORDER_BITS: usize = 384;
 
     /// `b = 0xb3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875a`
     ///     `c656398d8a2ed19d2a85c8edd3ec2aef`

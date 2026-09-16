@@ -48,6 +48,7 @@ impl Curve for P256 {
     const NAME: &'static str = "P-256";
     const FIELD_BYTES: usize = 32;
     const SCALAR_BYTES: usize = 32;
+    const ORDER_BITS: usize = 256;
 
     /// `b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b`
     const B: Fp = Fp::to_mont([

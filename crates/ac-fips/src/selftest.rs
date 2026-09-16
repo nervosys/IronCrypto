@@ -100,6 +100,8 @@ static CASTS: &[Cast] = &[
     ("ecdsa-p256-sha256", ac_ec::p256::EcdsaP256Sha256::self_test),
     ("ecdh-p384", ac_ec::p384::EcdhP384::self_test),
     ("ecdsa-p384-sha384", ac_ec::p384::EcdsaP384Sha384::self_test),
+    ("ecdh-p521", ac_ec::p521::EcdhP521::self_test),
+    ("ecdsa-p521-sha512", ac_ec::p521::EcdsaP521Sha512::self_test),
     // RSA
     //
     // Six 2048-bit private-key operations, which dominate the runtime of this
@@ -159,7 +161,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 46;
+pub const TEST_COUNT: usize = 48;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -250,7 +252,7 @@ pub fn integrity_check() -> Result<()> {
 }
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "4254ba3e8c16521952c441fa842f1cd33073c0ff76a7102b9e40a10a5af8a763";
+const INTEGRITY_TAG: &str = "a32f90b7bf348d1e49964e7567ee0b2d04724f346d2a443325f5ffcf6e2f8bdb";
 
 #[cfg(test)]
 mod tests {

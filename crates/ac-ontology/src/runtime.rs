@@ -106,8 +106,8 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         Capability {
             id: "approved-asymmetric",
             present: true,
-            note: "ECDSA and ECDH over P-256 and P-384, and RSA signatures in both PKCS#1 v1.5 \
-                   and PSS. P-521 is not implemented; the ontology registers it as planned.",
+            note: "ECDSA and ECDH over P-256, P-384 and P-521, and RSA signatures in both \
+                   PKCS#1 v1.5 and PSS, with CRT private operations.",
         },
         Capability {
             id: "key-encoding",

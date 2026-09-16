@@ -44,6 +44,7 @@ pub mod field;
 pub mod nist;
 pub mod p256;
 pub mod p384;
+pub mod p521;
 pub mod scalar;
 pub mod x25519;
 

@@ -73,7 +73,7 @@ a mode), `NotApproved`.
 
 ### Cryptographic algorithm self-tests
 
-46 known-answer tests, one per implemented algorithm, run by `initialize()` and
+48 known-answer tests, one per implemented algorithm, run by `initialize()` and
 individually addressable:
 
 ```console
@@ -87,7 +87,7 @@ $ acrypto selftest
   PASS ecdh-p384
   PASS ecdsa-p384-sha384
 
-46 passed, 0 failed; integrity check passed
+48 passed, 0 failed; integrity check passed
 ```
 
 Each test is the algorithm's own `SelfTest::self_test()` — the same code path
@@ -118,6 +118,8 @@ registered, so adding an algorithm without a self-test fails CI.
 | ECDSA P-256 | RFC 6979 A.2.5 (`sample` and `test`), including the published `k` and public key |
 | ECDSA P-384 | RFC 6979 A.2.6 (`sample` and `test`), including the published public key |
 | ECDH P-256 | NIST CAVP ECC CDH, first published case |
+| P-521 domain parameters | the base point satisfies the curve equation and `[n]G` is the identity, both checked in-test; a mistyped digit in `b`, `Gx`, `Gy` or `n` fails one of the two |
+| ECDSA P-521 | cross-checked against an independent RFC 6979 implementation written from the specification text, sharing no code with this one; no published vector is wired in |
 | HMAC_DRBG | validated against an independent in-test transcription of the SP 800-90A §10.1.2 pseudocode; the CAST vector is an implementation-pinned integrity value |
 | CTR_DRBG | determinism and independence properties; no published vector wired in |
 | PBKDF2 | reconstructed from the PRF XOR chain (RFC 6070 publishes HMAC-SHA1 only, which this library does not implement) |
@@ -148,8 +150,8 @@ In rough order of effort:
 
 1. **The remaining approved asymmetric algorithms.** ECDSA and ECDH are
    implemented and vector-tested over both P-256 and P-384, which covers
-   CNSA-aligned profiles. P-521 is not, and is registered in the ontology as
-   `planned`.
+   CNSA-aligned profiles. P-521 is implemented too, for profiles that call
+   for it.
 2. **CAVP algorithm certificates.** Every approved algorithm must pass the ACVP
    test harness, including Monte Carlo and large-data tests, not just the sample
    vectors bundled here.
@@ -176,7 +178,7 @@ If you have a genuine FIPS obligation:
   published vectors. But *correct* and *validated* are different words, and only
   the second satisfies an auditor. Where a certificate is the actual
   requirement, use a validated module.
-- Where you need P-521 or RSA encryption, this module has nothing to offer, and
+- Where you need RSA encryption, this module has nothing to offer, and
   `acrypto recommend` will say so rather than substituting a smaller curve.
 - Use the approved-mode policy engine and the ontology to keep your own code
   honest regardless of which module does the arithmetic. The registry is useful

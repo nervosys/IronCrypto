@@ -519,6 +519,46 @@ const RSA_SALT_ENTROPY: Constraint = Constraint {
     severity: Severity::Serious,
 };
 
+const P521_SIG_P: [Param; 3] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 66,
+        max: 66,
+        recommended: 66,
+        note: "A scalar in [1, n-1], left-padded to 66 bytes.",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 67,
+        max: 133,
+        recommended: 133,
+        note: "SEC1: 133 bytes uncompressed, 67 compressed.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 132,
+        max: 132,
+        recommended: 132,
+        note: "Fixed-width r || s, not DER. Convert with ac_pkix::ecdsa_signature.",
+    },
+];
+
+const P521_KA_P: [Param; 3] = [
+    P521_SIG_P[0],
+    P521_SIG_P[1],
+    Param {
+        name: "shared-secret",
+        unit: Unit::Bytes,
+        min: 66,
+        max: 66,
+        recommended: 66,
+        note: "The x-coordinate only. Run it through a KDF before use.",
+    },
+];
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
 
@@ -1608,6 +1648,75 @@ pub static REGISTRY: &[Entry] = &[
                 deployments. FIPS 186-5 approves EdDSA, but this implementation is not validated; \
                 the ontology reports it as not-approved so approved mode blocks it rather than \
                 implying a validation that does not exist.",
+    },
+    Entry {
+        id: "ecdsa-p521-sha512",
+        name: "ECDSA P-521 with SHA-512",
+        aliases: &["ecdsa-secp521r1"],
+        summary: "The largest NIST prime curve, for profiles that require 256-bit strength.",
+        class: Class::Signature,
+        family: "NIST P-curves",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength::classical_only(256),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "SP 800-186", "RFC 6979"],
+        params: &P521_SIG_P,
+        constraints: &[
+            Constraint {
+                id: "unique-signing-nonce",
+                requirement: "Generate a fresh random k per signature, or derive it \
+                              deterministically per RFC 6979.",
+                consequence: "A repeated or predictable k reveals the private key from two \
+                              signatures.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "ecdsa-is-malleable",
+                requirement: "Normalize to low-s, or do not treat a signature as a unique \
+                              identifier.",
+                consequence: "Both (r, s) and (r, n - s) verify, so a signature used as a \
+                              database key or transaction id can be duplicated.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-512" },
+            Edge { relation: Relation::PairsWith, target: "ecdh-p521" },
+            Edge { relation: Relation::Supersedes, target: "ecdsa-p384-sha384" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ac_ec::p521::EcdsaP521Sha512",
+        example: "use ac_core::traits::SignatureScheme;\nac_ec::p521::EcdsaP521Sha512::sign(&sk, msg, &mut sig)?;",
+        notes: "The only pairing here where the hash is narrower than the group order: SHA-512 \
+                gives 512 bits against 521, so RFC 6979 accumulates two HMAC blocks and keeps \
+                the leftmost 521 bits. Field elements are 66 bytes with the top seven bits \
+                always zero. Nonces are derived per RFC 6979, so the unique-signing-nonce \
+                constraint is satisfied by construction.",
+    },
+    Entry {
+        id: "ecdh-p521",
+        name: "ECDH P-521",
+        aliases: &["ecdh-secp521r1"],
+        summary: "Key agreement on the largest NIST prime curve.",
+        class: Class::KeyAgreement,
+        family: "NIST P-curves",
+        purposes: &[Purpose::KeyEstablishment],
+        strength: Strength::classical_only(256),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-56A", "SP 800-186"],
+        params: &P521_KA_P,
+        constraints: &[VALIDATE_PEER_KEY, HASH_TRANSCRIPT],
+        edges: &[
+            Edge { relation: Relation::PairsWith, target: "hkdf-sha2-256" },
+            Edge { relation: Relation::Supersedes, target: "ecdh-p384" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ac_ec::p521::EcdhP521",
+        example: "use ac_core::traits::KeyAgreement;\nac_ec::p521::EcdhP521::agree(&sk, &peer, &mut secret)?;",
+        notes: "Roughly three times the cost of P-384 for a security level few threat models \
+                distinguish from it. Choose it to meet a profile, not for the margin.",
     },
     Entry {
         id: "ecdsa-p256-sha256",

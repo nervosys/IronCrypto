@@ -158,7 +158,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305 |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
-| Curves | P-256 and P-384 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
+| Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
 | Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
@@ -168,8 +168,6 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 The ontology registers algorithms this library does **not** provide, marked
 `planned` or `excluded`, so that querying for them yields an honest answer:
 
-- **P-521** — `planned`. P-256 and P-384 cover the overwhelming majority of
-  deployed use.
 - **RSA encryption** — not offered at all. RSAES-PKCS1-v1_5 is a Bleichenbacher
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.
@@ -200,7 +198,7 @@ $ acrypto capabilities
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 46 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 48 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `acrypto capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.
@@ -243,8 +241,8 @@ Against aws-lc-rs, BoringSSL, and OpenSSL, AgenticCrypto leads on portability
 (zero dependencies, no C toolchain, genuine bare-metal `no_std`) and on the
 agent-facing ontology, which none of them has. With the NIST curves and RSA
 signatures in place it covers the algorithms most deployments actually reach
-for. It still trails on post-quantum schemes, on P-521, on RSA encryption, on
-X.509 certificate handling, and — decisively — on validation status. Pick accordingly, and note that the ontology will tell
+for. It still trails on post-quantum schemes, on RSA encryption, on X.509
+certificate handling, and — decisively — on validation status. Pick accordingly, and note that the ontology will tell
 you which case you're in without your having to read this paragraph.
 
 ---
