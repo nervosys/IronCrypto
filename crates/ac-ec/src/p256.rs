@@ -5,7 +5,7 @@
 //! public API.
 
 use crate::mont_field;
-use crate::nist::arith::{adc, Field};
+use crate::nist::arith::{sqrt_p3mod4, Field};
 use crate::nist::point::Curve;
 use crate::nist::{ecdh, ecdsa};
 use ac_core::traits::{Algorithm, KeyAgreement, SelfTest, SignatureScheme};
@@ -74,14 +74,11 @@ impl Curve for P256 {
 
     /// `p = 3 mod 4`, so a square root is `x^((p+1)/4)`.
     fn sqrt(x: &Fp) -> Fp {
-        let (sum, _) = adc(Fp::MODULUS, [1, 0, 0, 0]);
-        let exp = [
-            (sum[0] >> 2) | (sum[1] << 62),
-            (sum[1] >> 2) | (sum[2] << 62),
-            (sum[2] >> 2) | (sum[3] << 62),
-            sum[3] >> 2,
-        ];
-        x.pow(&exp)
+        // p = 3 mod 4, so the root is x^((p+1)/4). The shared helper computes
+        // that exponent rather than this file unrolling it by limb: an unrolled
+        // shift is easy to get subtly wrong and would only misbehave on inputs
+        // rare enough that a round-trip test would not find them.
+        sqrt_p3mod4(x, Fp::MODULUS, |v, e| v.pow(e))
     }
 
     fn field_from_slice(bytes: &[u8]) -> Option<Fp> {

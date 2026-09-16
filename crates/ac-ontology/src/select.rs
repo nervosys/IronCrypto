@@ -96,7 +96,12 @@ impl Intent {
 }
 
 /// Deployment constraints that shape the choice.
-#[derive(Debug, Clone, Copy)]
+///
+/// `PartialEq` is derived because a policy is plain configuration and callers
+/// compare them — to tell whether a detected policy differs from a constant, or
+/// to assert one in a test. Deriving it also means adding a field cannot
+/// quietly leave an equality check comparing only the old ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Policy {
     /// Only algorithms usable in the FIPS approved mode are acceptable.
     pub require_fips: bool,
@@ -590,6 +595,41 @@ fn fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The detected policies differ from their constants in exactly one field.
+    ///
+    /// Both are built with struct update syntax, which silently picks up any
+    /// field added to `Policy` later — that is the point — but it also means a
+    /// typo swapping the base constant would go unnoticed. `detected_fips`
+    /// building on `DEFAULT` instead of `FIPS_APPROVED` would drop the FIPS
+    /// requirement while still looking correct.
+    #[test]
+    fn the_detected_policies_only_override_the_hardware_flag() {
+        let hw = crate::runtime::backend().fast_bulk_symmetric();
+
+        let d = Policy::detected();
+        assert_eq!(d.aes_hardware, hw, "detected() must read the CPU");
+        assert_eq!(
+            Policy {
+                aes_hardware: Policy::DEFAULT.aes_hardware,
+                ..d
+            },
+            Policy::DEFAULT,
+            "detected() must otherwise be DEFAULT"
+        );
+
+        let f = Policy::detected_fips();
+        assert_eq!(f.aes_hardware, hw, "detected_fips() must read the CPU");
+        assert!(f.require_fips, "detected_fips() must actually require FIPS");
+        assert_eq!(
+            Policy {
+                aes_hardware: Policy::FIPS_APPROVED.aes_hardware,
+                ..f
+            },
+            Policy::FIPS_APPROVED,
+            "detected_fips() must otherwise be FIPS_APPROVED"
+        );
+    }
 
     #[test]
     fn fips_policy_selects_aes_gcm_over_chacha() {

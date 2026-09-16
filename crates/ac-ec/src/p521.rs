@@ -302,6 +302,67 @@ pub type AffinePoint = crate::nist::point::AffinePoint<P521>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P-521 takes a shortcut for square roots, and this is what checks it.
+    ///
+    /// Because `p = 2^521 - 1`, the exponent `(p+1)/4` is exactly `2^519`, so
+    /// the root is 519 repeated squarings and no exponentiation ladder is
+    /// needed. That is a genuine saving and a genuine risk: an off-by-one in
+    /// the count produces a value that is wrong for every input, but a
+    /// round-trip through point compression would still reject it as "not on
+    /// the curve" rather than pointing at the square root.
+    ///
+    /// So the shortcut is compared against the generic `(p+1)/4` computation
+    /// used by P-256 and P-384. Two independent routes to the same value.
+    #[test]
+    fn the_square_root_shortcut_matches_the_generic_exponent() {
+        use crate::nist::arith::sqrt_p3mod4;
+
+        let mut checked = 0;
+        for seed in 1u64..40 {
+            let mut bytes = [0u8; 66];
+            for (i, b) in bytes.iter_mut().enumerate() {
+                *b = (seed.wrapping_mul(i as u64 + 7) & 0xff) as u8;
+            }
+            // Keep it inside the field.
+            bytes[0] &= 0x01;
+            let Some(x) = P521::field_from_slice(&bytes) else {
+                continue;
+            };
+            // Square first, so the input is definitely a quadratic residue and
+            // both routes must land on a genuine root.
+            let y2 = x.square();
+
+            let shortcut = <P521 as Curve>::sqrt(&y2);
+            let generic = sqrt_p3mod4(&y2, Fp::MODULUS, |v, e| v.pow(e));
+            assert_eq!(
+                shortcut, generic,
+                "the shortcut disagrees with the generic exponent at seed {seed}"
+            );
+            assert_eq!(shortcut.square(), y2, "and it must actually be a root");
+            checked += 1;
+        }
+        assert!(
+            checked > 20,
+            "the sweep should reach real inputs: {checked}"
+        );
+    }
+
+    /// The generic helper must agree with each curve's own notion of a root.
+    ///
+    /// P-256 and P-384 now call it directly, so this mostly guards against the
+    /// helper being changed in a way that happens to keep those two working.
+    #[test]
+    fn a_root_squares_back_to_its_input_on_every_curve() {
+        for seed in 1u8..12 {
+            let mut b = [0u8; 66];
+            b[65] = seed;
+            let x = P521::field_from_slice(&b).unwrap();
+            let y2 = x.square();
+            let root = <P521 as Curve>::sqrt(&y2);
+            assert_eq!(root.square(), y2, "P-521 at seed {seed}");
+        }
+    }
     use ac_core::codec::hex;
 
     fn scalar(v: u64) -> Fn {

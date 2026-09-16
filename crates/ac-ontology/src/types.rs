@@ -456,6 +456,12 @@ impl Entry {
     }
 
     /// The most severe constraint attached to this entry, if any.
+    ///
+    /// This is `min_by_key`, not `max_by_key`, because [`Severity`] is declared
+    /// worst-first so that its derived `Ord` sorts the way a priority list
+    /// reads. That is a real dependency on the order of an enum's variants, so
+    /// the tests pin it: reordering `Severity` must fail loudly rather than
+    /// quietly turn this into `mildest_constraint`.
     pub fn worst_constraint(&self) -> Option<&'static Constraint> {
         self.constraints.iter().min_by_key(|c| c.severity)
     }
@@ -468,6 +474,25 @@ fn eq_ignore_case(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Severity` is ordered worst-first, and something depends on it.
+    ///
+    /// [`Entry::worst_constraint`] selects with `min_by_key`. If these variants
+    /// were ever reordered — alphabetized, or a new one inserted at the top —
+    /// that selection would silently invert and every caller asking "what is
+    /// the worst thing about this algorithm" would be told the mildest.
+    #[test]
+    fn severity_is_ordered_worst_first() {
+        assert!(Severity::Critical < Severity::Serious);
+        assert!(Severity::Serious < Severity::Advisory);
+        assert_eq!(
+            [Severity::Advisory, Severity::Critical, Severity::Serious]
+                .iter()
+                .min(),
+            Some(&Severity::Critical),
+            "min() must mean worst, which is what worst_constraint relies on"
+        );
+    }
 
     #[test]
     fn class_ids_roundtrip() {

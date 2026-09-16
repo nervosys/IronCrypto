@@ -387,15 +387,13 @@ impl MlKem768 {
 
         // FIPS 203 section 7.3's hash check. This is a check on the *key*, not
         // on the ciphertext, so failing it loudly is right and creates no
-        // decryption oracle: the answer does not depend on `ct` at all. A
-        // decapsulation key whose embedded hash does not match its own public
-        // half has been corrupted or spliced together from two key pairs, and
-        // continuing would produce secrets that silently never agree.
-        ensure!(
-            bool::from(ac_core::ct::eq(&h(ek), hash)),
-            MalformedEncoding,
-            "decapsulation key's embedded hash does not match its public key"
-        );
+        // decryption oracle: the answer does not depend on `ct` at all.
+        //
+        // Delegated rather than inlined. Two copies of one rule drift, and a
+        // drifted validator is worse than none because callers who check a key
+        // once at load time would be checking something different from what
+        // decapsulation enforces.
+        Self::validate_decapsulation_key(dk)?;
 
         let m = pke_decrypt(dk_pke, ct);
         let (k, r) = g(&[&m, hash]);

@@ -10,7 +10,7 @@
 //! since the hash and the group order are both 384 bits wide.
 
 use crate::mont_field;
-use crate::nist::arith::{adc, Field};
+use crate::nist::arith::{sqrt_p3mod4, Field};
 use crate::nist::point::Curve;
 use crate::nist::{ecdh, ecdsa};
 use ac_core::traits::{Algorithm, KeyAgreement, SelfTest, SignatureScheme};
@@ -90,14 +90,7 @@ impl Curve for P384 {
 
     /// `p = 3 mod 4`, so a square root is `x^((p+1)/4)`.
     fn sqrt(x: &Fp) -> Fp {
-        let (sum, _) = adc(Fp::MODULUS, [1, 0, 0, 0, 0, 0]);
-        let mut exp = [0u64; 6];
-        for i in 0..6 {
-            let lo = sum[i] >> 2;
-            let hi = if i + 1 < 6 { sum[i + 1] << 62 } else { 0 };
-            exp[i] = lo | hi;
-        }
-        x.pow(&exp)
+        sqrt_p3mod4(x, Fp::MODULUS, |v, e| v.pow(e))
     }
 
     fn field_from_slice(bytes: &[u8]) -> Option<Fp> {

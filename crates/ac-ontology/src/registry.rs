@@ -2750,6 +2750,40 @@ mod tests {
 
     /// An experimental entry has real code, so it must name it — and it must
     /// say why it is not simply available.
+    /// `worst_constraint` really returns the worst one, across the registry.
+    ///
+    /// Checked against every entry rather than one example, so the answer
+    /// cannot be right for the case someone thought of and wrong elsewhere.
+    #[test]
+    fn the_worst_constraint_is_the_worst_one() {
+        let mut saw_a_choice = 0;
+        for e in REGISTRY {
+            let Some(worst) = e.worst_constraint() else {
+                assert!(e.constraints.is_empty(), "{}: no worst but has some", e.id);
+                continue;
+            };
+            for c in e.constraints {
+                assert!(
+                    worst.severity <= c.severity,
+                    "{}: {} is not as bad as {}",
+                    e.id,
+                    worst.id,
+                    c.id
+                );
+            }
+            if e.constraints.len() > 1 && e.constraints.iter().any(|c| c.severity != worst.severity)
+            {
+                saw_a_choice += 1;
+            }
+        }
+        // If every entry's constraints were all the same severity, the test
+        // above would pass for a function that just returned the first one.
+        assert!(
+            saw_a_choice > 3,
+            "too few entries have a genuine choice to make: {saw_a_choice}"
+        );
+    }
+
     #[test]
     fn experimental_entries_name_their_code_and_their_caveat() {
         for e in REGISTRY
