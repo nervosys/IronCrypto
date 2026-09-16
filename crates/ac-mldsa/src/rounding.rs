@@ -147,7 +147,7 @@ pub fn use_hint(hint: bool, r: i32, gamma2: i32) -> i32 {
 ///
 /// The encoding needs this to choose a bit width, and getting it from the same
 /// expression `use_hint` wraps by means the two cannot disagree.
-pub fn bucket_count(gamma2: i32) -> i32 {
+pub const fn bucket_count(gamma2: i32) -> i32 {
     (Q - 1) / (2 * gamma2)
 }
 
