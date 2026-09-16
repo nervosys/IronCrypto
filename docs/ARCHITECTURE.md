@@ -140,7 +140,7 @@ behaviour can reproduce it from a shell.
 | `ac-rsa` | fixed-capacity bignums, Montgomery modular exponentiation, CRT private operations with output verification, PKCS#1 v1.5 and PSS signatures, Miller-Rabin key generation |
 | `ac-json` | an RFC 8259 reader and writer, extracted from the CLI once the test harness needed it too |
 | `ac-vectors` | loads test vectors supplied from outside the repository; test-only |
-| `ac-mldsa` | ML-DSA-65: ring arithmetic and NTT, rounding and hints (FIPS 204 alg. 35-40), bit packing (alg. 16-21), samplers (alg. 29-34), and key generation, signing and verification. Experimental - no vector wired in |
+| `ac-mldsa` | ML-DSA-65: ring arithmetic and NTT, rounding and hints (FIPS 204 alg. 35-40), bit packing (alg. 16-21), samplers (alg. 29-34), and key generation, signing and verification. Experimental - no vector wired in. `tests/robustness.rs` establishes that verification is total and sound against hostile input, which is a separate question from correctness |
 | `ac-mlkem` | ML-KEM-768: the ring Z_q[X]/(X^256+1), NTT, packing, samplers, K-PKE and the FO transform. Experimental |
 | `ac-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ac-core` and performs no cryptography |
 | `ac-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
