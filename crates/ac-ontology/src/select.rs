@@ -502,7 +502,13 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                             id: "ml-dsa-65",
                             reason: "Post-quantum, but not implemented in this build.",
                         }),
-                        None,
+                        Some(Rejected {
+                            id: "rsa-pss-sha256",
+                            reason: "Approved and implemented here, but a 2048-bit modulus buys \
+                                     112-bit strength for signatures an order of magnitude \
+                                     larger and slower. Choose it only to meet an existing \
+                                     interface.",
+                        }),
                     ],
                 ),
                 (None, Some(p)) => (
@@ -519,7 +525,12 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                             id: "ml-dsa-65",
                             reason: "Post-quantum, but not implemented in this build.",
                         }),
-                        None,
+                        Some(Rejected {
+                            id: "rsa-pss-sha256",
+                            reason: "Also approved, but slower and far larger at the same \
+                                     strength. Choose it only to meet an existing \
+                                     interface.",
+                        }),
                     ],
                 ),
                 _ => fallback(base),

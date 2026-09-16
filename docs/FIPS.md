@@ -73,7 +73,7 @@ a mode), `NotApproved`.
 
 ### Cryptographic algorithm self-tests
 
-40 known-answer tests, one per implemented algorithm, run by `initialize()` and
+46 known-answer tests, one per implemented algorithm, run by `initialize()` and
 individually addressable:
 
 ```console
@@ -87,7 +87,7 @@ $ acrypto selftest
   PASS ecdh-p384
   PASS ecdsa-p384-sha384
 
-40 passed, 0 failed; integrity check passed
+46 passed, 0 failed; integrity check passed
 ```
 
 Each test is the algorithm's own `SelfTest::self_test()` — the same code path
@@ -121,10 +121,15 @@ registered, so adding an algorithm without a self-test fails CI.
 | HMAC_DRBG | validated against an independent in-test transcription of the SP 800-90A §10.1.2 pseudocode; the CAST vector is an implementation-pinned integrity value |
 | CTR_DRBG | determinism and independence properties; no published vector wired in |
 | PBKDF2 | reconstructed from the PRF XOR chain (RFC 6070 publishes HMAC-SHA1 only, which this library does not implement) |
+| RSA PKCS#1 v1.5 | the DigestInfo prefixes are rebuilt from the algorithm OID and checked against the constants in RFC 8017 §9.2; the encoded message is checked against an independent in-test construction; the CAST signatures are implementation-pinned |
+| RSA-PSS | MGF1 against an in-test transcription of RFC 8017 B.2.1; the encoder against the separately written verifier; the CAST signatures are implementation-pinned |
+| RSA keys | the identity `(m^e)^d = m (mod n)`, which holds only if `p` and `q` are prime and `d` inverts `e`; Miller-Rabin is checked against Carmichael numbers, which a Fermat test would pass |
 
-The DRBG and PBKDF2 rows are the weak ones, and are called out as such rather
-than being papered over. Wiring in the CAVP `.rsp` response files is a
-pre-validation task (below).
+The DRBG, PBKDF2, and RSA rows are the weak ones, and are called out as such
+rather than being papered over. NIST's ACVP RSA vectors are not reproducible
+offline; the pinned signatures there catch regression rather than establishing
+correctness, which the rows above them do instead. Wiring in the CAVP `.rsp`
+response files is a pre-validation task (below).
 
 ### Integrity test
 
@@ -143,8 +148,8 @@ In rough order of effort:
 
 1. **The remaining approved asymmetric algorithms.** ECDSA and ECDH are
    implemented and vector-tested over both P-256 and P-384, which covers
-   CNSA-aligned profiles. P-521 and RSA are not, and are registered in the
-   ontology as `planned`; legacy PKI still requires RSA.
+   CNSA-aligned profiles. P-521 is not, and is registered in the ontology as
+   `planned`.
 2. **CAVP algorithm certificates.** Every approved algorithm must pass the ACVP
    test harness, including Monte Carlo and large-data tests, not just the sample
    vectors bundled here.
@@ -171,7 +176,7 @@ If you have a genuine FIPS obligation:
   published vectors. But *correct* and *validated* are different words, and only
   the second satisfies an auditor. Where a certificate is the actual
   requirement, use a validated module.
-- Where you need P-521 or RSA, this module has nothing to offer, and
+- Where you need P-521 or RSA encryption, this module has nothing to offer, and
   `acrypto recommend` will say so rather than substituting a smaller curve.
 - Use the approved-mode policy engine and the ontology to keep your own code
   honest regardless of which module does the arithmetic. The registry is useful

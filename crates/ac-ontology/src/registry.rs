@@ -445,6 +445,80 @@ const P384_SIG_P: [Param; 3] = [
     },
 ];
 
+const RSA_SIG_P: [Param; 3] = [
+    Param {
+        name: "modulus",
+        unit: Unit::Bytes,
+        min: 256,
+        max: 512,
+        recommended: 256,
+        note: "2048, 3072, or 4096 bits. Anything smaller is refused, not warned about.",
+    },
+    Param {
+        name: "public-exponent",
+        unit: Unit::Count,
+        min: 3,
+        max: u64::MAX,
+        recommended: 65_537,
+        note: "Odd. Key generation always uses 65537.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 256,
+        max: 512,
+        recommended: 256,
+        note: "Always exactly the modulus size.",
+    },
+];
+
+const RSA_PSS_P: [Param; 4] = [
+    RSA_SIG_P[0],
+    RSA_SIG_P[1],
+    RSA_SIG_P[2],
+    Param {
+        name: "salt",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 64,
+        recommended: 32,
+        note: "Always equal to the hash length; not caller-selectable.",
+    },
+];
+
+const RSA_MIN_MODULUS: Constraint = Constraint {
+    id: "rsa-modulus-at-least-2048-bits",
+    requirement: "Use a modulus of at least 2048 bits.",
+    consequence: "1024-bit RSA is within reach of a well-funded adversary, and SP 800-131A \
+                  disallows it for new signatures.",
+    severity: Severity::Critical,
+};
+
+const RSA_PREFER_PSS: Constraint = Constraint {
+    id: "prefer-pss-for-new-signatures",
+    requirement: "Sign new artifacts with RSA-PSS; use PKCS#1 v1.5 to verify existing ones and \
+                  where a peer requires it.",
+    consequence: "PKCS#1 v1.5 has no security proof and a long history of forgery from lax \
+                  padding checks, although FIPS 186-5 still approves it.",
+    severity: Severity::Advisory,
+};
+
+const RSA_NO_PARSING: Constraint = Constraint {
+    id: "verify-by-re-encoding",
+    requirement: "Compare the recovered block against a freshly encoded one; never parse it.",
+    consequence: "A parser that tolerates trailing bytes after the DigestInfo allows signature \
+                  forgery under a small public exponent without the private key.",
+    severity: Severity::Critical,
+};
+
+const RSA_SALT_ENTROPY: Constraint = Constraint {
+    id: "pss-salt-must-be-random",
+    requirement: "Draw the PSS salt from an approved DRBG for every signature.",
+    consequence: "A repeated salt does not leak the key the way a repeated ECDSA nonce does, but \
+                  it forfeits the randomization the PSS security proof relies on.",
+    severity: Severity::Serious,
+};
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
 
@@ -1598,31 +1672,153 @@ pub static REGISTRY: &[Entry] = &[
         notes: "Not implemented yet.",
     },
     Entry {
-        id: "rsa-pkcs1-v1_5",
-        name: "RSA PKCS#1 v1.5 signatures",
-        aliases: &["rsassa-pkcs1"],
-        summary: "Legacy RSA signature padding, kept for verification of existing artifacts.",
+        id: "rsa-pkcs1-sha256",
+        name: "RSASSA-PKCS1-v1_5 with SHA-256",
+        aliases: &["rsa-pkcs1-v1_5", "rsassa-pkcs1", "sha256withrsa"],
+        summary: "The RSA signature padding that certificate chains are made of.",
         class: Class::Signature,
         family: "RSA",
         purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
         strength: Strength::classical_only(112),
-        fips: FipsStatus::Deprecated,
-        status: ImplStatus::Planned,
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
         standards: &["FIPS 186-5", "RFC 8017"],
-        params: &NO_PARAMS,
-        constraints: &[Constraint {
-            id: "verify-only",
-            requirement: "Use for verification of existing signatures only; sign with RSA-PSS or \
-                          ECDSA.",
-            consequence: "Implementation flaws in v1.5 padding checks have repeatedly allowed \
-                          signature forgery.",
-            severity: Severity::Serious,
-        }],
-        edges: &[Edge { relation: Relation::SupersededBy, target: "ecdsa-p256-sha256" }],
+        params: &RSA_SIG_P,
+        constraints: &[RSA_MIN_MODULUS, RSA_PREFER_PSS, RSA_NO_PARSING],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-256" },
+            Edge { relation: Relation::SupersededBy, target: "rsa-pss-sha256" },
+        ],
         performance: Performance::Slow,
-        rust_path: "",
-        example: "",
-        notes: "Not implemented yet.",
+        rust_path: "ac_rsa::Pkcs1Sha256",
+        example: "let key = ac_rsa::RsaPrivateKey::from_components(n, 65537, d)?;\nac_rsa::Pkcs1Sha256::sign(&key, msg, &mut sig)?;\nac_rsa::Pkcs1Sha256::verify(key.public_key(), msg, &sig)?;",
+        notes: "Verification re-encodes the expected block and compares it in constant time; it \
+                never parses the recovered block, which is where the Bleichenbacher 2006 \
+                forgeries came from. The DigestInfo prefix is built from the algorithm OID at \
+                run time rather than pasted in as a constant.",
+    },
+    Entry {
+        id: "rsa-pkcs1-sha384",
+        name: "RSASSA-PKCS1-v1_5 with SHA-384",
+        aliases: &["sha384withrsa"],
+        summary: "PKCS#1 v1.5 padding over SHA-384.",
+        class: Class::Signature,
+        family: "RSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength::classical_only(112),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "RFC 8017"],
+        params: &RSA_SIG_P,
+        constraints: &[RSA_MIN_MODULUS, RSA_PREFER_PSS, RSA_NO_PARSING],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-384" },
+            Edge { relation: Relation::SupersededBy, target: "rsa-pss-sha384" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ac_rsa::Pkcs1Sha384",
+        example: "ac_rsa::Pkcs1Sha384::verify(&public_key, msg, &sig)?;",
+        notes: "The hash is stronger than what a 2048-bit modulus supports, so the modulus is \
+                what bounds the security level. Use this pairing when a peer requires it.",
+    },
+    Entry {
+        id: "rsa-pkcs1-sha512",
+        name: "RSASSA-PKCS1-v1_5 with SHA-512",
+        aliases: &["sha512withrsa"],
+        summary: "PKCS#1 v1.5 padding over SHA-512.",
+        class: Class::Signature,
+        family: "RSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength::classical_only(112),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "RFC 8017"],
+        params: &RSA_SIG_P,
+        constraints: &[RSA_MIN_MODULUS, RSA_PREFER_PSS, RSA_NO_PARSING],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-512" },
+            Edge { relation: Relation::SupersededBy, target: "rsa-pss-sha512" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ac_rsa::Pkcs1Sha512",
+        example: "ac_rsa::Pkcs1Sha512::verify(&public_key, msg, &sig)?;",
+        notes: "The hash is stronger than what a 2048-bit modulus supports, so the modulus is \
+                what bounds the security level.",
+    },
+    Entry {
+        id: "rsa-pss-sha256",
+        name: "RSASSA-PSS with SHA-256",
+        aliases: &["rsa-pss", "rsassa-pss"],
+        summary: "The RSA padding to choose for new signatures: randomized, with a security \
+                  proof PKCS#1 v1.5 lacks.",
+        class: Class::Signature,
+        family: "RSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength::classical_only(112),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "RFC 8017"],
+        params: &RSA_PSS_P,
+        constraints: &[RSA_MIN_MODULUS, RSA_SALT_ENTROPY],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-256" },
+            Edge { relation: Relation::Supersedes, target: "rsa-pkcs1-sha256" },
+            Edge { relation: Relation::SupersededBy, target: "ml-dsa-65" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ac_rsa::PssSha256",
+        example: "ac_rsa::PssSha256::sign(&key, msg, &mut rng, &mut sig)?;\nac_rsa::PssSha256::verify(key.public_key(), msg, &sig)?;",
+        notes: "The salt is always the hash length, which is what FIPS 186-5 and essentially \
+                every deployment use. Signing needs a random source; verification does not. Two \
+                signatures over one message differ, so a PSS signature is not a message id.",
+    },
+    Entry {
+        id: "rsa-pss-sha384",
+        name: "RSASSA-PSS with SHA-384",
+        aliases: &[],
+        summary: "PSS padding over SHA-384 with a 48-byte salt.",
+        class: Class::Signature,
+        family: "RSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength::classical_only(112),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "RFC 8017"],
+        params: &RSA_PSS_P,
+        constraints: &[RSA_MIN_MODULUS, RSA_SALT_ENTROPY],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-384" },
+            Edge { relation: Relation::Supersedes, target: "rsa-pkcs1-sha384" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ac_rsa::PssSha384",
+        example: "ac_rsa::PssSha384::sign(&key, msg, &mut rng, &mut sig)?;",
+        notes: "A 2048-bit modulus has room for a 48-byte hash and a 48-byte salt with 158 \
+                bytes to spare, so no size juggling is needed.",
+    },
+    Entry {
+        id: "rsa-pss-sha512",
+        name: "RSASSA-PSS with SHA-512",
+        aliases: &[],
+        summary: "PSS padding over SHA-512 with a 64-byte salt.",
+        class: Class::Signature,
+        family: "RSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength::classical_only(112),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "RFC 8017"],
+        params: &RSA_PSS_P,
+        constraints: &[RSA_MIN_MODULUS, RSA_SALT_ENTROPY],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-512" },
+            Edge { relation: Relation::Supersedes, target: "rsa-pkcs1-sha512" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ac_rsa::PssSha512",
+        example: "ac_rsa::PssSha512::sign(&key, msg, &mut rng, &mut sig)?;",
+        notes: "Needs a 2048-bit modulus or larger to fit a 64-byte hash beside a 64-byte salt; \
+                this library refuses anything smaller regardless.",
     },
     Entry {
         id: "3des",

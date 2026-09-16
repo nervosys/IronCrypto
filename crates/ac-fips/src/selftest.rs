@@ -100,6 +100,18 @@ static CASTS: &[Cast] = &[
     ("ecdsa-p256-sha256", ac_ec::p256::EcdsaP256Sha256::self_test),
     ("ecdh-p384", ac_ec::p384::EcdhP384::self_test),
     ("ecdsa-p384-sha384", ac_ec::p384::EcdsaP384Sha384::self_test),
+    // RSA
+    //
+    // Six 2048-bit private-key operations, which dominate the runtime of this
+    // suite. They stay in because every ontology entry marked Available has to
+    // have a CAST; an algorithm offered without one is exactly the gap this
+    // table exists to close.
+    ("rsa-pkcs1-sha256", ac_rsa::Pkcs1Sha256::self_test),
+    ("rsa-pkcs1-sha384", ac_rsa::Pkcs1Sha384::self_test),
+    ("rsa-pkcs1-sha512", ac_rsa::Pkcs1Sha512::self_test),
+    ("rsa-pss-sha256", ac_rsa::PssSha256::self_test),
+    ("rsa-pss-sha384", ac_rsa::PssSha384::self_test),
+    ("rsa-pss-sha512", ac_rsa::PssSha512::self_test),
 ];
 
 /// BLAKE2b known-answer test: RFC 7693 Appendix A.
@@ -147,7 +159,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 40;
+pub const TEST_COUNT: usize = 46;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -238,7 +250,7 @@ pub fn integrity_check() -> Result<()> {
 }
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "6f37ddd291fcc558e75bbba9ec27a276fdf03e0faf44a4a808964e32ac180fdf";
+const INTEGRITY_TAG: &str = "4254ba3e8c16521952c441fa842f1cd33073c0ff76a7102b9e40a10a5af8a763";
 
 #[cfg(test)]
 mod tests {

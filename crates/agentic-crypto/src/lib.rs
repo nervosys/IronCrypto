@@ -45,14 +45,14 @@
 //!
 //! * **Not CMVP validated.** The FIPS machinery is real; the certificate does
 //!   not exist. See [`ac_fips::VALIDATION_STATEMENT`].
-//! * **No approved asymmetric algorithms.** ECDSA, ECDH over NIST curves, and
-//!   RSA are registered in the ontology as planned, not implemented. Only
-//!   Curve25519 is available, and it is not approved.
-//! * **Portable backend only.** AES and GHASH are constant-time but
-//!   unaccelerated; expect single-digit MB/s, not GB/s. If you need bulk AES
-//!   throughput today, use a hardware-backed module.
+//! * **No RSA CRT.** The RSA private operation is a single exponentiation
+//!   modulo `n`, roughly four times slower than the Chinese-remainder form.
+//!   RSA key generation is variable time by design; generate keys offline.
 //! * **No post-quantum schemes yet.** ML-KEM and ML-DSA are registered as
-//!   planned.
+//!   planned, not implemented, and [`recommend`] says so rather than
+//!   substituting a classical scheme.
+//! * **No P-521, and no ARM crypto extensions.** Both are registered as
+//!   planned. x86-64 gets AES-NI and PCLMULQDQ, selected at run time.
 //!
 //! Each of those is queryable at runtime through
 //! [`ac_ontology::runtime::capabilities`], so an agent can discover them
@@ -70,6 +70,7 @@ pub use ac_hash as hash;
 pub use ac_kdf as kdf;
 pub use ac_mac as mac;
 pub use ac_ontology as ontology;
+pub use ac_rsa as rsa;
 
 /// Everything needed for ordinary use, in one import.
 pub mod prelude {
@@ -89,6 +90,8 @@ pub mod prelude {
     pub use ac_kdf::argon2::{argon2, Argon2Params, Variant};
     pub use ac_kdf::{pbkdf2, Hkdf};
     pub use ac_mac::{CmacAes256, HmacSha256, HmacSha384, HmacSha512};
+    pub use ac_rsa::{Pkcs1Sha256, Pkcs1Sha384, Pkcs1Sha512, PssSha256, PssSha384, PssSha512};
+    pub use ac_rsa::{RsaPrivateKey, RsaPublicKey};
 
     #[cfg(feature = "std")]
     pub use ac_drbg::Rng;
