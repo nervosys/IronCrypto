@@ -150,6 +150,19 @@ impl Policy {
         }
     }
 
+    /// A 192-bit floor with a FIPS requirement, as CNSA-aligned profiles ask
+    /// for.
+    ///
+    /// This is what moves the answer from P-256 to P-384: the curves differ
+    /// only in strength, so the selector picks on the number rather than on a
+    /// hard-coded preference.
+    pub const CNSA: Policy = Policy {
+        require_fips: true,
+        min_classical_bits: 192,
+        min_quantum_bits: 0,
+        aes_hardware: false,
+    };
+
     /// Resist a future quantum adversary.
     pub const POST_QUANTUM: Policy = Policy {
         require_fips: false,

@@ -136,7 +136,7 @@ behaviour can reproduce it from a shell.
 | `ac-cipher` | GF(2^8) arithmetic, AES (portable + AES-NI), SP 800-38A modes, GCM (portable + PCLMULQDQ GHASH), ChaCha20, Poly1305 |
 | `ac-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
 | `ac-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |
-| `ac-ec` | GF(2^255-19) field, X25519, Ed25519; P-256 Montgomery arithmetic, group law, ECDSA, ECDH |
+| `ac-ec` | GF(2^255-19) field, X25519, Ed25519; a limb-generic Montgomery field, one Jacobian group law, ECDSA and ECDH, instantiated for P-256 and P-384 |
 | `ac-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
 | `ac-fips` | state machine, approved-mode policy, CAST table, service indicator |
 | `agentic-crypto` | facade, prelude, and the ontology/implementation agreement tests |

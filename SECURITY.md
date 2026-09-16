@@ -51,8 +51,8 @@ reproduction if you have one.
 
 | | |
 |---|---|
-| Limited asymmetric coverage | P-256 ECDSA and ECDH are implemented. P-384, P-521, and RSA are not. |
-| No post-quantum schemes | ML-KEM and ML-DSA are registered as planned. X25519, Ed25519, and P-256 all fall to Shor. |
+| Limited asymmetric coverage | ECDSA and ECDH are implemented over P-256 and P-384. P-521 and RSA are not. |
+| No post-quantum schemes | ML-KEM and ML-DSA are registered as planned. X25519, Ed25519, P-256 and P-384 all fall to Shor. |
 | Slow symmetric throughput off x86-64 | The portable backend trades speed for the absence of secret-dependent memory access: single-digit MB/s for AES. x86-64 with AES-NI uses the accelerated path instead. |
 | PBKDF2 is not memory-hard | It is the only *approved* password KDF, not the strongest one. Argon2id is implemented and is the default outside FIPS. |
 | Two weak vector sources | The CTR_DRBG and PBKDF2 known-answer tests are property-based rather than CAVP-derived. Documented in `docs/FIPS.md`. |

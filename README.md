@@ -158,7 +158,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305 |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
-| Curves | P-256 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
+| Curves | P-256 and P-384 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
 
 ## What isn't — and why that's written down
@@ -166,8 +166,8 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 The ontology registers algorithms this library does **not** provide, marked
 `planned` or `excluded`, so that querying for them yields an honest answer:
 
-- **P-384, P-521, RSA** — `planned`. P-256 covers the overwhelming majority of
-  deployed use, but a CNSA-aligned profile wants P-384 and legacy PKI wants RSA.
+- **P-521, RSA** — `planned`. P-256 and P-384 cover the overwhelming majority of
+  deployed use; legacy PKI still wants RSA.
 - **ARMv8 crypto extensions** — `planned`. Apple Silicon and modern ARM servers
   have AES instructions this build does not yet use.
 - **ML-KEM, ML-DSA** (FIPS 203/204) — `planned`. No post-quantum schemes yet.
@@ -190,7 +190,7 @@ $ acrypto capabilities
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 38 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 40 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `acrypto capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.

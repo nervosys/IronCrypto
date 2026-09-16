@@ -391,6 +391,60 @@ const BLAKE2B_P: [Param; 2] = [
     },
 ];
 
+const P384_KA_P: [Param; 3] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 48,
+        max: 48,
+        recommended: 48,
+        note: "A scalar in [1, n-1]; zero and values at or above n are rejected.",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 49,
+        max: 97,
+        recommended: 97,
+        note: "SEC1: 97 bytes uncompressed (0x04 || X || Y), or 49 compressed.",
+    },
+    Param {
+        name: "shared-secret",
+        unit: Unit::Bytes,
+        min: 48,
+        max: 48,
+        recommended: 48,
+        note: "The x-coordinate of the shared point. Not a key; derive from it.",
+    },
+];
+
+const P384_SIG_P: [Param; 3] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 48,
+        max: 48,
+        recommended: 48,
+        note: "A scalar in [1, n-1].",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 49,
+        max: 97,
+        recommended: 97,
+        note: "SEC1 uncompressed or compressed; both are accepted on verification.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 96,
+        max: 96,
+        recommended: 96,
+        note: "Fixed-width r || s, each 48 bytes. Not DER-encoded.",
+    },
+];
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
 
@@ -1341,6 +1395,72 @@ pub static REGISTRY: &[Entry] = &[
         rust_path: "ac_ec::X25519",
         example: "use ac_core::traits::KeyAgreement;\nac_ec::X25519::agree(&my_sk, &peer_pk, &mut shared)?;",
         notes: "Shor breaks this outright; pair it with ML-KEM in a hybrid once that lands.",
+    },
+    Entry {
+        id: "ecdh-p384",
+        name: "ECDH P-384",
+        aliases: &["ecdh-secp384r1"],
+        summary: "Approved key agreement at 192-bit strength; what CNSA-aligned profiles require.",
+        class: Class::KeyAgreement,
+        family: "NIST P-curves",
+        purposes: &[Purpose::KeyEstablishment],
+        strength: Strength::classical_only(192),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-56A", "SP 800-186"],
+        params: &P384_KA_P,
+        constraints: &[VALIDATE_PEER_KEY, HASH_TRANSCRIPT],
+        edges: &[
+            Edge { relation: Relation::PairsWith, target: "hkdf-sha2-384" },
+            Edge { relation: Relation::Supersedes, target: "ecdh-p256" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_ec::p384::EcdhP384",
+        example: "use ac_core::traits::KeyAgreement;\nac_ec::p384::EcdhP384::agree(&my_sk, &peer_pk, &mut shared)?;",
+        notes: "Roughly three times the work of P-256 for a security level few threat models \
+                actually need. Choose it when a profile mandates 192-bit strength, not by default.",
+    },
+    Entry {
+        id: "ecdsa-p384-sha384",
+        name: "ECDSA P-384 with SHA-384",
+        aliases: &["ecdsa-secp384r1"],
+        summary: "Approved signatures at 192-bit strength, paired with SHA-384.",
+        class: Class::Signature,
+        family: "NIST P-curves",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength::classical_only(192),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 186-5", "SP 800-186", "RFC 6979"],
+        params: &P384_SIG_P,
+        constraints: &[
+            Constraint {
+                id: "unique-signing-nonce",
+                requirement: "Generate a fresh random k per signature, or derive it \
+                              deterministically per RFC 6979.",
+                consequence: "A repeated or predictable k reveals the private key from two \
+                              signatures.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "ecdsa-is-malleable",
+                requirement: "Normalize to low-s, or do not treat a signature as a unique \
+                              identifier.",
+                consequence: "Both (r, s) and (r, n - s) verify, so a signature used as a \
+                              database key or transaction id can be duplicated.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-384" },
+            Edge { relation: Relation::PairsWith, target: "ecdh-p384" },
+            Edge { relation: Relation::Supersedes, target: "ecdsa-p256-sha256" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ac_ec::p384::EcdsaP384Sha384",
+        example: "use ac_core::traits::SignatureScheme;\nac_ec::p384::EcdsaP384Sha384::sign(&sk, msg, &mut sig)?;",
+        notes: "Nonces are derived per RFC 6979, so the unique-signing-nonce constraint is \
+                satisfied by construction. Signatures are fixed-width r || s at 96 bytes, not DER.",
     },
     Entry {
         id: "ecdh-p256",

@@ -41,13 +41,23 @@
 
 pub mod ed25519;
 pub mod field;
+pub mod nist;
 pub mod p256;
+pub mod p384;
 pub mod scalar;
 pub mod x25519;
 
 pub use ed25519::Ed25519;
 pub use p256::{EcdhP256, EcdsaP256Sha256};
+pub use p384::{EcdhP384, EcdsaP384Sha384};
 pub use x25519::X25519;
 
 /// Ontology identifiers for the schemes implemented here.
-pub const EC_IDS: &[&str] = &["x25519", "ed25519", "ecdh-p256", "ecdsa-p256-sha256"];
+pub const EC_IDS: &[&str] = &[
+    "x25519",
+    "ed25519",
+    "ecdh-p256",
+    "ecdsa-p256-sha256",
+    "ecdh-p384",
+    "ecdsa-p384-sha384",
+];

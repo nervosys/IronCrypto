@@ -98,6 +98,8 @@ static CASTS: &[Cast] = &[
     ("ed25519", ac_ec::Ed25519::self_test),
     ("ecdh-p256", ac_ec::p256::EcdhP256::self_test),
     ("ecdsa-p256-sha256", ac_ec::p256::EcdsaP256Sha256::self_test),
+    ("ecdh-p384", ac_ec::p384::EcdhP384::self_test),
+    ("ecdsa-p384-sha384", ac_ec::p384::EcdsaP384Sha384::self_test),
 ];
 
 /// BLAKE2b known-answer test: RFC 7693 Appendix A.
@@ -145,7 +147,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 38;
+pub const TEST_COUNT: usize = 40;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -236,7 +238,7 @@ pub fn integrity_check() -> Result<()> {
 }
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "b8177e063aca346173b9fa0c8f288473e48aa38b8cece5c837aba01b13af50b7";
+const INTEGRITY_TAG: &str = "6f37ddd291fcc558e75bbba9ec27a276fdf03e0faf44a4a808964e32ac180fdf";
 
 #[cfg(test)]
 mod tests {
