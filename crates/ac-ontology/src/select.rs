@@ -378,32 +378,53 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
             ),
             None => fallback(base),
         },
-        Intent::HashPassword => match available("pbkdf2-hmac-sha2-256") {
-            Some(a) => (
-                a,
-                if policy.require_fips {
-                    "PBKDF2 is the only approved password-based KDF. Use at least 600000 iterations \
-                     and a fresh 128-bit salt."
-                } else {
-                    "PBKDF2 is available here; Argon2id would be stronger but is not yet \
-                     implemented."
-                },
-                None,
-                [
-                    Some(Rejected {
-                        id: "argon2id",
-                        reason: "Memory-hard and the better choice outside FIPS, but not \
-                                 implemented in this build.",
-                    }),
-                    Some(Rejected {
-                        id: "sha2-256",
-                        reason: "A bare hash is far too fast to protect a password.",
-                    }),
+        Intent::HashPassword => {
+            let argon2 = available("argon2id");
+            let pbkdf2 = available("pbkdf2-hmac-sha2-256");
+            match (argon2, pbkdf2) {
+                // Outside FIPS, memory-hardness is the whole point: PBKDF2 is
+                // attacked far faster on a GPU than it is defended on a CPU.
+                (Some(a), p) => (
+                    a,
+                    "Argon2id is memory-hard, so an attacker must spend RAM as well as time. Its \
+                     first half-pass indexes data-independently and the rest data-dependently, \
+                     which is why RFC 9106 recommends it over the other two variants.",
+                    p,
+                    [
+                        Some(Rejected {
+                            id: "pbkdf2-hmac-sha2-256",
+                            reason: "Approved, but not memory-hard: choose it only when FIPS \
+                                     approval is a requirement.",
+                        }),
+                        Some(Rejected {
+                            id: "sha2-256",
+                            reason: "A bare hash is far too fast to protect a password.",
+                        }),
+                        None,
+                    ],
+                ),
+                (None, Some(p)) => (
+                    p,
+                    "PBKDF2 is the only approved password-based KDF. Use at least 600000 \
+                     iterations and a fresh 128-bit salt; it is not memory-hard, so the iteration \
+                     count is the only lever you have.",
                     None,
-                ],
-            ),
-            None => fallback(base),
-        },
+                    [
+                        Some(Rejected {
+                            id: "argon2id",
+                            reason: "Memory-hard and stronger, but not approved for the FIPS \
+                                     approved mode of operation.",
+                        }),
+                        Some(Rejected {
+                            id: "sha2-256",
+                            reason: "A bare hash is far too fast to protect a password.",
+                        }),
+                        None,
+                    ],
+                ),
+                _ => fallback(base),
+            }
+        }
         Intent::AgreeKey => {
             let x25519 = available("x25519");
             let p256 = available("ecdh-p256");
@@ -681,10 +702,21 @@ mod tests {
         }
     }
 
+    /// Outside FIPS the memory-hard option wins; under FIPS the approved one
+    /// does, and each names the other as the road not taken.
     #[test]
-    fn password_hashing_admits_its_limitation() {
+    fn password_hashing_tracks_the_policy() {
         let r = recommend(Intent::HashPassword, Policy::DEFAULT).unwrap();
+        assert_eq!(r.primary.id, "argon2id");
+        assert_eq!(r.alternative.map(|e| e.id), Some("pbkdf2-hmac-sha2-256"));
+        assert!(r
+            .rejected()
+            .any(|x| x.id == "pbkdf2-hmac-sha2-256" && x.reason.contains("memory-hard")));
+
+        let r = recommend(Intent::HashPassword, Policy::FIPS_APPROVED).unwrap();
         assert_eq!(r.primary.id, "pbkdf2-hmac-sha2-256");
-        assert!(r.rejected().any(|x| x.id == "argon2id"));
+        assert!(r
+            .rejected()
+            .any(|x| x.id == "argon2id" && x.reason.contains("approved mode")));
     }
 }

@@ -150,13 +150,13 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 
 | class | algorithms |
 |---|---|
-| Hashes | SHA-224/256/384/512, SHA-512/224, SHA-512/256, SHA3-224/256/384/512 |
+| Hashes | SHA-224/256/384/512, SHA-512/224, SHA-512/256, SHA3-224/256/384/512, BLAKE2b |
 | XOFs | SHAKE128, SHAKE256 |
 | MACs | HMAC (SHA-2 and SHA-3), CMAC-AES-128/192/256, Poly1305 |
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7 |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305 |
-| KDFs | HKDF, PBKDF2, SP 800-108 counter mode |
+| KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
@@ -171,8 +171,6 @@ The ontology registers algorithms this library does **not** provide, marked
 - **ARMv8 crypto extensions** — `planned`. Apple Silicon and modern ARM servers
   have AES instructions this build does not yet use.
 - **ML-KEM, ML-DSA** (FIPS 203/204) — `planned`. No post-quantum schemes yet.
-- **Argon2id** — `planned`. PBKDF2 is available and approved, but it is not
-  memory-hard.
 - **SHA-1, MD5, Triple DES** — `excluded`, permanently. They are in the registry
   only so that a request for them resolves to a refusal with a reason.
 
@@ -192,7 +190,7 @@ $ acrypto capabilities
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 36 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 38 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `acrypto capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.

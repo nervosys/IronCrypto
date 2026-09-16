@@ -336,6 +336,61 @@ const P256_SIG_P: [Param; 3] = [
     },
 ];
 
+const ARGON2_P: [Param; 4] = [
+    Param {
+        name: "salt",
+        unit: Unit::Bytes,
+        min: 8,
+        max: u64::MAX,
+        recommended: 16,
+        note: "RFC 9106 requires at least 8 bytes and recommends 16.",
+    },
+    Param {
+        name: "memory",
+        unit: Unit::Count,
+        min: 8,
+        max: u64::MAX,
+        recommended: 65_536,
+        note: "Kibibytes, and at least 8 per lane. This is the parameter that costs an attacker \
+               the most; 65536 is the interactive recommendation and 2097152 the offline one.",
+    },
+    Param {
+        name: "passes",
+        unit: Unit::Count,
+        min: 1,
+        max: u64::MAX,
+        recommended: 3,
+        note: "Iterations over the arena. Raise the memory before raising this.",
+    },
+    Param {
+        name: "output",
+        unit: Unit::Bytes,
+        min: 4,
+        max: u64::MAX,
+        recommended: 32,
+        note: "Derived key length.",
+    },
+];
+
+const BLAKE2B_P: [Param; 2] = [
+    Param {
+        name: "output",
+        unit: Unit::Bytes,
+        min: 1,
+        max: 64,
+        recommended: 32,
+        note: "Chosen at construction and bound into the digest.",
+    },
+    Param {
+        name: "key",
+        unit: Unit::Bytes,
+        min: 0,
+        max: 64,
+        recommended: 32,
+        note: "Optional. A keyed BLAKE2b is a MAC without needing HMAC around it.",
+    },
+];
+
 const NO_PARAMS: [Param; 0] = [];
 const NO_CONSTRAINTS: [Constraint; 0] = [];
 
@@ -1156,16 +1211,45 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::PasswordHashing],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Planned,
+        status: ImplStatus::Available,
         standards: &["RFC 9106"],
-        params: &NO_PARAMS,
+        params: &ARGON2_P,
         constraints: &[SALT_REQUIRED],
-        edges: &[Edge { relation: Relation::Supersedes, target: "pbkdf2-hmac-sha2-256" }],
+        edges: &[
+            Edge { relation: Relation::Supersedes, target: "pbkdf2-hmac-sha2-256" },
+            Edge { relation: Relation::BuiltOn, target: "blake2b" },
+        ],
         performance: Performance::DeliberatelySlow,
-        rust_path: "",
-        example: "",
-        notes: "Not implemented yet. Until it lands, use PBKDF2 with a high iteration count, or an \
-                external Argon2 implementation.",
+        rust_path: "ac_kdf::argon2",
+        example: "use ac_kdf::argon2::{argon2, Argon2Params, Variant};\nargon2(Variant::Argon2id, &Argon2Params::INTERACTIVE, password, salt, &mut key)?;",
+        notes: "Memory is the parameter that matters: raising the pass count over a small arena \
+                buys far less than raising the memory. RFC 9106 recommends 2 GiB with t=1 for \
+                offline use and 64 MiB with t=3 for interactive logins, both available as \
+                constants. Argon2i and Argon2d are implemented too; prefer Argon2id unless you \
+                specifically need one of the others.",
+    },
+    Entry {
+        id: "blake2b",
+        name: "BLAKE2b",
+        aliases: &["blake2"],
+        summary: "Fast hash with a variable output length and a built-in keyed mode.",
+        class: Class::Hash,
+        family: "BLAKE2",
+        purposes: &[Purpose::Integrity, Purpose::Authentication, Purpose::Commitment],
+        strength: Strength::symmetric(256),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 7693"],
+        params: &BLAKE2B_P,
+        constraints: &[NOT_FOR_PASSWORDS],
+        edges: &[Edge { relation: Relation::PairsWith, target: "argon2id" }],
+        performance: Performance::Fast,
+        rust_path: "ac_hash::Blake2b",
+        example: "let mut out = [0u8; 32];\nac_hash::Blake2b::hash(b\"message\", &mut out)?;",
+        notes: "Present because Argon2 is defined in terms of it. Faster than SHA-512 on 64-bit \
+                hardware and keyed without needing HMAC, but not approved — under a FIPS policy \
+                use SHA-2 or SHA-3 instead. The output length is bound into the digest, so a short \
+                hash is not a prefix of a long one.",
     },
     // -- DRBGs --------------------------------------------------------------
     Entry {

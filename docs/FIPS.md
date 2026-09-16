@@ -73,7 +73,7 @@ a mode), `NotApproved`.
 
 ### Cryptographic algorithm self-tests
 
-36 known-answer tests, one per implemented algorithm, run by `initialize()` and
+38 known-answer tests, one per implemented algorithm, run by `initialize()` and
 individually addressable:
 
 ```console
@@ -85,7 +85,7 @@ $ acrypto selftest
   PASS ecdh-p256
   PASS ecdsa-p256-sha256
 
-36 passed, 0 failed; integrity check passed
+38 passed, 0 failed; integrity check passed
 ```
 
 Each test is the algorithm's own `SelfTest::self_test()` — the same code path
@@ -111,6 +111,8 @@ registered, so adding an algorithm without a self-test fails CI.
 | ChaCha20, Poly1305, ChaCha20-Poly1305 | RFC 8439 |
 | X25519 | RFC 7748 §5.2 and §6.1 |
 | Ed25519 | RFC 8032 §7.1 |
+| BLAKE2b | RFC 7693 Appendix A |
+| Argon2id, Argon2i, Argon2d | RFC 9106 §5.1–5.3, all three variants |
 | ECDSA P-256 | RFC 6979 A.2.5 (`sample` and `test`), including the published `k` and public key |
 | ECDH P-256 | NIST CAVP ECC CDH, first published case |
 | HMAC_DRBG | validated against an independent in-test transcription of the SP 800-90A §10.1.2 pseudocode; the CAST vector is an implementation-pinned integrity value |

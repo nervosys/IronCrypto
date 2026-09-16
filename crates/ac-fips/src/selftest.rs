@@ -75,6 +75,7 @@ static CASTS: &[Cast] = &[
     ("cmac-aes-192", ac_mac::CmacAes192::self_test),
     ("cmac-aes-256", ac_mac::CmacAes256::self_test),
     ("poly1305", ac_cipher::Poly1305::self_test),
+    ("blake2b", blake2b_self_test),
     // Block ciphers and AEADs
     ("aes-128", ac_cipher::Aes128::self_test),
     ("aes-192", ac_cipher::Aes192::self_test),
@@ -88,6 +89,7 @@ static CASTS: &[Cast] = &[
         "hkdf-sha2-256",
         ac_kdf::Hkdf::<ac_mac::HmacSha256>::self_test,
     ),
+    ("argon2id", argon2id_self_test),
     // DRBGs
     ("hmac-drbg-sha2-256", ac_drbg::HmacDrbgSha256::self_test),
     ("ctr-drbg-aes-256", ac_drbg::CtrDrbg::self_test),
@@ -98,8 +100,52 @@ static CASTS: &[Cast] = &[
     ("ecdsa-p256-sha256", ac_ec::p256::EcdsaP256Sha256::self_test),
 ];
 
+/// BLAKE2b known-answer test: RFC 7693 Appendix A.
+///
+/// BLAKE2b has a variable output length and so does not fit the fixed-size
+/// `Digest`/`SelfTest` pair; its CAST is spelled out here instead.
+fn blake2b_self_test() -> Result<()> {
+    let mut got = [0u8; 64];
+    ac_hash::Blake2b::hash(b"abc", &mut got)?;
+    let mut want = [0u8; 64];
+    ac_core::codec::hex_decode(
+        b"ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923",
+        &mut want,
+    )?;
+    ac_core::ensure!(ac_core::ct::verify(&want, &got), SelfTestFailed, "blake2b");
+    Ok(())
+}
+
+/// Argon2id known-answer test: RFC 9106 section 5.3.
+fn argon2id_self_test() -> Result<()> {
+    use ac_kdf::argon2::{argon2_full, Argon2Params, Variant};
+
+    let params = Argon2Params {
+        memory_kib: 32,
+        passes: 3,
+        lanes: 4,
+    };
+    let mut got = [0u8; 32];
+    argon2_full(
+        Variant::Argon2id,
+        &params,
+        &[0x01u8; 32],
+        &[0x02u8; 16],
+        &[0x03u8; 8],
+        &[0x04u8; 12],
+        &mut got,
+    )?;
+    let mut want = [0u8; 32];
+    ac_core::codec::hex_decode(
+        b"0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659",
+        &mut want,
+    )?;
+    ac_core::ensure!(ac_core::ct::verify(&want, &got), SelfTestFailed, "argon2id");
+    Ok(())
+}
+
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 36;
+pub const TEST_COUNT: usize = 38;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -190,7 +236,7 @@ pub fn integrity_check() -> Result<()> {
 }
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "6b8eeaf5a36c85be2ca284442f241de27be2f297b189dc375d24e7e174088c47";
+const INTEGRITY_TAG: &str = "b8177e063aca346173b9fa0c8f288473e48aa38b8cece5c837aba01b13af50b7";
 
 #[cfg(test)]
 mod tests {
