@@ -376,6 +376,56 @@ mod tests {
         );
     }
 
+    /// No crate here may be published by accident.
+    ///
+    /// Publishing this library is an export. Encryption source code controlled
+    /// under ECCN 5D002 requires notifying BIS and the NSA's ENC Encryption
+    /// Request Coordinator of the URL before it is made public, under
+    /// 15 CFR 742.15(b). That is a notification rather than a licence
+    /// application, and it still has to come first: nothing undoes a publish.
+    ///
+    /// So `publish = false` is the workspace default and every crate inherits
+    /// it, which turns `cargo publish` into an error instead of an export. This
+    /// test exists because that is one line in a manifest, and a manifest line
+    /// with nothing watching it is a line someone removes while doing something
+    /// else. Removing it should be a decision that follows the notification,
+    /// not a step on the way to one.
+    ///
+    /// See docs/RELEASING.md.
+    #[test]
+    fn no_crate_can_be_published_by_accident() {
+        let root = workspace_root();
+
+        let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        assert!(
+            workspace.contains("publish = false"),
+            "the workspace no longer defaults to publish = false, so `cargo              publish` would attempt an export that needs a notification first"
+        );
+
+        let mut checked = 0;
+        for name in manifest_members() {
+            let path = root.join("crates").join(&name).join("Cargo.toml");
+            let text =
+                std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{name} has no manifest"));
+            assert!(
+                text.contains("publish.workspace = true") || text.contains("publish = false"),
+                "{name} does not inherit publish = false, so it can be published                  on its own"
+            );
+            assert!(
+                !text.contains("publish = true"),
+                "{name} sets publish = true"
+            );
+            checked += 1;
+        }
+
+        // The loop passes trivially over an empty member list, which is how the
+        // dependency check used to fail.
+        assert!(
+            checked >= 10,
+            "only {checked} crates checked; the member list is wrong"
+        );
+    }
+
     /// The licence and repository the document asserts must be the ones the
     /// workspace actually sets.
     ///

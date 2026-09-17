@@ -30,6 +30,18 @@ authors = ["Nervosys"]
 keywords = ["cryptography", "fips", "no-std", "agentic", "post-quantum"]
 categories = ["cryptography", "no-std"]
 
+# Publishing this is an export. Encryption source code controlled under
+# ECCN 5D002 requires notifying BIS and the NSA's ENC Encryption Request
+# Coordinator of the URL before it is made public -- 15 CFR 742.15(b). That is
+# a notification and not a licence application, but it has to come first, and
+# nothing undoes a publish.
+#
+# So the default is off, every crate inherits it, and
+# `no_crate_can_be_published_by_accident` in crates/ic-cli/src/sbom.rs asserts
+# it. Turning this on is a decision that follows the notification, not a step
+# on the way to one. docs/RELEASING.md has the procedure.
+publish = false
+
 [workspace.dependencies]
 ic-core = { path = "crates/ic-core", version = "0.1.0", default-features = false }
 ic-hash = { path = "crates/ic-hash", version = "0.1.0", default-features = false }

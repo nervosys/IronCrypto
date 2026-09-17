@@ -91,9 +91,27 @@ considered and rejected:
 
 ## Install
 
+**IronCrypto is not published.** It is not on crates.io, and this repository is
+private, so `iron-crypto = "0.1"` does not resolve — that line used to be here
+and it never worked.
+
+Publishing it is an export, and requires notifying BIS and the NSA's ENC
+Encryption Request Coordinator first, under 15 CFR 742.15(b). Every crate
+carries `publish = false` so that `cargo publish` fails rather than doing it by
+accident. See [docs/RELEASING.md](docs/RELEASING.md).
+
+Until then, with access to the repository:
+
 ```toml
 [dependencies]
-iron-crypto = "0.1"
+iron-crypto = { git = "ssh://git@github.com/nervosys/IronCrypto.git" }
+```
+
+Or against a local checkout:
+
+```toml
+[dependencies]
+iron-crypto = { path = "../IronCrypto/crates/iron-crypto" }
 ```
 
 ```console
