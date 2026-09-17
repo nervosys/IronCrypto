@@ -351,6 +351,22 @@ mod tests {
             "scripts/check.sh has its own copy of the dependency check again"
         );
 
+        // The self-hosted workflow exists because CI is blocked at the account
+        // level. It must invoke the script rather than list the steps, which is
+        // what makes it unable to drift: there is nothing in it to drift.
+        let self_hosted = std::fs::read_to_string(root.join(".github/workflows/self-hosted.yml"))
+            .expect("the self-hosted workflow");
+        assert!(
+            self_hosted.contains("bash scripts/check.sh"),
+            "the self-hosted workflow no longer runs the gate script"
+        );
+        for copied in ["cargo tree", "cargo clippy", "cargo fmt"] {
+            assert!(
+                !self_hosted.contains(copied),
+                "the self-hosted workflow has its own copy of {copied:?}; it                  should call scripts/check.sh, which already runs it"
+            );
+        }
+
         let shared = std::fs::read_to_string(root.join("scripts/no-third-party.sh"))
             .expect("the shared dependency check");
         assert!(

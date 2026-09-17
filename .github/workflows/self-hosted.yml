@@ -1,0 +1,74 @@
+name: self-hosted
+
+# The same gate, on a runner this project provides.
+#
+# `ci.yml` uses GitHub-hosted runners and is correct, but it does not run: every
+# job on this repository is rejected before it starts with "the job was not
+# started because recent account payments have failed or your spending limit
+# needs to be increased". That is an account-level block and nothing in a
+# repository can lift it.
+#
+# A self-hosted runner consumes no GitHub minutes, so this workflow works
+# whatever the billing state, and both can run once billing is restored --
+# `ci.yml` for the three-OS matrix and the four cross-compilation targets, this
+# for a check that keeps working if billing lapses again.
+#
+# It invokes scripts/check.sh rather than listing the steps. That is the whole
+# design: CI used to write each step out again, its copy of the dependency check
+# drifted onto crate names that no longer existed, and the job failed on every
+# push. A workflow that calls the script cannot disagree with the script.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # One machine, so queued pushes should supersede rather than pile up. The
+  # in-progress run is left alone: a half-finished cargo build that is killed
+  # leaves the target directory in a state the next run has to clean up.
+  group: self-hosted-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: full check
+    runs-on: [self-hosted]
+    # The gate builds four cross-compilation targets and the whole test suite
+    # from cold on the first run.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # A self-hosted runner keeps whatever was installed last time, which is
+      # why this is a check rather than an install: a toolchain that drifted on
+      # the machine should be visible in the log, not silently used.
+      - name: Report the toolchain
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          echo "installed targets:"
+          rustup target list --installed
+
+      # check.sh names the four targets it wants and reports any that are
+      # missing rather than skipping them quietly, so an absent one shows up in
+      # the summary instead of passing as if it had been built.
+      - name: Install the cross-compilation targets
+        shell: bash
+        run: |
+          for target in thumbv7em-none-eabihf thumbv6m-none-eabi \
+                        riscv32imac-unknown-none-elf wasm32-unknown-unknown; do
+            rustup target add "$target"
+          done
+
+      - name: scripts/check.sh
+        shell: bash
+        # Kept out of the repository's own target directory: the runner may be
+        # working in a directory a developer also builds in, and two cargo
+        # processes sharing one target directory block on the same lock.
+        env:
+          CARGO_TERM_COLOR: always
+          CARGO_TARGET_DIR: ${{ runner.temp }}/ironcrypto-target
+        run: bash scripts/check.sh
