@@ -1427,7 +1427,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::BuiltOn, target: "aes-192" }],
         performance: Performance::Slow,
         rust_path: "ic_cipher::Aes192Gcm",
-        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::Aes192Gcm::new(key)?;",
+        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::Aes192Gcm::new(key)?;\nc.seal_detached(&nonce, aad, &mut buf, &mut tag)?;",
         notes: "Rarely used; prefer 128 or 256.",
     },
     Entry {

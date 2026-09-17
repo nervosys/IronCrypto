@@ -161,17 +161,7 @@ fn the_compiled_examples_match_the_registry() {
     ];
 
     for (id, compiled) in cases {
-        let entry = iron_crypto::ontology::get(id).unwrap_or_else(|| panic!("no entry {id}"));
-        let body: String = entry
-            .example
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("use "))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(
-            body, compiled,
-            "the registry's example for {id} is not the code compiled in this file"
-        );
+        check_example(id, compiled);
     }
 }
 
@@ -229,4 +219,213 @@ fn no_example_names_a_crate_that_no_longer_exists() {
         "only {checked} examples checked, which suggests they have gone missing rather than \
          that the registry shrank"
     );
+}
+
+/// Compare a compiled snippet against what the registry serves for `id`.
+///
+/// `use` lines are hoisted to the top of this file rather than repeated in
+/// every function, so they are filtered out of the comparison.
+fn check_example(id: &str, compiled: &str) {
+    let entry = iron_crypto::ontology::get(id).unwrap_or_else(|| panic!("no entry {id}"));
+    let body: String = entry
+        .example
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("use "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        body, compiled,
+        "the registry's example for {id} is not the code compiled in this file"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The parametric families.
+//
+// Ten hash entries differ only by type, nine HMAC entries likewise, and so on
+// through the block ciphers, AEADs, key derivation, key agreement and ECDSA.
+// Writing each out would be several hundred lines of near-duplicate, and the
+// duplication would be the kind that rots: change a signature and most copies
+// get updated.
+//
+// Each macro below emits the compiled call *and* the expected registry string,
+// both built from the same type name. That is what keeps the comparison
+// honest — a paraphrase is not expressible, because there is only one source
+// for the text.
+// ---------------------------------------------------------------------------
+
+/// Entries whose example is `let d = ic_hash::T::digest(b"message");`.
+macro_rules! digest_family {
+    ($($id:literal => $ty:ident),* $(,)?) => {
+        #[test]
+        fn digest_examples_compile_and_match() {
+            $({
+                let _d = iron_crypto::hash::$ty::digest(b"message");
+                let expected = concat!(
+                    "let d = ic_hash::", stringify!($ty), "::digest(b\"message\");"
+                );
+                check_example($id, expected);
+            })*
+        }
+    };
+}
+
+digest_family! {
+    "sha2-224" => Sha224,
+    "sha2-256" => Sha256,
+    "sha2-384" => Sha384,
+    "sha2-512" => Sha512,
+    "sha2-512-224" => Sha512_224,
+    "sha2-512-256" => Sha512_256,
+    "sha3-224" => Sha3_224,
+    "sha3-256" => Sha3_256,
+    "sha3-384" => Sha3_384,
+    "sha3-512" => Sha3_512,
+}
+
+/// Entries whose example is `let tag = ic_mac::T::mac(key, msg)?;`.
+macro_rules! mac_family {
+    ($($id:literal => $ty:ident, $keylen:literal),* $(,)?) => {
+        #[test]
+        fn mac_examples_compile_and_match() -> Result<()> {
+            let msg: &[u8] = b"message";
+            $({
+                // CMAC takes the key length of its cipher; HMAC takes any.
+                let key: &[u8] = &[0x11u8; $keylen];
+                let _tag = iron_crypto::mac::$ty::mac(key, msg)?;
+                let expected = concat!(
+                    "let tag = ic_mac::", stringify!($ty), "::mac(key, msg)?;"
+                );
+                check_example($id, expected);
+            })*
+            Ok(())
+        }
+    };
+}
+
+mac_family! {
+    "hmac-sha2-256" => HmacSha256, 32,
+    "hmac-sha2-384" => HmacSha384, 32,
+    "hmac-sha2-512" => HmacSha512, 32,
+    "hmac-sha2-512-256" => HmacSha512_256, 32,
+    "hmac-sha3-256" => HmacSha3_256, 32,
+    "hmac-sha3-512" => HmacSha3_512, 32,
+    "cmac-aes-128" => CmacAes128, 16,
+    "cmac-aes-192" => CmacAes192, 24,
+    "cmac-aes-256" => CmacAes256, 32,
+
+}
+
+/// Entries whose example is `let c = ic_cipher::T::new(key)?;`.
+macro_rules! block_cipher_family {
+    ($($id:literal => $ty:ident, $len:literal),* $(,)?) => {
+        #[test]
+        fn block_cipher_examples_compile_and_match() -> Result<()> {
+            $({
+                let key: &[u8] = &[0x22u8; $len];
+                let _c = iron_crypto::cipher::$ty::new(key)?;
+                let expected = concat!(
+                    "let c = ic_cipher::", stringify!($ty), "::new(key)?;"
+                );
+                check_example($id, expected);
+            })*
+            Ok(())
+        }
+    };
+}
+
+block_cipher_family! {
+    "aes-128" => Aes128, 16,
+    "aes-192" => Aes192, 24,
+    "aes-256" => Aes256, 32,
+}
+
+/// Entries whose example seals with a detached tag.
+macro_rules! aead_family {
+    ($($id:literal => $ty:ident, $len:literal),* $(,)?) => {
+        #[test]
+        fn aead_examples_compile_and_match() -> Result<()> {
+            let nonce = [0x33u8; 12];
+            let aad: &[u8] = b"aad";
+            $({
+                let key: &[u8] = &[0x44u8; $len];
+                let mut buf = [0x55u8; 16];
+                let mut tag = [0u8; 16];
+                let c = iron_crypto::cipher::$ty::new(key)?;
+                c.seal_detached(&nonce, aad, &mut buf, &mut tag)?;
+                let expected = concat!(
+                    "let c = ic_cipher::", stringify!($ty), "::new(key)?;\n",
+                    "c.seal_detached(&nonce, aad, &mut buf, &mut tag)?;"
+                );
+                check_example($id, expected);
+            })*
+            Ok(())
+        }
+    };
+}
+
+aead_family! {
+    "aes-128-gcm" => Aes128Gcm, 16,
+    "aes-192-gcm" => Aes192Gcm, 24,
+    "aes-256-gcm" => Aes256Gcm, 32,
+    "chacha20-poly1305" => ChaCha20Poly1305, 32,
+}
+
+/// HKDF entries, which name their MAC as a type parameter.
+macro_rules! hkdf_family {
+    ($($id:literal => $mac:ident),* $(,)?) => {
+        #[test]
+        fn hkdf_examples_compile_and_match() -> Result<()> {
+            let ikm: &[u8] = b"input keying material";
+            let salt: &[u8] = b"salt";
+            let info: &[u8] = b"info";
+            $({
+                let mut key = [0u8; 32];
+                iron_crypto::kdf::Hkdf::<iron_crypto::mac::$mac>::derive(
+                    ikm, salt, info, &mut key,
+                )?;
+                let expected = concat!(
+                    "ic_kdf::Hkdf::<ic_mac::", stringify!($mac), ">::derive(ikm, salt, info, &mut key)?;"
+                );
+                check_example($id, expected);
+            })*
+            Ok(())
+        }
+    };
+}
+
+hkdf_family! {
+    "hkdf-sha2-256" => HmacSha256,
+    "hkdf-sha2-384" => HmacSha384,
+    "hkdf-sha2-512" => HmacSha512,
+}
+
+/// ECDSA signing entries.
+macro_rules! ecdsa_family {
+    ($($id:literal => $module:ident, $ty:ident, $sklen:literal, $siglen:literal),* $(,)?) => {
+        #[test]
+        fn ecdsa_examples_compile_and_match() -> Result<()> {
+            let msg: &[u8] = b"message";
+            $({
+                // A P-521 scalar is 66 bytes and must be below the order,
+                // so the top byte is cleared. A constant fill produces a value
+                // larger than n, which the signer rightly refuses.
+                let mut sk = [0x07u8; $sklen];
+                sk[0] = 0;
+                let mut sig = [0u8; $siglen];
+                iron_crypto::ec::$module::$ty::sign(&sk, msg, &mut sig)?;
+                let expected = concat!(
+                    "ic_ec::", stringify!($module), "::", stringify!($ty),
+                    "::sign(&sk, msg, &mut sig)?;"
+                );
+                check_example($id, expected);
+            })*
+            Ok(())
+        }
+    };
+}
+
+ecdsa_family! {
+    "ecdsa-p384-sha384" => p384, EcdsaP384Sha384, 48, 96,
+    "ecdsa-p521-sha512" => p521, EcdsaP521Sha512, 66, 132,
 }
