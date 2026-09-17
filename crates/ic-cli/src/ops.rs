@@ -849,6 +849,171 @@ mod key_tests {
         assert_eq!(field(&json, "algorithm"), "ed25519");
     }
 
+    /// Nothing secret may appear in what `key_inspect` hands back.
+    ///
+    /// The tool tells agents it is "safe to run on an unknown file" because it
+    /// "parses structure only". An agent relays that output into a transcript,
+    /// a log, or another model's context, so the claim has to be true of the
+    /// bytes, not just of the code: a field added later that echoes part of a
+    /// key would be caught here and nowhere else.
+    ///
+    /// Each secret is filled with a byte pattern that occurs nowhere in a
+    /// structural answer, and the search is over the serialized response rather
+    /// than any particular field, since the risk is a field nobody thought to
+    /// look at.
+    #[test]
+    fn inspecting_a_private_key_reveals_nothing_secret() {
+        /// Distinctive enough that a match is not a coincidence: 8 bytes, and
+        /// not a length, an exponent, or anything else structural.
+        const SECRET: [u8; 8] = [0xde, 0xad, 0xbe, 0xef, 0xfe, 0xed, 0xfa, 0xce];
+
+        fn secret_of(len: usize) -> Vec<u8> {
+            let mut v: Vec<u8> = SECRET.iter().copied().cycle().take(len).collect();
+            // A leading zero would be stripped as non-minimal; keep it high so
+            // the value survives DER encoding intact.
+            v[0] = 0xde;
+            v
+        }
+
+        fn assert_absent(what: &str, json: &Json, secret: &[u8]) {
+            let rendered = json.to_string();
+
+            // Hex, both cases, since that is how bytes would most likely be
+            // rendered if something did emit them.
+            let hex = ic_core::codec::hex(secret);
+            assert!(
+                !rendered.contains(&hex) && !rendered.contains(&hex.to_uppercase()),
+                "{what}: the response contains the secret as hex:\n{rendered}"
+            );
+
+            // Base64, as a PEM body would carry it.
+            let mut b64 = String::new();
+            const ALPHABET: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            for chunk in secret.chunks(3) {
+                let mut block = [0u8; 3];
+                block[..chunk.len()].copy_from_slice(chunk);
+                let n = u32::from_be_bytes([0, block[0], block[1], block[2]]);
+                for i in 0..4 {
+                    b64.push(ALPHABET[((n >> (18 - 6 * i)) & 0x3f) as usize] as char);
+                }
+            }
+            // Trimmed, because the secret may be embedded mid-stream and so not
+            // aligned to a 3-byte boundary at either end.
+            let core = &b64[4..b64.len() - 4];
+            assert!(
+                !rendered.contains(core),
+                "{what}: the response contains the secret as base64:\n{rendered}"
+            );
+
+            // And raw, in case a byte string were passed through as text.
+            let raw: String = secret.iter().map(|b| *b as char).collect();
+            assert!(
+                !rendered.contains(&raw),
+                "{what}: the response contains the secret verbatim"
+            );
+        }
+
+        let mut examined = 0;
+
+        // Ed25519: the whole seed is secret.
+        let seed = secret_of(32);
+        let mut der = [0u8; 128];
+        let n = ic_pkix::PrivateKeyInfo::Ed25519(&seed)
+            .to_der(&mut der)
+            .unwrap();
+        let json = key_json(&der[..n]).unwrap();
+        assert_eq!(field(&json, "kind"), "private", "the key must have parsed");
+        assert_absent("ed25519", &json, &seed);
+        examined += 1;
+
+        // X25519: likewise.
+        let scalar = secret_of(32);
+        let n = ic_pkix::PrivateKeyInfo::X25519(&scalar)
+            .to_der(&mut der)
+            .unwrap();
+        let json = key_json(&der[..n]).unwrap();
+        assert_eq!(field(&json, "kind"), "private");
+        assert_absent("x25519", &json, &scalar);
+        examined += 1;
+
+        // P-256: the scalar is secret, the point is not.
+        let scalar = secret_of(32);
+        let point = [0x04u8; 65];
+        let mut der = [0u8; 256];
+        let n = ic_pkix::PrivateKeyInfo::Ec {
+            algorithm: ic_pkix::KeyAlgorithm::EcP256,
+            private_key: &scalar,
+            public_key: Some(&point),
+        }
+        .to_der(&mut der)
+        .unwrap();
+        let json = key_json(&der[..n]).unwrap();
+        assert_eq!(field(&json, "kind"), "private");
+        assert_eq!(
+            json.get("hasPublicKey").unwrap().as_bool(),
+            Some(true),
+            "the point was supplied and should be reported present"
+        );
+        assert_absent("ec-p256", &json, &scalar);
+        examined += 1;
+
+        // RSA: every field but the modulus and the public exponent is secret,
+        // and each is checked on its own so one being echoed is not masked by
+        // the others.
+        let modulus = {
+            let mut m = vec![0xa7u8; 256];
+            m[0] = 0xd1;
+            m
+        };
+        let private_exponent = secret_of(256);
+        let prime1 = secret_of(128);
+        let prime2 = {
+            let mut v = secret_of(128);
+            v[1] = 0xad;
+            v
+        };
+        let exponent1 = secret_of(128);
+        let exponent2 = secret_of(128);
+        let coefficient = secret_of(128);
+        let mut der = vec![0u8; 4096];
+        let n = ic_pkix::PrivateKeyInfo::Rsa {
+            modulus: &modulus,
+            public_exponent: 65537,
+            private_exponent: &private_exponent,
+            prime1: &prime1,
+            prime2: &prime2,
+            exponent1: &exponent1,
+            exponent2: &exponent2,
+            coefficient: &coefficient,
+        }
+        .to_der(&mut der)
+        .unwrap();
+        let json = key_json(&der[..n]).unwrap();
+        assert_eq!(field(&json, "kind"), "private");
+        assert_eq!(
+            json.get("bits").unwrap().as_i64(),
+            Some(2048),
+            "the structural answer must still be right"
+        );
+        for (name, secret) in [
+            ("privateExponent", &private_exponent),
+            ("prime1", &prime1),
+            ("prime2", &prime2),
+            ("exponent1", &exponent1),
+            ("exponent2", &exponent2),
+            ("coefficient", &coefficient),
+        ] {
+            assert_absent(&format!("rsa {name}"), &json, secret);
+        }
+        examined += 1;
+
+        // Every private variant but `Unsupported`, which holds an OID and no
+        // key material. A floor, so a variant quietly dropped from this list
+        // does not leave the test passing on fewer.
+        assert_eq!(examined, 4, "not every private key form was inspected");
+    }
+
     /// RSA reports its size, and deliberately reports no single ontology entry:
     /// the key does not choose between PSS and PKCS#1 v1.5.
     #[test]
