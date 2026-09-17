@@ -337,8 +337,7 @@ const FIPS203_REQS: [Requirement; 3] = [
         statement: "Decapsulation of a ciphertext that does not re-encrypt to itself shall \
                     return a pseudorandom shared secret derived from the rejection seed, not \
                     an error.",
-        rationale: "The error would itself be a decryption oracle, which is precisely what the \
-                    Fujisaki-Okamoto transform exists to remove.",
+        rationale: "The error would itself be a decryption oracle, which is precisely what the Fujisaki-Okamoto transform exists to remove. Returning a secret either way is necessary but not sufficient: the two paths must also be indistinguishable by timing, or the oracle returns through the side door. `icrypto timing mlkem-decapsulate` measures exactly that.",
         applies_to: &["ml-kem-768"],
         compliance: Compliance::Met {
             file: "crates/ic-mlkem/src/kem.rs",

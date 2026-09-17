@@ -38,6 +38,20 @@
 use ic_json::Json;
 use std::time::Instant;
 
+/// Buffer length for the two comparison targets.
+///
+/// Deliberately large. An early-exit comparison that bails on the first byte
+/// saves one byte of work out of sixty-four, which is a few nanoseconds against
+/// roughly twenty-five nanoseconds of clock overhead -- a signal so marginal
+/// that the positive control failed to fire on a loaded machine, correctly
+/// invalidating the whole run. At four kilobytes the same early exit saves
+/// thousands of comparisons, so the control is detectable even under load.
+///
+/// The constant-time comparison is measured over the same length, both so the
+/// two are comparable and because more bytes give a non-constant-time
+/// implementation more opportunity to reveal itself.
+const COMPARE_LEN: usize = 4096;
+
 /// How distinguishable two timing distributions are.
 ///
 /// The thresholds follow dudect's convention. They are conventions, not
@@ -58,6 +72,16 @@ pub enum Target {
     P256ScalarMul,
     /// X25519, likewise.
     X25519,
+    /// ML-KEM decapsulation of a valid versus an invalid ciphertext.
+    ///
+    /// The one target here where a difference would be a real
+    /// vulnerability rather than an inconvenience. Implicit rejection
+    /// exists so an attacker cannot tell a good ciphertext from a bad one;
+    /// if timing tells them, the Fujisaki-Okamoto transform's whole
+    /// argument collapses and the decryption oracle is back.
+    MlKemDecapsulate,
+    /// AES block encryption under a fixed versus a random key.
+    AesEncrypt,
 }
 
 impl Target {
@@ -71,6 +95,8 @@ impl Target {
         Target::AeadOpen,
         Target::P256ScalarMul,
         Target::X25519,
+        Target::MlKemDecapsulate,
+        Target::AesEncrypt,
     ];
 
     /// Stable identifier, as the command line accepts it.
@@ -81,6 +107,8 @@ impl Target {
             Self::AeadOpen => "aead-open",
             Self::P256ScalarMul => "p256-scalarmul",
             Self::X25519 => "x25519",
+            Self::MlKemDecapsulate => "mlkem-decapsulate",
+            Self::AesEncrypt => "aes-encrypt",
         }
     }
 
@@ -92,6 +120,10 @@ impl Target {
             }
             Self::AeadOpen => "a correct tag, versus a tag wrong in the first byte",
             Self::P256ScalarMul | Self::X25519 => "a fixed scalar, versus a random scalar",
+            Self::MlKemDecapsulate => {
+                "a ciphertext that decapsulates, versus one that is implicitly rejected"
+            }
+            Self::AesEncrypt => "a fixed key, versus a random key",
         }
     }
 
@@ -233,7 +265,7 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
 
     match target {
         Target::NaiveCompare | Target::CtVerify => {
-            let mut a = [0u8; 64];
+            let mut a = [0u8; COMPARE_LEN];
             rng.fill(&mut a);
             let mut b = a;
             if class == 1 {
@@ -282,6 +314,49 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
             *sink = sink
                 .wrapping_add(out.is_ok() as u64)
                 .wrapping_add(shared[0] as u64);
+            elapsed
+        }
+        Target::MlKemDecapsulate => {
+            // The key pair is fixed; only the ciphertext's validity varies, so
+            // any difference is attributable to the rejection path and not to
+            // key material.
+            let mut ek = [0u8; ic_mlkem::kem::ENCAPS_KEY_LEN];
+            let mut dk = [0u8; ic_mlkem::kem::DECAPS_KEY_LEN];
+            ic_mlkem::MlKem768::keygen_deterministic(
+                &[0x11u8; 32],
+                &[0x22u8; 32],
+                &mut ek,
+                &mut dk,
+            );
+            let mut ct = [0u8; ic_mlkem::kem::CIPHERTEXT_LEN];
+            let mut shared = [0u8; ic_mlkem::kem::SHARED_SECRET_LEN];
+            ic_mlkem::MlKem768::encapsulate_deterministic(&[0x33u8; 32], &ek, &mut ct, &mut shared);
+            if class == 1 {
+                ct[0] ^= 0xff;
+            }
+            let mut out = [0u8; ic_mlkem::kem::SHARED_SECRET_LEN];
+            let start = Instant::now();
+            let res = ic_mlkem::MlKem768::decapsulate(&dk, &ct, &mut out);
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink
+                .wrapping_add(res.is_ok() as u64)
+                .wrapping_add(out[0] as u64);
+            elapsed
+        }
+        Target::AesEncrypt => {
+            use ic_core::traits::BlockCipher;
+            let mut key = [0x07u8; 32];
+            if class == 1 {
+                rng.fill(&mut key);
+            }
+            let cipher = ic_cipher::Aes256::new(&key).unwrap();
+            let mut block = [0x42u8; 16];
+            let start = Instant::now();
+            let res = cipher.encrypt_block(&mut block);
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink
+                .wrapping_add(res.is_ok() as u64)
+                .wrapping_add(block[0] as u64);
             elapsed
         }
         Target::X25519 => {
@@ -371,8 +446,8 @@ pub fn measure(target: Target, iterations: usize) -> Report {
     // A documented public branch is allowed to differ. The expectation is
     // recorded per target so that a difference is judged against what the code
     // is known to do, not against a blanket hope that nothing differs.
-    let as_expected =
-        leaking == target.expected_to_leak() || (leaking && target.known_difference().is_some());
+    let as_expected = leaking == target.expected_to_leak()
+        || (best.abs() >= T_SUSPICIOUS && target.known_difference().is_some());
     Report {
         target,
         t: best,
@@ -399,7 +474,12 @@ pub fn run(target: Option<&str>, iterations: usize) -> Result<Json, String> {
     let items: Vec<Json> = reports
         .iter()
         .map(|r| {
-            let verdict = if r.leaking && r.target.known_difference().is_some() {
+            // A documented public branch is labelled as one at any magnitude.
+            // Reporting it as "suspicious" below the leaking threshold and as
+            // "documented" above it would make the same known behaviour look
+            // like two different findings depending on how loaded the machine
+            // was.
+            let verdict = if r.target.known_difference().is_some() && r.t.abs() >= T_SUSPICIOUS {
                 "differs, for a documented and public reason"
             } else if r.leaking {
                 "leaking"

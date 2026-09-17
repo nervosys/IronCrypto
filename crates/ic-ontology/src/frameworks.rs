@@ -225,13 +225,7 @@ pub static CONTROLS: &[Control] = &[
         compliance: Compliance::Partial {
             file: "crates/ic-cli/src/timing.rs",
             symbol: "the_positive_control_detects_its_own_leak",
-            gap: "A dudect-style leakage detector now ships as `icrypto timing`, so the claim is measurable rather than only argued. It is a tool and not a gating test, because timing measurement needs a quiet machine and a test that fails when a laptop indexes its disk teaches people to ignore failures. It carries a positive control, since a detector that has never detected anything proves nothing. On a developer machine the constant-time comparison, P-256 and X25519 show no evidence of leakage; AEAD open differs, for the documented reason that its failure path zeroizes the buffer, which is a branch on already-public output. What is still missing is measurement on quiet reference hardware and across the other primitives, and a null result on a noisy machine remains weak evidence of absence rather than a proof."
-        },
-        algorithms: &[],
-        standards: &[],
-    },
-    Control {
-        id: "CWE-323",
+            gap: "A dudect-style leakage detector ships as `icrypto timing`, so the claim is measurable rather than only argued. It is a tool and not a gating test, because timing measurement needs a quiet machine and a test that fails when a laptop indexes its disk teaches people to ignore failures. It carries a positive control, since a detector that has never detected anything proves nothing. On a developer machine the constant-time comparison, P-256, X25519, AES and ML-KEM decapsulation all show no evidence of leakage against a control that registers t above 1800; AEAD open differs, for the documented reason that its failure path zeroizes the buffer, which is a branch on already-public output. What is still missing is measurement on quiet reference hardware, coverage of the remaining primitives, and the RSA and ECDSA signing paths. A null result on a noisy machine remains weak evidence of absence rather than a proof."
         framework: Framework::Cwe,
         title: "Reusing a Nonce, Key Pair in Encryption",
         description: "A nonce is reused under the same key, destroying the mode's security guarantees.",
