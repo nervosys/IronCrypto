@@ -89,6 +89,23 @@ if [ -n "$skipped" ]; then
     printf 'no_std: install with `rustup target add%s`\n' "$skipped"
 fi
 
+step "aarch64 crypto extensions"
+# The ARM AES backend is off by default and had never been compiled anywhere.
+# A library crate produces an rlib, so this needs no linker and no Apple SDK --
+# any machine with the target installed can check that the intrinsics at least
+# build.
+#
+# Compiling is not running. What argues these are correct is the software model
+# in crates/ic-cipher/src/aes/armv8_model.rs, which is what caught the
+# decryption key schedule being wrong. CI runs the tests for real on
+# macos-latest, which is arm64.
+if rustup target list --installed 2>/dev/null | grep -qx aarch64-apple-darwin; then
+    cargo build -p ic-cipher --target aarch64-apple-darwin --features aarch64-crypto
+else
+    echo "aarch64-apple-darwin not installed; the ARM backend was NOT compiled"
+    echo "install with: rustup target add aarch64-apple-darwin"
+fi
+
 step "docs"
 # RUSTDOCFLAGS, or a broken intra-doc link is a warning here and an error in CI.
 # Nine of them had accumulated exactly that way: warnings locally, errors in a

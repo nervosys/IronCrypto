@@ -37,6 +37,26 @@ jobs:
       # habit rather than by the build.
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  aarch64-crypto:
+    name: ARM crypto extensions (native)
+    # macos-latest is arm64, so these tests run on hardware that has the
+    # extensions and the runtime detection picks the ARM path. This is the only
+    # place the intrinsics execute rather than merely compile -- they shipped
+    # behind an off-by-default feature precisely because nothing could run them.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Confirm this really is arm64
+        # Otherwise a runner image change could move this to x86 and the job
+        # would keep passing while testing the portable backend instead.
+        run: |
+          arch=$(uname -m)
+          echo "runner architecture: $arch"
+          test "$arch" = "arm64"
+      - run: cargo test -p ic-cipher --features aarch64-crypto
+      - run: cargo test -p iron-crypto --features aarch64-crypto
+
   no-std:
     name: no_std (${{ matrix.target }})
     runs-on: ubuntu-latest

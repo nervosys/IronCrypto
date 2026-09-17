@@ -13,6 +13,10 @@ categories.workspace = true
 [features]
 default = ["std"]
 std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-pkix/std", "ic-mlkem/std", "ic-mldsa/std", "ic-fips/std", "ic-ontology/std"]
+# The ARMv8 AES backend, forwarded so that a caller who depends on this facade
+# can reach it. Without this line the feature exists in ic-cipher and nobody
+# depending on iron-crypto can turn it on, which defeats the point of a facade.
+aarch64-crypto = ["ic-cipher/aarch64-crypto"]
 
 [dependencies]
 ic-core = { workspace = true }
