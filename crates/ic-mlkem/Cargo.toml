@@ -1,0 +1,23 @@
+[package]
+name = "ic-mlkem"
+description = "ML-KEM (FIPS 203) for IronCrypto - experimental, not vector-tested"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std", "ic-hash/std"]
+
+[dependencies]
+ic-core = { workspace = true }
+ic-hash = { workspace = true }
+
+# Only the tests need a DRBG; the library takes any `RandomSource`.
+[dev-dependencies]
+ic-drbg = { workspace = true, features = ["std"] }

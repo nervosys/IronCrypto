@@ -1,8 +1,8 @@
 # Contributor License Agreement (CLA)
 
-## AgenticCrypto — Individual Contributor License Agreement v1.0
+## IronCrypto — Individual Contributor License Agreement v1.0
 
-Thank you for your interest in contributing to **AgenticCrypto** (the "Project"),
+Thank you for your interest in contributing to **IronCrypto** (the "Project"),
 owned and maintained by **NERVOSYS** (the "Organization").
 
 By submitting a contribution (including but not limited to code, documentation,

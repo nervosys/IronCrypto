@@ -3,21 +3,21 @@
 ## Crate graph
 
 ```
-                      ac-core        (errors, traits, ct, zeroize, entropy, codec)
+                      ic-core        (errors, traits, ct, zeroize, entropy, codec)
                          │
         ┌────────┬───────┼───────┬──────────┐
-     ac-hash  ac-cipher  │    ac-ontology   │
+     ic-hash  ic-cipher  │    ic-ontology   │
         │        │       │       (registry, query, select, export)
         ├────────┤       │          │
-      ac-mac ────┤       │          │
+      ic-mac ────┤       │          │
         │        │       │          │
-      ac-kdf  ac-drbg  ac-ec        │
+      ic-kdf  ic-drbg  ic-ec        │
         └────────┴───────┴──────────┤
-                                 ac-fips     (policy, self-tests, service indicator)
+                                 ic-fips     (policy, self-tests, service indicator)
                                     │
-                            agentic-crypto   (facade + prelude)
+                            iron-crypto   (facade + prelude)
                                     │
-                                 ac-cli      (acrypto: CLI + MCP server)
+                                 ic-cli      (icrypto: CLI + MCP server)
 ```
 
 No crate depends on anything outside this graph. There are no build scripts and
@@ -38,14 +38,14 @@ lines and each one is directly tested.
 
 Every crate is `#![no_std]` unless the `std` feature is on, and `std` only ever
 buys `String`-returning conveniences and the OS entropy backend. CI
-cross-compiles `agentic-crypto` to `thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
+cross-compiles `iron-crypto` to `thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
 `riscv32imac-unknown-none-elf`, and `wasm32-unknown-unknown`, because a
 `--no-default-features` build on a host with `std` available does not actually
 prove anything.
 
 ### Nothing panics
 
-Every fallible operation returns `ac_core::Result`. There are no `unwrap`s on
+Every fallible operation returns `ic_core::Result`. There are no `unwrap`s on
 caller-controlled input and no indexing that a caller can drive out of bounds.
 An agent driving this library in a sandbox should get an `Err`, not an abort.
 
@@ -65,7 +65,7 @@ with recovery semantics attached, so a caller can distinguish "retry",
 - **Scalar reduction mod L** is a fixed 512-iteration shift-and-conditional-
   subtract: slower than Barrett, but with no data-dependent control flow and
   short enough to audit by reading.
-- **Tag comparison** goes through `ac_core::ct::verify`, which folds differences
+- **Tag comparison** goes through `ic_core::ct::verify`, which folds differences
   into an accumulator and passes the result through `black_box`.
 
 The cost is throughput, and it is steep: around 1.4 MiB/s for AES-256.
@@ -95,7 +95,7 @@ Accelerating AES alone would have been nearly pointless: the portable GHASH
 costs 128 iterations per block, so it, not the cipher, dominated AES-GCM. That
 is why `PCLMULQDQ` GHASH landed alongside AES-NI rather than after it.
 
-`ac_ontology::runtime::backend()` reports which backend is live, and the
+`ic_ontology::runtime::backend()` reports which backend is live, and the
 selector consults it — so on a machine with AES instructions `recommend` picks
 AES-256-GCM, and on one without it picks ChaCha20-Poly1305. The library tells
 you which case you are in rather than assuming.
@@ -110,9 +110,9 @@ cannot read unauthenticated plaintext.
 
 ### The ontology is a peer, not a doc comment
 
-`ac-ontology` does not depend on the implementation crates, and the
+`ic-ontology` does not depend on the implementation crates, and the
 implementation crates do not depend on it. They are joined by string identifiers
-(`Algorithm::ID`) and held together by tests in `agentic-crypto` and `ac-fips`
+(`Algorithm::ID`) and held together by tests in `iron-crypto` and `ic-fips`
 that assert the join is intact: sizes match, paths resolve, self-tests exist.
 
 That direction of dependency matters. The ontology can describe algorithms that
@@ -121,8 +121,8 @@ honest "not available here" instead of a substitution.
 
 ### One implementation behind two front ends
 
-`ac-cli/src/ops.rs` holds every operation. The CLI and the MCP server are thin
-shells over it, so `acrypto ontology show sha2-256 --json` and the MCP
+`ic-cli/src/ops.rs` holds every operation. The CLI and the MCP server are thin
+shells over it, so `icrypto ontology show sha2-256 --json` and the MCP
 `ontology_show` tool return byte-identical data. A human debugging an agent's
 behaviour can reproduce it from a shell.
 
@@ -130,24 +130,24 @@ behaviour can reproduce it from a shell.
 
 | crate | contents |
 |---|---|
-| `ac-core` | `Error`/`ErrorKind`, the algorithm traits, `ct`, `Zeroizing`, OS entropy, CPU detection, hex/base64 |
-| `ac-hash` | SHA-2 (two shared cores, six variants), SHA-3/SHAKE (one sponge) |
-| `ac-mac` | HMAC generic over `Digest`, CMAC generic over `BlockCipher`, KMAC over cSHAKE |
-| `ac-cipher` | GF(2^8) arithmetic, AES (portable + AES-NI), SP 800-38A modes, GCM (portable + PCLMULQDQ GHASH), ChaCha20, Poly1305 |
-| `ac-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
-| `ac-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |
-| `ac-ec` | GF(2^255-19) field, X25519, Ed25519; a limb-generic Montgomery field, one Jacobian group law, ECDSA and ECDH, instantiated for P-256, P-384 and P-521 |
-| `ac-rsa` | fixed-capacity bignums, Montgomery modular exponentiation, CRT private operations with output verification, PKCS#1 v1.5 and PSS signatures, Miller-Rabin key generation |
-| `ac-json` | an RFC 8259 reader and writer, extracted from the CLI once the test harness needed it too |
-| `ac-vectors` | loads test vectors supplied from outside the repository; test-only |
-| `ac-mldsa` | ML-DSA-65: ring arithmetic and NTT, rounding and hints (FIPS 204 alg. 35-40), bit packing (alg. 16-21), samplers (alg. 29-34), and key generation, signing and verification. Experimental - no vector wired in. `tests/robustness.rs` establishes that verification is total and sound against hostile input, which is a separate question from correctness |
-| `ac-mlkem` | ML-KEM-768: the ring Z_q[X]/(X^256+1), NTT, packing, samplers, K-PKE and the FO transform. Experimental |
-| `ac-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ac-core` and performs no cryptography |
-| `ac-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
-| `ac-ontology::standards` | The standards knowledgebase: the documents the registry cites, and the obligations they impose. Coupled to the code by tests - a met requirement names a file and a symbol, and both must exist |
-| `ac-fips` | state machine, approved-mode policy, CAST table, service indicator |
-| `agentic-crypto` | facade, prelude, and the ontology/implementation agreement tests |
-| `ac-cli` | JSON reader/writer, shared ops, CLI, MCP server |
+| `ic-core` | `Error`/`ErrorKind`, the algorithm traits, `ct`, `Zeroizing`, OS entropy, CPU detection, hex/base64 |
+| `ic-hash` | SHA-2 (two shared cores, six variants), SHA-3/SHAKE (one sponge) |
+| `ic-mac` | HMAC generic over `Digest`, CMAC generic over `BlockCipher`, KMAC over cSHAKE |
+| `ic-cipher` | GF(2^8) arithmetic, AES (portable + AES-NI), SP 800-38A modes, GCM (portable + PCLMULQDQ GHASH), ChaCha20, Poly1305 |
+| `ic-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
+| `ic-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |
+| `ic-ec` | GF(2^255-19) field, X25519, Ed25519; a limb-generic Montgomery field, one Jacobian group law, ECDSA and ECDH, instantiated for P-256, P-384 and P-521 |
+| `ic-rsa` | fixed-capacity bignums, Montgomery modular exponentiation, CRT private operations with output verification, PKCS#1 v1.5 and PSS signatures, Miller-Rabin key generation |
+| `ic-json` | an RFC 8259 reader and writer, extracted from the CLI once the test harness needed it too |
+| `ic-vectors` | loads test vectors supplied from outside the repository; test-only |
+| `ic-mldsa` | ML-DSA-65: ring arithmetic and NTT, rounding and hints (FIPS 204 alg. 35-40), bit packing (alg. 16-21), samplers (alg. 29-34), and key generation, signing and verification. Experimental - no vector wired in. `tests/robustness.rs` establishes that verification is total and sound against hostile input, which is a separate question from correctness |
+| `ic-mlkem` | ML-KEM-768: the ring Z_q[X]/(X^256+1), NTT, packing, samplers, K-PKE and the FO transform. Experimental |
+| `ic-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ic-core` and performs no cryptography |
+| `ic-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
+| `ic-ontology::standards` | The standards knowledgebase: the documents the registry cites, and the obligations they impose. Coupled to the code by tests - a met requirement names a file and a symbol, and both must exist |
+| `ic-fips` | state machine, approved-mode policy, CAST table, service indicator |
+| `iron-crypto` | facade, prelude, and the ontology/implementation agreement tests |
+| `ic-cli` | JSON reader/writer, shared ops, CLI, MCP server |
 
 ## Testing strategy
 

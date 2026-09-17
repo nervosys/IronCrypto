@@ -1,0 +1,18 @@
+[package]
+name = "ic-hash"
+description = "SHA-2, SHA-3, and SHAKE implementations for IronCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std"]
+
+[dependencies]
+ic-core = { workspace = true }

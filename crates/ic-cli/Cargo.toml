@@ -1,0 +1,27 @@
+[package]
+name = "ic-cli"
+description = "icrypto: command-line and MCP-server front end for IronCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "icrypto"
+path = "src/main.rs"
+
+[dependencies]
+iron-crypto = { workspace = true, features = ["std"] }
+ic-ontology = { workspace = true, features = ["std"] }
+ic-core = { workspace = true, features = ["std"] }
+ic-json = { workspace = true }
+ic-hash = { workspace = true, features = ["std"] }
+ic-mac = { workspace = true, features = ["std"] }
+ic-cipher = { workspace = true, features = ["std"] }
+ic-drbg = { workspace = true, features = ["std"] }
+ic-fips = { workspace = true, features = ["std"] }
+ic-pkix = { workspace = true, features = ["std"] }

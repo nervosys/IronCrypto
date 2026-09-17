@@ -1,4 +1,4 @@
-# Contributing to AgenticCrypto
+# Contributing to IronCrypto
 
 Thank you for your interest in contributing! We welcome contributions from the community.
 
@@ -8,7 +8,7 @@ Before your contribution can be accepted, you must agree to our
 [Contributor License Agreement](CLA.md). By submitting a pull request, you
 indicate your agreement to the CLA terms.
 
-**Why a CLA?** AgenticCrypto is dual-licensed under the AGPL v3 (open source)
+**Why a CLA?** IronCrypto is dual-licensed under the AGPL v3 (open source)
 and a commercial license. The CLA ensures that contributions can be distributed
 under both licenses, enabling the project to remain sustainable while staying
 open source.
@@ -43,13 +43,13 @@ and `wasm32-unknown-unknown`, because `--no-default-features` on a host that has
 
 ### Nothing panics on caller input
 
-Return `ac_core::Result`. No `unwrap`, `expect`, or slice indexing that a caller
+Return `ic_core::Result`. No `unwrap`, `expect`, or slice indexing that a caller
 can drive out of bounds.
 
 ### Constant time on secrets
 
 No branches or memory indices driven by key material. Compare tags with
-`ac_core::ct::verify`, never `==`. If you cannot see how to avoid a
+`ic_core::ct::verify`, never `==`. If you cannot see how to avoid a
 secret-dependent branch, open an issue rather than writing the code.
 
 ### Test vectors must be real
@@ -58,7 +58,7 @@ Use vectors from the published standard and cite it in a comment. **If you
 cannot verify a vector against an authoritative source, do not invent one.**
 Write a property test, or transcribe the specification's pseudocode
 independently and compare against it — both patterns already exist in the
-repository (`ac-drbg/src/hmac_drbg.rs`, `ac-kdf/src/pbkdf2.rs`). Record the
+repository (`ic-drbg/src/hmac_drbg.rs`, `ic-kdf/src/pbkdf2.rs`). Record the
 provenance in `docs/FIPS.md`.
 
 An asserted constant that nobody checked is worse than no test: it looks like
@@ -66,11 +66,11 @@ verification and is not.
 
 ### Every algorithm needs three things
 
-1. An entry in `crates/ac-ontology/src/registry.rs`.
-2. A `SelfTest` implementation registered in `crates/ac-fips/src/selftest.rs`
+1. An entry in `crates/ic-ontology/src/registry.rs`.
+2. A `SelfTest` implementation registered in `crates/ic-fips/src/selftest.rs`
    (bump `TEST_COUNT` and recompute the integrity tag).
 3. Parameter bounds in the ontology that match the type's constants — the
-   cross-layer tests in `agentic-crypto` will fail otherwise.
+   cross-layer tests in `iron-crypto` will fail otherwise.
 
 If an algorithm is *not* implemented, it still gets an ontology entry with
 `status: Planned` and a `notes` field explaining what a caller should do
@@ -81,7 +81,7 @@ substituting something inappropriate.
 
 This module is not CMVP validated. Do not say or imply that it is — in code,
 comments, documentation, commit messages, or pull request descriptions.
-`ac_ontology::runtime::has("fips-validated")` returns `false` and must keep
+`ic_ontology::runtime::has("fips-validated")` returns `false` and must keep
 returning `false` until a certificate actually exists.
 
 ## Pull Request Process

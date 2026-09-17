@@ -1,4 +1,4 @@
-# AgenticCrypto
+# IronCrypto
 
 **Agentic-first cryptography in pure Rust, with a machine-readable ontology.**
 
@@ -7,11 +7,11 @@ against ARM Cortex-M, RISC-V, and WebAssembly. Every primitive validated against
 its published test vectors.
 
 ```console
-$ acrypto recommend encrypt-message --fips
+$ icrypto recommend encrypt-message --fips
 use: aes-256-gcm
   AES-256-GCM is the approved authenticated cipher and retains 128-bit strength
   against a quantum adversary.
-  call: ac_cipher::Aes256Gcm
+  call: ic_cipher::Aes256Gcm
 
 must observe:
   [critical] Never reuse a (key, nonce) pair.
@@ -38,10 +38,10 @@ Humans learn those rules from documentation. An autonomous agent cannot read
 your prose and reliably act on it — so it guesses, and every guess is a chance
 to ship something broken.
 
-AgenticCrypto puts the rules in the same place as the code, as **data**:
+IronCrypto puts the rules in the same place as the code, as **data**:
 
 ```console
-$ acrypto ontology show aes-256-gcm --json | jq '.constraints[0]'
+$ icrypto ontology show aes-256-gcm --json | jq '.constraints[0]'
 {
   "consequence": "Reuse leaks the authentication subkey, allowing forgery of arbitrary messages, and XORs the two plaintexts together.",
   "id": "unique-nonce-per-key",
@@ -60,7 +60,7 @@ Ask for something this library cannot do, and it says so — instead of handing
 back the nearest available substitute:
 
 ```console
-$ acrypto recommend agree-key --post-quantum
+$ icrypto recommend agree-key --post-quantum
 no recommendation.
 
 The correct algorithm for this request is ml-kem-768, which is not implemented
@@ -77,11 +77,11 @@ The same discipline applies when an approved option *does* exist — it wins on
 the merits, and the one passed over is named:
 
 ```console
-$ acrypto recommend sign-data --fips
+$ icrypto recommend sign-data --fips
 use: ecdsa-p256-sha256
   ECDSA P-256 is the approved signature scheme. This implementation derives its
   nonce per RFC 6979, so the usual ECDSA nonce-reuse failure cannot occur.
-  call: ac_ec::p256::EcdsaP256Sha256
+  call: ic_ec::p256::EcdsaP256Sha256
 
 considered and rejected:
   ed25519: Not approved for the FIPS approved mode of operation.
@@ -93,22 +93,22 @@ considered and rejected:
 
 ```toml
 [dependencies]
-agentic-crypto = "0.1"
+iron-crypto = "0.1"
 ```
 
 ```console
-$ cargo install --path crates/ac-cli   # the `acrypto` CLI and MCP server
+$ cargo install --path crates/ic-cli   # the `icrypto` CLI and MCP server
 ```
 
 ## Use
 
 ```rust
-use agentic_crypto::prelude::*;
+use iron_crypto::prelude::*;
 
 // Ask what to use, rather than picking a name from memory.
 let choice = recommend(Intent::EncryptMessage, Policy::FIPS_APPROVED).unwrap();
 assert_eq!(choice.primary.id, "aes-256-gcm");
-assert_eq!(choice.primary.rust_path, "ac_cipher::Aes256Gcm");
+assert_eq!(choice.primary.rust_path, "ic_cipher::Aes256Gcm");
 
 // Then use it.
 let cipher = Aes256Gcm::new(&[0x2a; 32])?;
@@ -116,17 +116,17 @@ let mut buf = *b"the payload";
 let mut tag = [0u8; 16];
 cipher.seal_detached(&nonce, b"context", &mut buf, &mut tag)?;
 cipher.open_detached(&nonce, b"context", &mut buf, &tag)?;
-# Ok::<(), ac_core::Error>(())
+# Ok::<(), ic_core::Error>(())
 ```
 
 ## Connect an agent
 
-`acrypto mcp` is a Model Context Protocol server on stdio:
+`icrypto mcp` is a Model Context Protocol server on stdio:
 
 ```jsonc
 {
   "mcpServers": {
-    "agentic-crypto": { "command": "acrypto", "args": ["mcp"] }
+    "iron-crypto": { "command": "icrypto", "args": ["mcp"] }
   }
 }
 ```
@@ -177,7 +177,7 @@ The ontology registers algorithms this library does **not** provide, marked
 - **X.509 certificate parsing** — out of scope. Names, validity, extensions, and
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
-  `SubjectPublicKeyInfo` from any X.509 parser to `ac_pkix::PublicKeyInfo`.
+  `SubjectPublicKeyInfo` from any X.509 parser to `ic_pkix::PublicKeyInfo`.
 - **ML-DSA-65** (FIPS 204) — `experimental`, for the same reason as ML-KEM and
   with the same caveat. Every layer is independently checked: the NTT against
   schoolbook multiplication, the packing against a bit-at-a-time reference, the
@@ -192,14 +192,14 @@ The ontology registers algorithms this library does **not** provide, marked
   excluded from the approved mode and from `recommend`.
 ### The standards knowledgebase
 
-The registry says what algorithms exist. `ac_ontology::standards` says what
+The registry says what algorithms exist. `ic_ontology::standards` says what
 *documents* define them and what those documents require:
 
 ```sh
-acrypto ontology standards                    # every document, with status
-acrypto ontology standard "FIPS 203"          # one document and its obligations
-acrypto ontology requirements --state unmet   # the conformance view
-acrypto ontology requirements --algorithm ml-kem-768
+icrypto ontology standards                    # every document, with status
+icrypto ontology standard "FIPS 203"          # one document and its obligations
+icrypto ontology requirements --state unmet   # the conformance view
+icrypto ontology requirements --algorithm ml-kem-768
 ```
 
 Agents get the same through the `crypto_standard` and `crypto_requirements`
@@ -221,7 +221,7 @@ claims otherwise — see `has("fips-validated")`, which returns `false`.
   only so that a request for them resolves to a refusal with a reason.
 
 ```console
-$ acrypto capabilities
+$ icrypto capabilities
   [x] no-std
   [x] zero-dependencies
   [x] constant-time-symmetric
@@ -247,7 +247,7 @@ format, the field names, and `jq` recipes for converting ACVP output.
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
 is implemented (approved-mode policy, pre-operational self-tests, 60 algorithm
 known-answer tests, a latching error state, service indicators) and what
-validation would still require. `acrypto capabilities` reports
+validation would still require. `icrypto capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.
 
 **Throughput depends on the CPU, and the library tells you which case you are
@@ -266,12 +266,12 @@ slow:
 
 Indicative figures from a Ryzen 9 9900X, and they move by a factor of two
 between runs depending on clocks and load — treat them as orders of magnitude,
-not benchmarks. Reproduce with `cargo test --release -p ac-cipher --test
+not benchmarks. Reproduce with `cargo test --release -p ic-cipher --test
 throughput -- --ignored --nocapture`.
 
 This is why `recommend` asks the CPU rather than assuming: without AES
 instructions it steers you to ChaCha20-Poly1305, and with them it picks
-AES-256-GCM, which is then the faster of the two. `ac_ontology::runtime::backend()`
+AES-256-GCM, which is then the faster of the two. `ic_ontology::runtime::backend()`
 reports which backend is live.
 
 The accelerated paths are not independently trusted — they are differentially
@@ -284,7 +284,7 @@ test vectors; that is not the same as being reviewed by cryptographers. See
 
 ### How this compares
 
-Against aws-lc-rs, BoringSSL, and OpenSSL, AgenticCrypto leads on portability
+Against aws-lc-rs, BoringSSL, and OpenSSL, IronCrypto leads on portability
 (zero dependencies, no C toolchain, genuine bare-metal `no_std`) and on the
 agent-facing ontology, which none of them has. With the NIST curves and RSA
 signatures in place it covers the algorithms most deployments actually reach
@@ -308,12 +308,12 @@ you which case you're in without your having to read this paragraph.
 
 ```console
 $ cargo test --workspace
-$ cargo build -p agentic-crypto --no-default-features --target thumbv7em-none-eabihf
+$ cargo build -p iron-crypto --no-default-features --target thumbv7em-none-eabihf
 ```
 
 ## License
 
-AgenticCrypto is dual-licensed:
+IronCrypto is dual-licensed:
 
 - **[AGPL-3.0-or-later](LICENSE)** for open-source use. Note that the network
   clause has real reach for a crypto library: linking this into a service that

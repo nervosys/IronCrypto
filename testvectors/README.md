@@ -70,6 +70,6 @@ the two on `tcId` first.
 ## Adding a new algorithm
 
 Write the test beside the implementation, load with
-`ac_vectors::VectorFile::load_or_report("name")`, and return early when it gives
+`ic_vectors::VectorFile::load_or_report("name")`, and return early when it gives
 `None`. The skip notice it prints is deliberate: a vector test that silently
 passes with no input reports success for work nobody did.

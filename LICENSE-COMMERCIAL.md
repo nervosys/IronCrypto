@@ -1,30 +1,30 @@
-# Commercial License for AgenticCrypto
+# Commercial License for IronCrypto
 
 Copyright (C) 2024-2026 NERVOSYS. All rights reserved.
 
 ## Dual Licensing
 
-AgenticCrypto is available under two licensing options:
+IronCrypto is available under two licensing options:
 
 ### 1. GNU Affero General Public License v3 (AGPL-3.0-or-later)
 
-The default license for AgenticCrypto is the **GNU Affero General Public License v3**. Under this license:
+The default license for IronCrypto is the **GNU Affero General Public License v3**. Under this license:
 
 - You may freely use, copy, modify, and distribute the software.
 - If you modify the software and make it available over a network (e.g., as a web service), you **must** make the complete source code of your modified version available to users of that service.
 - Any derivative works must also be licensed under the AGPL v3.
 - Full text: [LICENSE](LICENSE)
 
-Note that for a cryptography library the network clause has real reach: linking AgenticCrypto into a service that terminates TLS, signs tokens, or encrypts customer data makes that service a derivative work, and the AGPL's source-disclosure obligation applies to it.
+Note that for a cryptography library the network clause has real reach: linking IronCrypto into a service that terminates TLS, signs tokens, or encrypts customer data makes that service a derivative work, and the AGPL's source-disclosure obligation applies to it.
 
 ### 2. Commercial License
 
 If the AGPL requirements are incompatible with your use case — for example, if you want to:
 
-- Integrate AgenticCrypto into proprietary/closed-source software
+- Integrate IronCrypto into proprietary/closed-source software
 - Embed it in a shipped product, firmware image, or hardware device
-- Distribute AgenticCrypto without disclosing your source code
-- Offer AgenticCrypto as part of a hosted/SaaS service without AGPL obligations
+- Distribute IronCrypto without disclosing your source code
+- Offer IronCrypto as part of a hosted/SaaS service without AGPL obligations
 - Use the software under terms that do not require network-use disclosure
 - Receive dedicated support, warranty, or indemnification
 
@@ -43,7 +43,7 @@ Commercial licenses are available with flexible terms tailored to your needs, in
 
 Neither license is a statement about cryptographic assurance. In particular:
 
-- **No FIPS validation.** AgenticCrypto implements the FIPS 140-3 operational discipline but holds no CMVP certificate. A commercial license does not confer one. See [docs/FIPS.md](docs/FIPS.md).
+- **No FIPS validation.** IronCrypto implements the FIPS 140-3 operational discipline but holds no CMVP certificate. A commercial license does not confer one. See [docs/FIPS.md](docs/FIPS.md).
 - **No security audit.** The code has not been independently reviewed by cryptographers. See [SECURITY.md](SECURITY.md).
 - **Warranty.** The AGPL version is provided without warranty, as stated in the licence. Warranty and indemnification terms, where offered, are set out in the commercial agreement rather than here.
 

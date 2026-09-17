@@ -1,23 +1,23 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/ac-core",
-    "crates/ac-hash",
-    "crates/ac-mac",
-    "crates/ac-kdf",
-    "crates/ac-cipher",
-    "crates/ac-drbg",
-    "crates/ac-ec",
-    "crates/ac-rsa",
-    "crates/ac-pkix",
-    "crates/ac-mlkem",
-    "crates/ac-mldsa",
-    "crates/ac-json",
-    "crates/ac-vectors",
-    "crates/ac-fips",
-    "crates/ac-ontology",
-    "crates/agentic-crypto",
-    "crates/ac-cli",
+    "crates/ic-core",
+    "crates/ic-hash",
+    "crates/ic-mac",
+    "crates/ic-kdf",
+    "crates/ic-cipher",
+    "crates/ic-drbg",
+    "crates/ic-ec",
+    "crates/ic-rsa",
+    "crates/ic-pkix",
+    "crates/ic-mlkem",
+    "crates/ic-mldsa",
+    "crates/ic-json",
+    "crates/ic-vectors",
+    "crates/ic-fips",
+    "crates/ic-ontology",
+    "crates/iron-crypto",
+    "crates/ic-cli",
 ]
 
 [workspace.package]
@@ -25,28 +25,28 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/nervosys/AgenticCrypto"
+repository = "https://github.com/nervosys/IronCrypto"
 authors = ["Nervosys"]
 keywords = ["cryptography", "fips", "no-std", "agentic", "post-quantum"]
 categories = ["cryptography", "no-std"]
 
 [workspace.dependencies]
-ac-core = { path = "crates/ac-core", version = "0.1.0", default-features = false }
-ac-hash = { path = "crates/ac-hash", version = "0.1.0", default-features = false }
-ac-mac = { path = "crates/ac-mac", version = "0.1.0", default-features = false }
-ac-kdf = { path = "crates/ac-kdf", version = "0.1.0", default-features = false }
-ac-cipher = { path = "crates/ac-cipher", version = "0.1.0", default-features = false }
-ac-drbg = { path = "crates/ac-drbg", version = "0.1.0", default-features = false }
-ac-ec = { path = "crates/ac-ec", version = "0.1.0", default-features = false }
-ac-rsa = { path = "crates/ac-rsa", version = "0.1.0", default-features = false }
-ac-pkix = { path = "crates/ac-pkix", version = "0.1.0", default-features = false }
-ac-mlkem = { path = "crates/ac-mlkem", version = "0.1.0", default-features = false }
-ac-mldsa = { path = "crates/ac-mldsa", version = "0.1.0", default-features = false }
-ac-json = { path = "crates/ac-json", version = "0.1.0" }
-ac-vectors = { path = "crates/ac-vectors", version = "0.1.0" }
-ac-fips = { path = "crates/ac-fips", version = "0.1.0", default-features = false }
-ac-ontology = { path = "crates/ac-ontology", version = "0.1.0", default-features = false }
-agentic-crypto = { path = "crates/agentic-crypto", version = "0.1.0", default-features = false }
+ic-core = { path = "crates/ic-core", version = "0.1.0", default-features = false }
+ic-hash = { path = "crates/ic-hash", version = "0.1.0", default-features = false }
+ic-mac = { path = "crates/ic-mac", version = "0.1.0", default-features = false }
+ic-kdf = { path = "crates/ic-kdf", version = "0.1.0", default-features = false }
+ic-cipher = { path = "crates/ic-cipher", version = "0.1.0", default-features = false }
+ic-drbg = { path = "crates/ic-drbg", version = "0.1.0", default-features = false }
+ic-ec = { path = "crates/ic-ec", version = "0.1.0", default-features = false }
+ic-rsa = { path = "crates/ic-rsa", version = "0.1.0", default-features = false }
+ic-pkix = { path = "crates/ic-pkix", version = "0.1.0", default-features = false }
+ic-mlkem = { path = "crates/ic-mlkem", version = "0.1.0", default-features = false }
+ic-mldsa = { path = "crates/ic-mldsa", version = "0.1.0", default-features = false }
+ic-json = { path = "crates/ic-json", version = "0.1.0" }
+ic-vectors = { path = "crates/ic-vectors", version = "0.1.0" }
+ic-fips = { path = "crates/ic-fips", version = "0.1.0", default-features = false }
+ic-ontology = { path = "crates/ic-ontology", version = "0.1.0", default-features = false }
+iron-crypto = { path = "crates/iron-crypto", version = "0.1.0", default-features = false }
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,35 @@
+[package]
+name = "iron-crypto"
+description = "Agentic-first, FIPS-oriented, pure-Rust cryptography with a machine-readable ontology"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-pkix/std", "ic-mlkem/std", "ic-mldsa/std", "ic-fips/std", "ic-ontology/std"]
+
+[dependencies]
+ic-core = { workspace = true }
+ic-hash = { workspace = true }
+ic-mac = { workspace = true }
+ic-kdf = { workspace = true }
+ic-cipher = { workspace = true }
+ic-drbg = { workspace = true }
+ic-ec = { workspace = true }
+ic-rsa = { workspace = true }
+ic-pkix = { workspace = true }
+ic-mlkem = { workspace = true }
+ic-mldsa = { workspace = true }
+ic-fips = { workspace = true }
+ic-ontology = { workspace = true }
+
+# The vector harness is test-only: it reads files that are not in the
+# repository, and the library must not depend on their presence.
+[dev-dependencies]
+ic-vectors = { workspace = true }

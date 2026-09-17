@@ -1,0 +1,21 @@
+[package]
+name = "ic-drbg"
+description = "SP 800-90A HMAC_DRBG and CTR_DRBG for IronCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-cipher/std"]
+
+[dependencies]
+ic-core = { workspace = true }
+ic-hash = { workspace = true }
+ic-mac = { workspace = true }
+ic-cipher = { workspace = true }

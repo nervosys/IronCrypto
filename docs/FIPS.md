@@ -2,7 +2,7 @@
 
 ## The headline
 
-**AgenticCrypto is not a FIPS-validated cryptographic module.** It has not been
+**IronCrypto is not a FIPS-validated cryptographic module.** It has not been
 submitted to the CMVP, holds no certificate number, and appears on no vendor
 list. Nothing in this document should be read as a validation claim.
 
@@ -14,20 +14,20 @@ rather than a rewrite.
 The runtime says this too:
 
 ```console
-$ acrypto capabilities --json | jq -r '.validationStatement'
-AgenticCrypto implements the FIPS 140-3 operational discipline (approved-mode
+$ icrypto capabilities --json | jq -r '.validationStatement'
+IronCrypto implements the FIPS 140-3 operational discipline (approved-mode
 policy, pre-operational and conditional self-tests, a latching error state, and
 service indicators). It has NOT been submitted to or validated by the CMVP, and
 holds no certificate number. Do not represent it as FIPS validated.
 ```
 
-`ac_ontology::runtime::has("fips-validated")` returns `false`.
+`ic_ontology::runtime::has("fips-validated")` returns `false`.
 
 ## What is implemented
 
 ### Module boundary and state machine
 
-`ac-fips` defines the boundary. The module moves through:
+`ic-fips` defines the boundary. The module moves through:
 
 ```
 Uninitialized ──initialize()──> SelfTestInProgress ──all pass──> Operational(Unrestricted)
@@ -46,15 +46,15 @@ operator decision, never a default a caller might not have noticed.
 
 ### Approved mode of operation
 
-In approved mode, `ac_fips::check(id)` refuses any algorithm the ontology does
+In approved mode, `ic_fips::check(id)` refuses any algorithm the ontology does
 not mark as permitted. The policy is data, not a hard-coded list — it reads
 `FipsStatus::permitted_in_approved_mode()` straight from the registry, so the
 policy and the documentation cannot drift apart.
 
 ```rust
-ac_fips::set_mode(Mode::Approved)?;
-ac_fips::check("aes-256-gcm")?;            // ServiceIndicator::Approved
-ac_fips::check("chacha20-poly1305")        // Err(NotApprovedInFipsMode)
+ic_fips::set_mode(Mode::Approved)?;
+ic_fips::check("aes-256-gcm")?;            // ServiceIndicator::Approved
+ic_fips::check("chacha20-poly1305")        // Err(NotApprovedInFipsMode)
 ```
 
 ### Service indicator
@@ -64,7 +64,7 @@ was an approved one. `check` returns that indicator, and `guarded` pairs it with
 the operation:
 
 ```rust
-let (digest, indicator) = ac_fips::guarded("sha2-256", || Sha256::digest(data))?;
+let (digest, indicator) = ic_fips::guarded("sha2-256", || Sha256::digest(data))?;
 assert_eq!(indicator, ServiceIndicator::Approved);
 ```
 
@@ -77,7 +77,7 @@ a mode), `NotApproved`.
 individually addressable:
 
 ```console
-$ acrypto selftest
+$ icrypto selftest
   PASS sha2-224
   PASS sha2-256
   ...
@@ -147,7 +147,7 @@ response files is a pre-validation task (below).
 
 ### Integrity test
 
-`ac_fips::selftest::integrity_check()` computes an HMAC over the self-test
+`ic_fips::selftest::integrity_check()` computes an HMAC over the self-test
 table. This detects a corrupted or partially linked constant pool — flip a byte
 in any embedded vector and it fails.
 
@@ -184,14 +184,14 @@ amount of code changes them.
 
 If you have a genuine FIPS obligation:
 
-- **Validation, not coverage, is the blocker now.** AgenticCrypto implements
+- **Validation, not coverage, is the blocker now.** IronCrypto implements
   approved algorithms across the board — AES-GCM, HMAC, CMAC, HKDF, PBKDF2,
   SP 800-108, the DRBGs, and ECDSA and ECDH over P-256 and P-384 — correctly against their
   published vectors. But *correct* and *validated* are different words, and only
   the second satisfies an auditor. Where a certificate is the actual
   requirement, use a validated module.
 - Where you need RSA encryption, this module has nothing to offer, and
-  `acrypto recommend` will say so rather than substituting a smaller curve.
+  `icrypto recommend` will say so rather than substituting a smaller curve.
 - Use the approved-mode policy engine and the ontology to keep your own code
   honest regardless of which module does the arithmetic. The registry is useful
   even when the implementation behind it is somebody else's.

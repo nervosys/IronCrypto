@@ -52,7 +52,7 @@ jobs:
           targets: ${{ matrix.target }}
       # A --no-default-features build on a host with std proves nothing; these
       # targets have no std at all, so they are the real check.
-      - run: cargo build -p agentic-crypto --no-default-features --target ${{ matrix.target }}
+      - run: cargo build -p iron-crypto --no-default-features --target ${{ matrix.target }}
 
   dependencies:
     name: zero dependencies
@@ -66,7 +66,7 @@ jobs:
         run: |
           external=$(cargo tree --workspace --prefix none --no-dedupe \
             | awk '{print $1}' | sort -u \
-            | grep -vE '^(ac-(core|hash|mac|kdf|cipher|drbg|ec|fips|ontology|cli)|agentic-crypto)$' \
+            | grep -vE '^(ac-(core|hash|mac|kdf|cipher|drbg|ec|fips|ontology|cli)|iron-crypto)$' \
             | grep -v '^$' || true)
           if [ -n "$external" ]; then
             echo "Third-party dependencies introduced:"

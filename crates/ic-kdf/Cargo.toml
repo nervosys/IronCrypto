@@ -1,0 +1,20 @@
+[package]
+name = "ic-kdf"
+description = "HKDF, PBKDF2, and SP 800-108 key derivation for IronCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std"]
+
+[dependencies]
+ic-core = { workspace = true }
+ic-hash = { workspace = true }
+ic-mac = { workspace = true }

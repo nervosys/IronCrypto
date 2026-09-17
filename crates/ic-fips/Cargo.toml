@@ -1,0 +1,26 @@
+[package]
+name = "ic-fips"
+description = "FIPS 140-3 module policy, self-tests, and service indicators for IronCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-ontology/std"]
+
+[dependencies]
+ic-core = { workspace = true }
+ic-hash = { workspace = true }
+ic-mac = { workspace = true }
+ic-kdf = { workspace = true }
+ic-cipher = { workspace = true }
+ic-drbg = { workspace = true }
+ic-ec = { workspace = true }
+ic-rsa = { workspace = true }
+ic-ontology = { workspace = true }
