@@ -370,8 +370,9 @@ const FIPS204_REQS: [Requirement; 3] = [
         statement: "An implementation may offer HashML-DSA, which signs a digest of the message rather than the message itself.",
         rationale: "The two variants use different domain separator bytes, so they are not interchangeable. A caller that needs the pre-hash variant must not approximate it by handing a digest to pure ML-DSA: the result verifies against nothing.",
         applies_to: &["ml-dsa-65"],
-        compliance: Compliance::Unmet {
-            why: "Only the pure variant is implemented. This is recorded rather than omitted because the obvious workaround is wrong, and a caller who assumes the variants differ only in where the hashing happens will produce signatures no conforming verifier accepts.",
+        compliance: Compliance::Met {
+            file: "crates/ac-mldsa/src/sign.rs",
+            symbol: "the_pure_and_prehash_variants_are_separated",
         },
     },
     Requirement {

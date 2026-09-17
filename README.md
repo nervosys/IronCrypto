@@ -187,7 +187,8 @@ The ontology registers algorithms this library does **not** provide, marked
   by signing and verifying — which is not nothing, since signing computes
   `A*y` and verification computes `A*z - c*t1*2^d` and the two must meet through
   the hints, but it cannot catch a convention misread consistently. Only the 65
-  parameter set exists. ML-KEM-768 is `experimental` on the same terms. Both are
+  parameter set exists, in both the pure and pre-hash variants. ML-KEM-768 is
+  `experimental` on the same terms. Both are
   excluded from the approved mode and from `recommend`.
 ### The standards knowledgebase
 

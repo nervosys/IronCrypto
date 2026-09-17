@@ -183,8 +183,108 @@ fn w1_encode(w1: &[Poly; K], out: &mut [u8]) {
 ///
 /// The two leading bytes are what keep a pure signature from colliding with a
 /// pre-hashed one over the same message, so they are not optional framing.
-fn message_prefix(ctx: &[u8]) -> ([u8; 2], bool) {
-    ([0u8, ctx.len() as u8], ctx.len() <= 255)
+fn message_prefix(domain: u8, ctx: &[u8]) -> ([u8; 2], bool) {
+    ([domain, ctx.len() as u8], ctx.len() <= 255)
+}
+
+/// The pieces of `M'`, assembled without allocating.
+///
+/// `mu` is hashed over `tr`, the two framing bytes, the context and then
+/// whatever the variant contributes. There is no `Vec` here, so the parts are
+/// gathered into a fixed array; four is the most any variant needs, and the
+/// assertion says so rather than silently truncating a fifth.
+struct Framed<'a> {
+    parts: [&'a [u8]; 5],
+    len: usize,
+}
+
+impl<'a> Framed<'a> {
+    fn new(tr: &'a [u8], prefix: &'a [u8], ctx: &'a [u8], rest: &[&'a [u8]]) -> Self {
+        assert!(rest.len() <= 2, "M' has at most two trailing parts");
+        let mut parts: [&[u8]; 5] = [&[]; 5];
+        parts[0] = tr;
+        parts[1] = prefix;
+        parts[2] = ctx;
+        for (slot, part) in parts[3..].iter_mut().zip(rest.iter()) {
+            *slot = part;
+        }
+        Framed {
+            parts,
+            len: 3 + rest.len(),
+        }
+    }
+
+    fn as_slice(&self) -> &[&'a [u8]] {
+        &self.parts[..self.len]
+    }
+}
+
+/// The domain byte for the pure variant, which signs the message itself.
+const DOMAIN_PURE: u8 = 0;
+
+/// The domain byte for the pre-hash variant.
+const DOMAIN_PREHASH: u8 = 1;
+
+/// Approved pre-hash functions for HashML-DSA.
+///
+/// The digest alone is not what gets signed: FIPS 204 places the DER encoding
+/// of the hash function's object identifier in front of it. That is what binds
+/// a signature to *which* hash produced the digest, and without it a signature
+/// over SHA-256(m) would also verify as one over a SHA-512 digest that happened
+/// to collide with it in its first 32 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreHash {
+    /// SHA-256, OID 2.16.840.1.101.3.4.2.1.
+    Sha256,
+    /// SHA-384, OID 2.16.840.1.101.3.4.2.2.
+    Sha384,
+    /// SHA-512, OID 2.16.840.1.101.3.4.2.3.
+    Sha512,
+}
+
+/// The longest digest any [`PreHash`] produces.
+const MAX_DIGEST: usize = 64;
+
+impl PreHash {
+    /// The DER encoding of the hash function's object identifier.
+    ///
+    /// Tag and length included, which is what FIPS 204 concatenates. The
+    /// trailing byte is the only difference between the three, and the tests
+    /// rebuild these from the OID arcs rather than trusting the transcription.
+    pub const fn oid_der(self) -> &'static [u8] {
+        match self {
+            Self::Sha256 => &[
+                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+            ],
+            Self::Sha384 => &[
+                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02,
+            ],
+            Self::Sha512 => &[
+                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03,
+            ],
+        }
+    }
+
+    /// Digest length in bytes.
+    pub const fn digest_len(self) -> usize {
+        match self {
+            Self::Sha256 => 32,
+            Self::Sha384 => 48,
+            Self::Sha512 => 64,
+        }
+    }
+
+    /// Hash `message`, returning the digest and its length.
+    fn digest(self, message: &[u8]) -> ([u8; MAX_DIGEST], usize) {
+        use ac_core::traits::Digest;
+        let mut out = [0u8; MAX_DIGEST];
+        match self {
+            Self::Sha256 => out[..32].copy_from_slice(ac_hash::Sha256::digest(message).as_ref()),
+            Self::Sha384 => out[..48].copy_from_slice(ac_hash::Sha384::digest(message).as_ref()),
+            Self::Sha512 => out[..64].copy_from_slice(ac_hash::Sha512::digest(message).as_ref()),
+        }
+        (out, self.digest_len())
+    }
 }
 
 /// Generate a key pair from a 32-byte seed.
@@ -331,14 +431,60 @@ pub fn sign(
     rnd: &[u8; 32],
     sig: &mut [u8; SIGNATURE_LEN],
 ) -> bool {
-    let (prefix, ok) = message_prefix(ctx);
+    sign_framed(sk, DOMAIN_PURE, &[message], ctx, rnd, sig)
+}
+
+/// Sign under HashML-DSA, which signs a digest rather than the message.
+///
+/// # This is not interchangeable with [`sign`]
+///
+/// The two variants differ in their domain separator byte, so a HashML-DSA
+/// signature never verifies as a pure one and the reverse is also false. That
+/// is deliberate, and it is why handing a digest to [`sign`] is not a
+/// substitute for this function: it produces something no conforming verifier
+/// accepts. The tests assert both directions of that separation.
+pub fn sign_prehash(
+    sk: &[u8; SECRET_KEY_LEN],
+    message: &[u8],
+    ctx: &[u8],
+    ph: PreHash,
+    rnd: &[u8; 32],
+    sig: &mut [u8; SIGNATURE_LEN],
+) -> bool {
+    let (digest, len) = ph.digest(message);
+    sign_framed(
+        sk,
+        DOMAIN_PREHASH,
+        &[ph.oid_der(), &digest[..len]],
+        ctx,
+        rnd,
+        sig,
+    )
+}
+
+/// The signing core, shared by both variants.
+///
+/// `parts` is what follows the context in `M'`: the message for the pure
+/// variant, the hash OID and digest for the pre-hash one. Threading it through
+/// rather than duplicating the loop means the two variants cannot drift in
+/// anything except the framing, which is the only thing that should differ.
+fn sign_framed(
+    sk: &[u8; SECRET_KEY_LEN],
+    domain: u8,
+    parts: &[&[u8]],
+    ctx: &[u8],
+    rnd: &[u8; 32],
+    sig: &mut [u8; SIGNATURE_LEN],
+) -> bool {
+    let (prefix, ok) = message_prefix(domain, ctx);
     if !ok {
         return false;
     }
     let k = sk_decode(sk);
 
     let mut mu = [0u8; 64];
-    h(&[&k.tr, &prefix, ctx, message], &mut mu);
+    let framed = Framed::new(&k.tr, &prefix, ctx, parts);
+    h(framed.as_slice(), &mut mu);
 
     let mut rho_prime = [0u8; 64];
     h(&[&k.key, rnd, &mu], &mut rho_prime);
@@ -456,7 +602,42 @@ pub fn verify(
     ctx: &[u8],
     sig: &[u8; SIGNATURE_LEN],
 ) -> bool {
-    let (prefix, ok) = message_prefix(ctx);
+    verify_framed(pk, DOMAIN_PURE, &[message], ctx, sig)
+}
+
+/// Verify a HashML-DSA signature.
+///
+/// The pre-hash function is an input rather than something recovered from the
+/// signature, because the signature does not carry it. A verifier must already
+/// know which hash the signer used; the OID inside `M'` then binds the
+/// signature to that choice, so presenting the wrong one fails rather than
+/// silently accepting.
+pub fn verify_prehash(
+    pk: &[u8; PUBLIC_KEY_LEN],
+    message: &[u8],
+    ctx: &[u8],
+    ph: PreHash,
+    sig: &[u8; SIGNATURE_LEN],
+) -> bool {
+    let (digest, len) = ph.digest(message);
+    verify_framed(
+        pk,
+        DOMAIN_PREHASH,
+        &[ph.oid_der(), &digest[..len]],
+        ctx,
+        sig,
+    )
+}
+
+/// The verification core, shared by both variants.
+fn verify_framed(
+    pk: &[u8; PUBLIC_KEY_LEN],
+    domain: u8,
+    parts: &[&[u8]],
+    ctx: &[u8],
+    sig: &[u8; SIGNATURE_LEN],
+) -> bool {
+    let (prefix, ok) = message_prefix(domain, ctx);
     if !ok {
         return false;
     }
@@ -494,7 +675,8 @@ pub fn verify(
     let mut tr = [0u8; 64];
     h(&[&pk[..]], &mut tr);
     let mut mu = [0u8; 64];
-    h(&[&tr, &prefix, ctx, message], &mut mu);
+    let framed = Framed::new(&tr, &prefix, ctx, parts);
+    h(framed.as_slice(), &mut mu);
 
     let mut c = sample_in_ball(&c_tilde, TAU);
     c.ntt();
@@ -563,6 +745,181 @@ mod tests {
             "keygen consistency test failed"
         );
         (pk, sk)
+    }
+
+    /// HashML-DSA round-trips for every approved pre-hash.
+    #[test]
+    fn prehash_signatures_verify() {
+        let (pk, sk) = key(20);
+        for ph in [PreHash::Sha256, PreHash::Sha384, PreHash::Sha512] {
+            for message in [&b""[..], &b"short"[..], &[0xa5u8; 5000][..]] {
+                for ctx in [&b""[..], &b"ctx"[..]] {
+                    let mut sig = [0u8; SIGNATURE_LEN];
+                    assert!(
+                        sign_prehash(&sk, message, ctx, ph, &[0u8; 32], &mut sig),
+                        "signing failed for {ph:?}"
+                    );
+                    assert!(
+                        verify_prehash(&pk, message, ctx, ph, &sig),
+                        "verification failed for {ph:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The two variants must not be interchangeable, in either direction.
+    ///
+    /// This is the property the whole pre-hash variant turns on. The domain
+    /// separator byte is 0 for pure and 1 for pre-hash, so a signature made one
+    /// way must be rejected the other way -- otherwise a caller could "support"
+    /// HashML-DSA by hashing the message themselves and calling `sign`, and the
+    /// result would interoperate with nothing while appearing to work in any
+    /// test that only signs and verifies with the same code.
+    #[test]
+    fn the_pure_and_prehash_variants_are_separated() {
+        let (pk, sk) = key(21);
+        let message = b"the message";
+        let ph = PreHash::Sha512;
+
+        let mut pure_sig = [0u8; SIGNATURE_LEN];
+        assert!(sign_deterministic(&sk, message, b"", &mut pure_sig));
+        let mut ph_sig = [0u8; SIGNATURE_LEN];
+        assert!(sign_prehash(&sk, message, b"", ph, &[0u8; 32], &mut ph_sig));
+
+        assert_ne!(
+            pure_sig.to_vec(),
+            ph_sig.to_vec(),
+            "the two variants must not produce the same signature"
+        );
+        assert!(
+            !verify_prehash(&pk, message, b"", ph, &pure_sig),
+            "a pure signature was accepted as a pre-hash one"
+        );
+        assert!(
+            !verify(&pk, message, b"", &ph_sig),
+            "a pre-hash signature was accepted as a pure one"
+        );
+
+        // And the workaround the documentation warns against: hashing the
+        // message yourself and calling the pure variant produces something the
+        // pre-hash verifier rejects.
+        use ac_core::traits::Digest;
+        let digest = ac_hash::Sha512::digest(message);
+        let mut hand_rolled = [0u8; SIGNATURE_LEN];
+        assert!(sign_deterministic(
+            &sk,
+            digest.as_ref(),
+            b"",
+            &mut hand_rolled
+        ));
+        assert!(
+            !verify_prehash(&pk, message, b"", ph, &hand_rolled),
+            "hashing by hand and signing pure must not pass as HashML-DSA"
+        );
+    }
+
+    /// The hash choice is bound into the signature by its OID.
+    ///
+    /// Without the OID in `M'`, a verifier told the wrong hash would still have
+    /// to be wrong about the digest to fail. With it, presenting the wrong hash
+    /// fails on the framing alone.
+    #[test]
+    fn the_prehash_choice_is_bound_to_the_signature() {
+        let (pk, sk) = key(22);
+        let message = b"bind the hash";
+
+        let mut sig = [0u8; SIGNATURE_LEN];
+        assert!(sign_prehash(
+            &sk,
+            message,
+            b"",
+            PreHash::Sha256,
+            &[0u8; 32],
+            &mut sig
+        ));
+        assert!(verify_prehash(&pk, message, b"", PreHash::Sha256, &sig));
+
+        for wrong in [PreHash::Sha384, PreHash::Sha512] {
+            assert!(
+                !verify_prehash(&pk, message, b"", wrong, &sig),
+                "a signature made with SHA-256 verified under {wrong:?}"
+            );
+        }
+    }
+
+    /// The OID bytes, rebuilt from their arcs rather than trusted.
+    ///
+    /// These are transcribed constants in a file that otherwise derives its
+    /// numbers, so the test encodes the object identifiers itself and compares.
+    /// A single wrong trailing byte would make every signature interoperate
+    /// with nothing, and would be invisible to a round-trip test.
+    #[test]
+    fn the_hash_oids_match_their_arcs() {
+        /// Minimal DER encoder for an OID, from its arcs.
+        fn der(arcs: &[u32]) -> Vec<u8> {
+            let mut content = vec![(arcs[0] * 40 + arcs[1]) as u8];
+            for &arc in &arcs[2..] {
+                let mut stack = Vec::new();
+                let mut v = arc;
+                loop {
+                    stack.push((v & 0x7f) as u8);
+                    v >>= 7;
+                    if v == 0 {
+                        break;
+                    }
+                }
+                for (i, byte) in stack.iter().rev().enumerate() {
+                    let last = i + 1 == stack.len();
+                    content.push(if last { *byte } else { *byte | 0x80 });
+                }
+            }
+            let mut out = vec![0x06, content.len() as u8];
+            out.extend_from_slice(&content);
+            out
+        }
+
+        // Sanity: the encoder reproduces a well-known OID.
+        assert_eq!(
+            der(&[1, 2, 840, 113549]),
+            vec![0x06, 0x06, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d],
+            "the test's own OID encoder is wrong"
+        );
+
+        assert_eq!(
+            PreHash::Sha256.oid_der().to_vec(),
+            der(&[2, 16, 840, 1, 101, 3, 4, 2, 1])
+        );
+        assert_eq!(
+            PreHash::Sha384.oid_der().to_vec(),
+            der(&[2, 16, 840, 1, 101, 3, 4, 2, 2])
+        );
+        assert_eq!(
+            PreHash::Sha512.oid_der().to_vec(),
+            der(&[2, 16, 840, 1, 101, 3, 4, 2, 3])
+        );
+
+        // And the digest lengths, which the framing depends on.
+        assert_eq!(PreHash::Sha256.digest_len(), 32);
+        assert_eq!(PreHash::Sha384.digest_len(), 48);
+        assert_eq!(PreHash::Sha512.digest_len(), 64);
+    }
+
+    /// Pre-hash signing honours the same context rules as the pure variant.
+    #[test]
+    fn prehash_binds_the_context_and_refuses_an_overlong_one() {
+        let (pk, sk) = key(23);
+        let ph = PreHash::Sha256;
+        let mut sig = [0u8; SIGNATURE_LEN];
+        assert!(sign_prehash(&sk, b"m", b"one", ph, &[0u8; 32], &mut sig));
+        assert!(verify_prehash(&pk, b"m", b"one", ph, &sig));
+        assert!(!verify_prehash(&pk, b"m", b"two", ph, &sig));
+        assert!(!verify_prehash(&pk, b"m", b"", ph, &sig));
+
+        let long = [0u8; 256];
+        let mut unused = [0u8; SIGNATURE_LEN];
+        assert!(!sign_prehash(&sk, b"m", &long, ph, &[0u8; 32], &mut unused));
+        assert!(!verify_prehash(&pk, b"m", &long, ph, &sig));
     }
 
     /// The sizes FIPS 204 publishes for ML-DSA-65.
