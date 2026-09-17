@@ -577,10 +577,10 @@ pub fn run(target: Option<&str>, iterations: usize) -> Result<Json, String> {
                 ("t", Json::Number((r.t * 100.0).round() / 100.0)),
                 ("samples", Json::Number(r.samples as f64)),
                 ("verdict", Json::str(verdict)),
-                ("expected_to_leak", Json::Bool(r.target.expected_to_leak())),
-                ("as_expected", Json::Bool(r.as_expected)),
+                ("expectedToLeak", Json::Bool(r.target.expected_to_leak())),
+                ("asExpected", Json::Bool(r.as_expected)),
                 (
-                    "known_difference",
+                    "knownDifference",
                     match r.target.known_difference() {
                         Some(why) => Json::str(why),
                         None => Json::Null,
@@ -591,7 +591,7 @@ pub fn run(target: Option<&str>, iterations: usize) -> Result<Json, String> {
         .collect();
 
     Ok(Json::object([
-        ("control_detected_leakage", Json::Bool(control_ok)),
+        ("controlDetectedLeakage", Json::Bool(control_ok)),
         (
             "interpretation",
             Json::str(if control.is_none() {
@@ -752,7 +752,7 @@ mod tests {
         // Run without the control, the interpretation must say so rather than
         // presenting a null result as reassurance.
         assert_eq!(
-            json.get("control_detected_leakage").unwrap().as_bool(),
+            json.get("controlDetectedLeakage").unwrap().as_bool(),
             Some(false)
         );
         let text = json.get("interpretation").unwrap().as_str().unwrap();

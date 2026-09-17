@@ -186,7 +186,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             for r in json.get("results").and_then(|v| v.as_array()).unwrap() {
                 let g = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("");
                 let t = r.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let flag = if r.get("as_expected").and_then(|v| v.as_bool()) == Some(true) {
+                let flag = if r.get("asExpected").and_then(|v| v.as_bool()) == Some(true) {
                     " "
                 } else {
                     "!"
@@ -291,7 +291,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     num("met"),
                     num("partial"),
                     num("unmet"),
-                    num("not_applicable")
+                    num("notApplicable")
                 ));
                 // The unmet list is printed rather than left to a filter. A
                 // compliance summary quoted without its gaps is worse than none.
@@ -301,7 +301,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                         out.push_str(&format!("\nNOT SATISFIED: {}", ids.join(", ")));
                     }
                 }
-                if json.get("fips_validated").and_then(|v| v.as_bool()) != Some(true) {
+                if json.get("fipsValidated").and_then(|v| v.as_bool()) != Some(true) {
                     out.push_str(
                         "\nIronCrypto is NOT FIPS-validated. Practices requiring validated \
                          cryptography are not satisfied.",
@@ -385,7 +385,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     t.get("met").and_then(|v| v.as_f64()).unwrap_or(0.0),
                     t.get("partial").and_then(|v| v.as_f64()).unwrap_or(0.0),
                     t.get("unmet").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                    t.get("not_applicable")
+                    t.get("notApplicable")
                         .and_then(|v| v.as_f64())
                         .unwrap_or(0.0),
                 ));
@@ -510,19 +510,19 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                 let mut out = String::new();
                 out.push_str(&format!("{} {} key\n", get("algorithm"), get("kind")));
                 out.push_str(&format!("  container:  {}\n", get("container")));
-                if let Some(label) = json.get("pem_label").and_then(|v| v.as_str()) {
+                if let Some(label) = json.get("pemLabel").and_then(|v| v.as_str()) {
                     out.push_str(&format!("  pem label:  {label}\n"));
                 }
                 if let Some(bits) = json.get("bits").and_then(|v| v.as_i64()) {
                     out.push_str(&format!("  size:       {bits} bits\n"));
                 }
-                if let Some(e) = json.get("public_exponent").and_then(|v| v.as_i64()) {
+                if let Some(e) = json.get("publicExponent").and_then(|v| v.as_i64()) {
                     out.push_str(&format!("  exponent:   {e}\n"));
                 }
                 if let Some(oid) = json.get("oid").and_then(|v| v.as_str()) {
                     out.push_str(&format!("  oid:        {oid}\n"));
                 }
-                if let Some(id) = json.get("ontology_id").and_then(|v| v.as_str()) {
+                if let Some(id) = json.get("ontologyId").and_then(|v| v.as_str()) {
                     out.push_str(&format!("  ontology:   {id}\n"));
                     out.push_str(&format!("  explain:    icrypto ontology show {id}\n"));
                 }
@@ -662,7 +662,7 @@ fn render_control(c: &Json) -> String {
     let g = |k: &str| c.get(k).and_then(|v| v.as_str()).unwrap_or("");
     let mut out = String::new();
     out.push_str(&format!("{}  {}\n", g("id"), g("title")));
-    out.push_str(&format!("  {}\n\n", g("framework_name")));
+    out.push_str(&format!("  {}\n\n", g("frameworkName")));
     out.push_str(&format!("{}\n\n", g("description")));
     out.push_str(&format!("Bearing on this library\n  {}\n", g("bearing")));
 

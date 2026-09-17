@@ -499,7 +499,7 @@ fn key_common(
     fields.insert("algorithm".to_string(), Json::str(algorithm.id()));
     fields.insert("container".to_string(), Json::str(container));
     if let Some(label) = label {
-        fields.insert("pem_label".to_string(), Json::str(label));
+        fields.insert("pemLabel".to_string(), Json::str(label));
     }
     fields
 }
@@ -510,10 +510,10 @@ fn public_key_json(key: &ic_pkix::PublicKeyInfo<'_>, container: &str, label: Opt
     match key {
         ic_pkix::PublicKeyInfo::Rsa { modulus, exponent } => {
             fields.insert("bits".to_string(), Json::num(modulus_bits(modulus) as f64));
-            fields.insert("public_exponent".to_string(), Json::num(*exponent as f64));
+            fields.insert("publicExponent".to_string(), Json::num(*exponent as f64));
         }
         ic_pkix::PublicKeyInfo::Ec { point, .. } => {
-            fields.insert("point_bytes".to_string(), Json::num(point.len() as f64));
+            fields.insert("pointBytes".to_string(), Json::num(point.len() as f64));
         }
         ic_pkix::PublicKeyInfo::Unsupported { oid } => {
             fields.insert("oid".to_string(), Json::str(dotted_oid(oid)));
@@ -521,7 +521,7 @@ fn public_key_json(key: &ic_pkix::PublicKeyInfo<'_>, container: &str, label: Opt
         _ => {}
     }
     if let Some(entry) = ontology_entry(key.algorithm()) {
-        fields.insert("ontology_id".to_string(), Json::str(entry));
+        fields.insert("ontologyId".to_string(), Json::str(entry));
     }
     Json::Object(fields)
 }
@@ -541,15 +541,12 @@ fn private_key_json(
         } => {
             fields.insert("bits".to_string(), Json::num(modulus_bits(modulus) as f64));
             fields.insert(
-                "public_exponent".to_string(),
+                "publicExponent".to_string(),
                 Json::num(*public_exponent as f64),
             );
         }
         ic_pkix::PrivateKeyInfo::Ec { public_key, .. } => {
-            fields.insert(
-                "has_public_key".to_string(),
-                Json::Bool(public_key.is_some()),
-            );
+            fields.insert("hasPublicKey".to_string(), Json::Bool(public_key.is_some()));
         }
         ic_pkix::PrivateKeyInfo::Unsupported { oid } => {
             fields.insert("oid".to_string(), Json::str(dotted_oid(oid)));
@@ -557,7 +554,7 @@ fn private_key_json(
         _ => {}
     }
     if let Some(entry) = ontology_entry(key.algorithm()) {
-        fields.insert("ontology_id".to_string(), Json::str(entry));
+        fields.insert("ontologyId".to_string(), Json::str(entry));
     }
     Json::Object(fields)
 }
@@ -792,8 +789,8 @@ mod key_tests {
         assert_eq!(field(&json, "algorithm"), "ed25519");
         assert_eq!(field(&json, "kind"), "public");
         assert_eq!(field(&json, "container"), "pem");
-        assert_eq!(field(&json, "pem_label"), "PUBLIC KEY");
-        assert_eq!(field(&json, "ontology_id"), "ed25519");
+        assert_eq!(field(&json, "pemLabel"), "PUBLIC KEY");
+        assert_eq!(field(&json, "ontologyId"), "ed25519");
     }
 
     /// The same key without its PEM wrapper must identify the same way.
@@ -804,7 +801,7 @@ mod key_tests {
         let json = key_json(&der[..n]).unwrap();
         assert_eq!(field(&json, "algorithm"), "ed25519");
         assert_eq!(field(&json, "container"), "der");
-        assert!(json.get("pem_label").is_none());
+        assert!(json.get("pemLabel").is_none());
     }
 
     #[test]
@@ -836,9 +833,9 @@ mod key_tests {
         let json = key_json(&der[..n]).unwrap();
         assert_eq!(field(&json, "algorithm"), "rsa");
         assert_eq!(json.get("bits").unwrap().as_i64(), Some(2048));
-        assert_eq!(json.get("public_exponent").unwrap().as_i64(), Some(65537));
+        assert_eq!(json.get("publicExponent").unwrap().as_i64(), Some(65537));
         assert!(
-            json.get("ontology_id").is_none(),
+            json.get("ontologyId").is_none(),
             "an rsa key does not name a padding"
         );
     }
@@ -926,7 +923,7 @@ pub fn requirement_json(doc: &Standard, r: &Requirement) -> Json {
         ("statement", Json::str(r.statement)),
         ("rationale", Json::str(r.rationale)),
         (
-            "applies_to",
+            "appliesTo",
             Json::Array(r.applies_to.iter().map(|a| Json::str(*a)).collect()),
         ),
         ("compliance", compliance),
@@ -944,7 +941,7 @@ pub fn standard_json(s: &Standard) -> Json {
         ("status", Json::str(s.status.id())),
         ("current", Json::Bool(s.status.is_current())),
         (
-            "superseded_by",
+            "supersededBy",
             Json::Array(s.superseded_by.iter().map(|x| Json::str(*x)).collect()),
         ),
         ("url", Json::str(s.url)),
@@ -1033,7 +1030,7 @@ pub fn requirements_json(state: Option<&str>, algorithm: Option<&str>) -> Result
                 ("met", Json::Number(met as f64)),
                 ("partial", Json::Number(partial as f64)),
                 ("unmet", Json::Number(unmet as f64)),
-                ("not_applicable", Json::Number(na as f64)),
+                ("notApplicable", Json::Number(na as f64)),
             ]),
         ),
         ("requirements", Json::Array(items)),
@@ -1069,7 +1066,7 @@ pub fn control_json(c: &Control) -> Json {
     Json::object([
         ("id", Json::str(c.id)),
         ("framework", Json::str(c.framework.id())),
-        ("framework_name", Json::str(c.framework.name())),
+        ("frameworkName", Json::str(c.framework.name())),
         ("title", Json::str(c.title)),
         ("description", Json::str(c.description)),
         ("bearing", Json::str(c.bearing)),
@@ -1160,13 +1157,13 @@ pub fn controls_json(
                 ("met", Json::Number(met as f64)),
                 ("partial", Json::Number(partial as f64)),
                 ("unmet", Json::Number(n_unmet as f64)),
-                ("not_applicable", Json::Number(na as f64)),
+                ("notApplicable", Json::Number(na as f64)),
             ]),
         ),
         ("unmet", Json::Array(unmet)),
-        ("cve_posture", Json::str(frameworks::cve_posture())),
+        ("cvePosture", Json::str(frameworks::cve_posture())),
         (
-            "fips_validated",
+            "fipsValidated",
             Json::Bool(ic_ontology::runtime::has("fips-validated")),
         ),
         ("controls", Json::Array(items)),

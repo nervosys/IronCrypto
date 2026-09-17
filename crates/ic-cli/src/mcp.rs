@@ -822,6 +822,74 @@ mod tests {
             .contains("NOT been submitted"));
     }
 
+    /// Every key in every tool response is camelCase.
+    ///
+    /// The responses used to mix twelve camelCase keys with fifteen
+    /// snake_case ones, so an agent parsing across tools had to handle both
+    /// with no rule for which applied where. The ontology's exports are
+    /// uniformly camelCase, so that is the convention.
+    ///
+    /// Tool *names* and input *parameters* stay snake_case and are not checked
+    /// here: that is the MCP convention for both, they were already consistent,
+    /// and they are the part callers have written down.
+    #[test]
+    fn response_keys_are_camel_case() {
+        fn walk(value: &Json, path: &str, bad: &mut Vec<String>) {
+            match value {
+                Json::Object(fields) => {
+                    for (k, v) in fields {
+                        if k.contains('_') {
+                            bad.push(format!("{path}.{k}"));
+                        }
+                        walk(v, &format!("{path}.{k}"), bad);
+                    }
+                }
+                Json::Array(items) => {
+                    for (i, v) in items.iter().enumerate() {
+                        walk(v, &format!("{path}[{i}]"), bad);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // One representative call per tool that returns a structured body.
+        let calls = [
+            (
+                "crypto_recommend",
+                Json::object([("intent", Json::str("encrypt-message"))]),
+            ),
+            ("crypto_capabilities", Json::object([])),
+            (
+                "crypto_standard",
+                Json::object([("standard", Json::str("FIPS 203"))]),
+            ),
+            ("crypto_requirements", Json::object([])),
+            ("crypto_controls", Json::object([])),
+            ("ontology_list", Json::object([])),
+            (
+                "ontology_show",
+                Json::object([("algorithm", Json::str("sha2-256"))]),
+            ),
+            ("ontology_errors", Json::object([])),
+        ];
+
+        let mut bad = Vec::new();
+        let mut checked = 0;
+        for (name, args) in calls {
+            let r = call(name, args);
+            assert!(!is_error(&r), "{name} returned an error");
+            checked += 1;
+            walk(&body(&r), name, &mut bad);
+        }
+
+        assert_eq!(checked, 8, "a tool stopped responding");
+        assert!(
+            bad.is_empty(),
+            "these response keys are not camelCase: {bad:?}"
+        );
+    }
+
     /// The compliance view must lead with what is *not* satisfied.
     ///
     /// An agent asked "is this CMMC compliant" will quote whatever comes back.
@@ -835,7 +903,7 @@ mod tests {
         let b = body(&r);
 
         assert_eq!(
-            b.get("fips_validated").unwrap().as_bool(),
+            b.get("fipsValidated").unwrap().as_bool(),
             Some(false),
             "the response must state plainly that this is not validated"
         );
