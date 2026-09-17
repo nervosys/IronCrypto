@@ -120,6 +120,10 @@ const COMPONENTS: &[Component] = &[
         name: "ic-cli",
         description: "The icrypto command line tool and its MCP server.",
     },
+    Component {
+        name: "ic-rustls",
+        description: "IronCrypto as a rustls CryptoProvider. The one crate here                       that depends on anything outside the workspace: it implements                       rustls's traits, so it requires rustls.",
+    },
 ];
 
 /// A package URL for a crate, in the form tooling expects.

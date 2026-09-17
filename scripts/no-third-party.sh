@@ -41,6 +41,24 @@ if [ "$count" -lt 10 ]; then
     exit 1
 fi
 
+# One crate is allowed a dependency, and only one: ic-rustls exists to implement
+# rustls's traits and cannot do that without rustls. Excluding it outright would
+# let rustls bring in anything at all unnoticed, so what it may bring is listed
+# here and anything else still fails.
+#
+# The cryptographic crates -- ic-core, ic-hash, ic-mac, ic-cipher, ic-drbg,
+# ic-ec, ic-rsa, ic-pkix, ic-mlkem, ic-mldsa -- are unaffected and still depend
+# on nothing. That is the claim the SBOM, CWE-1104 and T1195.001 rest on, and it
+# is checked below on its own.
+adapter="ic-rustls"
+adapter_deps="once_cell
+rustls
+rustls-pki-types
+rustls-webpki
+subtle
+untrusted
+zeroize"
+
 # `--edges normal,build` because a dev-dependency on something external would
 # not ship, and this claim is about what ships.
 seen=$(cargo tree --workspace --edges normal,build --prefix none --no-dedupe 2>/dev/null \
@@ -48,13 +66,34 @@ seen=$(cargo tree --workspace --edges normal,build --prefix none --no-dedupe 2>/
     | grep -v '^$' \
     | sort -u)
 
-external=$(comm -23 <(echo "$seen") <(echo "$members"))
+allowed=$(printf '%s\n%s\n' "$members" "$adapter_deps" | sort -u)
+external=$(comm -23 <(echo "$seen") <(echo "$allowed"))
 
 if [ -n "$external" ]; then
     echo "third-party crates found:"
     echo "$external"
+    echo
+    echo "Only $adapter may depend on anything outside this workspace, and only on"
+    echo "what scripts/no-third-party.sh lists. Everything else depends on nothing."
     exit 1
 fi
+
+# And the guarantee that actually matters: every crate but the adapter must have
+# a dependency tree containing nothing but workspace members. Checked per crate,
+# because the workspace-wide view above cannot tell which crate pulled rustls in.
+for member in $members; do
+    if [ "$member" = "$adapter" ]; then
+        continue
+    fi
+    deps=$(cargo tree -p "$member" --edges normal,build --prefix none --no-dedupe 2>/dev/null \
+        | awk '{print $1}' | grep -v '^$' | sort -u)
+    leaked=$(comm -23 <(echo "$deps") <(echo "$members"))
+    if [ -n "$leaked" ]; then
+        echo "$member depends on crates outside the workspace:"
+        echo "$leaked"
+        exit 1
+    fi
+done
 
 # And the tree must actually have contained the workspace, or an empty `seen`
 # would pass this having checked nothing.
@@ -64,4 +103,5 @@ if [ "$found" -lt "$count" ]; then
     exit 1
 fi
 
-echo "none ($found workspace crates, no external)"
+echo "none outside the workspace, except $adapter's rustls "\
+     "($found workspace crates checked; every crate but $adapter depends on nothing)"

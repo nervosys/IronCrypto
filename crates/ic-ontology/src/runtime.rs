@@ -116,6 +116,15 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
                    PKCS#1 v1.5 and PSS, with CRT private operations.",
         },
         Capability {
+            id: "tls-provider",
+            present: true,
+            note: "AES-GCM, SHA-2, HMAC, HKDF, ECDSA verification and ECDH, wired to rustls as a \
+                   CryptoProvider by the ic-rustls crate, for TLS 1.3 and TLS 1.2. That crate is \
+                   the one here that depends on anything outside the workspace, because a rustls \
+                   provider must depend on rustls. It verifies signatures and does not make them, \
+                   so it has no signing key provider and cannot present a certificate.",
+        },
+        Capability {
             id: "key-encoding",
             present: true,
             note: "Keys and signatures read and write as DER and PEM: SubjectPublicKeyInfo, \
@@ -219,6 +228,7 @@ mod tests {
         assert!(has("constant-time-symmetric"));
         assert!(has("approved-asymmetric"));
         assert!(has("key-encoding"));
+        assert!(has("tls-provider"));
     }
 
     #[test]

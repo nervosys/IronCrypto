@@ -122,14 +122,19 @@ pub fn for_algorithm(algorithm_id: &str) -> impl Iterator<Item = &'static Contro
 /// is deliberately a function returning prose rather than a boolean, because
 /// the honest answer has three parts and a boolean would flatten it.
 pub fn cve_posture() -> &'static str {
-    "IronCrypto has zero third-party dependencies, enforced by \
-     `scripts/no-third-party.sh`, which CI and the pre-commit hook both run, \
-     so it has no transitive CVE surface: there is no dependency whose advisory could apply to \
+    "Every IronCrypto crate that implements cryptography depends on nothing \
+     outside this workspace, enforced per crate by `scripts/no-third-party.sh`, \
+     which CI and the pre-commit hook both run. Those crates have no transitive \
+     CVE surface: there is no dependency whose advisory could apply to \
      it. That is the strongest claim available and it is a narrow one. It says nothing about \
      defects in IronCrypto's own code, for which the answer is the evidence recorded in \
      `docs/FIPS.md` and the weakness classes in this module. No CVE has been issued against \
      IronCrypto, which at this stage reflects that it is a young and privately held project \
-     rather than any assurance. SECURITY.md carries the disclosure process."
+     rather than any assurance. One crate is outside this: `ic-rustls` \
+     implements rustls's traits and so depends on rustls, which brings five \
+     crates with it. Anything depending on `ic-rustls` inherits their \
+     advisories; nothing else here does. SECURITY.md carries the disclosure \
+     process."
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +266,7 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Use of Unmaintained Third Party Components",
         description: "The product depends on components whose maintenance status it does not control.",
-        bearing: "IronCrypto has zero third-party dependencies, enforced by scripts/no-third-party.sh, which CI and the pre-commit hook both run. This is the structural half of the CVE question: there is no transitive advisory surface because there is nothing transitive.",
+        bearing: "Every crate implementing cryptography here depends on nothing outside the workspace, checked per crate by scripts/no-third-party.sh, which CI and the pre-commit hook both run. This is the structural half of the CVE question: those crates have no transitive advisory surface because they have nothing transitive. The exception is ic-rustls, the rustls provider, which must depend on rustls to implement its traits; what rustls may bring is listed by name in that script, so it cannot grow unnoticed.",
         compliance: Compliance::Met {
             file: "scripts/no-third-party.sh",
             symbol: "cargo tree",
@@ -340,7 +345,7 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Attack,
         title: "Supply Chain Compromise: Compromise Software Dependencies and Development Tools",
         description: "An adversary compromises a dependency so that the compromise reaches everyone who builds against it.",
-        bearing: "The surface is zero third-party dependencies, so there is no dependency to compromise. The build still trusts the Rust toolchain, which is a real and unclosed part of this technique, and saying otherwise would be a claim this library cannot support.",
+        bearing: "The cryptographic crates have no dependencies, so there is nothing there to compromise. ic-rustls is the exception and a real one: depending on rustls means depending on whoever publishes it and the five crates beneath it, which is the technique working as described. The build also still trusts the Rust toolchain, which is unclosed either way, and saying otherwise would be a claim this library cannot support.",
         compliance: Compliance::Partial {
             file: "scripts/no-third-party.sh",
             symbol: "cargo tree",
@@ -623,7 +628,14 @@ mod tests {
     #[test]
     fn the_cve_posture_is_not_an_assurance() {
         let text = cve_posture();
-        assert!(text.contains("zero third-party dependencies"));
+        assert!(text.contains("depends on nothing"));
+        // The claim narrowed when the rustls provider arrived, and a reader is
+        // entitled to know where it stops. Asserting the exception is named
+        // stops the narrower claim quietly widening back.
+        assert!(
+            text.contains("ic-rustls"),
+            "the posture must name the one crate that does have dependencies"
+        );
         assert!(
             text.contains("says nothing about defects in IronCrypto's own code"),
             "the posture must bound its own claim"
