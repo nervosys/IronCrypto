@@ -13,9 +13,15 @@
 #   scripts/check.sh          # everything
 #   scripts/check.sh --quick  # skip the cross-compilation, for a tight loop
 #
-# The hook in .githooks/pre-commit runs the quick form. CI runs the full form,
-# and the two are kept identical on purpose: a local check that gates on less
-# than CI trains people to push and find out.
+# The hook in .githooks/pre-commit runs the quick form. CI runs the same steps,
+# on purpose: a local check that gates on less than CI trains people to push and
+# find out.
+#
+# "The same steps" is kept true by sharing the scripts rather than by copying
+# them. CI used to write each one out again, and its copy of the dependency
+# check named the workspace crates under the old `ac-` prefix -- so after the
+# rename it reported every one of them as a third-party dependency and the job
+# failed on every push, which is what two copies of a rule eventually do.
 
 set -euo pipefail
 
@@ -46,20 +52,9 @@ step "tests"
 cargo test --workspace --all-features
 
 step "zero third-party dependencies"
-# The claim the SBOM, CWE-1104 and T1195.001 all rest on. Asserted here rather
-# than trusted, because it is the kind of thing a single convenient `cargo add`
-# would quietly end.
-external=$(cargo tree --workspace --edges normal,build --prefix none 2>/dev/null \
-    | awk '{print $1}' \
-    | grep -v '^$' \
-    | grep -vE '^(ic-[a-z0-9]+|iron-crypto)$' \
-    | sort -u || true)
-if [ -n "$external" ]; then
-    echo "third-party crates found:"
-    echo "$external"
-    exit 1
-fi
-echo "none"
+# In its own script, because CI needs the same check and the two copies that
+# used to exist drifted apart. See scripts/no-third-party.sh.
+"$(dirname "${BASH_SOURCE[0]}")/no-third-party.sh"
 
 if [ "$quick" -eq 1 ]; then
     printf '\nquick check passed (cross-compilation skipped)\n'

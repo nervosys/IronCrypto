@@ -63,20 +63,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # The workspace must depend on nothing outside itself. `cargo tree`
-      # listing any crate whose name is not one of ours fails the build.
-      - name: Assert no third-party crates
-        run: |
-          external=$(cargo tree --workspace --prefix none --no-dedupe \
-            | awk '{print $1}' | sort -u \
-            | grep -vE '^(ac-(core|hash|mac|kdf|cipher|drbg|ec|fips|ontology|cli)|iron-crypto)$' \
-            | grep -v '^$' || true)
-          if [ -n "$external" ]; then
-            echo "Third-party dependencies introduced:"
-            echo "$external"
-            exit 1
-          fi
-          echo "No third-party dependencies."
+      # The same script the local gate runs, rather than a second copy of the
+      # rule. The copy that used to live here listed the workspace crates by
+      # name under the old `ac-` prefix, so after the rename it reported all
+      # sixteen of them as third-party and this job failed on every push.
+      - run: scripts/no-third-party.sh
 
   docs:
     name: docs

@@ -270,6 +270,78 @@ mod tests {
         panic!("the manifest has no {key} in [workspace.package]");
     }
 
+    /// CI must gate on what the local check gates on.
+    ///
+    /// `scripts/check.sh` says so in its own header: "CI runs the same steps,
+    /// on purpose: a local check that gates on less than CI trains people to
+    /// push and find out." It was not true. CI wrote each step out again, and
+    /// its copy of the dependency check named the workspace crates under the
+    /// `ac-` prefix they had before the rename -- so it matched none of them,
+    /// reported all sixteen as third-party, and failed on every push. Nothing
+    /// compared the two files, so nothing said.
+    ///
+    /// Checked here rather than in a shell script because a shell script is
+    /// what drifted. The rule is that neither file may carry its own copy of a
+    /// check the other has: a shared step is invoked by name from both.
+    #[test]
+    fn ci_and_the_local_gate_run_the_same_checks() {
+        let root = workspace_root();
+        let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+            .expect("the CI workflow");
+        let check =
+            std::fs::read_to_string(root.join("scripts/check.sh")).expect("the check script");
+
+        // Each gate, and the fragment that shows it is being run. Where the two
+        // must share an implementation, the fragment is the script's path, so
+        // naming it is the only way to satisfy this.
+        let gates = [
+            ("formatting", "cargo fmt --all --check"),
+            (
+                "clippy",
+                "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+            ),
+            ("tests", "cargo test --workspace --all-features"),
+            ("zero dependencies", "no-third-party.sh"),
+            ("docs", "cargo doc --workspace --no-deps --all-features"),
+            ("no_std", "--no-default-features --target"),
+        ];
+
+        for (name, fragment) in gates {
+            assert!(
+                check.contains(fragment),
+                "scripts/check.sh does not run the {name} gate ({fragment:?})"
+            );
+            assert!(
+                ci.contains(fragment),
+                "CI does not run the {name} gate ({fragment:?}), so it gates on \
+                 less than a local run does"
+            );
+        }
+
+        // The dependency rule in particular must exist in exactly one place.
+        // Its previous second copy is the reason this test exists, and a copy
+        // is recognisable: it names crates, which the shared script never does
+        // because it reads them from the manifest.
+        assert!(
+            !ci.contains("cargo tree"),
+            "the CI workflow has its own copy of the dependency check again; it \
+             belongs in scripts/no-third-party.sh, which reads the workspace \
+             members from the manifest instead of listing them"
+        );
+        assert!(
+            !check.contains("cargo tree"),
+            "scripts/check.sh has its own copy of the dependency check again"
+        );
+
+        let shared = std::fs::read_to_string(root.join("scripts/no-third-party.sh"))
+            .expect("the shared dependency check");
+        assert!(
+            shared.contains("cargo tree") && shared.contains("Cargo.toml"),
+            "the shared check no longer reads the manifest, so it is back to \
+             carrying a list of its own"
+        );
+    }
+
     /// The licence and repository the document asserts must be the ones the
     /// workspace actually sets.
     ///

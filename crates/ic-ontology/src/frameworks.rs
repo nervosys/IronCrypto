@@ -122,7 +122,8 @@ pub fn for_algorithm(algorithm_id: &str) -> impl Iterator<Item = &'static Contro
 /// is deliberately a function returning prose rather than a boolean, because
 /// the honest answer has three parts and a boolean would flatten it.
 pub fn cve_posture() -> &'static str {
-    "IronCrypto has zero third-party dependencies, enforced by a CI check over `cargo tree`, \
+    "IronCrypto has zero third-party dependencies, enforced by \
+     `scripts/no-third-party.sh`, which CI and the pre-commit hook both run, \
      so it has no transitive CVE surface: there is no dependency whose advisory could apply to \
      it. That is the strongest claim available and it is a narrow one. It says nothing about \
      defects in IronCrypto's own code, for which the answer is the evidence recorded in \
@@ -260,9 +261,9 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Use of Unmaintained Third Party Components",
         description: "The product depends on components whose maintenance status it does not control.",
-        bearing: "IronCrypto has zero third-party dependencies, enforced by a CI check over cargo tree. This is the structural half of the CVE question: there is no transitive advisory surface because there is nothing transitive.",
+        bearing: "IronCrypto has zero third-party dependencies, enforced by scripts/no-third-party.sh, which CI and the pre-commit hook both run. This is the structural half of the CVE question: there is no transitive advisory surface because there is nothing transitive.",
         compliance: Compliance::Met {
-            file: ".github/workflows/ci.yml",
+            file: "scripts/no-third-party.sh",
             symbol: "cargo tree",
         },
         algorithms: &[],
@@ -341,7 +342,7 @@ pub static CONTROLS: &[Control] = &[
         description: "An adversary compromises a dependency so that the compromise reaches everyone who builds against it.",
         bearing: "The surface is zero third-party dependencies, so there is no dependency to compromise. The build still trusts the Rust toolchain, which is a real and unclosed part of this technique, and saying otherwise would be a claim this library cannot support.",
         compliance: Compliance::Partial {
-            file: ".github/workflows/ci.yml",
+            file: "scripts/no-third-party.sh",
             symbol: "cargo tree",
             gap: "No dependency surface, but the toolchain itself remains trusted, and the build is not reproducible in the bit-for-bit sense that would let a third party confirm a binary matches this source. Closing that needs a reproducible build pipeline, which is a property of the release process rather than of any source file.",
         },
