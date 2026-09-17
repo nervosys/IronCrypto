@@ -38,6 +38,28 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
+    /// Every kind, for callers that enumerate them.
+    ///
+    /// This type is `#[non_exhaustive]`, so no other crate can match on it
+    /// exhaustively and none can tell whether it has seen them all. That is
+    /// deliberate — it lets a variant be added without breaking callers — but
+    /// it also means a list like the ontology's error catalog cannot check its
+    /// own completeness. This crate can, so the list is published from here and
+    /// a test keeps it honest.
+    pub const ALL: &'static [ErrorKind] = &[
+        ErrorKind::InvalidLength,
+        ErrorKind::InvalidParameter,
+        ErrorKind::AuthenticationFailed,
+        ErrorKind::MalformedEncoding,
+        ErrorKind::Unsupported,
+        ErrorKind::NotApprovedInFipsMode,
+        ErrorKind::SelfTestFailed,
+        ErrorKind::ModuleErrorState,
+        ErrorKind::EntropyFailure,
+        ErrorKind::CounterExhausted,
+        ErrorKind::Internal,
+    ];
+
     /// Stable kebab-case identifier used in ontology exports and CLI/MCP output.
     pub const fn id(self) -> &'static str {
         match self {
@@ -131,4 +153,54 @@ macro_rules! ensure {
             return Err($crate::Error::new($crate::ErrorKind::$kind, $ctx));
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ALL` must really be all of them.
+    ///
+    /// The match below is exhaustive, and this is the crate that defines the
+    /// type, so `#[non_exhaustive]` does not apply here and adding a variant
+    /// stops this compiling until it is handled. Requiring `ALL` to contain
+    /// each one is what turns "the compiler noticed" into "the list was
+    /// updated".
+    #[test]
+    fn the_variant_list_is_complete() {
+        // The match is a no-op by construction, and that is the point: it
+        // exists so the compiler refuses this file when a variant is added,
+        // not to compute anything. Clippy is right that it does nothing and
+        // wrong that it is therefore unnecessary.
+        #[allow(clippy::needless_match)]
+        fn identify(kind: ErrorKind) -> ErrorKind {
+            match kind {
+                ErrorKind::InvalidLength => ErrorKind::InvalidLength,
+                ErrorKind::InvalidParameter => ErrorKind::InvalidParameter,
+                ErrorKind::AuthenticationFailed => ErrorKind::AuthenticationFailed,
+                ErrorKind::MalformedEncoding => ErrorKind::MalformedEncoding,
+                ErrorKind::Unsupported => ErrorKind::Unsupported,
+                ErrorKind::NotApprovedInFipsMode => ErrorKind::NotApprovedInFipsMode,
+                ErrorKind::SelfTestFailed => ErrorKind::SelfTestFailed,
+                ErrorKind::ModuleErrorState => ErrorKind::ModuleErrorState,
+                ErrorKind::EntropyFailure => ErrorKind::EntropyFailure,
+                ErrorKind::CounterExhausted => ErrorKind::CounterExhausted,
+                ErrorKind::Internal => ErrorKind::Internal,
+            }
+        }
+
+        for kind in ErrorKind::ALL {
+            assert_eq!(identify(*kind), *kind);
+        }
+
+        // Identifiers are the join key the ontology matches on, so a duplicate
+        // would make two kinds indistinguishable to every consumer. Compared
+        // pairwise rather than collected, since this crate has no allocator.
+        for (i, a) in ErrorKind::ALL.iter().enumerate() {
+            for b in ErrorKind::ALL.iter().skip(i + 1) {
+                assert_ne!(a.id(), b.id(), "two kinds share an identifier");
+            }
+            assert!(!a.id().is_empty());
+        }
+    }
 }

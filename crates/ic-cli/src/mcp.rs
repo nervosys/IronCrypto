@@ -822,6 +822,54 @@ mod tests {
             .contains("NOT been submitted"));
     }
 
+    /// The CLI and this server must return the same data.
+    ///
+    /// `ops.rs` opens by saying they do, and that a human debugging an agent's
+    /// behaviour should be able to reproduce it from a shell. That is a promise
+    /// about two front ends staying in step, and nothing checked it — they
+    /// share an ops layer today, and the way that decays is a field added to
+    /// one path and not the other.
+    ///
+    /// Comparing the parsed JSON rather than the strings, since key order is
+    /// not part of the promise.
+    #[test]
+    fn the_cli_and_this_server_agree() {
+        let cases = [
+            (
+                vec!["ontology", "show", "sha2-256", "--json"],
+                "ontology_show",
+                Json::object([("algorithm", Json::str("sha2-256"))]),
+            ),
+            (
+                vec!["recommend", "encrypt-message", "--json"],
+                "crypto_recommend",
+                Json::object([("intent", Json::str("encrypt-message"))]),
+            ),
+            (
+                vec!["ontology", "standard", "FIPS 203", "--json"],
+                "crypto_standard",
+                Json::object([("standard", Json::str("FIPS 203"))]),
+            ),
+            (
+                vec!["ontology", "controls", "--json"],
+                "crypto_controls",
+                Json::object([]),
+            ),
+        ];
+
+        for (argv, tool, args) in cases {
+            let from_cli = crate::run(&argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+            let from_cli = ic_json::parse(&from_cli).expect("the CLI emits valid JSON");
+            let from_mcp = body(&call(tool, args));
+            assert_eq!(
+                from_cli,
+                from_mcp,
+                "`icrypto {}` and the {tool} tool returned different data",
+                argv.join(" ")
+            );
+        }
+    }
+
     /// Every key in every tool response is camelCase.
     ///
     /// The responses used to mix twelve camelCase keys with fifteen

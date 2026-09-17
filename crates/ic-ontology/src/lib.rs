@@ -176,6 +176,33 @@ pub mod errors {
     mod tests {
         use super::*;
 
+        /// Every `ErrorKind` must be in the catalog.
+        ///
+        /// The test below checks the entries are unique and say something.
+        /// Neither property notices an entry that is *absent*, and an
+        /// undocumented error is the one case the catalog exists for: an agent
+        /// that hits it gets a kind identifier and no guidance.
+        ///
+        /// Completeness is delegated to `ErrorKind::ALL`, because this type is
+        /// `#[non_exhaustive]` and no crate but `ic-core` can match on it
+        /// exhaustively. The compiler enforces the list there; this asserts the
+        /// catalog covers it.
+        #[test]
+        fn every_error_kind_is_documented() {
+            for kind in ErrorKind::ALL {
+                assert!(
+                    get(kind.id()).is_some(),
+                    "{} has no catalog entry, so an agent that hits it gets an identifier and no guidance",
+                    kind.id()
+                );
+            }
+            assert_eq!(
+                catalog().count(),
+                ErrorKind::ALL.len(),
+                "the catalog and the variant list disagree on how many kinds there are"
+            );
+        }
+
         #[test]
         fn catalog_is_complete_and_unique() {
             let docs: std::vec::Vec<_> = catalog().collect();
