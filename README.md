@@ -190,6 +190,26 @@ The ontology registers algorithms this library does **not** provide, marked
   parameter set exists, in both the pure and pre-hash variants. ML-KEM-768 is
   `experimental` on the same terms. Both are
   excluded from the approved mode and from `recommend`.
+### Timing
+
+```sh
+icrypto timing                      # all targets
+icrypto timing ct-verify --iterations 200000
+```
+
+A dudect-style leakage detector: two input classes interleaved at random, then
+Welch's t-test on the timings. It is a tool, not a gating test — timing needs a
+quiet machine, and a test that fails when a laptop indexes its disk teaches
+people to ignore failures.
+
+It ships with a **positive control**, a deliberately early-exiting comparison
+that must show leakage. A detector that has never detected anything proves
+nothing; if the control is quiet, the report says every other result in the run
+is meaningless.
+
+A null result means *this run found no evidence on this machine*. That is not a
+proof of constant time, and the output says so rather than printing a tick.
+
 ### Supply chain
 
 ```sh

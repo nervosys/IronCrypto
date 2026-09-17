@@ -7,6 +7,7 @@
 mod mcp;
 mod ops;
 mod sbom;
+mod timing;
 
 use ic_json::Json;
 use std::io::Read;
@@ -85,10 +86,27 @@ fn opt<'a>(args: &[&'a str], name: &str) -> Option<&'a str> {
         .filter(|v| !v.starts_with("--"))
 }
 
+/// Flags that take a following value.
+///
+/// A flag missing from this list still *works* through `opt`, but its value
+/// also leaks into the positional arguments, where it is read as a subcommand
+/// or an identifier. That is how `--iterations 60000` came to be parsed as a
+/// timing target. The list is checked against the source by a test, so adding
+/// a valued flag and forgetting to list it fails the build rather than
+/// producing a confusing error at run time.
+const VALUED_FLAGS: &[&str] = &[
+    "--algorithm",
+    "--class",
+    "--framework",
+    "--iterations",
+    "--purpose",
+    "--state",
+];
+
 /// Positional arguments, in order, excluding flags and their values.
 #[allow(clippy::manual_pattern_char_comparison)]
 fn positionals<'a>(args: &[&'a str]) -> Vec<&'a str> {
-    let valued = ["--class", "--purpose"];
+    let valued = VALUED_FLAGS;
     let mut out = Vec::new();
     let mut skip_next = false;
     for a in args {
@@ -150,6 +168,48 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             } else {
                 render_recommendation(&result)
             })
+        }
+
+        "timing" => {
+            let iterations = opt(args, "--iterations")
+                .map(|s| {
+                    s.parse::<usize>()
+                        .map_err(|_| "--iterations wants a number".to_string())
+                })
+                .transpose()?
+                .unwrap_or(100_000);
+            let json = timing::run(pos.get(1).copied(), iterations)?;
+            if want_json {
+                return Ok(json.to_string());
+            }
+            let mut out = String::new();
+            for r in json.get("results").and_then(|v| v.as_array()).unwrap() {
+                let g = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("");
+                let t = r.get("t").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let flag = if r.get("as_expected").and_then(|v| v.as_bool()) == Some(true) {
+                    " "
+                } else {
+                    "!"
+                };
+                out.push_str(&format!(
+                    "{} {:<16} t = {:>10.2}   {:<24} {}
+",
+                    flag,
+                    g("target"),
+                    t,
+                    g("verdict"),
+                    g("classes")
+                ));
+            }
+            out.push_str(&format!(
+                "
+{}
+",
+                json.get("interpretation")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ));
+            Ok(out)
         }
 
         "sbom" => {
@@ -953,6 +1013,48 @@ mod tests {
         assert_eq!(out.len(), 32);
         assert!(run(&["random", "abc"]).is_err());
         assert!(run(&["random"]).is_err());
+    }
+
+    /// Every flag read with `opt` must be listed as value-taking.
+    ///
+    /// Reads this file's own source, because the failure it prevents is one of
+    /// omission: the code compiles, the flag works, and only the positional
+    /// parsing quietly goes wrong. That is exactly what happened when
+    /// `--iterations` was added, and `--iterations 60000` reported "unknown
+    /// target '60000'".
+    #[test]
+    fn every_valued_flag_is_declared() {
+        let source = include_str!("main.rs");
+        let mut found: Vec<&str> = Vec::new();
+        let needle = "opt(args, \"";
+        let mut rest = source;
+        while let Some(at) = rest.find(needle) {
+            rest = &rest[at + needle.len()..];
+            if let Some(end) = rest.find('"') {
+                let flag = &rest[..end];
+                if flag.starts_with("--") && !found.contains(&flag) {
+                    found.push(flag);
+                }
+            }
+        }
+        assert!(
+            found.len() >= 5,
+            "the scan found only {} flags, which suggests it stopped matching: {found:?}",
+            found.len()
+        );
+        for flag in &found {
+            assert!(
+                VALUED_FLAGS.contains(flag),
+                "{flag} takes a value but is not in VALUED_FLAGS, so its value will be parsed                  as a positional argument"
+            );
+        }
+        // And nothing declared that is never read, which would be dead config.
+        for flag in VALUED_FLAGS {
+            assert!(
+                found.contains(flag),
+                "{flag} is declared value-taking but nothing reads it"
+            );
+        }
     }
 
     #[test]

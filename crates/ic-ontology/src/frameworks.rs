@@ -223,9 +223,9 @@ pub static CONTROLS: &[Control] = &[
         description: "The time taken by an operation reveals information about secret data.",
         bearing: "Comparisons are constant time, scalar multiplication does not branch on secret bits, and the AEAD tag check cannot be short-circuited. What is not done is measurement: an argument that code is constant time is not the same as evidence, and this library has the argument.",
         compliance: Compliance::Partial {
-            file: "crates/ic-core/src/ct.rs",
-            symbol: "verify",
-            gap: "Constant-time construction is argued in each module and enforced by review, not demonstrated by measurement. A dudect-style statistical harness would close it, but needs a quieter machine than a test suite runs on, and a flaky timing test is worse than none. Two samplers in ML-DSA also reject in a data-dependent loop, which is FIPS 204's design rather than this implementation's choice, and is documented where it happens.",
+            file: "crates/ic-cli/src/timing.rs",
+            symbol: "the_positive_control_detects_its_own_leak",
+            gap: "A dudect-style leakage detector now ships as `icrypto timing`, so the claim is measurable rather than only argued. It is a tool and not a gating test, because timing measurement needs a quiet machine and a test that fails when a laptop indexes its disk teaches people to ignore failures. It carries a positive control, since a detector that has never detected anything proves nothing. On a developer machine the constant-time comparison, P-256 and X25519 show no evidence of leakage; AEAD open differs, for the documented reason that its failure path zeroizes the buffer, which is a branch on already-public output. What is still missing is measurement on quiet reference hardware and across the other primitives, and a null result on a noisy machine remains weak evidence of absence rather than a proof."
         },
         algorithms: &[],
         standards: &[],
