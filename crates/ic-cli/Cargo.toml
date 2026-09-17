@@ -27,3 +27,4 @@ ic-fips = { workspace = true, features = ["std"] }
 ic-pkix = { workspace = true, features = ["std"] }
 ic-ec = { workspace = true, features = ["std"] }
 ic-mlkem = { workspace = true, features = ["std"] }
+ic-rsa = { workspace = true, features = ["std"] }

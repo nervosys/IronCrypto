@@ -82,6 +82,17 @@ pub enum Target {
     MlKemDecapsulate,
     /// AES block encryption under a fixed versus a random key.
     AesEncrypt,
+    /// ECDSA signing on P-256, under two different private keys.
+    ///
+    /// Signing is the severe case. A distinguisher on verification tells an
+    /// attacker whether a signature was valid, which they usually learn anyway;
+    /// a distinguisher on signing leaks the private key itself.
+    EcdsaSign,
+    /// RSA signing, under two different private keys.
+    ///
+    /// The CRT path in particular: it branches per prime, and a leak there is
+    /// the classic route to factoring the modulus.
+    RsaSign,
 }
 
 impl Target {
@@ -97,6 +108,8 @@ impl Target {
         Target::X25519,
         Target::MlKemDecapsulate,
         Target::AesEncrypt,
+        Target::EcdsaSign,
+        Target::RsaSign,
     ];
 
     /// Stable identifier, as the command line accepts it.
@@ -109,6 +122,8 @@ impl Target {
             Self::X25519 => "x25519",
             Self::MlKemDecapsulate => "mlkem-decapsulate",
             Self::AesEncrypt => "aes-encrypt",
+            Self::EcdsaSign => "ecdsa-sign",
+            Self::RsaSign => "rsa-sign",
         }
     }
 
@@ -124,6 +139,7 @@ impl Target {
                 "a ciphertext that decapsulates, versus one that is implicitly rejected"
             }
             Self::AesEncrypt => "a fixed key, versus a random key",
+            Self::EcdsaSign | Self::RsaSign => "one private key, versus a different one",
         }
     }
 
@@ -148,6 +164,25 @@ impl Target {
                 "The tag comparison is constant time; ct-verify measures it directly and shows no difference. What differs is that the failure path zeroizes the output buffer and the success path does not. That branch is on whether the tag verified, which the caller already learns from the returned error, so it reveals nothing about the key or the plaintext. It is not free, though: a caller trying to hide whether authentication failed -- to deny an attacker a decryption oracle -- cannot assume this is invisible, and should add its own constant-time handling above this layer.",
             ),
             _ => None,
+        }
+    }
+
+    /// The most iterations worth running for this target.
+    ///
+    /// An RSA signature is a few milliseconds, so the default hundred thousand
+    /// would take hours and nobody would run it. Capping here rather than
+    /// asking the caller to know means `icrypto timing` with no arguments does
+    /// something sensible for every target, and the report carries the sample
+    /// count so a reader can see which ones had less to work with.
+    ///
+    /// Fewer samples means less power, not a different answer: a real leak of
+    /// the size these instructions produce shows up in thousands, and the
+    /// positive control is what says whether the run had enough.
+    pub const fn max_iterations(self) -> usize {
+        match self {
+            Self::RsaSign => 2_000,
+            Self::EcdsaSign | Self::MlKemDecapsulate => 20_000,
+            _ => usize::MAX,
         }
     }
 
@@ -238,6 +273,23 @@ impl Rng {
     }
 }
 
+/// Two RSA private keys, generated once.
+///
+/// Generating one costs seconds, so doing it per measurement would time key
+/// generation rather than signing. Both are built on first use and reused.
+fn rsa_keys() -> &'static (ic_rsa::RsaPrivateKey, ic_rsa::RsaPrivateKey) {
+    static KEYS: std::sync::OnceLock<(ic_rsa::RsaPrivateKey, ic_rsa::RsaPrivateKey)> =
+        std::sync::OnceLock::new();
+    KEYS.get_or_init(|| {
+        let mut a = ic_drbg::Rng::from_entropy(&[0x41u8; 32], b"timing/rsa/a").unwrap();
+        let mut b = ic_drbg::Rng::from_entropy(&[0x42u8; 32], b"timing/rsa/b").unwrap();
+        (
+            ic_rsa::generate(2048, &mut a).expect("rsa key generation"),
+            ic_rsa::generate(2048, &mut b).expect("rsa key generation"),
+        )
+    })
+}
+
 /// An early-exit comparison. The positive control, and nothing else.
 ///
 /// `#[inline(never)]` because the whole point is to time it, and an inlined
@@ -261,7 +313,7 @@ fn naive_compare(a: &[u8], b: &[u8]) -> bool {
 /// The result of the operation is returned to the caller and folded into a
 /// running accumulator, so the optimiser cannot discard the call as dead.
 fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
-    use ic_core::traits::{Aead, KeyAgreement};
+    use ic_core::traits::{Aead, KeyAgreement, SignatureScheme};
 
     match target {
         Target::NaiveCompare | Target::CtVerify => {
@@ -343,6 +395,32 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
                 .wrapping_add(out[0] as u64);
             elapsed
         }
+        Target::EcdsaSign => {
+            // Two fixed private keys rather than one fixed and one random: a
+            // randomly drawn scalar occasionally needs rejecting, and timing
+            // the rejection loop would answer a different question.
+            let sk: [u8; 32] = if class == 0 { [0x07; 32] } else { [0x5b; 32] };
+            let mut sig = [0u8; 64];
+            let start = Instant::now();
+            let out = ic_ec::p256::EcdsaP256Sha256::sign(&sk, b"timing", &mut sig);
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink
+                .wrapping_add(out.is_ok() as u64)
+                .wrapping_add(sig[0] as u64);
+            elapsed
+        }
+        Target::RsaSign => {
+            let (a, b) = rsa_keys();
+            let key = if class == 0 { a } else { b };
+            let mut sig = vec![0u8; key.size()];
+            let start = Instant::now();
+            let out = ic_rsa::Pkcs1Sha256::sign(key, b"timing", &mut sig);
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink
+                .wrapping_add(out.is_ok() as u64)
+                .wrapping_add(sig[0] as u64);
+            elapsed
+        }
         Target::AesEncrypt => {
             use ic_core::traits::BlockCipher;
             let mut key = [0x07u8; 32];
@@ -380,12 +458,17 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
 
 /// Measure one target.
 pub fn measure(target: Target, iterations: usize) -> Report {
+    let iterations = iterations.min(target.max_iterations());
     let mut rng = Rng(0x7a17_1234_5678_9abc);
     let mut sink = 0u64;
 
     // Warm up: the first calls pay for page faults, branch predictor training
     // and frequency ramp, none of which is what is being measured.
-    for i in 0..(iterations / 20).max(100) {
+    // Never warm up for longer than the measurement itself. At the default
+    // that floor of a hundred is nothing; on a fifty-iteration smoke test
+    // against RSA it was twice the work being measured.
+    let warmup = (iterations / 20).max(100).min(iterations);
+    for i in 0..warmup {
         time_once(target, (i % 2) as u8, &mut rng, &mut sink);
     }
 
