@@ -91,20 +91,50 @@ impl VectorFile {
     /// trouble of providing it, and silently ignoring it would waste their
     /// effort in the most confusing way available.
     pub fn load(name: &str) -> Option<VectorFile> {
-        let path = vectors_dir().join(format!("{name}.json"));
+        Self::load_from(&vectors_dir(), name)
+    }
+
+    /// [`load`](Self::load), reading from a directory the caller names.
+    ///
+    /// Exists so the tests can point at a directory of their own rather than
+    /// setting `IC_TEST_VECTORS` -- cargo runs a crate's tests as threads in
+    /// one process, so mutating the environment races every sibling that reads
+    /// it.
+    pub fn load_from(dir: &std::path::Path, name: &str) -> Option<VectorFile> {
+        let path = dir.join(format!("{name}.json"));
         let text = std::fs::read_to_string(&path).ok()?;
         let parsed = ic_json::parse(&text)
             .unwrap_or_else(|e| panic!("{} is present but not valid JSON: {e}", path.display()));
 
+        // Both are required of a file that exists. `source` used to fall back to
+        // the string "unrecorded", so a file with no provenance loaded and its
+        // values went on to validate an implementation, with the report
+        // printing "unrecorded" where the citation belongs.
+        //
+        // The point of this crate is that ML-KEM-768 and AES-GCM-SIV stop being
+        // `experimental` when someone drops a file in here. `experimental`
+        // means nothing has checked them against values produced by something
+        // other than themselves, and a file of unknown origin does not close
+        // that -- it hides it. A missing citation belongs with the other ways a
+        // present file can be malformed, all of which already panic.
         let algorithm = parsed
             .get("algorithm")
             .and_then(|v| v.as_str())
-            .unwrap_or_default()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| panic!("{} does not say which algorithm it is for", path.display()))
             .to_string();
         let source = parsed
             .get("source")
             .and_then(|v| v.as_str())
-            .unwrap_or("unrecorded")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} does not cite where its values came from. A vector whose \
+                     provenance is unknown cannot establish that an implementation \
+                     interoperates, which is the only reason to have one.",
+                    path.display()
+                )
+            })
             .to_string();
 
         let raw = match parsed.get("cases") {
@@ -222,6 +252,68 @@ mod tests {
 
     /// A missing file is a miss, not a failure. This is the behaviour the whole
     /// design rests on, so it is asserted rather than assumed.
+    /// A file that is present must cite its source, and one that does not must
+    /// fail loudly rather than load.
+    ///
+    /// `source` used to fall back to the string "unrecorded", so a file with no
+    /// provenance loaded and its values went on to validate an implementation.
+    /// That matters here more than it would elsewhere: this crate is how
+    /// ML-KEM-768 and AES-GCM-SIV are meant to stop being `experimental`, and
+    /// `experimental` means exactly that nothing has checked them against
+    /// values produced by something other than themselves. A file of unknown
+    /// origin does not close that gap, it conceals it.
+    ///
+    /// Absent stays `None`: skipping loudly is the documented behaviour and is
+    /// a different situation from a file that is there and incomplete.
+    #[test]
+    fn a_vector_file_without_provenance_is_refused() {
+        let dir =
+            std::env::temp_dir().join(format!("ic-vectors-provenance-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let write = |name: &str, body: &str| {
+            std::fs::write(dir.join(format!("{name}.json")), body).unwrap();
+        };
+
+        // Present and properly cited: loads, and carries the citation through.
+        write(
+            "cited",
+            r#"{"algorithm":"aes-kw","source":"RFC 3394 section 4.1",
+                "cases":[{"key":"00","pt":"11","ct":"22"}]}"#,
+        );
+        let file = VectorFile::load_from(&dir, "cited").expect("a cited file must load");
+        assert_eq!(file.source, "RFC 3394 section 4.1");
+        assert_eq!(file.algorithm, "aes-kw");
+        assert_eq!(file.cases.len(), 1);
+
+        // Absent: none, and no panic. This is the skip path.
+        assert!(VectorFile::load_from(&dir, "no-such-file").is_none());
+
+        // Present with no source, and present with an empty one. Both are a
+        // file someone meant to be used, without the one thing that makes it
+        // usable.
+        for (name, body) in [
+            (
+                "uncited",
+                r#"{"algorithm":"aes-kw","cases":[{"key":"00"}]}"#,
+            ),
+            (
+                "blank-source",
+                r#"{"algorithm":"aes-kw","source":"   ","cases":[{"key":"00"}]}"#,
+            ),
+            ("unnamed", r#"{"source":"RFC 3394","cases":[{"key":"00"}]}"#),
+        ] {
+            write(name, body);
+            let outcome = std::panic::catch_unwind(|| VectorFile::load_from(&dir, name));
+            assert!(
+                outcome.is_err(),
+                "{name} loaded despite not saying where its values came from"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn an_absent_file_is_none() {
         assert!(VectorFile::load("a-name-no-file-will-ever-have").is_none());
