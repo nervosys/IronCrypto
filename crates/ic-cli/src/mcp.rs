@@ -218,7 +218,7 @@ fn tools() -> Vec<Tool> {
                 let name = required(args, "algorithm")?;
                 let e = ic_ontology::get(name)
                     .ok_or_else(|| format!("unknown algorithm '{name}'"))?;
-                Ok(ops::entry_json(e))
+                Ok(ops::entry_detail_json(e))
             },
         },
         Tool {
@@ -820,6 +820,67 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("NOT been submitted"));
+    }
+
+    /// The detail view must carry the relations that point *at* an entry.
+    ///
+    /// The registry stores each relation once, in the direction that helps the
+    /// reader, so the outgoing edges alone are half the graph. This tool's
+    /// description promises "related algorithms", and before the inbound half
+    /// was added an agent asking about HKDF-SHA-256 was told it pairs with
+    /// X25519 while three ECDH curves and HMAC-SHA-256 pointed at it unseen.
+    ///
+    /// SHA-256 is the clearest case: it declares one edge and is named by six
+    /// other entries, so without this it reads as a leaf.
+    #[test]
+    fn the_detail_view_shows_both_directions() {
+        let r = call(
+            "ontology_show",
+            Json::object([("algorithm", Json::str("sha2-256"))]),
+        );
+        assert!(!is_error(&r));
+        let b = body(&r);
+
+        let inbound = b
+            .get("relatedBy")
+            .and_then(|v| v.as_array())
+            .expect("the detail view must carry relatedBy");
+        let sources: Vec<&str> = inbound
+            .iter()
+            .filter_map(|x| x.get("source").and_then(|v| v.as_str()))
+            .collect();
+
+        assert!(
+            sources.len() >= 5,
+            "sha2-256 is named by several entries; got {sources:?}"
+        );
+        for expected in ["md5", "sha-1", "hmac-sha2-256"] {
+            assert!(
+                sources.contains(&expected),
+                "{expected} points at sha2-256 but is not listed: {sources:?}"
+            );
+        }
+        // Every inbound record names the relation, not just the source: an
+        // agent needs to know whether it is being superseded or built upon.
+        for item in inbound {
+            assert!(item.get("relation").and_then(|v| v.as_str()).is_some());
+        }
+
+        // And the outgoing half is still there.
+        assert!(b.get("relations").and_then(|v| v.as_array()).is_some());
+
+        // The list view stays lean; the inbound half is detail. Checked over
+        // the serialized response rather than by indexing into a shape this
+        // test would otherwise be asserting by assumption.
+        let listed = body(&call("ontology_list", Json::object([]))).to_string();
+        assert!(
+            listed.contains("sha2-256"),
+            "the list response should contain entries"
+        );
+        assert!(
+            !listed.contains("relatedBy"),
+            "ontology_list should not carry the inbound half for every entry"
+        );
     }
 
     /// The CLI and this server must return the same data.

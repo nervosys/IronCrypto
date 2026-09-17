@@ -12,6 +12,39 @@ use ic_ontology::select::{recommend, Intent, NoRecommendation, Policy};
 use ic_ontology::standards::{self, Compliance, Requirement, Standard};
 use ic_ontology::{Entry, ImplStatus};
 
+/// An entry with the relations that point *at* it as well as those it declares.
+///
+/// The registry stores each relation once, in whichever direction helps the
+/// reader: MD5 records that SHA-256 supersedes it, and SHA-256 carries no list
+/// of everything it replaced. That keeps the data small and the entries
+/// readable, and it means the outgoing edges alone are a half view.
+///
+/// `ontology show` and the `ontology_show` tool use this rather than
+/// [`entry_json`]; `ontology list` does not, because the inbound half is
+/// detail nobody wants seventy-five times.
+pub fn entry_detail_json(e: &Entry) -> Json {
+    let mut inbound = Vec::new();
+    for other in ic_ontology::registry::REGISTRY {
+        if other.id == e.id {
+            continue;
+        }
+        for edge in other.edges {
+            if edge.target == e.id {
+                inbound.push(Json::object([
+                    ("relation", Json::str(edge.relation.id())),
+                    ("source", Json::str(other.id)),
+                ]));
+            }
+        }
+    }
+
+    let Json::Object(mut fields) = entry_json(e) else {
+        unreachable!("entry_json always returns an object")
+    };
+    fields.insert("relatedBy".to_string(), Json::Array(inbound));
+    Json::Object(fields)
+}
+
 /// Render an ontology entry as JSON.
 pub fn entry_json(e: &Entry) -> Json {
     Json::object([

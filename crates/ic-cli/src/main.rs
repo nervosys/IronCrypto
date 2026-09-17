@@ -254,7 +254,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     format!("unknown algorithm '{name}'; try `icrypto ontology list`")
                 })?;
                 Ok(if want_json {
-                    ops::entry_json(e).to_string()
+                    ops::entry_detail_json(e).to_string()
                 } else {
                     render_entry(e)
                 })
