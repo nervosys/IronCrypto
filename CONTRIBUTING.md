@@ -2,6 +2,33 @@
 
 Thank you for your interest in contributing! We welcome contributions from the community.
 
+## Before you commit
+
+```sh
+scripts/check.sh            # everything CI gates on
+scripts/check.sh --quick    # skips cross-compilation, for a tight loop
+```
+
+One script rather than a chain of commands, because a chain assembled at a
+prompt can be mis-composed. `a && b; c` runs `c` whether or not `b` succeeded,
+and that is not hypothetical — it is how a commit that did not compile reached
+master in this repository. The script uses `set -e`, so there is no composition
+decision left to whoever is typing.
+
+Enable the hook to have it run automatically:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+It runs the quick form and refuses a commit that fails. `git commit --no-verify`
+skips it once. That escape hatch is deliberate: a hook nobody can bypass gets
+disabled entirely the first time someone needs to commit a work in progress, and
+then it protects nothing. Using it should be a decision, not a habit.
+
+The local check and CI gate on the same things on purpose. A local check that
+covers less trains people to push and find out.
+
 ## Contributor License Agreement (CLA)
 
 Before your contribution can be accepted, you must agree to our

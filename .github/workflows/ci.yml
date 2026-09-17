@@ -32,7 +32,10 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features
+      # -D warnings, or clippy reports problems and exits zero. Local runs
+      # have always included it; CI did not, so the rule was enforced by
+      # habit rather than by the build.
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   no-std:
     name: no_std (${{ matrix.target }})

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#
+# Refuse a commit that does not build, lint and test cleanly.
+#
+# Enable with:
+#   git config core.hooksPath .githooks
+#
+# Skip once, deliberately, with `git commit --no-verify`. That escape hatch is
+# here on purpose: a hook nobody can bypass gets disabled entirely the first
+# time someone needs to commit a work in progress, and then it protects nothing.
+# Using it should be a decision, not a habit.
+
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+
+if [ ! -x "$root/scripts/check.sh" ] && [ ! -f "$root/scripts/check.sh" ]; then
+    echo "pre-commit: scripts/check.sh is missing; skipping" >&2
+    exit 0
+fi
+
+echo "pre-commit: running scripts/check.sh --quick"
+if ! bash "$root/scripts/check.sh" --quick; then
+    cat >&2 <<'MSG'
+
+pre-commit: checks failed, commit refused.
+
+Fix the failure, or pass --no-verify if you are deliberately committing
+something incomplete.
+MSG
+    exit 1
+fi
