@@ -759,6 +759,124 @@ mod tests {
         }
     }
 
+    /// A recommendation must satisfy every field of the policy that asked for
+    /// it, across the whole policy space rather than three named points.
+    ///
+    /// The test above this one walks `DEFAULT`, `FIPS_APPROVED` and
+    /// `POST_QUANTUM`, and of the four fields in a `Policy` it compares one:
+    /// `require_fips`. The two strength minimums are what an agent sets when it
+    /// has a requirement it cannot express any other way, and nothing checked
+    /// that the answer honoured them. Being handed a classical scheme after
+    /// asking for quantum resistance is the worst shape of wrong answer here --
+    /// silent, and in the direction of weakness.
+    ///
+    /// Declining is always acceptable: this library would rather say it has
+    /// nothing than substitute something weaker, and
+    /// `fips_policy_never_substitutes_an_unapproved_scheme` covers that
+    /// separately. What is checked here is that an answer, when there is one,
+    /// is not weaker than what was asked for.
+    #[test]
+    fn no_recommendation_is_weaker_than_the_policy_that_asked_for_it() {
+        let mut answered = 0;
+        let mut declined = 0;
+
+        for intent in Intent::ALL {
+            for require_fips in [false, true] {
+                for min_classical_bits in [0u16, 112, 128, 192, 256] {
+                    for min_quantum_bits in [0u16, 128, 192] {
+                        for aes_hardware in [false, true] {
+                            let policy = Policy {
+                                require_fips,
+                                min_classical_bits,
+                                min_quantum_bits,
+                                aes_hardware,
+                            };
+                            let Ok(r) = recommend(*intent, policy) else {
+                                declined += 1;
+                                continue;
+                            };
+                            answered += 1;
+
+                            let what = r.primary.id;
+                            let strength = r.primary.strength;
+
+                            assert!(
+                                r.primary.status == ImplStatus::Available,
+                                "{} recommended {what}, which is not available",
+                                intent.id()
+                            );
+                            assert!(
+                                !require_fips || r.primary.fips.permitted_in_approved_mode(),
+                                "{} recommended {what} under a FIPS policy",
+                                intent.id()
+                            );
+                            assert!(
+                                strength.classical >= min_classical_bits,
+                                "{} asked for {min_classical_bits} classical bits and got \
+                                 {what}, which has {}",
+                                intent.id(),
+                                strength.classical
+                            );
+                            assert!(
+                                strength.quantum >= min_quantum_bits,
+                                "{} asked for {min_quantum_bits} quantum bits and got \
+                                 {what}, which has {}",
+                                intent.id(),
+                                strength.quantum
+                            );
+
+                            // The alternative is offered to be chosen, so it is
+                            // held to the same policy as the primary. One that
+                            // does not satisfy it is a trap: the reason to
+                            // mention it is that the caller might take it.
+                            if let Some(alt) = r.alternative {
+                                assert!(
+                                    alt.status == ImplStatus::Available,
+                                    "{} offered {} as an alternative and it is not available",
+                                    intent.id(),
+                                    alt.id
+                                );
+                                assert!(
+                                    !require_fips || alt.fips.permitted_in_approved_mode(),
+                                    "{} offered {} under a FIPS policy",
+                                    intent.id(),
+                                    alt.id
+                                );
+                                assert!(
+                                    alt.strength.classical >= min_classical_bits
+                                        && alt.strength.quantum >= min_quantum_bits,
+                                    "{} offered {} as an alternative, which is weaker than \
+                                     the policy allows",
+                                    intent.id(),
+                                    alt.id
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Floors. Every combination declining would satisfy every assertion
+        // above, and so would a loop that never ran.
+        let total = answered + declined;
+        assert_eq!(
+            total,
+            Intent::ALL.len() * 2 * 5 * 3 * 2,
+            "the policy space was not walked"
+        );
+        assert!(
+            answered > total / 2,
+            "only {answered} of {total} policies produced an answer, which is too \
+             few for this to have tested much"
+        );
+        assert!(
+            declined > 0,
+            "nothing was declined anywhere in the space, so the strict policies \
+             are not as strict as they look"
+        );
+    }
+
     #[test]
     fn intent_ids_roundtrip() {
         for i in Intent::ALL {
