@@ -325,6 +325,104 @@ mod tests {
         }
     }
 
+    /// Each CAST must call the algorithm it is filed under.
+    ///
+    /// The two coverage tests either side of this one check that the table and
+    /// the ontology list the same algorithms. Neither looks at the function.
+    /// `("sha2-224", Sha256::self_test)` passes both, and then SHA-224 can be
+    /// broken in any way at all while the report says it passed -- which is
+    /// precisely what a self-test exists to prevent, so it is worth one more
+    /// test to rule out.
+    ///
+    /// The ontology records each entry's Rust path for its own reasons, which
+    /// makes it a usable second opinion on what a CAST for that entry should
+    /// call. The table is read from the source text because a function pointer
+    /// does not carry its own name at runtime.
+    #[test]
+    fn each_cast_calls_the_algorithm_it_is_filed_under() {
+        // Compiled in, so this cannot be defeated by running from another
+        // directory, and cannot go looking at a stale copy on disk.
+        const SOURCE: &str = include_str!("selftest.rs");
+
+        let table = SOURCE
+            .split_once("static CASTS: &[Cast] = &[")
+            .expect("the CAST table is not where this expects it")
+            .1
+            .split_once("\n];")
+            .expect("the CAST table does not end")
+            .0;
+
+        let mut by_path = 0;
+        let mut by_local_fn = 0;
+
+        // Flattened first: rustfmt wraps a row whose path is long, and
+        // `hkdf-sha2-256` is spread over four lines. Reading line by line
+        // silently skipped it.
+        let flat: String = table
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or("").trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        for row in flat.split("),") {
+            let Some((id, rest)) = row.split_once('"').and_then(|(_, r)| r.split_once('"')) else {
+                continue;
+            };
+            let function = rest
+                .trim()
+                .trim_start_matches(',')
+                .trim()
+                .trim_end_matches(')')
+                .trim_end_matches(',')
+                .trim();
+
+            if function.is_empty() {
+                continue;
+            }
+            let entry =
+                ic_ontology::get(id).unwrap_or_else(|| panic!("{id} has no ontology entry"));
+
+            if let Some(ty) = function.strip_suffix("::self_test") {
+                // The usual form: the trait method on the type itself. The
+                // ontology's path for the entry must be that same type, or the
+                // table is testing something else under this name.
+                assert_eq!(
+                    ty, entry.rust_path,
+                    "the CAST for {id} calls {ty}, but the ontology says {id} is \
+                     {}",
+                    entry.rust_path
+                );
+                by_path += 1;
+            } else {
+                // A hand-written vector, for the algorithms whose check does not
+                // fit the trait. The name is the only thing tying it to the
+                // entry, so it has to match.
+                let expected = format!("{}_self_test", id.replace('-', "_"));
+                assert_eq!(
+                    function, expected,
+                    "the CAST for {id} calls {function}, which does not name {id}"
+                );
+                by_local_fn += 1;
+            }
+        }
+
+        // Floors: the parse above is the kind that quietly matches nothing if
+        // the table is reformatted, and then this passes having checked none of
+        // it. Both forms must also still be present, or the branch that is gone
+        // is no longer being tested.
+        assert_eq!(
+            by_path + by_local_fn,
+            CASTS.len(),
+            "the source table and the compiled one are different lengths, so the \
+             parse missed rows"
+        );
+        assert!(
+            by_path > 50,
+            "only {by_path} casts checked against a rust path"
+        );
+        assert!(by_local_fn > 0, "no hand-written casts found");
+    }
+
     #[test]
     fn every_cast_names_a_real_ontology_entry() {
         for name in tested_algorithms() {
