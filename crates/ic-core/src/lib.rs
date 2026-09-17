@@ -15,6 +15,10 @@
 //! panicking, so an autonomous agent can drive the library without tripping an
 //! abort in a sandbox.
 #![cfg_attr(not(feature = "std"), no_std)]
+// Unsafe is confined to the two modules that cannot avoid it, each of which
+// carries an explicit allowance and says why. Anywhere else in this crate it is
+// a compile error rather than a review comment.
+#![deny(unsafe_code)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
@@ -22,10 +26,18 @@
 pub mod codec;
 pub mod cpu;
 pub mod ct;
+// The operating system's entropy source is a syscall; there is no safe way to
+// ask for it.
+#[allow(unsafe_code)]
 pub mod entropy;
 pub mod traits;
 
 mod error;
+// Zeroing must survive the optimiser, which means volatile writes, which are
+// unsafe by construction. A safe loop here would be deleted as dead stores and
+// the secret would stay in memory -- the exact failure this module exists to
+// prevent.
+#[allow(unsafe_code)]
 mod zeroize;
 
 pub use error::{Error, ErrorKind, Result};

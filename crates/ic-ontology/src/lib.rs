@@ -42,6 +42,7 @@
 //! An honest "no" is worth more to an autonomous caller than a plausible
 //! "yes".
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 

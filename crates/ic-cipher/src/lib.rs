@@ -33,13 +33,23 @@
 // Every unsafe operation inside an unsafe fn must be marked explicitly, so the
 // SIMD backends cannot smuggle one in under the function signature.
 #![forbid(unsafe_op_in_unsafe_fn)]
+// And unsafe may only appear where a CPU intrinsic is being called, which is
+// what the allowances below mark. Everywhere else in this crate -- the modes,
+// the key wrapping, the field arithmetic -- it is a compile error.
+#![deny(unsafe_code)]
 #![warn(clippy::all)]
 
+// AES-NI and the ARMv8 crypto extensions, behind runtime detection.
+#[allow(unsafe_code)]
 pub mod aes;
 
 pub mod chacha;
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
+// The carry-less multiply instruction.
+#[allow(unsafe_code)]
 mod clmul;
+// GHASH via CLMUL when the CPU has it.
+#[allow(unsafe_code)]
 pub mod gcm;
 pub mod gcm_siv;
 pub mod gf;

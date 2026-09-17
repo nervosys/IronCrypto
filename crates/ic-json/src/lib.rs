@@ -10,6 +10,7 @@
 //! Parsing JSON is not a command-line concern, and a binary crate is a place
 //! code goes to become unreachable.
 
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 

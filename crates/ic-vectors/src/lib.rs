@@ -40,6 +40,7 @@
 //! and the callers print what they were looking for, so an absent file shows up
 //! in the output rather than in nothing at all.
 
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 

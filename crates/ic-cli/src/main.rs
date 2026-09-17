@@ -4,6 +4,8 @@
 //! reading a terminal and an agent parsing output. `icrypto mcp` turns the
 //! binary into a Model Context Protocol server.
 
+#![forbid(unsafe_code)]
+
 mod mcp;
 mod ops;
 mod sbom;

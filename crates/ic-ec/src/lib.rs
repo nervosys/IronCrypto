@@ -36,6 +36,7 @@
 //! querying for an approved signature scheme gets an honest "not available
 //! here" rather than a silent substitution.
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 

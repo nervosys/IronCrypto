@@ -18,6 +18,7 @@
 //! and [`ic_core::traits::SelfTest`], so `ic-fips` can drive their known-answer
 //! tests generically.
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
