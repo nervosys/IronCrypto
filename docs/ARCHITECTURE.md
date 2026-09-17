@@ -145,6 +145,7 @@ behaviour can reproduce it from a shell.
 | `ic-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ic-core` and performs no cryptography |
 | `ic-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
 | `ic-ontology::standards` | The standards knowledgebase: the documents the registry cites, and the obligations they impose. Coupled to the code by tests - a met requirement names a file and a symbol, and both must exist |
+| `iron-crypto/tests/hostile_input.rs` | Every public entry point that parses attacker-chosen bytes, held to three properties: total (never panics), sound (never accepts a forgery) and deep (enough input reaches the cryptography for the first two to mean something) |
 | `ic-fips` | state machine, approved-mode policy, CAST table, service indicator |
 | `iron-crypto` | facade, prelude, and the ontology/implementation agreement tests |
 | `ic-cli` | JSON reader/writer, shared ops, CLI, MCP server |
