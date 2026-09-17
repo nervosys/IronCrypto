@@ -192,6 +192,67 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     render_entry(e)
                 })
             }
+            "controls" => {
+                let json = ops::controls_json(
+                    opt(args, "--framework"),
+                    opt(args, "--algorithm"),
+                    opt(args, "--state"),
+                )?;
+                if want_json {
+                    return Ok(json.to_string());
+                }
+                let mut out = String::new();
+                for c in json.get("controls").and_then(|v| v.as_array()).unwrap() {
+                    let g = |k: &str| c.get(k).and_then(|v| v.as_str()).unwrap_or("");
+                    let state = c
+                        .get("compliance")
+                        .and_then(|x| x.get("state"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    out.push_str(&format!(
+                        "{:<18} {:<8} {:<16} {}\n",
+                        g("id"),
+                        g("framework"),
+                        state,
+                        g("title")
+                    ));
+                }
+                let t = json.get("totals").unwrap();
+                let num = |k: &str| t.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                out.push_str(&format!(
+                    "\n{} met, {} partial, {} unmet, {} not applicable",
+                    num("met"),
+                    num("partial"),
+                    num("unmet"),
+                    num("not_applicable")
+                ));
+                // The unmet list is printed rather than left to a filter. A
+                // compliance summary quoted without its gaps is worse than none.
+                if let Some(unmet) = json.get("unmet").and_then(|v| v.as_array()) {
+                    if !unmet.is_empty() {
+                        let ids: Vec<&str> = unmet.iter().filter_map(|v| v.as_str()).collect();
+                        out.push_str(&format!("\nNOT SATISFIED: {}", ids.join(", ")));
+                    }
+                }
+                if json.get("fips_validated").and_then(|v| v.as_bool()) != Some(true) {
+                    out.push_str(
+                        "\nIronCrypto is NOT FIPS-validated. Practices requiring validated \
+                         cryptography are not satisfied.",
+                    );
+                }
+                Ok(out)
+            }
+            "control" => {
+                let name = pos
+                    .get(2)
+                    .copied()
+                    .ok_or("ontology control needs an id, e.g. CWE-327 or SC.L2-3.13.11")?;
+                let json = ops::control_lookup_json(name)?;
+                if want_json {
+                    return Ok(json.to_string());
+                }
+                Ok(render_control(&json))
+            }
             "standards" => {
                 let json = ops::standards_json(opt(args, "--algorithm"))?;
                 if want_json {
@@ -527,6 +588,44 @@ fn render_recommendation(r: &Json) -> String {
         ),
         _ => format!("no recommendation.\n{}", s("explanation")),
     }
+}
+
+/// Render one framework control for a human.
+fn render_control(c: &Json) -> String {
+    let g = |k: &str| c.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    let mut out = String::new();
+    out.push_str(&format!("{}  {}\n", g("id"), g("title")));
+    out.push_str(&format!("  {}\n\n", g("framework_name")));
+    out.push_str(&format!("{}\n\n", g("description")));
+    out.push_str(&format!("Bearing on this library\n  {}\n", g("bearing")));
+
+    let comp = c.get("compliance").unwrap();
+    let cg = |k: &str| comp.get(k).and_then(|v| v.as_str()).unwrap_or("");
+    out.push_str(&format!("\nStatus: {}\n", cg("state")));
+    match cg("state") {
+        "met" => out.push_str(&format!(
+            "  Evidence: {} in {}\n",
+            cg("evidence"),
+            cg("file")
+        )),
+        "partial" => out.push_str(&format!(
+            "  Evidence: {} in {}\n  Gap: {}\n",
+            cg("evidence"),
+            cg("file"),
+            cg("gap")
+        )),
+        _ => out.push_str(&format!("  Reason: {}\n", cg("reason"))),
+    }
+
+    for (label, key) in [("Algorithms", "algorithms"), ("Standards", "standards")] {
+        if let Some(items) = c.get(key).and_then(|v| v.as_array()) {
+            if !items.is_empty() {
+                let names: Vec<&str> = items.iter().filter_map(|v| v.as_str()).collect();
+                out.push_str(&format!("\n{label}: {}\n", names.join(", ")));
+            }
+        }
+    }
+    out
 }
 
 /// Render one standard for a human.

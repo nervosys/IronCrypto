@@ -7,6 +7,7 @@
 
 use ic_core::traits::{Aead, Digest, Mac};
 use ic_json::Json;
+use ic_ontology::frameworks::{self, Control, Framework};
 use ic_ontology::select::{recommend, Intent, NoRecommendation, Policy};
 use ic_ontology::standards::{self, Compliance, Requirement, Standard};
 use ic_ontology::{Entry, ImplStatus};
@@ -1037,4 +1038,144 @@ pub fn requirements_json(state: Option<&str>, algorithm: Option<&str>) -> Result
         ),
         ("requirements", Json::Array(items)),
     ]))
+}
+
+// ---------------------------------------------------------------------------
+// Security frameworks: CWE, MITRE ATT&CK, CMMC 2.0.
+// ---------------------------------------------------------------------------
+
+/// One control, as JSON.
+pub fn control_json(c: &Control) -> Json {
+    let compliance = match c.compliance {
+        Compliance::Met { file, symbol } => Json::object([
+            ("state", Json::str("met")),
+            ("file", Json::str(file)),
+            ("evidence", Json::str(symbol)),
+        ]),
+        Compliance::Partial { file, symbol, gap } => Json::object([
+            ("state", Json::str("partial")),
+            ("file", Json::str(file)),
+            ("evidence", Json::str(symbol)),
+            ("gap", Json::str(gap)),
+        ]),
+        Compliance::NotApplicable { why } => Json::object([
+            ("state", Json::str("not-applicable")),
+            ("reason", Json::str(why)),
+        ]),
+        Compliance::Unmet { why } => {
+            Json::object([("state", Json::str("unmet")), ("reason", Json::str(why))])
+        }
+    };
+    Json::object([
+        ("id", Json::str(c.id)),
+        ("framework", Json::str(c.framework.id())),
+        ("framework_name", Json::str(c.framework.name())),
+        ("title", Json::str(c.title)),
+        ("description", Json::str(c.description)),
+        ("bearing", Json::str(c.bearing)),
+        (
+            "algorithms",
+            Json::Array(c.algorithms.iter().map(|a| Json::str(*a)).collect()),
+        ),
+        (
+            "standards",
+            Json::Array(c.standards.iter().map(|s| Json::str(*s)).collect()),
+        ),
+        ("compliance", compliance),
+    ])
+}
+
+/// Controls, optionally narrowed by framework, algorithm or compliance state.
+///
+/// The totals come back alongside the list, and the `unmet` list is named
+/// separately rather than left for a caller to filter out. A compliance view
+/// whose gaps are one filter away from being missed is a compliance view that
+/// will be quoted without them.
+pub fn controls_json(
+    framework: Option<&str>,
+    algorithm: Option<&str>,
+    state: Option<&str>,
+) -> Result<Json, String> {
+    let wanted = match framework {
+        None => None,
+        Some("cwe") => Some(Framework::Cwe),
+        Some("attack") => Some(Framework::Attack),
+        Some("cmmc") => Some(Framework::Cmmc),
+        Some(other) => {
+            return Err(format!(
+                "unknown framework '{other}'; try cwe, attack or cmmc"
+            ))
+        }
+    };
+    if let Some(s) = state {
+        if !["met", "partial", "unmet", "not-applicable"].contains(&s) {
+            return Err(format!(
+                "unknown compliance state '{s}'; try met, partial, unmet or not-applicable"
+            ));
+        }
+    }
+    if let Some(a) = algorithm {
+        if !ic_ontology::registry::REGISTRY.iter().any(|e| e.id == a) {
+            return Err(format!("unknown algorithm '{a}'"));
+        }
+    }
+
+    let mut items = Vec::new();
+    let mut unmet = Vec::new();
+    let (mut met, mut partial, mut n_unmet, mut na) = (0usize, 0usize, 0usize, 0usize);
+
+    for c in frameworks::CONTROLS {
+        if let Some(f) = wanted {
+            if c.framework != f {
+                continue;
+            }
+        }
+        if let Some(a) = algorithm {
+            if !c.algorithms.is_empty() && !c.algorithms.contains(&a) {
+                continue;
+            }
+        }
+        match c.compliance.id() {
+            "met" => met += 1,
+            "partial" => partial += 1,
+            "unmet" => {
+                n_unmet += 1;
+                unmet.push(Json::str(c.id));
+            }
+            _ => na += 1,
+        }
+        if let Some(s) = state {
+            if c.compliance.id() != s {
+                continue;
+            }
+        }
+        items.push(control_json(c));
+    }
+
+    Ok(Json::object([
+        ("count", Json::Number(items.len() as f64)),
+        (
+            "totals",
+            Json::object([
+                ("met", Json::Number(met as f64)),
+                ("partial", Json::Number(partial as f64)),
+                ("unmet", Json::Number(n_unmet as f64)),
+                ("not_applicable", Json::Number(na as f64)),
+            ]),
+        ),
+        ("unmet", Json::Array(unmet)),
+        ("cve_posture", Json::str(frameworks::cve_posture())),
+        (
+            "fips_validated",
+            Json::Bool(ic_ontology::runtime::has("fips-validated")),
+        ),
+        ("controls", Json::Array(items)),
+    ]))
+}
+
+/// Look one control up by its framework identifier.
+pub fn control_lookup_json(id: &str) -> Result<Json, String> {
+    frameworks::control(id)
+        .map(control_json)
+        .ok_or_else(|| format!("unknown control '{id}'"))
 }

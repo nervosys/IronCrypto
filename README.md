@@ -190,6 +190,36 @@ The ontology registers algorithms this library does **not** provide, marked
   parameter set exists, in both the pure and pre-hash variants. ML-KEM-768 is
   `experimental` on the same terms. Both are
   excluded from the approved mode and from `recommend`.
+### Security frameworks
+
+The same machinery, applied to the frameworks people are audited against:
+
+```sh
+icrypto ontology controls --framework cwe      # weakness classes
+icrypto ontology controls --framework attack   # MITRE ATT&CK techniques
+icrypto ontology controls --framework cmmc     # CMMC 2.0 practices
+icrypto ontology control SC.L2-3.13.11
+```
+
+Agents get the same through the `crypto_controls` MCP tool.
+
+**Read this before quoting any of it.** CMMC `SC.L2-3.13.11` requires
+FIPS-*validated* cryptography. IronCrypto has no CMVP certificate, so that
+practice is **not satisfied**, and no amount of correctness evidence changes
+it — validation is a process with a laboratory and a certificate number, not a
+property of source code. The summary line names unsatisfied controls
+explicitly rather than leaving them to be filtered out, the MCP response carries
+`fips_validated: false` as its own field, and tests assert both stay that way.
+A compliance view that can be quoted without its gaps is worse than none.
+
+On CVE: a library does not comply with CVE — CVEs are instances, and what an
+implementation can do is avoid the weakness classes they belong to, which is
+what the CWE entries cover. The other half is supply chain, and there
+IronCrypto has zero third-party dependencies enforced in CI, so no advisory
+against another crate can apply to it. That claim is narrow on purpose and says
+nothing about defects in IronCrypto's own code. `SECURITY.md` has the
+disclosure process.
+
 ### The standards knowledgebase
 
 The registry says what algorithms exist. `ic_ontology::standards` says what

@@ -230,6 +230,53 @@ fn tools() -> Vec<Tool> {
             call: |_| Ok(ops::errors_json()),
         },
         Tool {
+            name: "crypto_controls",
+            description:
+                "Security framework coverage: MITRE CWE weakness classes, MITRE ATT&CK \
+                 techniques, and CMMC 2.0 practices, each with whether IronCrypto satisfies it \
+                 and the file that evidences it. Filter by framework, algorithm or compliance \
+                 state. IMPORTANT: IronCrypto is NOT FIPS-validated, so CMMC SC.L2-3.13.11 is \
+                 reported as unmet; any answer about FIPS-validated cryptography must say so \
+                 rather than inferring satisfaction from the other entries.",
+            schema: || {
+                schema(
+                    vec![
+                        (
+                            "framework",
+                            enum_prop("Narrow to one framework.", "cwe, attack, cmmc"),
+                        ),
+                        (
+                            "algorithm",
+                            string_prop(
+                                "Narrow to controls bearing on this algorithm id. \
+                                 Library-wide controls always match.",
+                            ),
+                        ),
+                        (
+                            "state",
+                            enum_prop(
+                                "Narrow to one compliance state.",
+                                "met, partial, unmet, not-applicable",
+                            ),
+                        ),
+                        (
+                            "control",
+                            string_prop("A single control id, e.g. CWE-327 or SC.L2-3.13.11."),
+                        ),
+                    ],
+                    &[],
+                )
+            },
+            call: |args| match arg(args, "control") {
+                Some(id) => ops::control_lookup_json(id),
+                None => ops::controls_json(
+                    arg(args, "framework"),
+                    arg(args, "algorithm"),
+                    arg(args, "state"),
+                ),
+            },
+        },
+        Tool {
             name: "crypto_standard",
             description:
                 "Look up the standards that define an algorithm, or one document by its                  citation. Returns the title, publisher, year, whether it is still current,                  what it covers, and the obligations it imposes on an implementation -- each                  with whether this library meets it and the file that evidences it. Use this                  to answer 'what does FIPS 203 require here' without guessing.",
@@ -773,6 +820,66 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("NOT been submitted"));
+    }
+
+    /// The compliance view must lead with what is *not* satisfied.
+    ///
+    /// An agent asked "is this CMMC compliant" will quote whatever comes back.
+    /// If the unmet practice were merely one row among several, it would be
+    /// summarised away. So the response names it separately and carries the
+    /// validation status as its own field.
+    #[test]
+    fn the_controls_tool_surfaces_what_is_not_satisfied() {
+        let r = call("crypto_controls", Json::object([]));
+        assert!(!is_error(&r));
+        let b = body(&r);
+
+        assert_eq!(
+            b.get("fips_validated").unwrap().as_bool(),
+            Some(false),
+            "the response must state plainly that this is not validated"
+        );
+
+        let unmet: Vec<&str> = b
+            .get("unmet")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(
+            unmet.contains(&"SC.L2-3.13.11"),
+            "the FIPS-validation practice must be named as unmet, got {unmet:?}"
+        );
+
+        // And looking it up directly gives the reason, not just a state.
+        let r = call(
+            "crypto_controls",
+            Json::object([("control", Json::str("SC.L2-3.13.11"))]),
+        );
+        let b = body(&r);
+        let why = b
+            .get("compliance")
+            .unwrap()
+            .get("reason")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(why.contains("no CMVP certificate"), "got {why}");
+
+        // Filtering by framework narrows, and an unknown one is correctable.
+        let r = call(
+            "crypto_controls",
+            Json::object([("framework", Json::str("cwe"))]),
+        );
+        let n = body(&r).get("count").unwrap().as_f64().unwrap();
+        assert!(n >= 5.0, "cwe should have several controls: {n}");
+        let r = call(
+            "crypto_controls",
+            Json::object([("framework", Json::str("nonsense"))]),
+        );
+        assert!(is_error(&r));
     }
 
     /// The knowledgebase is reachable over MCP, with the evidence attached.

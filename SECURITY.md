@@ -1,65 +1,75 @@
-# Security
-
-## Status
-
-This code has **not been independently audited**. It is correct against its
-published test vectors and its property tests; that is a different and weaker
-claim than review by cryptographers. Treat it accordingly.
-
-It is also **not FIPS validated**. See [docs/FIPS.md](docs/FIPS.md).
+# Security policy
 
 ## Reporting a vulnerability
 
-Report privately via GitHub Security Advisories on the repository, rather than
-opening a public issue. Include a description, the affected version, and a
-reproduction if you have one.
+Report privately, not as a public issue. Open a GitHub security advisory on
+`nervosys/IronCrypto`, or contact the maintainers directly if you cannot.
 
-## Threat model
+Useful reports include the version or commit, what you observed, and the
+smallest input that shows it. A failing test is the most useful form. If you
+believe the finding is exploitable, say what you think an attacker gains — that
+is what decides how fast it moves, and it is the part nobody else can supply.
 
-### In scope
+You do not need a working exploit to report something. A convincing argument
+that a bound is wrong, a comparison is not constant time, or a validation step
+is missing is worth reporting on its own.
 
-- **Cache-timing and address-bus leakage.** The portable AES computes its S-box
-  algebraically and GHASH multiplies bit by bit, so neither indexes memory with
-  a secret. The accelerated backend uses `AESENC` and `PCLMULQDQ`, single
-  instructions with data-independent latency and no table at all. Curve25519 uses constant-time ladders and complete formulas. Tag
-  comparison is constant time.
-- **Memory disclosure after use.** Secrets are wrapped in `Zeroizing`, which
-  wipes on drop with volatile writes plus a compiler fence. AEAD decryption
-  wipes the buffer before returning an authentication failure.
-- **Caller misuse.** Parameter bounds are enforced, not merely documented:
-  PBKDF2 rejects iteration counts below 1 000 and salts under 128 bits; X25519
-  rejects small-order peer keys; Ed25519 rejects non-canonical `S`; DRBGs refuse
-  to generate past their reseed interval.
-- **Panics as denial of service.** Every fallible path returns `Result`.
+## What this project can and cannot claim
 
-### Out of scope
+**IronCrypto is not FIPS 140-3 validated.** It has no CMVP certificate.
+`ic_ontology::runtime::has("fips-validated")` returns `false`, and a test
+asserts it keeps returning `false` until a certificate exists. The library
+implements FIPS 140-3's *operational discipline* — an approved-mode policy,
+self-tests before first use, a latching error state, service indicators — which
+is a prerequisite for pursuing validation and is not validation. Do not use it
+where a contract requires validated cryptography; CMMC `SC.L2-3.13.11` is
+recorded as unmet for exactly this reason.
 
-- **Power and electromagnetic analysis.** No countermeasures. Do not use this on
-  a smartcard or in an environment with a physically present adversary.
-- **Fault injection.** No redundant computation or result verification.
-- **Speculative execution.** No speculation barriers beyond what the compiler
-  emits.
-- **Compiler-introduced leaks.** Constant-time properties are written at the
-  source level. LLVM is not obliged to preserve them, and this build is not
-  verified with a tool that checks the emitted machine code. This is a real
-  limitation shared with most portable constant-time implementations.
-- **The operating system entropy source.** `BCryptGenRandom` and
-  `/dev/urandom` are trusted to deliver full-entropy bytes. No SP 800-90B
-  raw-noise health testing is performed.
+**Three algorithms are `experimental`**: ML-KEM-768, ML-DSA-65, and
+AES-GCM-SIV. Every component of each is checked against an independent oracle,
+and the assembled scheme is checked against nothing but itself, because no ACVP
+or RFC vector is wired in. They are excluded from the approved mode and from
+`recommend`, and each carries a `not-interoperability-tested` constraint at
+`Critical` severity. Do not use them to talk to another implementation.
 
-## Known weaknesses
+**There is no transitive dependency surface.** IronCrypto has zero third-party
+dependencies, enforced in CI by a check over `cargo tree`. No advisory against
+another crate can apply to it. That is a narrow claim and it is worth being
+precise about its limits: it says nothing about defects in IronCrypto's own
+code.
 
-| | |
+**No CVE has been issued against IronCrypto.** At this stage that reflects a
+young, privately held project rather than any assurance, and should not be read
+as evidence of anything.
+
+## Where the evidence is
+
+Claims in this project are meant to be checkable rather than taken on trust.
+
+| Question | Where it is answered |
 |---|---|
-| Limited asymmetric coverage | ECDSA and ECDH are implemented over P-256 and P-384. P-521 and RSA are not. |
-| No post-quantum schemes | ML-KEM and ML-DSA are registered as planned. X25519, Ed25519, P-256 and P-384 all fall to Shor. |
-| Slow symmetric throughput off x86-64 | The portable backend trades speed for the absence of secret-dependent memory access: single-digit MB/s for AES. x86-64 with AES-NI uses the accelerated path instead. |
-| PBKDF2 is not memory-hard | It is the only *approved* password KDF, not the strongest one. Argon2id is implemented and is the default outside FIPS. |
-| Two weak vector sources | The CTR_DRBG and PBKDF2 known-answer tests are property-based rather than CAVP-derived. Documented in `docs/FIPS.md`. |
+| What is verified, and against what oracle? | `docs/FIPS.md` |
+| What does a standard require, and does this meet it? | `icrypto ontology requirements` |
+| Which weakness classes and practices does this address? | `icrypto ontology controls` |
+| Why is an algorithm not recommended? | `icrypto ontology show <id>` |
+| Does it interoperate? | Nothing establishes this yet. See `testvectors/README.md` |
 
-## Cryptographic agility
+The compliance views are coupled to the code rather than filed beside it: a
+control claiming to be met names a file and a symbol, and the tests fail if
+either stops existing. That is deliberate — a compliance document that can drift
+away from its implementation will, and is then worse than none, because people
+believe it.
 
-If a primitive here is broken, the ontology is the mitigation path: set its
-`fips` to `Disallowed` and its `status` to `Excluded`, add a `superseded-by`
-edge, and every query, recommendation, and policy check updates at once. Callers
-that route through `recommend` stop receiving it immediately.
+## Scope
+
+In scope: the algorithms, their encodings, the parsing surface, constant-time
+construction, the ontology's accuracy about all of the above.
+
+Out of scope, because they are not implemented rather than because they do not
+matter: certificate path validation, TLS or any protocol, key storage, key
+distribution, and audit logging. If you find that the documentation implies any
+of these exist, that is itself a reportable defect.
+
+## Supported versions
+
+Pre-1.0. Only `master` is supported, and there is no backport policy yet.
