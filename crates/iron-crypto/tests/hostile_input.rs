@@ -5,6 +5,12 @@
 //! whole facade, in one place, so that adding an algorithm without hardening it
 //! is visible rather than merely possible.
 //!
+//! What makes that true is `the_suite_hammers_every_implemented_primitive`,
+//! which asks the ontology what this build implements and requires every
+//! answer to be hammered here or to name where it is hammered instead.
+//! Until it existed the targets were a hand-written list, and six had
+//! quietly drifted out of it.
+//!
 //! Three properties per target, and the third is what stops the first two being
 //! decoration:
 //!
@@ -168,6 +174,20 @@ fn ecdsa_verification_is_total_and_sound() {
     ec::p384::EcdsaP384Sha384::sign(&sk, message, &mut sig).unwrap();
     let deep = hammer_signature::<ec::p384::EcdsaP384Sha384>(&mut rng, &pk, &sig, message);
     assert!(deep > 80, "too few candidates reached P-384: {deep}");
+
+    // P-521. Its field arithmetic is the awkward one -- 521 bits is no multiple
+    // of a limb, so the top limb is partly used and every reduction has to know
+    // it -- and it had no hostile coverage at either level until now.
+    // The top byte must stay clear: n is just under 2^521, so a 66-byte scalar
+    // of 0x0b bytes exceeds it and key generation refuses -- correctly.
+    let mut sk = [11u8; 66];
+    sk[0] = 0;
+    let mut pk = [0u8; 133];
+    ec::p521::EcdsaP521Sha512::public_key(&sk, &mut pk).unwrap();
+    let mut sig = [0u8; 132];
+    ec::p521::EcdsaP521Sha512::sign(&sk, message, &mut sig).unwrap();
+    let deep = hammer_signature::<ec::p521::EcdsaP521Sha512>(&mut rng, &pk, &sig, message);
+    assert!(deep > 80, "too few candidates reached P-521: {deep}");
 }
 
 #[test]
@@ -334,18 +354,48 @@ fn hammer_aead<A: Aead>(rng: &mut Rng, aead: &A, nonce_len: usize) {
     }
 }
 
+/// One hammering target: its ontology id, and the closure that hammers it.
+type Target = (&'static str, fn(&mut Rng));
+
+/// Every AEAD this build implements, by ontology id.
+///
+/// A table rather than a sequence of calls, because
+/// [`the_suite_hammers_every_implemented_primitive`] reads the ids from it. Only
+/// the 256-bit forms used to be here; the 128- and 192-bit ones share a great
+/// deal of code but not the key schedule, and `aes-128-gcm-siv` derives its
+/// per-message keys differently again.
+static AEADS: &[Target] = &[
+    ("aes-128-gcm", |rng| {
+        hammer_aead(rng, &cipher::Aes128Gcm::new(&[0x11u8; 16]).unwrap(), 12)
+    }),
+    ("aes-192-gcm", |rng| {
+        hammer_aead(rng, &cipher::Aes192Gcm::new(&[0x11u8; 24]).unwrap(), 12)
+    }),
+    ("aes-256-gcm", |rng| {
+        hammer_aead(rng, &cipher::Aes256Gcm::new(&[0x11u8; 32]).unwrap(), 12)
+    }),
+    ("chacha20-poly1305", |rng| {
+        hammer_aead(
+            rng,
+            &cipher::ChaCha20Poly1305::new(&[0x22u8; 32]).unwrap(),
+            12,
+        )
+    }),
+    ("aes-128-gcm-siv", |rng| {
+        hammer_aead(rng, &cipher::Aes128GcmSiv::new(&[0x33u8; 16]).unwrap(), 12)
+    }),
+    ("aes-256-gcm-siv", |rng| {
+        hammer_aead(rng, &cipher::Aes256GcmSiv::new(&[0x33u8; 32]).unwrap(), 12)
+    }),
+];
+
 #[test]
 fn aead_opening_is_total_and_sound() {
     let mut rng = Rng::new(0x4444);
-
-    let aes = cipher::Aes256Gcm::new(&[0x11u8; 32]).unwrap();
-    hammer_aead(&mut rng, &aes, 12);
-
-    let cha = cipher::ChaCha20Poly1305::new(&[0x22u8; 32]).unwrap();
-    hammer_aead(&mut rng, &cha, 12);
-
-    let siv = cipher::Aes256GcmSiv::new(&[0x33u8; 32]).unwrap();
-    hammer_aead(&mut rng, &siv, 12);
+    for (id, hammer) in AEADS {
+        hammer(&mut rng);
+        assert!(!id.is_empty());
+    }
 }
 
 #[test]
@@ -420,28 +470,192 @@ fn key_agreement_rejects_hostile_peer_keys() {
     }
 
     // The NIST curves must reject a point that is not on the curve, which is
-    // the input that leaks the private scalar a few bits at a time.
-    let sk = [5u8; 32];
-    let mut good = [0u8; 65];
-    ec::p256::EcdhP256::public_key(&sk, &mut good).unwrap();
-    let mut out = [0u8; 32];
-    assert!(ec::p256::EcdhP256::agree(&sk, &good, &mut out).is_ok());
+    // the input that leaks the private scalar a few bits at a time. Each curve
+    // validates in its own field arithmetic, so P-256 passing says nothing
+    // about the other two: only P-256 was checked here before.
+    for (id, hammer) in NIST_AGREEMENTS {
+        hammer(&mut rng);
+        assert!(!id.is_empty());
+    }
+}
 
-    for bad in hostile_inputs(&mut rng, good.len(), 40) {
+/// Hammer one NIST curve's ECDH with off-curve and perturbed peer keys.
+///
+/// Generic over the scheme so the three curves are tested by the same code
+/// rather than three copies that could drift apart. `SCALAR` and `POINT` are
+/// the curve's byte widths, which differ per curve and so cannot be inferred.
+fn hammer_ecdh<A, const SCALAR: usize, const POINT: usize>(rng: &mut Rng, seed: u8)
+where
+    A: KeyAgreement,
+{
+    let mut sk = [seed; SCALAR];
+    // The top byte is cleared so the scalar is comfortably below the group
+    // order on every curve, P-521 included, where only the low bit of the top
+    // byte is available.
+    sk[0] = 0;
+
+    let mut good = [0u8; POINT];
+    A::public_key(&sk, &mut good).unwrap();
+    let mut out = [0u8; SCALAR];
+    assert!(
+        A::agree(&sk, &good, &mut out).is_ok(),
+        "the genuine case must work, or nothing below tests anything"
+    );
+
+    for bad in hostile_inputs(rng, POINT, 40) {
         assert!(
-            ec::p256::EcdhP256::agree(&sk, &bad, &mut out).is_err(),
+            A::agree(&sk, &bad, &mut out).is_err(),
             "an off-curve peer key was accepted"
         );
     }
-    // A point whose coordinates are individually valid but which does not
-    // satisfy the curve equation.
+
+    // Points whose coordinates are individually in range but which do not
+    // satisfy the curve equation. The leading byte is left alone so the point
+    // still claims to be uncompressed and gets past the cheap check.
     for _ in 0..40 {
         let mut bad = good;
-        let at = 1 + rng.below(64);
+        let at = 1 + rng.below(POINT - 1);
         bad[at] ^= 1 << rng.below(8);
         assert!(
-            ec::p256::EcdhP256::agree(&sk, &bad, &mut out).is_err(),
+            A::agree(&sk, &bad, &mut out).is_err(),
             "a perturbed peer key was accepted"
+        );
+    }
+}
+
+/// Every NIST-curve key agreement this build implements, by ontology id.
+static NIST_AGREEMENTS: &[Target] = &[
+    ("ecdh-p256", |rng| {
+        hammer_ecdh::<ec::p256::EcdhP256, 32, 65>(rng, 5)
+    }),
+    ("ecdh-p384", |rng| {
+        hammer_ecdh::<ec::p384::EcdhP384, 48, 97>(rng, 7)
+    }),
+    ("ecdh-p521", |rng| {
+        hammer_ecdh::<ec::p521::EcdhP521, 66, 133>(rng, 9)
+    }),
+];
+
+// ---------------------------------------------------------------------------
+// Coverage
+// ---------------------------------------------------------------------------
+
+/// Primitives hardened somewhere other than this file.
+///
+/// Each is named with where its own hostile-input suite lives, so this is a
+/// pointer rather than an exemption. Anything added here without one is being
+/// excused, which is the thing this test exists to prevent.
+static COVERED_ELSEWHERE: &[(&str, &str)] = &[
+    // The verifier was fuzzed as it was written; see the module doc there for
+    // the same three properties this file argues.
+    ("ml-dsa-65", "ic-mldsa/tests/robustness.rs"),
+    // The RSA signature schemes share one public key shape and one parser, and
+    // `rsa_verification_is_total_and_sound` hammers it through both paddings
+    // at all three digest sizes.
+    ("rsa-pkcs1-sha384", "rsa_verification_is_total_and_sound"),
+    ("rsa-pkcs1-sha512", "rsa_verification_is_total_and_sound"),
+    ("rsa-pss-sha384", "rsa_verification_is_total_and_sound"),
+    ("rsa-pss-sha512", "rsa_verification_is_total_and_sound"),
+];
+
+/// Everything this file hammers, by ontology id.
+fn hammered_here() -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = Vec::new();
+    ids.extend(AEADS.iter().map(|(id, _)| *id));
+    ids.extend(NIST_AGREEMENTS.iter().map(|(id, _)| *id));
+    // Named individually because their hammering is not table-driven: each
+    // needs a differently shaped key and signature.
+    ids.extend([
+        "ecdsa-p256-sha256",
+        "ecdsa-p384-sha384",
+        "ecdsa-p521-sha512",
+        "ed25519",
+        "rsa-pkcs1-sha256",
+        "rsa-pss-sha256",
+        "x25519",
+        "ml-kem-768",
+    ]);
+    ids
+}
+
+/// Every implemented algorithm that parses attacker-chosen bytes must be
+/// hammered by this suite or name where it is hammered instead.
+///
+/// The doc at the top of this file says the suite exists "so that adding an
+/// algorithm without hardening it is visible rather than merely possible".
+/// Nothing made it visible. The targets were written out by hand, and six had
+/// drifted out of coverage by the time anyone looked: the 128- and 192-bit
+/// AEADs, `aes-128-gcm-siv`, ECDSA on P-521, and ECDH on P-384 and P-521.
+///
+/// P-521 was the one worth having. Its field arithmetic is the awkward case --
+/// 521 bits is no multiple of a limb, so the top limb is partly used and every
+/// reduction has to account for it -- and it had no hostile coverage at either
+/// level.
+///
+/// The ontology knows what this build implements, which makes it the thing to
+/// ask. A class is listed here when its inputs come from whoever is on the
+/// other side of the exchange.
+#[test]
+fn the_suite_hammers_every_implemented_primitive() {
+    // Classes whose parsing surface an attacker reaches directly: a signature
+    // to verify, a sealed message to open, a peer's key, a ciphertext to
+    // decapsulate.
+    const EXPOSED: &[&str] = &["aead", "signature", "kem", "key-agreement"];
+
+    let hammered = hammered_here();
+    let excused: Vec<&str> = COVERED_ELSEWHERE.iter().map(|(id, _)| *id).collect();
+
+    let mut owed = 0;
+    let mut missing: Vec<&str> = Vec::new();
+    for e in ic_ontology::all() {
+        if !EXPOSED.contains(&e.class.id()) {
+            continue;
+        }
+        // `experimental` counts: an implementation nobody has checked against a
+        // second one is not a reason to leave its parser unhammered. `planned`
+        // and `excluded` do not, since there is no code to hammer.
+        if !matches!(
+            e.status,
+            ic_ontology::ImplStatus::Available | ic_ontology::ImplStatus::Experimental
+        ) {
+            continue;
+        }
+        owed += 1;
+        if !hammered.contains(&e.id) && !excused.contains(&e.id) {
+            missing.push(e.id);
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these parse attacker-chosen bytes and nothing hammers them: {missing:?}"
+    );
+
+    // Floors. The loop above passes trivially if the ontology returns nothing,
+    // or if every entry turns out to be excused rather than tested.
+    assert!(
+        owed > 15,
+        "only {owed} implemented primitives found; the ontology query is wrong"
+    );
+    assert!(
+        hammered.len() >= owed - excused.len(),
+        "more primitives are excused than tested"
+    );
+
+    // Nothing may be excused that is not implemented, and nothing may be listed
+    // as hammered that does not exist -- either would be a stale entry quietly
+    // widening the exemption.
+    for (id, where_) in COVERED_ELSEWHERE {
+        assert!(
+            ic_ontology::get(id).is_some(),
+            "{id} is excused but is not in the ontology"
+        );
+        assert!(!where_.is_empty(), "{id} is excused without saying where");
+    }
+    for id in &hammered {
+        assert!(
+            ic_ontology::get(id).is_some(),
+            "{id} is claimed as hammered but is not in the ontology"
         );
     }
 }
