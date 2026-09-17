@@ -608,6 +608,19 @@ mod tests {
             }
         }
 
+        // The exhaustive matches above catch a variant being *added* -- they
+        // stop compiling until it is handled, and handling it means looking at
+        // the list right there. They do not catch one being *removed* from a
+        // list, since a shorter list still maps each of its members to itself.
+        // These counts are the other half: they sit beside the matches, and the
+        // only way to satisfy both is to edit them together.
+        assert_eq!(ImplStatus::ALL.len(), 4);
+        assert_eq!(FipsStatus::ALL.len(), 5);
+        assert_eq!(Performance::ALL.len(), 4);
+        assert_eq!(Severity::ALL.len(), 3);
+        assert_eq!(Unit::ALL.len(), 2);
+        assert_eq!(Relation::ALL.len(), 5);
+
         for v in ImplStatus::ALL {
             assert_eq!(identify_status(*v), *v);
         }

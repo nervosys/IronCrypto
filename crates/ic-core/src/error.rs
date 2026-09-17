@@ -189,6 +189,13 @@ mod tests {
             }
         }
 
+        // The match catches a variant being added: it stops compiling until
+        // the new one is handled, and handling it means editing the list right
+        // there. It does not catch one being dropped from `ALL`, because a
+        // shorter list still maps each of its members to itself. This count
+        // sits beside the match so the two are edited together.
+        assert_eq!(ErrorKind::ALL.len(), 11);
+
         for kind in ErrorKind::ALL {
             assert_eq!(identify(*kind), *kind);
         }
