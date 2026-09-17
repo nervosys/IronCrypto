@@ -89,7 +89,9 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         Capability {
             id: "hardware-acceleration",
             present: backend().fast_bulk_symmetric(),
-            note: "x86-64 AES-NI and PCLMULQDQ, selected at runtime and validated against the                    portable backend. Absent on other targets, where AES falls back to the                    constant-time portable path at single-digit MB/s.",
+            note: "x86-64 AES-NI and PCLMULQDQ, selected at runtime and validated against the \
+                   portable backend. Absent on other targets, where AES falls back to the \
+                   constant-time portable path at single-digit MB/s.",
         },
         Capability {
             id: "fips-validated",
@@ -100,8 +102,12 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         },
         Capability {
             id: "post-quantum",
-            present: false,
-            note: "ML-KEM and ML-DSA are registered in the ontology as planned, not implemented.",
+            present: true,
+            note: "ML-KEM-768 and ML-DSA-65, both checked against NIST's published ACVP vectors -- \
+                   every case in each parameter set, not a selection. Only the 768 and 65 parameter \
+                   sets are present. Deploy the KEM in a hybrid with X25519 rather than alone: \
+                   lattice cryptanalysis is young, and that is a judgement about the scheme's age \
+                   rather than about this implementation.",
         },
         Capability {
             id: "approved-asymmetric",
@@ -168,11 +174,46 @@ mod tests {
     #[test]
     fn unimplemented_capabilities_report_false() {
         assert!(!has("fips-validated"));
-        assert!(!has("post-quantum"));
+    }
+
+    /// A capability's note is prose an agent reads, so it must read as prose.
+    ///
+    /// A Rust string broken across lines needs a trailing backslash, which eats
+    /// the newline and the next line's indentation. Without it the indentation
+    /// stays in the string. Four MCP tool descriptions had exactly that defect;
+    /// the check that catches them looks only at tool descriptions, and this
+    /// found `hardware-acceleration` carrying two runs of twenty spaces.
+    #[test]
+    fn capability_notes_read_as_prose() {
+        let mut checked = 0;
+        for c in capabilities() {
+            assert!(
+                !c.note.contains("  "),
+                "{}: the note has a run of spaces, so a line continuation is missing: {:?}",
+                c.id,
+                c.note
+            );
+            assert!(
+                !c.note.contains('\n') && !c.note.contains('\t'),
+                "{}: the note has a literal newline or tab",
+                c.id
+            );
+            assert!(
+                c.note.trim() == c.note && c.note.len() > 20,
+                "{}: the note is padded, or too short to say anything",
+                c.id
+            );
+            checked += 1;
+        }
+        assert!(checked >= 8, "only {checked} capabilities examined");
     }
 
     #[test]
     fn implemented_capabilities_report_true() {
+        // `post-quantum` was in the test above until ML-KEM-768 and ML-DSA-65
+        // were checked against ACVP vectors. `fips-validated` stays there, and
+        // stays until a certificate exists: it is not a property of code.
+        assert!(has("post-quantum"));
         assert!(has("no-std"));
         assert!(has("zero-dependencies"));
         assert!(has("constant-time-symmetric"));

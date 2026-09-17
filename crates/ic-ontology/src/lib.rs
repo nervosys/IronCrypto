@@ -22,25 +22,32 @@
 //!
 //! ## The property that matters most
 //!
-//! The registry describes algorithms this library does **not** implement. An
-//! agent asked for a FIPS-approved signature learns that ECDSA P-256 is the
-//! answer *and* that it is unavailable here, rather than being handed Ed25519
-//! as a near-enough substitute:
+//! The registry describes algorithms this library does **not** implement, and
+//! declines rather than substituting something weaker. Asked for a policy
+//! nothing here satisfies, an agent gets a refusal instead of the nearest
+//! plausible answer:
 //!
 //! ```
 //! use ic_ontology::select::{recommend, Intent, NoRecommendation, Policy};
 //!
-//! // ML-KEM is the right answer for post-quantum key agreement, and is not
-//! // implemented here, so the selector declines rather than offering X25519.
-//! let outcome = recommend(Intent::AgreeKey, Policy::POST_QUANTUM);
-//! assert_eq!(
-//!     outcome.unwrap_err(),
-//!     NoRecommendation::KnownButUnavailable { id: "ml-kem-768" }
+//! // No hash offers this much quantum resistance, so the answer is "nothing",
+//! // not "the strongest one available".
+//! let outcome = recommend(
+//!     Intent::HashData,
+//!     Policy { require_fips: false, min_classical_bits: 0,
+//!              min_quantum_bits: 512, aes_hardware: false },
 //! );
+//! assert_eq!(outcome.unwrap_err(), NoRecommendation::NothingSatisfiesPolicy);
 //! ```
 //!
 //! An honest "no" is worth more to an autonomous caller than a plausible
 //! "yes".
+//!
+//! This example used to be post-quantum key agreement, which returned
+//! [`select::NoRecommendation::KnownButUnavailable`] because ML-KEM-768 was
+//! implemented but not checked against anyone else's values. It is checked
+//! against NIST's ACVP vectors now, so that call succeeds and the example had
+//! to move to a policy that still has no answer.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

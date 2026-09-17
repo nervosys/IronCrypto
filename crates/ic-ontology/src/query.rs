@@ -214,14 +214,32 @@ mod tests {
     }
 
     #[test]
-    fn availability_filter_excludes_planned_work() {
-        assert!(Query::new()
+    fn availability_filter_excludes_what_is_not_implemented() {
+        // The KEM class used to be the example here, because ML-KEM-768 was the
+        // only entry in it and was `experimental`. It is vector-tested now, so
+        // the filter keeps it -- and that is the point of the filter, not a
+        // failure of it.
+        let kems: Vec<&str> = Query::new()
             .class(Class::Kem)
             .available_only()
             .run()
-            .next()
-            .is_none());
-        assert!(Query::new().class(Class::Kem).run().next().is_some());
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(kems, ["ml-kem-768"]);
+
+        // Excluded algorithms are what the filter must still remove. They are
+        // in the registry so that asking for one gets a reasoned refusal rather
+        // than silence, and they must never be offered as usable.
+        for id in ["md5", "sha-1", "3des"] {
+            assert!(
+                crate::get(id).is_some(),
+                "{id} should still be listed, so a request for it is answered"
+            );
+            assert!(
+                !Query::new().available_only().run().any(|e| e.id == id),
+                "{id} is broken and must not appear as available"
+            );
+        }
     }
 
     #[test]

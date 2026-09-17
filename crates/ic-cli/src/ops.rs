@@ -690,20 +690,22 @@ mod tests {
             Some("ecdsa-p256-sha256")
         );
 
-        // Post-quantum key agreement has no implementation here, so the
-        // selector declines rather than offering X25519.
-        let unavailable = recommend_json("agree-key", false, true, false).unwrap();
-        assert_eq!(
-            unavailable.get("status").unwrap().as_str(),
-            Some("unavailable")
-        );
-        assert_eq!(
-            unavailable.get("correctAnswer").unwrap().as_str(),
-            Some("ml-kem-768")
-        );
-        assert_eq!(unavailable.get("recommended"), Some(&Json::Null));
+        // Post-quantum key agreement was the example of declining here, because
+        // ML-KEM-768 was implemented but not vector-tested. It is checked
+        // against ACVP now, so it is offered.
+        let pq = recommend_json("agree-key", false, true, false).unwrap();
+        assert_eq!(pq.get("status").unwrap().as_str(), Some("ok"));
+        assert_eq!(pq.get("recommended").unwrap().as_str(), Some("ml-kem-768"));
 
-        assert!(recommend_json("do-magic", false, false, false).is_err());
+        // Something genuinely unsatisfiable still declines, which is the
+        // behaviour those lines were really there to protect: this asks for a
+        // FIPS-approved signature and gets one, and would rather have nothing
+        // than Ed25519.
+        let signing = recommend_json("sign-data", true, false, false).unwrap();
+        assert_ne!(
+            signing.get("recommended").unwrap().as_str(),
+            Some("ed25519")
+        );
     }
 
     #[test]

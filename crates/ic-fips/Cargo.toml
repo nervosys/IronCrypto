@@ -13,7 +13,7 @@ publish.workspace = true
 
 [features]
 default = ["std"]
-std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-ontology/std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-mlkem/std", "ic-mldsa/std", "ic-ontology/std"]
 
 [dependencies]
 ic-core = { workspace = true }
@@ -24,4 +24,6 @@ ic-cipher = { workspace = true }
 ic-drbg = { workspace = true }
 ic-ec = { workspace = true }
 ic-rsa = { workspace = true }
+ic-mlkem = { workspace = true }
+ic-mldsa = { workspace = true }
 ic-ontology = { workspace = true }

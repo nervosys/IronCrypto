@@ -352,17 +352,20 @@ mod tests {
             check("nonsense").unwrap_err().kind(),
             ErrorKind::Unsupported
         );
-        // Both experimental entries are refused here even though they are
-        // FIPS-approved *algorithms* with working code. That is the point of
-        // the status: approval is about the algorithm, availability is about
-        // whether this implementation has been shown to be that algorithm, and
-        // only the second one gates use.
+        // ML-KEM-768 and ML-DSA-65 used to be refused here. They were
+        // FIPS-approved algorithms with working code and the status gated them
+        // anyway, because approval is about the algorithm while availability is
+        // about whether this implementation has been shown to *be* that
+        // algorithm -- and only the second gates use. They are checked against
+        // ACVP vectors now, so the second condition holds and they are accepted.
+        assert!(check("ml-kem-768").is_ok());
+        assert!(check("ml-dsa-65").is_ok());
+
+        // AES-GCM-SIV still demonstrates the rule: it has working code and no
+        // published vector wired in, so availability refuses it regardless of
+        // what its approval status says.
         assert_eq!(
-            check("ml-kem-768").unwrap_err().kind(),
-            ErrorKind::Unsupported
-        );
-        assert_eq!(
-            check("ml-dsa-65").unwrap_err().kind(),
+            check("aes-256-gcm-siv").unwrap_err().kind(),
             ErrorKind::Unsupported
         );
 

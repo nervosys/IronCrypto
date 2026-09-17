@@ -696,29 +696,72 @@ mod tests {
         assert_eq!(r.alternative.map(|e| e.id), Some("ecdh-p256"));
     }
 
-    /// The "honest no" path still exists for algorithms genuinely absent.
+    /// A post-quantum policy now gets an answer rather than an apology.
+    ///
+    /// These two assertions used to be the opposite: both intents returned
+    /// `KnownButUnavailable`, because ML-KEM-768 and ML-DSA-65 were registered
+    /// `experimental` and `recommend` will not hand back something it cannot
+    /// vouch for. They are checked against NIST's published ACVP vectors now --
+    /// 50 cases for the KEM, 55 for the signature scheme -- so the status is
+    /// `Available` and the answer exists.
     #[test]
-    fn unavailable_schemes_are_reported_not_substituted() {
-        let err = recommend(Intent::AgreeKey, Policy::POST_QUANTUM).unwrap_err();
-        assert_eq!(
-            err,
-            NoRecommendation::KnownButUnavailable { id: "ml-kem-768" }
-        );
+    fn a_post_quantum_policy_now_has_answers() {
+        let r = recommend(Intent::AgreeKey, Policy::POST_QUANTUM).unwrap();
+        assert_eq!(r.primary.id, "ml-kem-768");
+        assert!(r.primary.strength.quantum >= 128);
 
-        let err = recommend(Intent::SignData, Policy::POST_QUANTUM).unwrap_err();
-        assert_eq!(
-            err,
-            NoRecommendation::KnownButUnavailable { id: "ml-dsa-65" }
+        let r = recommend(Intent::SignData, Policy::POST_QUANTUM).unwrap();
+        assert_eq!(r.primary.id, "ml-dsa-65");
+        assert!(r.primary.strength.quantum >= 128);
+
+        // The hybrid advice has to survive becoming available. It is the one
+        // piece of guidance a caller most needs here and the easiest to lose
+        // while editing an entry's status.
+        let r = recommend(Intent::AgreeKey, Policy::POST_QUANTUM).unwrap();
+        assert!(
+            r.must_observe
+                .iter()
+                .any(|c| c.id == "deploy-post-quantum-in-a-hybrid"),
+            "ml-kem-768 no longer tells the caller to deploy it in a hybrid"
         );
     }
 
+    /// Declining is still what happens when nothing fits.
+    ///
+    /// This is the property the two tests above used to carry: `recommend`
+    /// would rather say it has nothing than substitute something weaker. It
+    /// used to be reachable through `KnownButUnavailable`, which no longer
+    /// occurs anywhere in the policy space -- everything the registry knows and
+    /// that satisfies a policy is implemented. `NothingSatisfiesPolicy` is
+    /// where the behaviour lives now, and it is reached often.
     #[test]
-    fn post_quantum_policy_reports_what_is_missing() {
-        let err = recommend(Intent::AgreeKey, Policy::POST_QUANTUM).unwrap_err();
-        assert_eq!(
-            err,
-            NoRecommendation::KnownButUnavailable { id: "ml-kem-768" }
-        );
+    fn a_policy_nothing_satisfies_is_declined_not_approximated() {
+        // No hash offers quantum resistance at this level, and the answer must
+        // be a refusal rather than the strongest thing available.
+        let err = recommend(
+            Intent::HashData,
+            Policy {
+                require_fips: false,
+                min_classical_bits: 0,
+                min_quantum_bits: 512,
+                aes_hardware: false,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, NoRecommendation::NothingSatisfiesPolicy);
+
+        // And a classical strength nothing here reaches.
+        let err = recommend(
+            Intent::SignData,
+            Policy {
+                require_fips: true,
+                min_classical_bits: 512,
+                min_quantum_bits: 0,
+                aes_hardware: false,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, NoRecommendation::NothingSatisfiesPolicy);
     }
 
     #[test]

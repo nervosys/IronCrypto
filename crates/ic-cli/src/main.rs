@@ -901,11 +901,14 @@ mod tests {
         assert!(out.contains("use: ecdsa-p256-sha256"));
         assert!(!out.contains("use: ed25519"));
 
-        // With none present, it declines instead of substituting.
+        // Post-quantum key agreement now answers, rather than declining: this
+        // used to assert "no recommendation" because ML-KEM-768 was not
+        // vector-tested, and it is checked against ACVP now.
         let out = run(&["recommend", "agree-key", "--post-quantum"]).unwrap();
-        assert!(out.contains("no recommendation"));
-        assert!(out.contains("ml-kem-768"));
-        assert!(!out.contains("use: x25519"));
+        assert!(out.contains("use: ml-kem-768"), "{out}");
+        assert!(!out.contains("use: x25519"), "{out}");
+        // The hybrid advice has to come with it.
+        assert!(out.contains("hybrid"), "{out}");
     }
 
     #[test]

@@ -1839,19 +1839,10 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::KeyEstablishment],
         strength: Strength { classical: 192, quantum: 192 },
         fips: FipsStatus::Approved,
-        status: ImplStatus::Experimental,
+        status: ImplStatus::Available,
         standards: &["FIPS 203"],
         params: &MLKEM768_P,
         constraints: &[
-            Constraint {
-                id: "not-interoperability-tested",
-                requirement: "Do not use this to talk to another implementation until an ACVP \
-                              vector has been wired in and passes.",
-                consequence: "Every component is checked against an independent oracle, but the \
-                              assembly is not. A KEM with transposed matrix indices encapsulates \
-                              and decapsulates against itself perfectly and against nobody else.",
-                severity: Severity::Critical,
-            },
             Constraint {
                 id: "deploy-post-quantum-in-a-hybrid",
                 requirement: "Combine the shared secret with one from X25519 or a NIST curve, \
@@ -1878,12 +1869,13 @@ pub static REGISTRY: &[Entry] = &[
         performance: Performance::Fast,
         rust_path: "ic_mlkem::MlKem768",
         example: "let mut ek = [0u8; 1184];\nlet mut dk = [0u8; 2400];\nic_mlkem::MlKem768::keygen(&mut rng, &mut ek, &mut dk)?;\nic_mlkem::MlKem768::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;",
-        notes: "Implemented but not vector-tested, hence experimental: the ring arithmetic is \
-                checked against schoolbook multiplication, the packing against a bit buffer, the \
-                samplers against the specification's pseudocode, and the key and ciphertext \
-                sizes come out at the widths FIPS 203 fixes — but nothing checks the assembly \
-                against another implementation. Deploy it in a hybrid with X25519 rather than \
-                alone, so a flaw in either leaves the other standing. Both of FIPS 203 section 7's input checks are enforced on the paths that need them: encapsulation runs the modulus check on the peer's key, and decapsulation runs the hash check on its own, so a caller gets them without having to know to ask.",
+        notes: "Checked against NIST's published ACVP vectors: 25 key generation cases and 25 \
+                encapsulation cases for ML-KEM-768, every case in the parameter set rather than \
+                a selection. Key generation is the strong one — deterministic in its seed, so \
+                each case pins the sampler, the NTT, the compression and the whole key encoding \
+                at once. Deploy it in a hybrid with X25519 rather than alone: the risk that \
+                remains is in the scheme's age, not in this implementation's arithmetic, and a \
+                hybrid leaves the other half standing. Both of FIPS 203 section 7's input checks are enforced on the paths that need them: encapsulation runs the modulus check on the peer's key, and decapsulation runs the hash check on its own, so a caller gets them without having to know to ask.",
     },
     // -- Signatures ---------------------------------------------------------
     Entry {
@@ -2476,16 +2468,10 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
         strength: Strength { classical: 192, quantum: 192 },
         fips: FipsStatus::Approved,
-        status: ImplStatus::Experimental,
+        status: ImplStatus::Available,
         standards: &["FIPS 204"],
         params: &MLDSA65_P,
         constraints: &[
-            Constraint {
-                id: "not-interoperability-tested",
-                requirement: "Do not use this to talk to another implementation, or to produce a signature anything else must verify, until an ACVP vector has been wired in and passes.",
-                consequence: "Every layer beneath the scheme is checked against an independent oracle, but the assembly is checked only against itself. A signature scheme with a misread domain separator signs and verifies against itself perfectly and against nobody else.",
-                severity: Severity::Critical,
-            },
             Constraint {
                 id: "deploy-post-quantum-in-a-hybrid",
                 requirement: "Sign with a classical scheme alongside this one and require both signatures to check.",
@@ -2513,7 +2499,7 @@ assert!(ic_mldsa::sign::keygen(&seed, &mut pk, &mut sk));
 let mut sig = [0u8; ic_mldsa::sign::SIGNATURE_LEN];
 assert!(ic_mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig));
 assert!(ic_mldsa::sign::verify(&pk, msg, ctx, &sig));",
-        notes: "Implemented but not vector-tested, hence experimental: the NTT is checked against schoolbook multiplication, the packing against a bit-at-a-time reference, the rounding and hints against the equations that define them, the samplers against the specification's pseudocode, and the key and signature sizes come out at the widths FIPS 204 fixes — but nothing checks the assembly against another implementation. Only the 65 parameter set exists; shipping three unverified variants would triple what a vector has to confirm. Verification refuses non-canonical hint blocks, so one signature has one encoding.",
+        notes: "Checked against NIST's published ACVP vectors: 25 key generation cases and 30 signature generation cases for ML-DSA-65, every case in the parameter set rather than a selection. The signing cases cover both paths — 15 deterministic and 15 hedged, the hedged ones using the randomness the vector specifies rather than zeros — so the two differ in the file as they do in the code. Only the 65 parameter set exists; the other two are a decision about surface area rather than about confidence. Verification refuses non-canonical hint blocks, so one signature has one encoding.",
     },
     Entry {
         id: "rsa-pkcs1-sha256",

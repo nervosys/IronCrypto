@@ -4,17 +4,30 @@ Files here are read by the test suite at run time. Drop one in and the matching
 test starts checking against it; leave it out and that test prints a skip
 notice and passes.
 
-That arrangement exists for a specific reason. Three algorithms in this
-workspace are registered `experimental` rather than `available`:
+That arrangement exists for a specific reason. Algorithms are registered
+`experimental` rather than `available` when they are implemented and have never
+been checked against values produced by something other than themselves.
+Supplying a file is what closes that gap, and it takes no code.
+
+It has now closed for two of them. ML-KEM-768 and ML-DSA-65 are checked against
+NIST's published ACVP vectors and are registered `available`:
+
+| algorithm | vectors | cases |
+|---|---|---|
+| `ml-kem-768` | ACVP `ML-KEM-keyGen-FIPS203`, `ML-KEM-encapDecap-FIPS203` | 25 key generation, 25 encapsulation |
+| `ml-dsa-65` | ACVP `ML-DSA-keyGen-FIPS204`, `ML-DSA-sigGen-FIPS204` | 25 key generation, 15 deterministic and 15 hedged signatures |
+
+Every case in each parameter set, not a selection. Choosing cases is how a
+vector file comes to prove that the cases which pass, pass.
+
+One remains open:
 
 | algorithm | what is verified | what is not |
 |---|---|---|
-| `ml-kem-768` | NTT against schoolbook multiplication, packing against a bit buffer, samplers against FIPS 203's pseudocode, key and ciphertext sizes against the standard | that the assembly computes what other implementations compute |
-| `aes-256-gcm-siv` | POLYVAL against the GHASH construction of RFC 8452 Appendix A, AES against FIPS 197 | the same |
-| `ml-dsa-65` | NTT against schoolbook multiplication, packing against a bit-at-a-time reference, rounding and hints against their defining equations, samplers against FIPS 204's pseudocode, key and signature sizes against the standard | the same |
+| `aes-256-gcm-siv`, `aes-128-gcm-siv` | POLYVAL against the GHASH construction of RFC 8452 Appendix A, AES against FIPS 197 | that the assembly computes what other implementations compute |
 
-None of those gaps is a code problem. Each is a missing *file*, and supplying
-one promotes the algorithm without anybody writing code.
+That gap is not a code problem. It is a missing *file* — RFC 8452 Appendix C —
+and supplying it promotes the algorithm without anybody writing code.
 
 ## Format
 
@@ -42,10 +55,10 @@ that effort in the most confusing way available.
 |---|---|---|
 | `aes-kw.json` | `key`, `pt`, `ct` | RFC 3394 section 4. **Bundled** — this one is in the repository, and is what proves the harness itself works |
 | `aes-gcm-siv.json` | `key`, `nonce`, `aad`, `pt`, `ct` (ciphertext with the tag appended) | RFC 8452 Appendix C |
-| `ml-kem-768-keygen.json` | `d`, `z`, `ek`, `dk` | ACVP `ML-KEM-keyGen-FIPS203`, `AFT` groups |
-| `ml-kem-768-encap.json` | `ek`, `m`, `c`, `k` | ACVP `ML-KEM-encapDecap-FIPS203`, encapsulation `AFT` groups |
-| `ml-dsa-65-keygen.json` | `seed`, `pk`, `sk` | ACVP `ML-DSA-keyGen-FIPS204`, `AFT` groups, `ML-DSA-65` only |
-| `ml-dsa-65-siggen.json` | `sk`, `message`, `context`, `rnd`, `signature` | ACVP `ML-DSA-sigGen-FIPS204`. Use the deterministic groups, or supply `rnd` for hedged ones |
+| `ml-kem-768-keygen.json` | `d`, `z`, `ek`, `dk` | ACVP `ML-KEM-keyGen-FIPS203`, `AFT` groups. **Bundled** |
+| `ml-kem-768-encap.json` | `ek`, `m`, `c`, `k` | ACVP `ML-KEM-encapDecap-FIPS203`, encapsulation `AFT` groups. **Bundled** |
+| `ml-dsa-65-keygen.json` | `seed`, `pk`, `sk` | ACVP `ML-DSA-keyGen-FIPS204`, `AFT` groups, `ML-DSA-65` only. **Bundled** |
+| `ml-dsa-65-siggen.json` | `sk`, `message`, `context`, `rnd`, `signature` | ACVP `ML-DSA-sigGen-FIPS204`. Use the deterministic groups, or supply `rnd` for hedged ones. **Bundled**: both |
 
 ## Converting ACVP files
 

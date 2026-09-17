@@ -878,7 +878,9 @@ mod tests {
             Some("ecdsa-p256-sha256")
         );
 
-        // And where nothing suitable is implemented, it declines outright.
+        // Post-quantum key agreement used to be the example of declining, since
+        // ML-KEM-768 was implemented but not vector-tested. It is checked
+        // against ACVP now, so the honest answer is the algorithm.
         let r = call(
             "crypto_recommend",
             Json::object([
@@ -887,9 +889,16 @@ mod tests {
             ]),
         );
         let b = body(&r);
-        assert_eq!(b.get("status").unwrap().as_str(), Some("unavailable"));
-        assert_eq!(b.get("recommended"), Some(&Json::Null));
-        assert_eq!(b.get("correctAnswer").unwrap().as_str(), Some("ml-kem-768"));
+        assert_eq!(b.get("status").unwrap().as_str(), Some("ok"));
+        assert_eq!(b.get("recommended").unwrap().as_str(), Some("ml-kem-768"));
+        // And it still carries the advice that matters more than the choice.
+        assert!(
+            b.get("mustObserve")
+                .and_then(|c| c.as_array())
+                .is_some_and(|cs| cs.iter().any(|c| c.get("id").and_then(Json::as_str)
+                    == Some("deploy-post-quantum-in-a-hybrid"))),
+            "the hybrid constraint is missing from the recommendation"
+        );
     }
 
     #[test]
