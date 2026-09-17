@@ -487,9 +487,10 @@ const FIPS140_REQS: [Requirement; 6] = [
         statement: "Secret and private key material shall be zeroized when no longer needed.",
         rationale: "Key material left in freed memory outlives the operation that needed it, and can be recovered from a core dump, a swapped page or a reused allocation.",
         applies_to: &[],
-        compliance: Compliance::Met {
-            file: "crates/ic-core/src/zeroize.rs",
-            symbol: "Zeroize",
+        compliance: Compliance::Partial {
+            file: "crates/ic-mldsa/src/sign.rs",
+            symbol: "impl Drop for SigningKey",
+            gap: "Coverage is real but uneven, and this entry previously claimed Met on the strength of the Zeroize trait merely existing -- the same shape as a validator nothing calls. An audit of which types actually wipe found that AES key schedules, ChaCha and Poly1305 state, GHASH, POLYVAL, the CTR_DRBG, BLAKE2b, the SHA-3 sponge and the RSA private key and its bignums all do; the SHA-2 states do not, and neither does HMAC, which holds key-derived inner and outer state and so carries a CSP in every HMAC-based KDF and DRBG built on it. Closing those needs a Zeroize bound threaded through the Digest trait, which is a wider change than this entry should quietly imply is done. Two gaps found by the same audit are now closed: ML-KEM decapsulation left the recovered message, both candidate shared secrets and the derived randomness unwiped, and ML-DSA had no Drop at all while impl Zeroize for Poly sat unused. Rust also cannot guarantee a wipe survives moves and optimisation, so even the covered cases are best-effort rather than a guarantee.",
         },
     },
     Requirement {

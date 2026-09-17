@@ -433,9 +433,9 @@ impl MlKem768 {
         // decapsulation enforces.
         Self::validate_decapsulation_key(dk)?;
 
-        let m = pke_decrypt(dk_pke, ct);
-        let (k, r) = g(&[&m, hash]);
-        let reject = j(&[z, ct]);
+        let mut m = pke_decrypt(dk_pke, ct);
+        let (mut k, mut r) = g(&[&m, hash]);
+        let mut reject = j(&[z, ct]);
 
         let mut recomputed = [0u8; CIPHERTEXT_LEN];
         pke_encrypt(ek, &m, &r, &mut recomputed);
@@ -447,7 +447,17 @@ impl MlKem768 {
         for (i, out) in shared.iter_mut().enumerate() {
             *out = ic_core::ct::select_u8(matched, k[i], reject[i]);
         }
+        // Every one of these is key material. `m` is the recovered message,
+        // which is the value the whole transform protects; `k` and `reject` are
+        // the two candidate shared secrets, one of which was not selected and
+        // is therefore still live; `r` is the encryption randomness derived
+        // from `m`. Previously only `recomputed` was wiped, which is the one
+        // item on the list that is a *ciphertext*.
         recomputed.zeroize();
+        m.zeroize();
+        k.zeroize();
+        r.zeroize();
+        reject.zeroize();
         Ok(())
     }
 

@@ -48,6 +48,7 @@ use crate::rounding::{
 };
 use crate::sample::{expand_mask_poly, rej_bounded_poly, rej_ntt_poly, sample_in_ball};
 use ic_core::traits::Xof;
+use ic_core::Zeroize;
 use ic_hash::Shake256;
 
 /// Rows of `A`, and the length of `t`, `s2` and `w`.
@@ -389,6 +390,32 @@ struct SigningKey {
     s1: [Poly; L],
     s2: [Poly; K],
     t0: [Poly; K],
+}
+
+impl Drop for SigningKey {
+    /// Wipe the secret halves when the decoded key goes out of scope.
+    ///
+    /// `sk_decode` runs on every signature, so without this each one leaves a
+    /// copy of `s1`, `s2` and `t0` on the stack. `rho` is skipped deliberately:
+    /// it is published in the verification key, and wiping public material
+    /// alongside private material blurs which is which.
+    ///
+    /// This crate had no `Drop` anywhere before, while `impl Zeroize for Poly`
+    /// sat unused -- the trait existed, the application did not, which is the
+    /// same shape as a validator nothing calls.
+    fn drop(&mut self) {
+        self.key.zeroize();
+        self.tr.zeroize();
+        for p in self.s1.iter_mut() {
+            p.zeroize();
+        }
+        for p in self.s2.iter_mut() {
+            p.zeroize();
+        }
+        for p in self.t0.iter_mut() {
+            p.zeroize();
+        }
+    }
 }
 
 fn sk_decode(sk: &[u8; SECRET_KEY_LEN]) -> SigningKey {
