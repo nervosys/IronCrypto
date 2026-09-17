@@ -56,25 +56,8 @@ codebase uses an algorithm the ontology marks `disallowed`.
 
 ### The property that matters most
 
-Ask for something this library cannot do, and it says so — instead of handing
-back the nearest available substitute:
-
-```console
-$ icrypto recommend agree-key --post-quantum
-no recommendation.
-
-The correct algorithm for this request is ml-kem-768, which is not implemented
-in this build.
-Do not substitute a different algorithm to work around this.
-```
-
-X25519 *is* implemented and *is* a key agreement scheme. A library that
-optimizes for "always return something" would have returned it, silently missing
-the requirement the caller actually stated. An honest "no" is worth more to an
-autonomous caller than a plausible "yes".
-
-The same discipline applies when an approved option *does* exist — it wins on
-the merits, and the one passed over is named:
+Never substitute something the caller did not ask for. That has two halves, and
+the first is refusing to trade a stated requirement for availability:
 
 ```console
 $ icrypto recommend sign-data --fips
@@ -85,7 +68,38 @@ use: ecdsa-p256-sha256
 
 considered and rejected:
   ed25519: Not approved for the FIPS approved mode of operation.
+  ml-dsa-65: Post-quantum and implemented, but larger and slower. Pass
+    --post-quantum to choose it, and prefer a hybrid with the classical scheme
+    over either alone.
+  rsa-pss-sha256: Also approved, but slower and far larger at the same strength.
+    Choose it only to meet an existing interface.
 ```
+
+Ed25519 *is* implemented, *is* a signature scheme, and is faster. A library that
+optimizes for "always return something" could have returned it, silently missing
+the requirement the caller actually stated. Here it is passed over, and named,
+so the caller can see the choice rather than infer it.
+
+The second half is refusing outright when nothing fits:
+
+```rust
+use ic_ontology::select::{recommend, Intent, NoRecommendation, Policy};
+
+// No hash on offer is this quantum-resistant.
+let outcome = recommend(
+    Intent::HashData,
+    Policy { require_fips: false, min_classical_bits: 0,
+             min_quantum_bits: 512, aes_hardware: false },
+);
+assert_eq!(outcome.unwrap_err(), NoRecommendation::NothingSatisfiesPolicy);
+```
+
+An honest "no" is worth more to an autonomous caller than a plausible "yes".
+
+That second example used to be post-quantum key agreement, which was declined
+because ML-KEM-768 was implemented and unverified. It is checked against NIST's
+ACVP vectors now, so the request has a real answer and the example had to move
+to one that still does not.
 
 ---
 
@@ -175,6 +189,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV (experimental) |
+| Post-quantum | ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204), both ACVP-checked |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
@@ -190,24 +205,22 @@ The ontology registers algorithms this library does **not** provide, marked
 - **RSA encryption** — not offered at all. RSAES-PKCS1-v1_5 is a Bleichenbacher
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.
-- **ARMv8 crypto extensions** — `planned`. Apple Silicon and modern ARM servers
-  have AES instructions this build does not yet use.
+- **ARMv8 crypto extensions** — implemented, behind the off-by-default
+  `aarch64-crypto` feature, and never executed. It compiles for
+  `aarch64-apple-darwin` and its round structure is checked against a software
+  model of the instructions — which is what caught the decryption key schedule
+  being wrong — but no machine has run it. It becomes the default once CI has.
 - **X.509 certificate parsing** — out of scope. Names, validity, extensions, and
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
   `SubjectPublicKeyInfo` from any X.509 parser to `ic_pkix::PublicKeyInfo`.
-- **ML-DSA-65** (FIPS 204) — `experimental`, for the same reason as ML-KEM and
-  with the same caveat. Every layer is independently checked: the NTT against
-  schoolbook multiplication, the packing against a bit-at-a-time reference, the
-  rounding and hints against the equations that define them, the samplers
-  against the specification's pseudocode, and the key and signature sizes
-  against the widths FIPS 204 fixes. The scheme on top of them is checked only
-  by signing and verifying — which is not nothing, since signing computes
-  `A*y` and verification computes `A*z - c*t1*2^d` and the two must meet through
-  the hints, but it cannot catch a convention misread consistently. Only the 65
-  parameter set exists, in both the pure and pre-hash variants. ML-KEM-768 is
-  `experimental` on the same terms. Both are
-  excluded from the approved mode and from `recommend`.
+- **AES-GCM-SIV** — `experimental`, and the last algorithm here that is. Its
+  components are checked — POLYVAL against the GHASH construction of RFC 8452
+  Appendix A, AES against FIPS 197 — and their assembly is not. That is a
+  missing *file*, RFC 8452 Appendix C, rather than missing code: see
+  `testvectors/README.md`.
+- **Other ML-KEM and ML-DSA parameter sets** — only 768 and 65 are implemented.
+  That is a decision about surface area, not about confidence.
 ### Timing
 
 ```sh
@@ -311,22 +324,29 @@ $ icrypto capabilities
   [x] no-std
   [x] zero-dependencies
   [x] constant-time-symmetric
-  [x] approved-asymmetric
   [x] hardware-acceleration      # on this machine; portable elsewhere
-  [x] key-encoding
   [ ] fips-validated
-  [ ] post-quantum
+  [x] post-quantum
+  [x] approved-asymmetric
+  [x] key-encoding
 ```
 
 ---
 
 ## Supplying test vectors
 
-Two algorithms are `experimental` only because nobody has checked them against
-values from another implementation. That is a missing *file*, not missing code:
-drop an ACVP or RFC vector file into `testvectors/` and the matching test starts
-running. Without one it skips and says so. `testvectors/README.md` has the
-format, the field names, and `jq` recipes for converting ACVP output.
+An algorithm is `experimental` when it is implemented and nobody has checked it
+against values produced by something other than itself. That is a missing
+*file*, not missing code: drop an ACVP or RFC vector file into `testvectors/`
+and the matching test starts running. Without one it skips and says so.
+
+It worked. ML-KEM-768 and ML-DSA-65 were `experimental` until NIST's published
+ACVP vectors were dropped in — 105 cases across key generation, encapsulation
+and signing, every case in each parameter set rather than a selection. No code
+changed. AES-GCM-SIV is the one still waiting, on RFC 8452 Appendix C.
+
+`testvectors/README.md` has the format, the field names, and `jq` recipes for
+converting ACVP output.
 
 ## Honest limits
 
@@ -374,7 +394,7 @@ Against aws-lc-rs, BoringSSL, and OpenSSL, IronCrypto leads on portability
 (zero dependencies, no C toolchain, genuine bare-metal `no_std`) and on the
 agent-facing ontology, which none of them has. With the NIST curves and RSA
 signatures in place it covers the algorithms most deployments actually reach
-for. It still trails on post-quantum schemes, on RSA encryption, on X.509
+for, post-quantum included. It still trails on RSA encryption, on X.509
 certificate handling, and — decisively — on validation status. Pick accordingly, and note that the ontology will tell
 you which case you're in without your having to read this paragraph.
 

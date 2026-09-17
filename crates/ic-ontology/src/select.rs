@@ -462,7 +462,9 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                         }),
                         Some(Rejected {
                             id: "ml-kem-768",
-                            reason: "Post-quantum, but not implemented in this build.",
+                            reason: "Post-quantum and implemented, but larger and slower. \
+                                     Pass --post-quantum to choose it, and prefer a hybrid \
+                                     with the classical scheme over either alone.",
                         }),
                         None,
                     ],
@@ -480,7 +482,9 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                         }),
                         Some(Rejected {
                             id: "ml-kem-768",
-                            reason: "Post-quantum, but not implemented in this build.",
+                            reason: "Post-quantum and implemented, but larger and slower. \
+                                     Pass --post-quantum to choose it, and prefer a hybrid \
+                                     with the classical scheme over either alone.",
                         }),
                         None,
                     ],
@@ -505,7 +509,9 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                         }),
                         Some(Rejected {
                             id: "ml-dsa-65",
-                            reason: "Post-quantum, but not implemented in this build.",
+                            reason: "Post-quantum and implemented, but larger and slower. \
+                                     Pass --post-quantum to choose it, and prefer a hybrid \
+                                     with the classical scheme over either alone.",
                         }),
                         Some(Rejected {
                             id: "rsa-pss-sha256",
@@ -528,7 +534,9 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                         }),
                         Some(Rejected {
                             id: "ml-dsa-65",
-                            reason: "Post-quantum, but not implemented in this build.",
+                            reason: "Post-quantum and implemented, but larger and slower. \
+                                     Pass --post-quantum to choose it, and prefer a hybrid \
+                                     with the classical scheme over either alone.",
                         }),
                         Some(Rejected {
                             id: "rsa-pss-sha256",
