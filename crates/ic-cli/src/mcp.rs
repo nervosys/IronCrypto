@@ -662,20 +662,115 @@ mod tests {
     fn tools_list_is_complete_and_well_formed() {
         let r = handle(&request("tools/list", Json::Null)).unwrap();
         let listed = r.get("result").unwrap().get("tools").unwrap();
-        match listed {
-            Json::Array(items) => {
-                assert_eq!(items.len(), tools().len());
-                for t in items {
-                    assert!(!t.get("name").unwrap().as_str().unwrap().is_empty());
-                    assert!(t.get("description").unwrap().as_str().unwrap().len() > 20);
-                    let s = t.get("inputSchema").unwrap();
-                    assert_eq!(s.get("type").unwrap().as_str(), Some("object"));
-                    assert!(s.get("properties").is_some());
-                    assert!(s.get("required").is_some());
-                }
+        let Json::Array(items) = listed else {
+            panic!("expected an array")
+        };
+        assert_eq!(items.len(), tools().len());
+
+        for t in items {
+            let name = t.get("name").unwrap().as_str().unwrap();
+            assert!(!name.is_empty());
+            assert!(t.get("description").unwrap().as_str().unwrap().len() > 20);
+
+            let s = t.get("inputSchema").unwrap();
+            assert_eq!(s.get("type").unwrap().as_str(), Some("object"));
+            let Some(Json::Object(props)) = s.get("properties") else {
+                panic!("{name} has no properties object")
+            };
+            let Some(Json::Array(required)) = s.get("required") else {
+                panic!("{name} has no required list")
+            };
+
+            // A required argument that is not a declared property cannot be
+            // supplied: `inputSchema` is the whole of what an agent is given,
+            // so an argument absent from `properties` does not exist to it.
+            for r in required {
+                let r = r.as_str().expect("required entries are strings");
+                assert!(
+                    props.contains_key(r),
+                    "{name} requires {r:?}, which it never declares"
+                );
             }
-            _ => panic!("expected an array"),
+
+            // An undescribed or untyped property is one an agent has to guess
+            // at, which is the failure mode this whole server exists to avoid.
+            for (prop, def) in props {
+                let Json::Object(def) = def else {
+                    panic!("{name}.{prop} is not a schema object")
+                };
+                assert!(
+                    def.get("description")
+                        .and_then(Json::as_str)
+                        .is_some_and(|d| d.len() > 10),
+                    "{name}.{prop} has no useful description"
+                );
+                assert!(
+                    def.contains_key("type") || def.contains_key("enum"),
+                    "{name}.{prop} declares neither a type nor an enum"
+                );
+            }
         }
+    }
+
+    /// A tool's `required` list must be the one its handler enforces.
+    ///
+    /// The two are written in different places -- the schema in the `schema`
+    /// field, the demand in the `call` closure -- and nothing but this holds
+    /// them together. An agent that trusts an empty `required` and gets an
+    /// error, or supplies everything listed and is told something else is
+    /// missing, has been misled by the description it was handed.
+    ///
+    /// Calling with no arguments at all separates the two cases: a tool that
+    /// requires something must refuse, and a tool that requires nothing must
+    /// work.
+    #[test]
+    fn the_required_list_is_the_one_the_handler_enforces() {
+        let Json::Array(items) = handle(&request("tools/list", Json::Null))
+            .unwrap()
+            .get("result")
+            .unwrap()
+            .get("tools")
+            .unwrap()
+            .clone()
+        else {
+            panic!("expected an array")
+        };
+
+        let mut with_required = 0;
+        let mut without = 0;
+
+        for t in &items {
+            let name = t.get("name").unwrap().as_str().unwrap();
+            let Some(Json::Array(required)) = t.get("inputSchema").unwrap().get("required") else {
+                panic!("{name} has no required list")
+            };
+
+            let response = call(name, Json::object([]));
+            let refused = is_error(&response);
+
+            if required.is_empty() {
+                assert!(
+                    !refused,
+                    "{name} requires nothing but refused a call with no arguments: {response}"
+                );
+                without += 1;
+            } else {
+                assert!(
+                    refused,
+                    "{name} lists {} required argument(s) and accepted a call with none",
+                    required.len()
+                );
+                with_required += 1;
+            }
+        }
+
+        // Both branches must have been taken, or the test proves only that one
+        // kind of tool exists.
+        assert!(
+            with_required > 0 && without > 0,
+            "{with_required} tools with required arguments, {without} without"
+        );
+        assert_eq!(with_required + without, items.len());
     }
 
     #[test]
