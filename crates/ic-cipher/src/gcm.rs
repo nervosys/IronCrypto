@@ -46,6 +46,7 @@ impl GcmLimits {
 /// Needs `ssse3` for the byte-reversal shuffle as well as `pclmulqdq` for the
 /// multiply itself.
 #[inline]
+#[must_use]
 pub fn ghash_accelerated() -> bool {
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
     {

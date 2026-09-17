@@ -65,6 +65,7 @@ impl<'a> Reader<'a> {
     }
 
     /// Whether every byte has been consumed.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pos >= self.input.len()
     }
@@ -268,6 +269,7 @@ impl<'a> Writer<'a> {
     }
 
     /// Whether nothing has been written yet.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

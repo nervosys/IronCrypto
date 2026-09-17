@@ -126,6 +126,7 @@ fn to_limbs(bytes: &[u8; 32]) -> [u32; 8] {
 ///
 /// RFC 8032 §5.1.7 requires verifiers to reject signatures whose `S` is not
 /// canonical; skipping this is what makes an implementation malleable.
+#[must_use = "a false return means the scalar encoding was non-canonical"]
 pub fn is_canonical(s: &[u8; 32]) -> bool {
     let mut borrow = 0u16;
     for i in 0..32 {

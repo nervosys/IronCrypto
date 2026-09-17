@@ -164,6 +164,7 @@ pub fn bit_unpack(data: &[u8], b: i32, bits: u32, p: &mut Poly) {
 ///
 /// Returns `false` without writing anything if the total weight exceeds
 /// `omega`, which is the condition signing restarts on.
+#[must_use = "a false return means the hint weight exceeded omega"]
 pub fn hint_pack(hints: &[[bool; N]], omega: usize, out: &mut [u8]) -> bool {
     let k = hints.len();
     assert_eq!(out.len(), omega + k, "output length");
@@ -202,6 +203,7 @@ pub fn hint_pack(hints: &[[bool; N]], omega: usize, out: &mut [u8]) -> bool {
 /// same hint vector, so a signature could be rewritten without invalidating it.
 /// Whether that is exploitable depends on what the caller does with the bytes,
 /// which is exactly why it is not this layer's call to make.
+#[must_use = "a false return means the encoding was rejected"]
 pub fn hint_unpack(data: &[u8], omega: usize, hints: &mut [[bool; N]]) -> bool {
     let k = hints.len();
     if data.len() != omega + k {
@@ -628,7 +630,9 @@ mod tests {
             // enough noise to reach cases the rules above do not name.
             let weight = rng.below(10) as usize;
             let hints = sample_hints(&mut rng, k, weight);
-            hint_pack(&hints, omega, &mut candidate);
+            // The weight is below omega by construction, so this cannot
+            // fail; asserting says so rather than discarding the answer.
+            assert!(hint_pack(&hints, omega, &mut candidate));
             for _ in 0..rng.below(3) {
                 let at = rng.below(candidate.len() as u32) as usize;
                 candidate[at] = rng.below(256) as u8;

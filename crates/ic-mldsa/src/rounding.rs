@@ -121,6 +121,7 @@ pub fn low_bits(r: i32, gamma2: i32) -> i32 {
 /// One bit, and the whole point of the hint mechanism: the verifier cannot
 /// compute `z`, but it can be told, in one bit per coefficient, whether `z`
 /// would have moved the bucket.
+#[must_use]
 pub fn make_hint(z: i32, r: i32, gamma2: i32) -> bool {
     high_bits(r, gamma2) != high_bits((r + z).rem_euclid(Q), gamma2)
 }

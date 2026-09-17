@@ -252,6 +252,7 @@ impl Poly {
     /// the gate the whole scheme's timing story rests on: it must not branch on
     /// *which* coefficient failed, only on whether one did, and the result is
     /// public because a rejection is visible in the retry anyway.
+    #[must_use = "this is the rejection decision the signing loop depends on"]
     pub fn exceeds(&self, bound: i32) -> bool {
         // Every coefficient is inspected, and the accumulator is only consulted
         // at the end, so the timing does not reveal *which* one failed. The

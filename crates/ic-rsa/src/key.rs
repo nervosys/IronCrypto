@@ -351,6 +351,7 @@ impl RsaPrivateKey {
     ///
     /// Reported so a caller can tell a fast key from a slow one, and so the
     /// tests can assert which path they exercised.
+    #[must_use]
     pub fn uses_crt(&self) -> bool {
         self.crt.is_some()
     }

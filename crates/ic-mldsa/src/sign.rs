@@ -424,6 +424,7 @@ fn sk_decode(sk: &[u8; SECRET_KEY_LEN]) -> SigningKey {
 /// Pass zeros for the deterministic variant. Returns `false` only if the
 /// context is too long or the retry cap is reached; the latter means a bug or a
 /// malformed key rather than bad luck.
+#[must_use = "a false return means no signature was produced"]
 pub fn sign(
     sk: &[u8; SECRET_KEY_LEN],
     message: &[u8],
@@ -443,6 +444,7 @@ pub fn sign(
 /// is deliberate, and it is why handing a digest to [`sign`] is not a
 /// substitute for this function: it produces something no conforming verifier
 /// accepts. The tests assert both directions of that separation.
+#[must_use = "a false return means no signature was produced"]
 pub fn sign_prehash(
     sk: &[u8; SECRET_KEY_LEN],
     message: &[u8],
@@ -596,6 +598,7 @@ fn sign_framed(
 }
 
 /// Verify `sig` over `message` under `pk`.
+#[must_use = "this is the result of a cryptographic verification; discarding it accepts everything"]
 pub fn verify(
     pk: &[u8; PUBLIC_KEY_LEN],
     message: &[u8],
@@ -612,6 +615,7 @@ pub fn verify(
 /// know which hash the signer used; the OID inside `M'` then binds the
 /// signature to that choice, so presenting the wrong one fails rather than
 /// silently accepting.
+#[must_use = "this is the result of a cryptographic verification; discarding it accepts everything"]
 pub fn verify_prehash(
     pk: &[u8; PUBLIC_KEY_LEN],
     message: &[u8],
@@ -719,6 +723,7 @@ fn verify_framed(
 }
 
 /// Deterministic signing: the hedged path with zero randomness.
+#[must_use = "a false return means no signature was produced"]
 pub fn sign_deterministic(
     sk: &[u8; SECRET_KEY_LEN],
     message: &[u8],

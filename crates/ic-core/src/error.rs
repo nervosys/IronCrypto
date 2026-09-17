@@ -58,11 +58,13 @@ impl ErrorKind {
     /// Whether retrying the identical call could plausibly succeed.
     ///
     /// Agents use this to decide between *retry*, *re-parameterize*, and *abort*.
+    #[must_use]
     pub const fn retryable(self) -> bool {
         matches!(self, Self::EntropyFailure)
     }
 
     /// Whether the caller should change inputs and try again.
+    #[must_use]
     pub const fn caller_correctable(self) -> bool {
         matches!(
             self,

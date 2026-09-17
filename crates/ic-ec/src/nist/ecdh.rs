@@ -39,7 +39,14 @@ pub fn public_key<C: Curve>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
         .mul_scalar(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
-    q.write_uncompressed(out);
+    // The length was checked above, so this can only fail if that check
+    // and the encoder disagree. Propagating it keeps such a drift loud
+    // rather than silently returning success with nothing written.
+    ensure!(
+        q.write_uncompressed(out),
+        Internal,
+        "public key buffer length disagrees with the encoder"
+    );
     Ok(())
 }
 
@@ -55,7 +62,11 @@ pub fn public_key_compressed<C: Curve>(private_key: &[u8], out: &mut [u8]) -> Re
         .mul_scalar(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
-    q.write_compressed(out);
+    ensure!(
+        q.write_compressed(out),
+        Internal,
+        "compressed key buffer length disagrees with the encoder"
+    );
     Ok(())
 }
 

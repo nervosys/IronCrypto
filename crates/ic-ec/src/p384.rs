@@ -432,7 +432,7 @@ mod tests {
     fn decoding_rejects_bad_encodings() {
         let g = Point::generator().to_affine().unwrap();
         let mut unc = [0u8; 97];
-        g.write_uncompressed(&mut unc);
+        assert!(g.write_uncompressed(&mut unc));
 
         assert!(AffinePoint::from_sec1(&[0u8; 97]).is_none(), "identity");
         assert!(AffinePoint::from_sec1(&unc[..96]).is_none(), "truncated");

@@ -12,6 +12,7 @@ use core::hint::black_box;
 ///
 /// Stored as `0` or `1` so it can be expanded to a full-width bitmask by
 /// [`Choice::mask`] and consumed by the `select_*` helpers.
+#[must_use = "a Choice carries the outcome of a constant-time comparison"]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Choice(u8);
 
@@ -93,6 +94,7 @@ pub fn eq(a: &[u8], b: &[u8]) -> Choice {
 ///
 /// Use this for MAC and AEAD tag verification instead of `==`.
 #[inline]
+#[must_use = "this is the result of a cryptographic verification; discarding it accepts everything"]
 pub fn verify(expected: &[u8], actual: &[u8]) -> bool {
     eq(expected, actual).into()
 }

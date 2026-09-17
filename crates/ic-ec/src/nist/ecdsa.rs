@@ -194,7 +194,13 @@ pub fn public_key<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) -> Result<(
         .mul_scalar(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
-    q.write_uncompressed(out);
+    // See the note in `ecdh::public_key`: the length check above and the
+    // encoder must agree, and this is what says so if they stop.
+    ensure!(
+        q.write_uncompressed(out),
+        Internal,
+        "public key buffer length disagrees with the encoder"
+    );
     Ok(())
 }
 
@@ -210,7 +216,11 @@ pub fn public_key_compressed<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) 
         .mul_scalar(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
-    q.write_compressed(out);
+    ensure!(
+        q.write_compressed(out),
+        Internal,
+        "compressed key buffer length disagrees with the encoder"
+    );
     Ok(())
 }
 

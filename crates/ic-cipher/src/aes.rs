@@ -62,6 +62,7 @@ impl Backend {
 
 /// Whether the AES-NI backend is usable on this CPU.
 #[inline]
+#[must_use]
 pub fn aesni_available() -> bool {
     // Detection lives in `ic-core` so the ontology can report the same answer
     // without depending on this crate.

@@ -309,6 +309,7 @@ impl<C: Curve> AffinePoint<C> {
     /// Write the SEC1 uncompressed encoding `0x04 || X || Y` into `out`.
     ///
     /// `out` must be `1 + 2 * FIELD_BYTES` bytes.
+    #[must_use = "a false return means nothing was written"]
     pub fn write_uncompressed(&self, out: &mut [u8]) -> bool {
         if out.len() != 1 + 2 * C::FIELD_BYTES {
             return false;
@@ -321,6 +322,7 @@ impl<C: Curve> AffinePoint<C> {
 
     /// Write the SEC1 compressed encoding into `out`, which must be
     /// `1 + FIELD_BYTES` bytes.
+    #[must_use = "a false return means nothing was written"]
     pub fn write_compressed(&self, out: &mut [u8]) -> bool {
         if out.len() != 1 + C::FIELD_BYTES {
             return false;

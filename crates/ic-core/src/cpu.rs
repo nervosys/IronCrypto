@@ -16,6 +16,7 @@
 /// Whether AES instructions (AES-NI, or the ARMv8 crypto extension) are
 /// available.
 #[inline]
+#[must_use]
 pub fn has_aes() -> bool {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     {
@@ -44,6 +45,7 @@ pub fn has_aes() -> bool {
 /// [`has_aes`] are true, because the portable GHASH costs far more per block
 /// than the portable AES does.
 #[inline]
+#[must_use]
 pub fn has_pclmulqdq() -> bool {
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
     {

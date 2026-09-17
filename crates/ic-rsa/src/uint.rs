@@ -172,6 +172,7 @@ impl Uint {
 
     /// Whether the value is odd.
     #[inline]
+    #[must_use]
     pub fn is_odd(&self) -> bool {
         self.0[0] & 1 == 1
     }
@@ -414,6 +415,7 @@ impl Modulus {
     /// search forces the top two bits. A prime from somewhere else might not,
     /// and then the CRT path is declined rather than silently given a value it
     /// cannot reduce.
+    #[must_use]
     pub fn is_full_width(&self) -> bool {
         self.n.bits() == self.limbs * 64
     }
