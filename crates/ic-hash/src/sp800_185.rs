@@ -28,7 +28,7 @@
 //! ```
 //!
 //! That identity is a free oracle against an already-validated implementation,
-//! and [`tests::empty_customization_is_plain_shake`] checks it. It does not
+//! and `empty_customization_is_plain_shake` checks it. It does not
 //! cover the customized path, which uses domain separator `0x04` where SHAKE
 //! uses `0x1f`; that path is checked against an independent Keccak written from
 //! FIPS 202 in the tests below.

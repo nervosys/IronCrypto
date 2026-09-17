@@ -22,7 +22,7 @@ use ic_core::ct::Choice;
 ///
 /// Nine, for P-521: 521 bits needs nine 64-bit words, and the top one carries
 /// only nine significant bits. Nothing here requires the modulus to fill its
-/// top limb — see [`from_be_bytes`] and [`to_be_bytes`], which is where that
+/// top limb — see `from_be_bytes` and `to_be_bytes`, which is where that
 /// assumption used to live.
 pub const MAX_LIMBS: usize = 9;
 

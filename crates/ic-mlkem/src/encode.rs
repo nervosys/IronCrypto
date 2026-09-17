@@ -16,7 +16,7 @@
 //! `Compress_d` maps `Z_q` onto `d` bits and `Decompress_d` maps back. The
 //! round trip is deliberately lossy; what the scheme needs is that the error
 //! stays below a bound, which is what makes decryption succeed despite the
-//! noise. [`tests::decompression_error_is_bounded`] checks that bound directly
+//! noise. `decompression_error_is_bounded` checks that bound directly
 //! rather than assuming it.
 
 use crate::poly::{Poly, N, Q};

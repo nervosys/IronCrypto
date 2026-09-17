@@ -303,6 +303,11 @@ mod tests {
             ("tests", "cargo test --workspace --all-features"),
             ("zero dependencies", "no-third-party.sh"),
             ("docs", "cargo doc --workspace --no-deps --all-features"),
+            // The flag, not just the command. CI set `-D warnings` on its docs
+            // job and the local gate did not, so nine unresolved intra-doc
+            // links were warnings in one place and errors in the other. The
+            // command strings matched, so comparing those alone missed it.
+            ("strict docs", "-D warnings"),
             ("no_std", "--no-default-features --target"),
         ];
 
@@ -317,6 +322,19 @@ mod tests {
                  less than a local run does"
             );
         }
+
+        // Both must treat a rustdoc warning as fatal. The check above finds
+        // `-D warnings` anywhere in each file, which clippy also uses, so the
+        // rustdoc setting is confirmed on its own here.
+        assert!(
+            ci.contains("RUSTDOCFLAGS: -D warnings"),
+            "CI no longer fails the build on a rustdoc warning"
+        );
+        assert!(
+            check.contains(r#"RUSTDOCFLAGS="-D warnings""#),
+            "scripts/check.sh no longer fails on a rustdoc warning, so a broken \
+             doc link is a warning locally and an error in CI"
+        );
 
         // The dependency rule in particular must exist in exactly one place.
         // Its previous second copy is the reason this test exists, and a copy

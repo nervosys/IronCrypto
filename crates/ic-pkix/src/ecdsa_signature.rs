@@ -4,7 +4,7 @@
 //! Ecdsa-Sig-Value ::= SEQUENCE { r INTEGER, s INTEGER }
 //! ```
 //!
-//! [`ic_ec`] produces and consumes the fixed-width form, `r || s` with each
+//! `ic-ec` produces and consumes the fixed-width form, `r || s` with each
 //! half padded to the field size. X.509, CMS, and TLS carry the DER form. The
 //! two are the same numbers in different clothes, and this module is the
 //! changing room.
@@ -17,7 +17,7 @@
 //! verify correctly against itself and are rejected by everything else, roughly
 //! half the time — which is exactly the kind of bug that survives a test suite
 //! with one vector in it. [`der::Writer::push_unsigned_integer`] applies the
-//! rule, and [`tests::the_sign_byte_appears_exactly_when_the_top_bit_is_set`]
+//! rule, and `the_sign_byte_appears_exactly_when_the_top_bit_is_set`
 //! checks both branches.
 //!
 //! [`der::Writer::push_unsigned_integer`]: crate::der::Writer::push_unsigned_integer

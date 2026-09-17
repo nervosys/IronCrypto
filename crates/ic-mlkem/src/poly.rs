@@ -14,7 +14,7 @@
 //! and inverse still round-trip — while computing the wrong product.
 //!
 //! So a round-trip test proves nothing here. What proves something is
-//! [`tests::ntt_multiplication_matches_schoolbook`]: multiply two polynomials
+//! `ntt_multiplication_matches_schoolbook`: multiply two polynomials
 //! the slow quadratic way, multiply them through the NTT, and require the same
 //! answer. Schoolbook multiplication in a 256-element ring is four lines and
 //! obviously correct by inspection, which is exactly what an oracle needs to

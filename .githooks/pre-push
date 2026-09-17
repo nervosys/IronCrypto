@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Refuse a push that has not passed the full check, cross-compilation included.
+#
+# The pre-commit hook runs `--quick`, which skips the no_std builds so that a
+# tight edit-commit loop stays tight. Something has to run them, and until now
+# that was CI.
+#
+# CI has not run at all in this repository's recent history: every job is
+# rejected before it starts with "the job was not started because recent
+# account payments have failed or your spending limit needs to be increased".
+# A gate nobody runs is not a gate, so the full check runs here instead, at the
+# point where work leaves the machine.
+#
+# Enable with:
+#   git config core.hooksPath .githooks
+#
+# Skip once, deliberately, with `git push --no-verify`. The escape hatch is
+# here for the same reason it is in pre-commit: a hook nobody can bypass gets
+# disabled entirely the first time it is inconvenient, and then it protects
+# nothing.
+
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+
+if [ ! -f "$root/scripts/check.sh" ]; then
+    echo "pre-push: scripts/check.sh is missing; skipping" >&2
+    exit 0
+fi
+
+echo "pre-push: running scripts/check.sh (full, including cross-compilation)"
+if ! bash "$root/scripts/check.sh"; then
+    cat >&2 <<'MSG'
+
+pre-push: checks failed, push refused.
+
+Fix the failure, or pass --no-verify if you are deliberately pushing
+something incomplete.
+MSG
+    exit 1
+fi

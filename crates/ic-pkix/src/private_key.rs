@@ -26,7 +26,7 @@
 //!
 //! `RSAPrivateKey` holds `n`, `e`, `d`, the two primes, and the three CRT
 //! parameters. All eight are parsed and all eight are kept, because
-//! [`ic_rsa::RsaPrivateKey`] uses the CRT and can supply them. A key that
+//! `ic_rsa::RsaPrivateKey` uses the CRT and can supply them. A key that
 //! reaches here without them is malformed, not merely inconvenient: the
 //! structure has no optional fields before `otherPrimeInfos`.
 

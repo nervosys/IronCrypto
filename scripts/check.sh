@@ -62,16 +62,41 @@ if [ "$quick" -eq 1 ]; then
 fi
 
 step "no_std cross-compilation"
-for target in thumbv7em-none-eabihf thumbv6m-none-eabi riscv32imac-unknown-none-elf; do
+# The same four CI builds. `wasm32-unknown-unknown` used to be in CI's list and
+# not here, so it was never cross-compiled locally -- which mattered the moment
+# CI stopped running.
+#
+# A --no-default-features build on a host with std proves nothing; these targets
+# have no std at all, so they are the real check.
+skipped=""
+built=0
+for target in thumbv7em-none-eabihf thumbv6m-none-eabi riscv32imac-unknown-none-elf wasm32-unknown-unknown; do
     if rustup target list --installed 2>/dev/null | grep -qx "$target"; then
         echo "-- $target"
         cargo build -p iron-crypto --no-default-features --target "$target"
+        built=$((built + 1))
     else
-        echo "-- $target (not installed, skipped)"
+        echo "-- $target (not installed)"
+        skipped="$skipped $target"
     fi
 done
 
-step "docs"
-cargo doc --workspace --no-deps --all-features
+if [ -n "$skipped" ]; then
+    # Said plainly rather than buried, because "checks passed" after building
+    # none of them is the kind of pass that teaches people to trust a gate that
+    # did nothing. Install with: rustup target add <target>
+    printf '\nno_std: built %d of 4. NOT CHECKED:%s\n' "$built" "$skipped"
+    printf 'no_std: install with `rustup target add%s`\n' "$skipped"
+fi
 
-printf '\nall checks passed\n'
+step "docs"
+# RUSTDOCFLAGS, or a broken intra-doc link is a warning here and an error in CI.
+# Nine of them had accumulated exactly that way: warnings locally, errors in a
+# CI job that was not running, so neither was ever read.
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+
+if [ -n "$skipped" ]; then
+    printf '\nall checks passed, except the no_std targets listed above\n'
+else
+    printf '\nall checks passed\n'
+fi

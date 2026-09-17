@@ -9,7 +9,7 @@
 //!
 //! # The oracle
 //!
-//! As in [`ic_mlkem::poly`], the test that matters multiplies two polynomials
+//! As in `ic_mlkem::poly`, the test that matters multiplies two polynomials
 //! the slow quadratic way and requires the transform to agree. A transposed
 //! index or a bad zeta leaves the forward and inverse transforms mutually
 //! consistent while computing the wrong product, so a round-trip test proves
