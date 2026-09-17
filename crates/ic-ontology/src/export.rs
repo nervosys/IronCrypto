@@ -16,7 +16,9 @@
 //! produce malformed output.
 
 use crate::registry::REGISTRY;
-use crate::types::{Class, Entry, Purpose};
+use crate::types::{
+    Class, Entry, FipsStatus, ImplStatus, Performance, Purpose, Relation, Severity, Unit,
+};
 
 /// The vocabulary IRI that JSON-LD and Turtle exports resolve terms against.
 pub const VOCAB: &str = "https://nervosys.github.io/IronCrypto/ontology#";
@@ -280,6 +282,16 @@ fn term(id: &str) -> String {
 pub fn to_json_schema() -> String {
     let classes = json_string_array(Class::ALL.iter().map(|c| c.id().to_string()));
     let purposes = json_string_array(Purpose::ALL.iter().map(|p| p.id().to_string()));
+    // Derived rather than written out. `implementationStatus` was inline and
+    // went stale when `Experimental` was added, so the published schema
+    // rejected the four entries carrying that status -- the unverified ones,
+    // which are exactly the entries a consumer most needs described.
+    let fips_statuses = json_string_array(FipsStatus::ALL.iter().map(|v| v.id().to_string()));
+    let impl_statuses = json_string_array(ImplStatus::ALL.iter().map(|v| v.id().to_string()));
+    let performances = json_string_array(Performance::ALL.iter().map(|v| v.id().to_string()));
+    let severities = json_string_array(Severity::ALL.iter().map(|v| v.id().to_string()));
+    let units = json_string_array(Unit::ALL.iter().map(|v| v.id().to_string()));
+    let relations = json_string_array(Relation::ALL.iter().map(|v| v.id().to_string()));
     format!(
         r##"{{"$schema":"https://json-schema.org/draft/2020-12/schema",
 "$id":"{VOCAB}schema.json",
@@ -305,10 +317,10 @@ pub fn to_json_schema() -> String {
    "strength":{{"type":"object","required":["classicalBits","quantumBits"],
      "properties":{{"classicalBits":{{"type":"integer","minimum":0}},
                    "quantumBits":{{"type":"integer","minimum":0}}}}}},
-   "fipsStatus":{{"enum":["approved","allowed-as-component","not-approved","deprecated","disallowed"]}},
-   "implementationStatus":{{"enum":["available","planned","excluded"]}},
+   "fipsStatus":{{"enum":{fips_statuses}}},
+   "implementationStatus":{{"enum":{impl_statuses}}},
    "approvedModeUsable":{{"type":"boolean"}},
-   "performance":{{"enum":["fast","moderate","slow","deliberately-slow"]}},
+   "performance":{{"enum":{performances}}},
    "aliases":{{"type":"array","items":{{"type":"string"}}}},
    "standards":{{"type":"array","items":{{"type":"string"}}}},
    "parameters":{{"type":"array","items":{{"$ref":"#/$defs/parameter"}}}},
@@ -320,15 +332,15 @@ pub fn to_json_schema() -> String {
   }}
  }},
  "parameter":{{"type":"object","required":["name","unit","min","max"],
-  "properties":{{"name":{{"type":"string"}},"unit":{{"enum":["bytes","count"]}},
+  "properties":{{"name":{{"type":"string"}},"unit":{{"enum":{units}}},
    "min":{{"type":"integer"}},"max":{{"type":"integer"}},
    "recommended":{{"type":"integer"}},"note":{{"type":"string"}}}}}},
  "constraint":{{"type":"object","required":["id","severity","requirement","consequence"],
   "properties":{{"id":{{"type":"string"}},
-   "severity":{{"enum":["critical","serious","advisory"]}},
+   "severity":{{"enum":{severities}}},
    "requirement":{{"type":"string"}},"consequence":{{"type":"string"}}}}}},
  "relation":{{"type":"object","required":["relation","target"],
-  "properties":{{"relation":{{"enum":["built-on","supersedes","superseded-by","pairs-with","specializes"]}},
+  "properties":{{"relation":{{"enum":{relations}}},
    "target":{{"type":"string"}}}}}}
 }}}}"##
     )

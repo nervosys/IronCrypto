@@ -153,6 +153,20 @@ pub enum FipsStatus {
 }
 
 impl FipsStatus {
+    /// Every variant, for callers that enumerate them.
+    ///
+    /// The published JSON Schema builds its `enum` from this. It used to
+    /// carry the strings inline, which is how `implementationStatus` came
+    /// to omit `experimental` after that status was added -- the schema
+    /// then rejected the very entries it most needed to describe.
+    pub const ALL: &'static [FipsStatus] = &[
+        FipsStatus::Approved,
+        FipsStatus::AllowedAsComponent,
+        FipsStatus::NotApproved,
+        FipsStatus::Deprecated,
+        FipsStatus::Disallowed,
+    ];
+
     /// Stable identifier used in every serialized form.
     pub const fn id(self) -> &'static str {
         match self {
@@ -208,6 +222,19 @@ pub enum ImplStatus {
 }
 
 impl ImplStatus {
+    /// Every variant, for callers that enumerate them.
+    ///
+    /// The published JSON Schema builds its `enum` from this. It used to
+    /// carry the strings inline, which is how `implementationStatus` came
+    /// to omit `experimental` after that status was added -- the schema
+    /// then rejected the very entries it most needed to describe.
+    pub const ALL: &'static [ImplStatus] = &[
+        ImplStatus::Available,
+        ImplStatus::Experimental,
+        ImplStatus::Planned,
+        ImplStatus::Excluded,
+    ];
+
     /// Stable identifier used in every serialized form.
     pub const fn id(self) -> &'static str {
         match self {
@@ -240,6 +267,19 @@ pub enum Performance {
 }
 
 impl Performance {
+    /// Every variant, for callers that enumerate them.
+    ///
+    /// The published JSON Schema builds its `enum` from this. It used to
+    /// carry the strings inline, which is how `implementationStatus` came
+    /// to omit `experimental` after that status was added -- the schema
+    /// then rejected the very entries it most needed to describe.
+    pub const ALL: &'static [Performance] = &[
+        Performance::Fast,
+        Performance::Moderate,
+        Performance::Slow,
+        Performance::DeliberatelySlow,
+    ];
+
     /// Stable identifier used in every serialized form.
     pub const fn id(self) -> &'static str {
         match self {
@@ -278,6 +318,14 @@ pub enum Unit {
 }
 
 impl Unit {
+    /// Every variant, for callers that enumerate them.
+    ///
+    /// The published JSON Schema builds its `enum` from this. It used to
+    /// carry the strings inline, which is how `implementationStatus` came
+    /// to omit `experimental` after that status was added -- the schema
+    /// then rejected the very entries it most needed to describe.
+    pub const ALL: &'static [Unit] = &[Unit::Bytes, Unit::Count];
+
     /// Stable identifier used in every serialized form.
     pub const fn id(self) -> &'static str {
         match self {
@@ -316,6 +364,15 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// Every variant, for callers that enumerate them.
+    ///
+    /// The published JSON Schema builds its `enum` from this. It used to
+    /// carry the strings inline, which is how `implementationStatus` came
+    /// to omit `experimental` after that status was added -- the schema
+    /// then rejected the very entries it most needed to describe.
+    pub const ALL: &'static [Severity] =
+        &[Severity::Critical, Severity::Serious, Severity::Advisory];
+
     /// Stable identifier used in every serialized form.
     pub const fn id(self) -> &'static str {
         match self {
@@ -370,6 +427,20 @@ pub enum Relation {
 }
 
 impl Relation {
+    /// Every variant, for callers that enumerate them.
+    ///
+    /// The published JSON Schema builds its `enum` from this. It used to
+    /// carry the strings inline, which is how `implementationStatus` came
+    /// to omit `experimental` after that status was added -- the schema
+    /// then rejected the very entries it most needed to describe.
+    pub const ALL: &'static [Relation] = &[
+        Relation::BuiltOn,
+        Relation::Supersedes,
+        Relation::SupersededBy,
+        Relation::PairsWith,
+        Relation::Specializes,
+    ];
+
     /// Stable identifier used in every serialized form.
     pub const fn id(self) -> &'static str {
         match self {
@@ -474,6 +545,104 @@ fn eq_ignore_case(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `ALL` list must really be all of them.
+    ///
+    /// The matches are exhaustive and this is the crate that defines the types,
+    /// so adding a variant stops this compiling until it is handled. Without
+    /// that, a list like this is a second place to remember, and the schema's
+    /// stale `implementationStatus` is what forgetting looks like.
+    #[test]
+    fn the_variant_lists_are_complete() {
+        #[allow(clippy::needless_match)]
+        fn identify_status(v: ImplStatus) -> ImplStatus {
+            match v {
+                ImplStatus::Available => ImplStatus::Available,
+                ImplStatus::Experimental => ImplStatus::Experimental,
+                ImplStatus::Planned => ImplStatus::Planned,
+                ImplStatus::Excluded => ImplStatus::Excluded,
+            }
+        }
+        #[allow(clippy::needless_match)]
+        fn identify_fips(v: FipsStatus) -> FipsStatus {
+            match v {
+                FipsStatus::Approved => FipsStatus::Approved,
+                FipsStatus::AllowedAsComponent => FipsStatus::AllowedAsComponent,
+                FipsStatus::NotApproved => FipsStatus::NotApproved,
+                FipsStatus::Deprecated => FipsStatus::Deprecated,
+                FipsStatus::Disallowed => FipsStatus::Disallowed,
+            }
+        }
+        #[allow(clippy::needless_match)]
+        fn identify_perf(v: Performance) -> Performance {
+            match v {
+                Performance::Fast => Performance::Fast,
+                Performance::Moderate => Performance::Moderate,
+                Performance::Slow => Performance::Slow,
+                Performance::DeliberatelySlow => Performance::DeliberatelySlow,
+            }
+        }
+        #[allow(clippy::needless_match)]
+        fn identify_severity(v: Severity) -> Severity {
+            match v {
+                Severity::Critical => Severity::Critical,
+                Severity::Serious => Severity::Serious,
+                Severity::Advisory => Severity::Advisory,
+            }
+        }
+        #[allow(clippy::needless_match)]
+        fn identify_unit(v: Unit) -> Unit {
+            match v {
+                Unit::Bytes => Unit::Bytes,
+                Unit::Count => Unit::Count,
+            }
+        }
+        #[allow(clippy::needless_match)]
+        fn identify_relation(v: Relation) -> Relation {
+            match v {
+                Relation::BuiltOn => Relation::BuiltOn,
+                Relation::Supersedes => Relation::Supersedes,
+                Relation::SupersededBy => Relation::SupersededBy,
+                Relation::PairsWith => Relation::PairsWith,
+                Relation::Specializes => Relation::Specializes,
+            }
+        }
+
+        for v in ImplStatus::ALL {
+            assert_eq!(identify_status(*v), *v);
+        }
+        for v in FipsStatus::ALL {
+            assert_eq!(identify_fips(*v), *v);
+        }
+        for v in Performance::ALL {
+            assert_eq!(identify_perf(*v), *v);
+        }
+        for v in Severity::ALL {
+            assert_eq!(identify_severity(*v), *v);
+        }
+        for v in Unit::ALL {
+            assert_eq!(identify_unit(*v), *v);
+        }
+        for v in Relation::ALL {
+            assert_eq!(identify_relation(*v), *v);
+        }
+
+        // Identifiers are the join key every serialized form uses.
+        fn distinct(ids: &[&str]) -> bool {
+            ids.iter()
+                .enumerate()
+                .all(|(i, a)| !ids[i + 1..].contains(a))
+        }
+        assert!(distinct(
+            &ImplStatus::ALL.iter().map(|v| v.id()).collect::<Vec<_>>()
+        ));
+        assert!(distinct(
+            &FipsStatus::ALL.iter().map(|v| v.id()).collect::<Vec<_>>()
+        ));
+        assert!(distinct(
+            &Relation::ALL.iter().map(|v| v.id()).collect::<Vec<_>>()
+        ));
+    }
 
     /// `Severity` is ordered worst-first, and something depends on it.
     ///
