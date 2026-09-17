@@ -190,6 +190,24 @@ The ontology registers algorithms this library does **not** provide, marked
   parameter set exists, in both the pure and pre-hash variants. ML-KEM-768 is
   `experimental` on the same terms. Both are
   excluded from the approved mode and from `recommend`.
+### Supply chain
+
+```sh
+icrypto sbom > bom.json      # CycloneDX 1.5
+```
+
+Deliberately deterministic: no timestamp, no random serial number, so two runs
+over identical source produce byte-identical documents and anyone can
+regenerate and diff it. A bill of materials you cannot reproduce is one you have
+to trust. The component list is checked against the workspace manifest by a
+test, so a crate added without being listed fails the build — an SBOM that
+quietly omits a component is worse than none, since completeness is its entire
+purpose.
+
+It describes the *source*, not a particular binary. Establishing that a binary
+came from this source needs a reproducible build pipeline, which `T1195.001`
+records as an open gap rather than papering over.
+
 ### Security frameworks
 
 The same machinery, applied to the frameworks people are audited against:

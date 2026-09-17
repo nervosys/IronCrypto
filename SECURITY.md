@@ -53,6 +53,7 @@ Claims in this project are meant to be checkable rather than taken on trust.
 | Which weakness classes and practices does this address? | `icrypto ontology controls` |
 | Why is an algorithm not recommended? | `icrypto ontology show <id>` |
 | Does it interoperate? | Nothing establishes this yet. See `testvectors/README.md` |
+| What is in the build? | `icrypto sbom` — CycloneDX, deterministic, regenerate and diff it |
 
 The compliance views are coupled to the code rather than filed beside it: a
 control claiming to be met names a file and a symbol, and the tests fail if

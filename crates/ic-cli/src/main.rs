@@ -6,6 +6,7 @@
 
 mod mcp;
 mod ops;
+mod sbom;
 
 use ic_json::Json;
 use std::io::Read;
@@ -149,6 +150,12 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             } else {
                 render_recommendation(&result)
             })
+        }
+
+        "sbom" => {
+            // Always JSON: an SBOM is consumed by tooling, and a human-readable
+            // variant would be a second document that could disagree with it.
+            Ok(sbom::cyclonedx().to_string())
         }
 
         "ontology" => match pos.get(1).copied().unwrap_or("") {
