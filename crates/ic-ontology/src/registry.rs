@@ -2508,10 +2508,11 @@ pub static REGISTRY: &[Entry] = &[
         rust_path: "ic_mldsa::sign",
         example: "let mut pk = [0u8; ic_mldsa::sign::PUBLIC_KEY_LEN];
 let mut sk = [0u8; ic_mldsa::sign::SECRET_KEY_LEN];
-ic_mldsa::sign::keygen(&seed, &mut pk, &mut sk);
+// every call below returns a value you must check
+assert!(ic_mldsa::sign::keygen(&seed, &mut pk, &mut sk));
 let mut sig = [0u8; ic_mldsa::sign::SIGNATURE_LEN];
-ic_mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig);
-ic_mldsa::sign::verify(&pk, msg, ctx, &sig);",
+assert!(ic_mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig));
+assert!(ic_mldsa::sign::verify(&pk, msg, ctx, &sig));",
         notes: "Implemented but not vector-tested, hence experimental: the NTT is checked against schoolbook multiplication, the packing against a bit-at-a-time reference, the rounding and hints against the equations that define them, the samplers against the specification's pseudocode, and the key and signature sizes come out at the widths FIPS 204 fixes — but nothing checks the assembly against another implementation. Only the 65 parameter set exists; shipping three unverified variants would triple what a vector has to confirm. Verification refuses non-canonical hint blocks, so one signature has one encoding.",
     },
     Entry {

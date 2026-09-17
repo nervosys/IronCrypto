@@ -17,8 +17,15 @@
 //!
 //! # Scope
 //!
-//! Five entries, chosen one per API shape: authenticated encryption, signing,
-//! key encapsulation, key derivation, and key wrapping. Not all seventy-five.
+//! Six entries, chosen one per API shape: authenticated encryption, signing,
+//! key encapsulation, key derivation, key wrapping, and post-quantum signing.
+//! Not all seventy-five.
+//!
+//! The sixth was not chosen for coverage. It was added because ML-DSA's example
+//! turned out to discard all three of its return values, including `verify`, so
+//! the registry was handing agents a snippet that checks a signature and throws
+//! the answer away. The defect was in an entry this file did not compile, which
+//! is the argument for the list being longer than it is.
 //! The snippets are fragments rather than programs — they reference a `key`, a
 //! `nonce`, an `rng` that the surrounding code is expected to supply — so each
 //! one needs a preamble written by hand, and doing that for every entry would
@@ -31,7 +38,7 @@
 
 use iron_crypto::core_types::traits::{Aead, Kdf, SignatureScheme};
 use iron_crypto::prelude::*;
-use iron_crypto::{cipher, drbg, ec, kdf, mac, mlkem};
+use iron_crypto::{cipher, drbg, ec, kdf, mac, mldsa, mlkem};
 
 /// `aes-256-gcm`.
 const AES_256_GCM: &str =
@@ -105,6 +112,37 @@ fn run_aes_256_kwp() -> Result<()> {
     Ok(())
 }
 
+/// `ml-dsa-65`.
+///
+/// Added after this entry's example was found discarding all three of its
+/// return values, including `verify` -- the registry was teaching an agent to
+/// check a signature and ignore the answer. Compiling it is what stops that
+/// coming back: every one of these returns `#[must_use]`, so discarding one is
+/// a warning, and the workspace builds with warnings denied.
+const ML_DSA_65: &str = "let mut pk = [0u8; ic_mldsa::sign::PUBLIC_KEY_LEN];
+let mut sk = [0u8; ic_mldsa::sign::SECRET_KEY_LEN];
+// every call below returns a value you must check
+assert!(ic_mldsa::sign::keygen(&seed, &mut pk, &mut sk));
+let mut sig = [0u8; ic_mldsa::sign::SIGNATURE_LEN];
+assert!(ic_mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig));
+assert!(ic_mldsa::sign::verify(&pk, msg, ctx, &sig));";
+
+fn run_ml_dsa_65() -> Result<()> {
+    let seed = [0x61u8; 32];
+    let msg: &[u8] = b"message";
+    let ctx: &[u8] = b"";
+    let rnd = [0u8; 32];
+
+    let mut pk = [0u8; mldsa::sign::PUBLIC_KEY_LEN];
+    let mut sk = [0u8; mldsa::sign::SECRET_KEY_LEN];
+    // every call below returns a value you must check
+    assert!(mldsa::sign::keygen(&seed, &mut pk, &mut sk));
+    let mut sig = [0u8; mldsa::sign::SIGNATURE_LEN];
+    assert!(mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig));
+    assert!(mldsa::sign::verify(&pk, msg, ctx, &sig));
+    Ok(())
+}
+
 /// The compiled code above must be what the registry actually serves.
 ///
 /// Without this the file would prove only that *something* compiles. The
@@ -119,6 +157,7 @@ fn the_compiled_examples_match_the_registry() {
         ("ml-kem-768", ML_KEM_768),
         ("hkdf-sha2-256", HKDF_SHA256),
         ("aes-256-kwp", AES_256_KWP),
+        ("ml-dsa-65", ML_DSA_65),
     ];
 
     for (id, compiled) in cases {
@@ -148,6 +187,7 @@ fn the_examples_run() {
     run_ml_kem_768().expect("ml-kem-768");
     run_hkdf_sha256().expect("hkdf-sha2-256");
     run_aes_256_kwp().expect("aes-256-kwp");
+    run_ml_dsa_65().expect("ml-dsa-65");
 }
 
 /// No example may still name the pre-rename crates.
