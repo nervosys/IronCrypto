@@ -166,6 +166,12 @@ pub fn to_json() -> String {
 pub fn to_json_ld() -> String {
     let mut out = String::from("{\"@context\":{");
     out.push_str(&format!(r#""@vocab":"{VOCAB}","#));
+    // `@id` values resolve against the base IRI, never against `@vocab`. With
+    // no base declared, an entry's identity depended on the URL the document
+    // was fetched from, so the same registry loaded from two places produced
+    // two disjoint graphs -- and neither matched the Turtle export, which names
+    // entries under `ac:` absolutely. Declaring the base fixes both.
+    out.push_str(&format!(r#""@base":"{VOCAB}","#));
     out.push_str(r#""id":"@id","#);
     out.push_str(r#""algorithms":{"@id":"member","@container":"@set"},"#);
     out.push_str(r#""target":{"@type":"@id"},"#);
@@ -220,7 +226,7 @@ pub fn to_turtle() -> String {
     for e in REGISTRY {
         out.push_str(&format!(
             "ac:{} a ac:{} ;\n",
-            term(e.id),
+            local_name(e.id),
             term(e.class.id())
         ));
         out.push_str(&format!("    rdfs:label \"{}\" ;\n", escape_json(e.name)));
@@ -249,7 +255,7 @@ pub fn to_turtle() -> String {
             out.push_str(&format!(
                 ";\n    ac:{} ac:{} ",
                 term(edge.relation.id()),
-                term(edge.target)
+                local_name(edge.target)
             ));
         }
         out.push_str(".\n\n");
@@ -258,6 +264,32 @@ pub fn to_turtle() -> String {
 }
 
 /// Convert a kebab-case identifier into a Turtle-safe camel-ish local name.
+/// The Turtle local name for an entry, which is its identifier unchanged.
+///
+/// Distinct from [`term`], which camel-cases. That is right for a vocabulary
+/// term -- `block-cipher` reads better as `ac:blockCipher` -- and wrong for an
+/// identifier, where the segments are usually digits and there is nothing to
+/// capitalise: `sha2-256` collapsed to `sha2256`, irreversibly, for 58 of the
+/// 75 entries.
+///
+/// Nothing required it. `-` is in Turtle's `PN_CHARS` and is legal anywhere in
+/// a local name except the first position, and the registry's identifiers are
+/// constrained to `^[a-z0-9][a-z0-9._-]*$`, so they are already valid as they
+/// stand. The assertion holds them to the part of that grammar this uses.
+fn local_name(id: &str) -> &str {
+    debug_assert!(
+        id.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c))
+            && !id.ends_with('.'),
+        "{id} is not a valid Turtle local name"
+    );
+    id
+}
+
 fn term(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
     let mut upper_next = false;
@@ -450,9 +482,12 @@ mod tests {
         let ttl = to_turtle();
         assert!(ttl.starts_with("@prefix ac:"));
         for e in REGISTRY {
+            // Built from `e.id` directly, not from whatever the exporter did to
+            // it. The previous version of this test called `term(e.id)`, so it
+            // reproduced the exporter's renaming and agreed with it.
             assert!(
-                ttl.contains(&format!("ac:{} a ac:", term(e.id))),
-                "turtle omits {}",
+                ttl.contains(&format!("\nac:{} a ac:", e.id)),
+                "turtle omits {} (or names it something else)",
                 e.id
             );
         }
@@ -460,18 +495,122 @@ mod tests {
         assert!(ttl.matches(" .\n").count() + ttl.matches(".\n\n").count() > 0);
     }
 
+    /// The Turtle and JSON-LD exports must give an entry the same IRI.
+    ///
+    /// They are two serializations of one registry, and the point of emitting
+    /// both is that a consumer can load either, or both, and get one graph. For
+    /// a while they agreed on nothing: Turtle named SHA-256 `ac:sha2256`,
+    /// having dropped the hyphens from `sha2-256`, while JSON-LD left `sha2-256`
+    /// to resolve against a base IRI the document never declared -- so its
+    /// identity depended on where the file was fetched from.
+    ///
+    /// Each side is resolved here the way its own specification says to, from
+    /// the registry identifier, and the two are required to meet.
     #[test]
-    fn turtle_terms_are_valid_local_names() {
-        assert_eq!(term("aes-256-gcm"), "aes256Gcm");
-        assert_eq!(term("sha2-512-256"), "sha2512256");
-        assert_eq!(term("hash"), "hash");
+    fn the_two_rdf_exports_agree_on_every_iri() {
+        let ttl = to_turtle();
+        let jsonld = to_json_ld();
+
+        // Turtle: `ac:` is bound to VOCAB by the @prefix directive, so the
+        // subject `ac:<local>` denotes VOCAB + local.
+        let prefix_line = format!("@prefix ac: <{VOCAB}> .");
+        assert!(
+            ttl.starts_with(&prefix_line),
+            "the ac: prefix is not bound to the vocabulary"
+        );
+
+        // JSON-LD: `id` is aliased to `@id`, and an `@id` resolves against
+        // `@base`, which must therefore be the vocabulary for the two to meet.
+        assert!(
+            jsonld.contains(&format!(r#""@base":"{VOCAB}""#)),
+            "the JSON-LD declares no base, so entry IRIs depend on where the \
+             document was fetched from"
+        );
+        assert!(
+            jsonld.contains(r#""id":"@id""#),
+            "the JSON-LD no longer aliases id to @id"
+        );
+
+        let mut checked = 0;
         for e in REGISTRY {
-            let t = term(e.id);
+            let iri = format!("{VOCAB}{}", e.id);
+
+            // Turtle states it as a subject.
             assert!(
-                t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-                "{} produced an invalid local name {t}",
+                ttl.contains(&format!("\nac:{} a ac:", e.id)),
+                "turtle does not name {} as {iri}",
                 e.id
             );
+            // JSON-LD states it as the entry's id, which resolves to the same.
+            assert!(
+                jsonld.contains(&format!(r#""id":"{}""#, e.id)),
+                "the JSON-LD does not name {} as {iri}",
+                e.id
+            );
+
+            // And a relation's target must denote the entry it points at, in
+            // both, or the edges land on nodes that do not exist.
+            for edge in e.edges {
+                assert!(
+                    ttl.contains(&format!("ac:{} ", edge.target))
+                        || ttl.contains(&format!("ac:{} .", edge.target)),
+                    "{} points at {}, which turtle names differently",
+                    e.id,
+                    edge.target
+                );
+                assert!(
+                    jsonld.contains(&format!(r#""target":"{}""#, edge.target)),
+                    "{} points at {}, which the JSON-LD names differently",
+                    e.id,
+                    edge.target
+                );
+                checked += 1;
+            }
+            checked += 1;
+        }
+
+        // A floor, so an empty registry or an export that stopped emitting
+        // entries fails here rather than passing quietly.
+        assert!(
+            checked > 100,
+            "only {checked} identifiers compared across the two exports"
+        );
+    }
+
+    #[test]
+    fn identifiers_survive_both_serializations_intact() {
+        // `term` camel-cases, which is what a vocabulary term wants.
+        assert_eq!(term("block-cipher"), "blockCipher");
+        assert_eq!(term("allowed-as-component"), "allowedAsComponent");
+        assert_eq!(term("hash"), "hash");
+
+        // An identifier is left alone, because its segments are usually digits
+        // and camel-casing them just deletes the separator: `sha2-256` became
+        // `sha2256`, and nothing can turn that back.
+        assert_eq!(local_name("sha2-256"), "sha2-256");
+        assert_eq!(local_name("aes-256-gcm"), "aes-256-gcm");
+        assert_eq!(local_name("3des"), "3des");
+
+        for e in REGISTRY {
+            // Turtle's PN_LOCAL, restricted to the characters these use: a
+            // leading alphanumeric, then alphanumerics and `_-.`, not ending in
+            // a dot. Wider than the previous rule, which allowed neither `-`
+            // nor `.` and so forced the renaming.
+            let mut chars = e.id.chars();
+            assert!(
+                chars
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "{} cannot start a Turtle local name",
+                e.id
+            );
+            assert!(
+                e.id.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)),
+                "{} contains a character Turtle would need escaped",
+                e.id
+            );
+            assert!(!e.id.ends_with('.'), "{} ends in a dot", e.id);
         }
     }
 
