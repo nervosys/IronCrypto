@@ -250,6 +250,80 @@ mod tests {
             .collect()
     }
 
+    /// A `key = "value"` from the workspace manifest's `[workspace.package]`.
+    fn manifest_field(key: &str) -> String {
+        let text = std::fs::read_to_string(workspace_root().join("Cargo.toml")).unwrap();
+        let section = text
+            .split_once("[workspace.package]")
+            .expect("a [workspace.package] section")
+            .1;
+        // Stop at the next section, so a key of the same name elsewhere in the
+        // manifest cannot be picked up instead.
+        let section = section.split("\n[").next().unwrap();
+        for line in section.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim() == key {
+                    return v.trim().trim_matches('"').to_string();
+                }
+            }
+        }
+        panic!("the manifest has no {key} in [workspace.package]");
+    }
+
+    /// The licence and repository the document asserts must be the ones the
+    /// workspace actually sets.
+    ///
+    /// `VERSION` comes from `CARGO_PKG_VERSION`, so it cannot drift. `LICENSE`
+    /// and `REPOSITORY` are strings in this file, and the test below them
+    /// compares the rendered document against those same constants -- which
+    /// holds whatever they happen to say.
+    ///
+    /// A licence in an SBOM is the field downstream consumers scan for.
+    /// Relicensing the workspace without touching this file would leave every
+    /// component in the document claiming terms the code is no longer under,
+    /// and the document would still pass every other test here.
+    #[test]
+    fn the_declared_licence_is_the_workspace_licence() {
+        assert_eq!(
+            LICENSE,
+            manifest_field("license"),
+            "the SBOM claims a licence the workspace does not set"
+        );
+        assert_eq!(
+            REPOSITORY,
+            manifest_field("repository"),
+            "the SBOM points somewhere the workspace does not"
+        );
+
+        // And the rendered document must carry them, not merely agree in
+        // principle: every component states the licence, so an omission in one
+        // is an unlicensed component to a consumer reading it.
+        let bom = cyclonedx();
+        let components = bom.get("components").unwrap().as_array().unwrap();
+        let mut stated = 0;
+        for c in components {
+            let id = c
+                .get("licenses")
+                .and_then(|l| l.as_array())
+                .and_then(|l| l.first())
+                .and_then(|l| l.get("license"))
+                .and_then(|l| l.get("id"))
+                .and_then(Json::as_str)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{} states no licence",
+                        c.get("name")
+                            .and_then(Json::as_str)
+                            .unwrap_or("a component")
+                    )
+                });
+            assert_eq!(id, LICENSE);
+            stated += 1;
+        }
+        assert_eq!(stated, components.len(), "not every component was examined");
+        assert!(stated > 10, "only {stated} components in the document");
+    }
+
     /// The bill of materials must list exactly the workspace, no more and no
     /// less.
     ///
