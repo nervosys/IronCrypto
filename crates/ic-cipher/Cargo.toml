@@ -13,6 +13,11 @@ categories.workspace = true
 [features]
 default = ["std"]
 std = ["ic-core/std"]
+# The ARMv8 AES backend. Off by default because it was written and
+# cross-compiled on x86 and has never been executed by its author; CI runs
+# the workspace with --all-features on an arm64 macOS runner, which is what
+# actually exercises it. It becomes the default once that has passed.
+aarch64-crypto = []
 
 [dependencies]
 ic-core = { workspace = true }

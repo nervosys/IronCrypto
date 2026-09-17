@@ -13,8 +13,14 @@
 //! Every query here depends only on the CPU, never on key material, so none of
 //! it is a side channel.
 
-/// Whether AES instructions (AES-NI, or the ARMv8 crypto extension) are
-/// available.
+/// Whether x86 AES-NI is available.
+///
+/// x86 only, deliberately. The ARMv8 cryptographic extension is detected in
+/// `ic_cipher::aes::armv8_aes_available`, because selecting it also depends on
+/// a cargo feature that this crate has no business knowing about. Reporting it
+/// here would additionally make the ontology call an ARM build
+/// `hardware-accelerated`, which would be an overclaim: that label means the
+/// cipher and the carry-less multiply, and there is no `PMULL` GHASH backend.
 #[inline]
 #[must_use]
 pub fn has_aes() -> bool {

@@ -36,6 +36,9 @@ pub mod x86;
 ))]
 pub mod x86;
 
+#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+pub mod aarch64;
+
 use ic_core::traits::{Algorithm, BlockCipher, SelfTest};
 use ic_core::{ensure, Result};
 
@@ -48,6 +51,8 @@ pub enum Backend {
     Portable,
     /// x86-64 AES-NI.
     Aesni,
+    /// The ARMv8 cryptographic extension.
+    Armv8,
 }
 
 impl Backend {
@@ -56,6 +61,7 @@ impl Backend {
         match self {
             Self::Portable => "portable-constant-time",
             Self::Aesni => "aes-ni",
+            Self::Armv8 => "armv8-crypto",
         }
     }
 }
@@ -69,9 +75,32 @@ pub fn aesni_available() -> bool {
     ic_core::cpu::has_aes()
 }
 
+/// Whether the ARMv8 AES extension is usable in this build.
+///
+/// Two conditions, and the second is deliberate. The CPU must support the
+/// extension, and the `aarch64-crypto` feature must be on. The feature exists
+/// because the backend was written on an x86 machine and has never been run by
+/// its author; until CI on an arm64 runner has executed the differential tests,
+/// an ARM build keeps the portable backend, which is slower and known to be
+/// right.
+#[inline]
+#[must_use]
+pub fn armv8_aes_available() -> bool {
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    {
+        std::arch::is_aarch64_feature_detected!("aes")
+    }
+    #[cfg(not(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")))]
+    {
+        false
+    }
+}
+
 /// The backend this build will use for AES.
 pub fn active_backend() -> Backend {
-    if aesni_available() {
+    if armv8_aes_available() {
+        Backend::Armv8
+    } else if aesni_available() {
         Backend::Aesni
     } else {
         Backend::Portable
@@ -98,6 +127,8 @@ enum Keys {
         )
     ))]
     Aesni(x86::Keys),
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    Armv8(aarch64::Keys),
 }
 
 /// Expand a key using whichever backend is active.
@@ -120,6 +151,13 @@ fn expand(key: &[u8]) -> Result<Keys> {
         return Ok(Keys::Aesni(keys));
     }
 
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    if armv8_aes_available() {
+        // SAFETY: `armv8_aes_available()` established the `aes` feature.
+        let keys = unsafe { aarch64::Keys::load(&sched) };
+        return Ok(Keys::Armv8(keys));
+    }
+
     Ok(Keys::Portable(sched))
 }
 
@@ -138,6 +176,9 @@ impl Keys {
             ))]
             // SAFETY: this variant is only constructed after a feature check.
             Keys::Aesni(k) => unsafe { x86::encrypt_block(k, block) },
+            #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+            // SAFETY: this variant is only constructed after a feature check.
+            Keys::Armv8(k) => unsafe { aarch64::encrypt_block(k, block) },
         }
     }
 
@@ -155,6 +196,9 @@ impl Keys {
             ))]
             // SAFETY: this variant is only constructed after a feature check.
             Keys::Aesni(k) => unsafe { x86::decrypt_block(k, block) },
+            #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+            // SAFETY: this variant is only constructed after a feature check.
+            Keys::Armv8(k) => unsafe { aarch64::decrypt_block(k, block) },
         }
     }
 
@@ -182,6 +226,9 @@ impl Keys {
             ))]
             // SAFETY: this variant is only constructed after a feature check.
             Keys::Aesni(k) => unsafe { x86::encrypt_blocks(k, data) },
+            #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+            // SAFETY: this variant is only constructed after a feature check.
+            Keys::Armv8(k) => unsafe { aarch64::encrypt_blocks(k, data) },
         }
     }
 
@@ -197,6 +244,8 @@ impl Keys {
                 )
             ))]
             Keys::Aesni(_) => Backend::Aesni,
+            #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+            Keys::Armv8(_) => Backend::Armv8,
         }
     }
 }
