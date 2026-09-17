@@ -56,8 +56,27 @@ fn json_string_array(items: impl Iterator<Item = String>) -> String {
     out
 }
 
+/// How an entry's relations are written out.
+#[derive(Clone, Copy, PartialEq)]
+enum Edges {
+    /// A `relations` array of `{relation, target}` objects: the shape of the
+    /// plain JSON export and of the published schema.
+    Nested,
+    /// One property per relation, keyed by the relation's vocabulary term.
+    ///
+    /// For JSON-LD, where the document is going into a triple store. The nested
+    /// shape would put the relation's name in a literal on a blank node, so
+    /// `ac:specializes` would not be a predicate anything could query, and the
+    /// Turtle export of the same registry states exactly that predicate.
+    Direct,
+}
+
 /// Render one entry as a JSON object.
 pub fn entry_to_json(e: &Entry) -> String {
+    entry_to_json_with(e, Edges::Nested)
+}
+
+fn entry_to_json_with(e: &Entry, edges: Edges) -> String {
     let mut out = String::new();
     out.push('{');
     out.push_str(&format!(r#""id":"{}","#, escape_json(e.id)));
@@ -121,18 +140,46 @@ pub fn entry_to_json(e: &Entry) -> String {
     }
     out.push_str("],");
 
-    out.push_str(r#""relations":["#);
-    for (i, edge) in e.edges.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
+    match edges {
+        Edges::Nested => {
+            out.push_str(r#""relations":["#);
+            for (i, edge) in e.edges.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    r#"{{"relation":"{}","target":"{}"}}"#,
+                    edge.relation.id(),
+                    escape_json(edge.target)
+                ));
+            }
+            out.push_str("],");
         }
-        out.push_str(&format!(
-            r#"{{"relation":"{}","target":"{}"}}"#,
-            edge.relation.id(),
-            escape_json(edge.target)
-        ));
+        Edges::Direct => {
+            // Several edges can share a relation, so the values are collected
+            // per term; `@container: @set` in the context keeps a single one
+            // from expanding differently to a pair.
+            for relation in Relation::ALL {
+                let targets: Vec<&str> = e
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.relation == *relation)
+                    .map(|edge| edge.target)
+                    .collect();
+                if targets.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!(r#""{}":["#, term(relation.id())));
+                for (i, t) in targets.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!(r#""{}""#, escape_json(t)));
+                }
+                out.push_str("],");
+            }
+        }
     }
-    out.push_str("],");
 
     out.push_str(&format!(r#""rustPath":"{}","#, escape_json(e.rust_path)));
     out.push_str(&format!(r#""example":"{}","#, escape_json(e.example)));
@@ -161,8 +208,13 @@ pub fn to_json() -> String {
 /// The registry as JSON-LD, for loading into a knowledge graph.
 ///
 /// The `@context` maps every ontology term onto the [`VOCAB`] IRI and declares
-/// the relation properties as `@id` references, so a triple store resolves
-/// `built-on` into a real edge rather than a literal string.
+/// each relation as a property whose values are node references, so
+/// `built-on` becomes an edge a query can traverse rather than a literal
+/// string. This is the one place the JSON-LD departs from [`to_json`]: that
+/// export nests relations in a `relations` array, which is the better shape to
+/// read and the wrong one to load, since it would hang the relation's name off
+/// a blank node as a literal. The triples here are the ones [`to_turtle`]
+/// states.
 pub fn to_json_ld() -> String {
     let mut out = String::from("{\"@context\":{");
     out.push_str(&format!(r#""@vocab":"{VOCAB}","#));
@@ -174,7 +226,14 @@ pub fn to_json_ld() -> String {
     out.push_str(&format!(r#""@base":"{VOCAB}","#));
     out.push_str(r#""id":"@id","#);
     out.push_str(r#""algorithms":{"@id":"member","@container":"@set"},"#);
-    out.push_str(r#""target":{"@type":"@id"},"#);
+    // Each relation is a property whose value is a node, not a string. Without
+    // this the target would expand to a literal and the edge would not exist.
+    for relation in Relation::ALL {
+        out.push_str(&format!(
+            r#""{}":{{"@type":"@id","@container":"@set"}},"#,
+            term(relation.id())
+        ));
+    }
     out.push_str(r#""class":{"@type":"@vocab"},"#);
     out.push_str(r#""purposes":{"@type":"@vocab","@container":"@set"},"#);
     out.push_str(r#""fipsStatus":{"@type":"@vocab"}"#);
@@ -183,7 +242,7 @@ pub fn to_json_ld() -> String {
         if i > 0 {
             out.push(',');
         }
-        let body = entry_to_json(e);
+        let body = entry_to_json_with(e, Edges::Direct);
         // Splice in the node type after the opening brace.
         out.push('{');
         out.push_str("\"@type\":\"Algorithm\",");
@@ -531,9 +590,23 @@ mod tests {
             "the JSON-LD no longer aliases id to @id"
         );
 
+        // The JSON-LD is one document; an assertion that some target appears
+        // somewhere in it would pass for an edge attached to the wrong entry.
+        // Split it into node objects so each entry is checked against its own.
+        let nodes: Vec<&str> = jsonld.split(r#"{"@type":"Algorithm","#).skip(1).collect();
+        assert_eq!(
+            nodes.len(),
+            REGISTRY.len(),
+            "the JSON-LD does not have one node per entry"
+        );
+
         let mut checked = 0;
         for e in REGISTRY {
             let iri = format!("{VOCAB}{}", e.id);
+            let node = nodes
+                .iter()
+                .find(|n| n.starts_with(&format!(r#""id":"{}","#, e.id)))
+                .unwrap_or_else(|| panic!("the JSON-LD has no node for {}", e.id));
 
             // Turtle states it as a subject.
             assert!(
@@ -543,24 +616,34 @@ mod tests {
             );
             // JSON-LD states it as the entry's id, which resolves to the same.
             assert!(
-                jsonld.contains(&format!(r#""id":"{}""#, e.id)),
+                node.starts_with(&format!(r#""id":"{}","#, e.id)),
                 "the JSON-LD does not name {} as {iri}",
                 e.id
             );
 
-            // And a relation's target must denote the entry it points at, in
-            // both, or the edges land on nodes that do not exist.
+            // And both must state the same edge: same predicate, same object.
+            // The two write it differently -- Turtle as a predicate, JSON-LD as
+            // a property whose values are node references -- but they expand to
+            // the same triple, which is the whole reason for emitting both.
             for edge in e.edges {
+                let predicate = term(edge.relation.id());
                 assert!(
-                    ttl.contains(&format!("ac:{} ", edge.target))
-                        || ttl.contains(&format!("ac:{} .", edge.target)),
-                    "{} points at {}, which turtle names differently",
+                    ttl.contains(&format!("ac:{predicate} ac:{}", edge.target)),
+                    "turtle does not state {} --{predicate}-> {}",
                     e.id,
                     edge.target
                 );
+                let property = format!(r#""{predicate}":["#);
+                let values = node
+                    .split_once(property.as_str())
+                    .and_then(|(_, rest)| rest.split_once(']'))
+                    .map(|(values, _)| values)
+                    .unwrap_or_else(|| panic!("the JSON-LD node for {} has no {predicate}", e.id));
                 assert!(
-                    jsonld.contains(&format!(r#""target":"{}""#, edge.target)),
-                    "{} points at {}, which the JSON-LD names differently",
+                    values
+                        .split(',')
+                        .any(|v| v.trim_matches('"') == edge.target),
+                    "the JSON-LD does not state {} --{predicate}-> {}",
                     e.id,
                     edge.target
                 );
