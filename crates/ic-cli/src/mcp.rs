@@ -279,7 +279,11 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "crypto_standard",
             description:
-                "Look up the standards that define an algorithm, or one document by its                  citation. Returns the title, publisher, year, whether it is still current,                  what it covers, and the obligations it imposes on an implementation -- each                  with whether this library meets it and the file that evidences it. Use this                  to answer 'what does FIPS 203 require here' without guessing.",
+                "Look up the standards that define an algorithm, or one document by its citation. \
+                 Returns the title, publisher, year, whether it is still current, what it covers, \
+                 and the obligations it imposes on an implementation -- each with whether this \
+                 library meets it and the file that evidences it. Use this to answer 'what does \
+                 FIPS 203 require here' without guessing.",
             schema: || {
                 schema(
                     vec![
@@ -305,7 +309,12 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "crypto_requirements",
             description:
-                "The conformance view: every normative obligation drawn from the standards,                  with whether this library meets it, meets it partially, does not, or is not                  bound by it -- and why. A partial answer names the gap, which is the one a                  binary yes/no would misreport in either direction. Filter by state or algorithm. Nothing here asserts FIPS validation; a                  met requirement means the code does what the document asks, not that a                  laboratory has agreed.",
+                "The conformance view: every normative obligation drawn from the standards, with \
+                 whether this library meets it, meets it partially, does not, or is not bound by it \
+                 -- and why. A partial answer names the gap, which is the one a binary yes/no would \
+                 misreport in either direction. Filter by state or algorithm. Nothing here asserts \
+                 FIPS validation; a met requirement means the code does what the document asks, not \
+                 that a laboratory has agreed.",
             schema: || {
                 schema(
                     vec![
@@ -319,7 +328,8 @@ fn tools() -> Vec<Tool> {
                         (
                             "algorithm",
                             string_prop(
-                                "Narrow to obligations bearing on this algorithm id.                                  Library-wide obligations always match.",
+                                "Narrow to obligations bearing on this algorithm id. Library-wide \
+                                 obligations always match.",
                             ),
                         ),
                     ],
@@ -394,7 +404,8 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "crypto_seal",
             description:
-                "Encrypt with an AEAD and return the ciphertext and tag as hex. Key, nonce, and                  associated data are hex; the plaintext is a UTF-8 string.",
+                "Encrypt with an AEAD and return the ciphertext and tag as hex. Key, nonce, and \
+                 associated data are hex; the plaintext is a UTF-8 string.",
             schema: || {
                 schema(
                     vec![
@@ -710,6 +721,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Every word an agent reads must be prose, not a source listing.
+    ///
+    /// A Rust string broken across lines needs a trailing backslash, which eats
+    /// the newline and the next line's indentation. Without it the indentation
+    /// stays in the string, and four descriptions reached agents with runs of
+    /// eighteen and thirty-four spaces in mid-sentence. The ontology already
+    /// tests its own prose this way; the tool descriptions were not covered,
+    /// which is the only reason it went unnoticed.
+    #[test]
+    fn descriptions_read_as_prose() {
+        let Json::Array(items) = handle(&request("tools/list", Json::Null))
+            .unwrap()
+            .get("result")
+            .unwrap()
+            .get("tools")
+            .unwrap()
+            .clone()
+        else {
+            panic!("expected an array")
+        };
+
+        let mut checked = 0;
+        for t in &items {
+            let name = t.get("name").unwrap().as_str().unwrap();
+            let schema = t.get("inputSchema").unwrap();
+            let Some(Json::Object(props)) = schema.get("properties") else {
+                panic!("{name} has no properties")
+            };
+
+            let mut prose = vec![(
+                name.to_string(),
+                t.get("description").unwrap().as_str().unwrap(),
+            )];
+            for (prop, def) in props {
+                if let Some(d) = def.get("description").and_then(Json::as_str) {
+                    prose.push((format!("{name}.{prop}"), d));
+                }
+            }
+
+            for (what, text) in prose {
+                assert!(
+                    !text.contains("  "),
+                    "{what} contains a run of spaces, so a line continuation is \
+                     missing: {text:?}"
+                );
+                assert!(
+                    !text.contains('\n') && !text.contains('\t'),
+                    "{what} contains a literal newline or tab"
+                );
+                assert!(text.trim() == text, "{what} is padded at one end");
+                checked += 1;
+            }
+        }
+
+        // Well past the fourteen descriptions alone, so this cannot pass by
+        // examining the tools and skipping their arguments.
+        assert!(checked > 30, "only {checked} pieces of prose examined");
     }
 
     /// A tool's `required` list must be the one its handler enforces.
