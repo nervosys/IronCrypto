@@ -27,6 +27,21 @@
 
 pub mod portable;
 
+// Only where something expands them: the real backend on aarch64, and the
+// model under test everywhere. A plain x86 build has neither, and an
+// ungated module would sit there as an unused-macro warning.
+#[cfg(any(
+    test,
+    all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+))]
+mod armv8_rounds;
+
+// The model runs everywhere, including on hosts with no ARM hardware,
+// which is the entire point: it checks the round structure that the real
+// backend cannot be executed to check.
+#[cfg(test)]
+mod armv8_model;
+
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"))]
 pub mod x86;
 #[cfg(all(

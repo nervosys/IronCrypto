@@ -135,6 +135,7 @@ behaviour can reproduce it from a shell.
 | `ic-mac` | HMAC generic over `Digest`, CMAC generic over `BlockCipher`, KMAC over cSHAKE |
 | `ic-cipher` | GF(2^8) arithmetic, AES (portable + AES-NI), SP 800-38A modes, GCM (portable + PCLMULQDQ GHASH), ChaCha20, Poly1305 |
 | `ic-cipher::aes::aarch64` | The ARMv8 AES backend, behind the off-by-default `aarch64-crypto` feature. Written and cross-compiled on x86 and never executed by its author; CI's arm64 macOS runner is what exercises it. AES only - there is no PMULL GHASH, so the ontology keeps reporting portable on ARM |
+| `ic-cipher::aes::armv8_model` | A software model of AESE/AESMC/AESD/AESIMC from their FIPS 197 definitions, driven by the same macro the real backend expands. Runs everywhere, and is how the ARM round structure is checked on a host with no ARM hardware. It found a wrong decryption key schedule that review did not |
 | `ic-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
 | `ic-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |
 | `ic-ec` | GF(2^255-19) field, X25519, Ed25519; a limb-generic Montgomery field, one Jacobian group law, ECDSA and ECDH, instantiated for P-256, P-384 and P-521 |

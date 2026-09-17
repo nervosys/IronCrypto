@@ -27,9 +27,18 @@
 //!
 //! So the ARM loop is `AESMC(AESE(state, rk[r]))` for the middle rounds, a bare
 //! `AESE` for the last, and an explicit XOR of the final round key — which x86
-//! gets for free from `AESENCLAST`. The same shift applies to decryption, where
-//! the round keys are used in plain reverse order and `AESIMC` is applied to
-//! the *state* rather than pre-applied to the keys as it is on x86.
+//! gets for free from `AESENCLAST`. Decryption mirrors it with `AESD` and
+//! `AESIMC`, over the same equivalent inverse cipher schedule x86 uses:
+//! reversed, with InvMixColumns pre-applied to every key but the first and
+//! last.
+//!
+//! That last point is worth dwelling on, because the first version of this file
+//! got it wrong. It used a plain reversal, on the reasoning that ARM applies
+//! `AESIMC` to the state so pre-applying it to the keys would invert twice.
+//! That reasoning is wrong, the result encrypts correctly and decrypts to
+//! nonsense, and no amount of rereading found it — [`super::armv8_model`] did,
+//! by running the structure against the portable backend on a machine with no
+//! ARM hardware at all.
 //!
 //! # Scope: AES only
 //!
@@ -51,6 +60,7 @@
 //! optimisation is held to the output of something already known to be correct,
 //! rather than to a second reading of the same specification.
 
+use super::armv8_rounds::{armv8_decrypt_rounds, armv8_encrypt_rounds};
 use super::portable::{Schedule, BLOCK_LEN};
 use core::arch::aarch64::*;
 use ic_core::{ensure, Result};
@@ -93,12 +103,21 @@ impl Keys {
             *slot = unsafe { vld1q_u8(rk.as_ptr()) };
         }
 
-        // Plain reversal. Unlike the x86 equivalent inverse cipher, AESIMC is
-        // not pre-applied to the keys here: on ARM it is applied to the state
-        // inside the loop, so doing both would invert twice.
-        for i in 0..=rounds {
-            dec[i] = enc[rounds - i];
+        // The equivalent inverse cipher schedule, exactly as the x86 backend
+        // builds it: reversed, with InvMixColumns pre-applied to everything
+        // except the first and last key.
+        //
+        // An earlier version of this file used a plain reversal and a comment
+        // asserting that ARM does not need the pre-applied inverse because
+        // AESIMC is applied to the state. That was wrong. It encrypts
+        // correctly and decrypts to nonsense, and it was caught by the software
+        // model in `armv8_model`, not by reasoning -- which is why the model
+        // exists.
+        dec[0] = enc[rounds];
+        for i in 1..rounds {
+            dec[i] = vaesimcq_u8(enc[rounds - i]);
         }
+        dec[rounds] = enc[0];
 
         Keys { enc, dec, rounds }
     }
@@ -112,12 +131,14 @@ impl Keys {
     #[target_feature(enable = "aes")]
     #[inline]
     unsafe fn encrypt(&self, block: uint8x16_t) -> uint8x16_t {
-        let mut b = block;
-        for r in 0..self.rounds - 1 {
-            b = vaesmcq_u8(vaeseq_u8(b, self.enc[r]));
-        }
-        b = vaeseq_u8(b, self.enc[self.rounds - 1]);
-        veorq_u8(b, self.enc[self.rounds])
+        armv8_encrypt_rounds!(
+            block,
+            self.enc,
+            self.rounds,
+            vaeseq_u8,
+            vaesmcq_u8,
+            veorq_u8
+        )
     }
 
     /// Decrypt one block in registers.
@@ -129,12 +150,14 @@ impl Keys {
     #[target_feature(enable = "aes")]
     #[inline]
     unsafe fn decrypt(&self, block: uint8x16_t) -> uint8x16_t {
-        let mut b = block;
-        for r in 0..self.rounds - 1 {
-            b = vaesimcq_u8(vaesdq_u8(b, self.dec[r]));
-        }
-        b = vaesdq_u8(b, self.dec[self.rounds - 1]);
-        veorq_u8(b, self.dec[self.rounds])
+        armv8_decrypt_rounds!(
+            block,
+            self.dec,
+            self.rounds,
+            vaesdq_u8,
+            vaesimcq_u8,
+            veorq_u8
+        )
     }
 }
 
