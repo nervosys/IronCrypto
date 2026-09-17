@@ -76,8 +76,12 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         Capability {
             id: "zero-dependencies",
             present: true,
-            note: "No third-party crates, no C, no build scripts. The dependency graph is the \
-                   workspace itself.",
+            note: "No third-party crates, no C, no build scripts: for every crate that implements \
+                   an algorithm, the dependency graph is the workspace itself, and a per-crate \
+                   check enforces that on each build. One crate is outside it -- ic-rustls \
+                   implements rustls's traits and so depends on rustls -- and what rustls may \
+                   bring is listed by name, so it cannot grow unnoticed. Depend on ic-rustls and \
+                   you inherit that; depend on anything else here and you do not.",
         },
         Capability {
             id: "constant-time-symmetric",

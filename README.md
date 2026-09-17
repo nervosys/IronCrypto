@@ -4,7 +4,13 @@
 
 Zero dependencies. No C. No build scripts. `no_std` from the ground up, verified
 against ARM Cortex-M, RISC-V, and WebAssembly. Every primitive validated against
-its published test vectors.
+its published test vectors. Usable as a [rustls](https://docs.rs/rustls)
+provider, so it can carry TLS.
+
+*Zero dependencies* means every crate that implements an algorithm depends on
+nothing outside this workspace, checked per crate on each build. The rustls
+adapter is the one exception and necessarily so; see
+[Supply chain](#supply-chain).
 
 ```console
 $ icrypto recommend encrypt-message --fips
@@ -175,6 +181,57 @@ cipher.open_detached(&nonce, b"context", &mut buf, &tag)?;
 
 ---
 
+## TLS
+
+`ic-rustls` presents IronCrypto to [rustls](https://docs.rs/rustls) as a
+`CryptoProvider`:
+
+```rust
+let roots = rustls::RootCertStore::empty();
+let config = rustls::ClientConfig::builder_with_provider(ic_rustls::arc_provider())
+    .with_safe_default_protocol_versions()?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+# let _ = config;
+# Ok::<(), rustls::Error>(())
+```
+
+Or `ic_rustls::provider().install_default()` once, for every rustls
+configuration in the process.
+
+| | |
+|---|---|
+| AEAD | AES-128-GCM, AES-256-GCM — TLS 1.3 and TLS 1.2 |
+| Hash | SHA-256, SHA-384 |
+| MAC | HMAC-SHA256, HMAC-SHA384 |
+| KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
+| Signatures | ECDSA P-256/SHA-256, P-384/SHA-384 — verification |
+| Key exchange | X25519, ECDH P-256, ECDH P-384 |
+| Randomness | SP 800-90A HMAC\_DRBG, OS-seeded |
+
+HKDF is rustls's own extract-and-expand over IronCrypto's HMAC rather than a
+second HKDF written for the occasion — HKDF is a construction, HMAC is the
+primitive — and the composition is checked against RFC 5869 appendix A.
+
+**It verifies signatures and does not make them.** There is no `KeyProvider`, so
+it can authenticate a server and cannot present a certificate of its own.
+Loading a private key returns an error saying exactly that, rather than one that
+surfaces later somewhere unhelpful.
+
+Also absent: ChaCha20-Poly1305 suites (the cipher exists; the suite is not wired
+up), QUIC header protection, and the mismatched ECDSA pairings — a P-256 key
+signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
+assembling one inside the adapter, out of sight of that crate's vectors, would
+be worse than declining the chain.
+
+The record layer is where this crate's own risk lives: the cipher is already
+checked against the GCM vectors, and none of that says whether a record is
+*framed* right. Wrong additional data, a misplaced tag, a nonce built wrong from
+the sequence number — each produces something that round-trips against itself
+and interoperates with nothing. So the tests check framing: every single-bit
+mutation across a whole record refused, replay at another sequence number
+refused, and for TLS 1.2 the content type and version bound into the header.
+
 ## What's implemented
 
 Everything below is validated against published test vectors — FIPS 180-4,
@@ -196,6 +253,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
 | Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
+| TLS | a rustls `CryptoProvider`: AES-GCM, SHA-2, HMAC, HKDF, ECDSA, ECDH, X25519 |
 
 ## What isn't — and why that's written down
 
@@ -284,10 +342,17 @@ A compliance view that can be quoted without its gaps is worse than none.
 On CVE: a library does not comply with CVE — CVEs are instances, and what an
 implementation can do is avoid the weakness classes they belong to, which is
 what the CWE entries cover. The other half is supply chain, and there
-IronCrypto has zero third-party dependencies enforced in CI, so no advisory
-against another crate can apply to it. That claim is narrow on purpose and says
-nothing about defects in IronCrypto's own code. `SECURITY.md` has the
-disclosure process.
+every crate implementing an algorithm depends on nothing outside this
+workspace, so no advisory against another crate can apply to it. That claim is
+narrow on purpose and says nothing about defects in IronCrypto's own code.
+
+One crate is outside it. `ic-rustls` implements rustls's traits and so depends
+on rustls, which brings five crates with it; anything depending on `ic-rustls`
+inherits their advisories, and nothing else here does. `scripts/no-third-party.sh`
+enforces both halves: it lists by name what rustls may bring, so that set cannot
+grow unnoticed, and it checks every other crate individually rather than looking
+at the workspace as a whole — which is what lets the narrower claim still mean
+something. `SECURITY.md` has the disclosure process.
 
 ### The standards knowledgebase
 
@@ -328,6 +393,7 @@ $ icrypto capabilities
   [ ] fips-validated
   [x] post-quantum
   [x] approved-asymmetric
+  [x] tls-provider
   [x] key-encoding
 ```
 
@@ -391,7 +457,8 @@ test vectors; that is not the same as being reviewed by cryptographers. See
 ### How this compares
 
 Against aws-lc-rs, BoringSSL, and OpenSSL, IronCrypto leads on portability
-(zero dependencies, no C toolchain, genuine bare-metal `no_std`) and on the
+(no dependencies in any algorithm crate, no C toolchain, genuine bare-metal
+`no_std`) and on the
 agent-facing ontology, which none of them has. With the NIST curves and RSA
 signatures in place it covers the algorithms most deployments actually reach
 for, post-quantum included. It still trails on RSA encryption, on X.509
