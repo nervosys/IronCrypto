@@ -488,9 +488,9 @@ const FIPS140_REQS: [Requirement; 6] = [
         rationale: "Key material left in freed memory outlives the operation that needed it, and can be recovered from a core dump, a swapped page or a reused allocation.",
         applies_to: &[],
         compliance: Compliance::Partial {
-            file: "crates/ic-mldsa/src/sign.rs",
-            symbol: "impl Drop for SigningKey",
-            gap: "Coverage is real but uneven, and this entry previously claimed Met on the strength of the Zeroize trait merely existing -- the same shape as a validator nothing calls. An audit of which types actually wipe found that AES key schedules, ChaCha and Poly1305 state, GHASH, POLYVAL, the CTR_DRBG, BLAKE2b, the SHA-3 sponge and the RSA private key and its bignums all do; the SHA-2 states do not, and neither does HMAC, which holds key-derived inner and outer state and so carries a CSP in every HMAC-based KDF and DRBG built on it. Closing those needs a Zeroize bound threaded through the Digest trait, which is a wider change than this entry should quietly imply is done. Two gaps found by the same audit are now closed: ML-KEM decapsulation left the recovered message, both candidate shared secrets and the derived randomness unwiped, and ML-DSA had no Drop at all while impl Zeroize for Poly sat unused. Rust also cannot guarantee a wipe survives moves and optimisation, so even the covered cases are best-effort rather than a guarantee.",
+            file: "crates/iron-crypto/tests/api_hygiene.rs",
+            symbol: "secret_bearing_types_wipe_on_drop",
+            gap: "Rust cannot guarantee a wipe survives moves and optimisation, so every case here is best-effort rather than a guarantee, and that is the honest ceiling on this requirement. Within it, the types that hold secret or key-derived state are enumerated in `api_hygiene.rs` and each is asserted to implement Drop, so removing one fails the build. Hmac is deliberately not on that list: it holds two digest states with the key already absorbed, and those states wipe themselves, so it inherits the property through field drop rather than restating it. What is not covered is material a caller holds -- a private key passed in as a slice is the caller's memory and the caller's responsibility, and no library can discharge that."
         },
     },
     Requirement {

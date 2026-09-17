@@ -114,6 +114,23 @@ struct Core256 {
     len: u64,
 }
 
+impl Drop for Core256 {
+    /// Wipe the chaining state and the buffered block.
+    ///
+    /// A hash is not a secret, but this state is not only used for hashing:
+    /// `Hmac<D>` holds two of these with the key already absorbed into them,
+    /// so the ipad and opad states are key-derived material. Putting the wipe
+    /// here rather than on `Hmac` means every consumer inherits it through
+    /// ordinary field drop, with no `Zeroize` bound threaded through the
+    /// `Digest` trait and no chance of a new wrapper forgetting.
+    fn drop(&mut self) {
+        self.h.zeroize();
+        self.buf.zeroize();
+        self.buffered = 0;
+        self.len = 0;
+    }
+}
+
 impl Core256 {
     const fn new(iv: [u32; 8]) -> Self {
         Self {
@@ -224,6 +241,16 @@ struct Core512 {
     buf: [u8; 128],
     buffered: usize,
     len: u128,
+}
+
+impl Drop for Core512 {
+    /// Wipe the chaining state and the buffered block. See [`Core256`].
+    fn drop(&mut self) {
+        self.h.zeroize();
+        self.buf.zeroize();
+        self.buffered = 0;
+        self.len = 0;
+    }
 }
 
 impl Core512 {

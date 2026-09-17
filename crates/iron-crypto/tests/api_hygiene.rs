@@ -153,3 +153,93 @@ fn public_predicates_cannot_be_ignored() {
          has stopped matching rather than that they have gone away"
     );
 }
+
+/// Types that hold secret or key-derived state, and must wipe it on drop.
+///
+/// A curated list rather than a heuristic, because "holds a secret" is not
+/// something a regular expression can decide. Each name is asserted to have a
+/// `Drop` implementation somewhere in the crypto crates; delete one and this
+/// fails.
+///
+/// `Hmac` is deliberately absent. It holds two digest states with the key
+/// already absorbed, and those states wipe themselves, so `Hmac` inherits the
+/// property through ordinary field drop. Adding a `Drop` to it as well would
+/// suggest the wipe lives there when it does not.
+const MUST_WIPE_ON_DROP: &[&str] = &[
+    "Schedule",         // AES round keys
+    "ChaCha20Poly1305", // the AEAD's key and derived one-time key
+    "Poly1305",         // the one-time authentication key
+    "Ghash",            // the GCM subkey
+    "Polyval",          // the GCM-SIV subkey
+    "Cmac",             // k1 and k2, derived from the key
+    "CtrDrbg",          // the generator's internal state
+    "HmacDrbg",         // likewise
+    "Blake2b",          // keyed hashing state
+    "Sponge",           // SHA-3 and everything built on it, including KMAC
+    "Core256",          // SHA-2 chaining state, and so HMAC's ipad/opad
+    "Core512",          // likewise
+    "RsaPrivateKey",    // d, the primes and the CRT parameters
+    "SigningKey",       // ML-DSA's s1, s2 and t0
+];
+
+/// Every type on that list must implement `Drop`.
+///
+/// This exists because the hand audit that produced the list got the answer
+/// wrong twice. The first grep searched for `impl Drop for` and so missed
+/// `impl<C: BlockCipher + Clone> Drop for Cmac<C>`, reporting a type that wipes
+/// as one that does not — which then reached a shipped compliance entry. A
+/// pattern in a test can be wrong too, but it is wrong in public and only once.
+#[test]
+fn secret_bearing_types_wipe_on_drop() {
+    let root = workspace_root();
+    let mut implemented: Vec<String> = Vec::new();
+
+    for crate_name in CRYPTO_CRATES {
+        let mut files = Vec::new();
+        rust_files(
+            &root.join("crates").join(crate_name).join("src"),
+            &mut files,
+        );
+        for file in files {
+            let text = std::fs::read_to_string(&file).expect("readable source");
+            for line in text.lines() {
+                let line = line.trim_start();
+                if !line.starts_with("impl") {
+                    continue;
+                }
+                // Skip the generic parameter list, which is what a naive
+                // `impl Drop for` search trips over.
+                let after_generics = match line.find('>') {
+                    Some(i) if line.as_bytes().get(4) == Some(&b'<') => &line[i + 1..],
+                    _ => &line[4..],
+                };
+                let after_generics = after_generics.trim_start();
+                if let Some(rest) = after_generics.strip_prefix("Drop for ") {
+                    let name: String = rest
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !name.is_empty() {
+                        implemented.push(name);
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        implemented.len() >= 12,
+        "only {} Drop implementations found, which suggests the scan broke rather than that          they were removed: {implemented:?}",
+        implemented.len()
+    );
+
+    let missing: Vec<&str> = MUST_WIPE_ON_DROP
+        .iter()
+        .copied()
+        .filter(|want| !implemented.iter().any(|got| got == want))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "these hold secret or key-derived state and do not wipe it on drop: {missing:?}"
+    );
+}
