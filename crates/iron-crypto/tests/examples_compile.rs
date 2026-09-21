@@ -17,24 +17,30 @@
 //!
 //! # Scope
 //!
-//! Six entries, chosen one per API shape: authenticated encryption, signing,
-//! key encapsulation, key derivation, key wrapping, and post-quantum signing.
-//! Not all seventy-five.
+//! Every registry entry that carries an example: all seventy-two.
+//! [`every_example_is_covered`] asserts that, so an entry added without a test
+//! here fails rather than passing unnoticed.
 //!
-//! The sixth was not chosen for coverage. It was added because ML-DSA's example
-//! turned out to discard all three of its return values, including `verify`, so
-//! the registry was handing agents a snippet that checks a signature and throws
-//! the answer away. The defect was in an entry this file did not compile, which
-//! is the argument for the list being longer than it is.
+//! It did not start that way. It began as six, chosen one per API shape, and
+//! grew to thirty-one and then to all of them. The sixth was not added for
+//! coverage -- it was added because ML-DSA's example turned out to discard all
+//! three of its return values, including `verify`, so the registry was handing
+//! agents a snippet that checks a signature and throws the answer away. That
+//! defect was in an entry this file did not compile at the time, which is the
+//! argument that finished the job.
+//!
+//! Until the coverage test existed, answering "how much is covered?" meant
+//! grepping this file for identifiers, and doing that by hand got the answer
+//! wrong twice -- once by missing the standalone `check_example` calls, once by
+//! missing the list that passes identifiers as variables. Both times it looked
+//! like a large gap that was not there. The test is cheaper than the grep and
+//! does not make that mistake.
 //! The snippets are fragments rather than programs — they reference a `key`, a
 //! `nonce`, an `rng` that the surrounding code is expected to supply — so each
-//! one needs a preamble written by hand, and doing that for every entry would
-//! be a large amount of work to re-confirm a property that holds structurally:
-//! they all name types from the same few crates in the same few shapes.
-//!
-//! What these five do establish is that the shapes are right and that the
-//! rename to `ic_*` reached the example strings, which is the drift most likely
-//! to have happened recently.
+//! needs a preamble written by hand. Where several entries share a shape, a
+//! macro takes the identifier and the type and writes the expected text from
+//! them, which is why covering seventy-two costs far less than seventy-two
+//! preambles.
 
 use iron_crypto::core_types::traits::{Aead, BlockCipher, Digest, Kdf, Mac, SignatureScheme};
 use iron_crypto::prelude::*;
@@ -178,6 +184,53 @@ fn the_examples_run() {
     run_hkdf_sha256().expect("hkdf-sha2-256");
     run_aes_256_kwp().expect("aes-256-kwp");
     run_ml_dsa_65().expect("ml-dsa-65");
+}
+
+/// Every registry example must be checked somewhere in this file.
+///
+/// This is the test that was missing, and its absence is why the file's own
+/// documentation was able to claim six for as long as it did. Nothing compared
+/// the list of entries against the list of tests, so the two drifted and the
+/// only way to compare them was to grep -- which is easy to get wrong, and was
+/// got wrong twice.
+///
+/// The check is by identifier appearing in this file's source, which is
+/// necessary rather than sufficient: an identifier could in principle appear in
+/// a comment and nowhere else. That is worth accepting, because the drift this
+/// guards against is an entry added to the registry with no test written for
+/// it, and an identifier that appears nowhere at all is exactly what that looks
+/// like.
+#[test]
+fn every_example_is_covered() {
+    // Compiled in, so this cannot read a stale copy from another directory.
+    const SOURCE: &str = include_str!("examples_compile.rs");
+
+    let mut with_example = 0;
+    let mut missing = Vec::new();
+
+    for e in iron_crypto::ontology::REGISTRY {
+        if e.example.is_empty() {
+            continue;
+        }
+        with_example += 1;
+        // The identifier as this file would write it, in quotes, so a
+        // coincidental substring of a longer id does not count.
+        if !SOURCE.contains(&format!("\"{}\"", e.id)) {
+            missing.push(e.id);
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "these entries carry an example that nothing here compiles: {missing:?}"
+    );
+
+    // A floor, because the loop above passes over an empty registry and would
+    // then report perfect coverage of nothing.
+    assert!(
+        with_example > 60,
+        "only {with_example} entries carry an example; the registry did not load"
+    );
 }
 
 /// No example may still name the pre-rename crates.
