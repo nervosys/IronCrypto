@@ -671,6 +671,201 @@ pub fn serve_on(mut input: impl BufRead, stdout: &mut impl Write) -> std::io::Re
 }
 
 #[cfg(test)]
+mod totality_tests {
+    use super::*;
+
+    /// A JSON-RPC envelope around one call.
+    fn envelope(method: &str, params: Json) -> Json {
+        Json::object([
+            ("jsonrpc", Json::str("2.0")),
+            ("id", Json::num(1)),
+            ("method", Json::str(method)),
+            ("params", params),
+        ])
+    }
+
+    /// Hostile values for a string argument, including the shapes that have
+    /// broken parsers elsewhere in this workspace.
+    fn hostile_strings() -> Vec<String> {
+        let mut out = vec![
+            String::new(),
+            "0".into(),
+            "zz".into(),       // not hex
+            "0z".into(),       // half hex
+            "00".repeat(1000), // long but valid hex
+            "ff".repeat(1000),
+            "\u{0}\u{1}\u{7f}".into(),           // control characters
+            "\u{1f600}".into(),                  // outside the basic plane
+            "-----BEGIN PUBLIC KEY-----".into(), // a truncated PEM header
+            "-".repeat(500),
+            "a".repeat(100_000),
+        ];
+        // Every odd length up to a block, since hex decoding and key lengths
+        // both care about parity and boundaries.
+        for n in [1usize, 15, 16, 17, 31, 32, 33, 47, 48, 63, 64, 65] {
+            out.push("a".repeat(n));
+            out.push("0".repeat(n));
+        }
+        out
+    }
+
+    /// The handler must return for every request, however malformed.
+    ///
+    /// Not "must succeed": a bad argument should come back as `isError` inside
+    /// the result, which is where the protocol puts a failure the agent is
+    /// meant to read and retry. What must not happen is a panic, because that
+    /// ends the server rather than the call.
+    #[test]
+    fn every_tool_returns_on_hostile_arguments() {
+        let tools = tools();
+        assert!(tools.len() >= 10, "only {} tools found", tools.len());
+
+        let mut calls = 0;
+        let mut reached_the_tool = 0;
+
+        for tool in &tools {
+            // The argument names this tool declares, from its own schema, so a
+            // tool gaining an argument is covered without editing this.
+            let schema = (tool.schema)();
+            let Some(Json::Object(props)) = schema.get("properties") else {
+                panic!("{} has no properties", tool.name)
+            };
+            let names: Vec<String> = props.keys().cloned().collect();
+
+            for value in hostile_strings() {
+                // Every argument set to the same hostile value, so required
+                // ones are present and the call gets past the argument check
+                // into the code that interprets them.
+                let mut args = std::collections::BTreeMap::new();
+                for name in &names {
+                    args.insert(name.clone(), Json::str(value.clone()));
+                }
+                let call = envelope(
+                    "tools/call",
+                    Json::object([
+                        ("name", Json::str(tool.name)),
+                        ("arguments", Json::Object(args.clone())),
+                    ]),
+                );
+
+                let response = handle(&call).expect("a request with an id gets a response");
+                calls += 1;
+
+                // Depth means the tool examined the value it was handed and
+                // objected to *it* -- not that the call returned. Two things
+                // are excluded, and both fooled the first version of this:
+                //
+                //   - "missing required argument", which is the call stopping
+                //     at the argument check before any value is read;
+                //   - a plain success, because six of these tools require no
+                //     arguments and answer happily when sent none. A fuzzer
+                //     supplying nothing at all passed the old guard on those.
+                let text = response.to_string();
+                let objected = text.contains("\"isError\":true");
+                if objected && !text.contains("missing required argument") {
+                    reached_the_tool += 1;
+                }
+            }
+
+            // Each argument dropped in turn, once. What this exercises is the
+            // absence rather than the value that was absent, so repeating it
+            // per hostile value only costs time -- 29 seconds of it, almost all
+            // in `crypto_selftest`, which runs all 64 known-answer tests when
+            // its argument is missing.
+            for dropped in &names {
+                let mut short = std::collections::BTreeMap::new();
+                for name in &names {
+                    if name != dropped {
+                        short.insert(name.clone(), Json::str("00"));
+                    }
+                }
+                let call = envelope(
+                    "tools/call",
+                    Json::object([
+                        ("name", Json::str(tool.name)),
+                        ("arguments", Json::Object(short)),
+                    ]),
+                );
+                assert!(handle(&call).is_some(), "{} without {dropped}", tool.name);
+                calls += 1;
+            }
+
+            // Wrong types, which the accessors turn into None rather than a
+            // panic -- worth asserting, since that is the behaviour being
+            // relied on.
+            for wrong in [
+                Json::Null,
+                Json::Bool(true),
+                Json::Number(-1.0),
+                Json::Number(f64::MAX),
+                Json::Array(vec![Json::Null; 3]),
+            ] {
+                let mut args = std::collections::BTreeMap::new();
+                for name in &names {
+                    args.insert(name.clone(), wrong.clone());
+                }
+                let call = envelope(
+                    "tools/call",
+                    Json::object([
+                        ("name", Json::str(tool.name)),
+                        ("arguments", Json::Object(args)),
+                    ]),
+                );
+                assert!(handle(&call).is_some(), "{} on {wrong:?}", tool.name);
+                calls += 1;
+            }
+        }
+
+        // Floors. Without these the loop passes having tried nothing, and the
+        // second is the one that matters: arguments all rejected for being
+        // absent would never reach a cipher, a hex decoder or a key parser.
+        assert!(calls > 250, "only {calls} calls made");
+        assert!(
+            reached_the_tool > calls / 4,
+            "only {reached_the_tool} of {calls} calls reached a tool that then \
+             objected to the value it was given; the rest either stopped at the \
+             argument check or succeeded without reading anything, so the hostile \
+             values never got near the code that interprets them"
+        );
+    }
+
+    /// The protocol layer must return for malformed envelopes too.
+    #[test]
+    fn the_protocol_layer_returns_on_anything() {
+        let shapes = [
+            Json::Null,
+            Json::Bool(false),
+            Json::Number(0.0),
+            Json::str("not an object"),
+            Json::Array(vec![]),
+            Json::object([]),
+            Json::object([("method", Json::Null)]),
+            Json::object([("id", Json::Null), ("method", Json::Number(7.0))]),
+            Json::object([("id", Json::str("x")), ("method", Json::str("tools/call"))]),
+            Json::object([
+                ("id", Json::Number(1.0)),
+                ("method", Json::str("tools/call")),
+                ("params", Json::str("not an object")),
+            ]),
+            Json::object([
+                ("id", Json::Number(1.0)),
+                ("method", Json::str("tools/call")),
+                ("params", Json::object([("name", Json::Number(3.0))])),
+            ]),
+        ];
+
+        let mut tried = 0;
+        for shape in shapes {
+            // Returning None is allowed -- that is a notification -- but it
+            // must return rather than panic.
+            let _ = handle(&shape);
+            tried += 1;
+        }
+        assert_eq!(tried, 11);
+    }
+}
+
+#[cfg(test)]
 mod serve_tests {
     use super::*;
 
