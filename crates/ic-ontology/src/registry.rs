@@ -2054,20 +2054,11 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::Authentication],
         strength: Strength { classical: 256, quantum: 128 },
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Experimental,
+        status: ImplStatus::Available,
         standards: &["RFC 8452"],
         params: &GCM_SIV_P,
         constraints: &[
             NONCE_MISUSE_RESISTANT,
-            Constraint {
-                id: "not-interoperability-tested",
-                requirement: "Do not use this to talk to another implementation until a vector \
-                              from RFC 8452 Appendix C has been wired in and passes.",
-                consequence: "The components are verified but their assembly is not. Code that \
-                              is wrong in one byte order still round-trips against itself and \
-                              interoperates with nothing.",
-                severity: Severity::Critical,
-            },
             Constraint {
                 id: "equal-plaintexts-are-visible",
                 requirement: "Accept that two identical messages under one nonce produce \
@@ -2088,8 +2079,10 @@ pub static REGISTRY: &[Entry] = &[
                 everything on a repeated nonce — the keystream and the authentication key both \
                 — while GCM-SIV leaks only whether two plaintexts were equal. The cost is two \
                 passes over the plaintext, so it cannot stream, and it is not FIPS-approved: \
-                RFC 8452 is an IETF document, not a NIST one. This build is marked experimental \
-                because no published vector is wired in; see the crate docs.",
+                RFC 8452 is an IETF document, not a NIST one. Checked against RFC 8452 appendix C: all 50 published cases \
+                across C.1, C.2 and C.3, in both directions, including the counter-wrap \
+                tests that exist because an implementation can pass everything else and \
+                still get that case wrong.",
     },
     Entry {
         id: "aes-128-gcm-siv",
@@ -2101,18 +2094,12 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::Authentication],
         strength: Strength { classical: 128, quantum: 64 },
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Experimental,
+        status: ImplStatus::Available,
         standards: &["RFC 8452"],
         params: &GCM_SIV_P,
         constraints: &[
             NONCE_MISUSE_RESISTANT,
-            Constraint {
-            id: "not-interoperability-tested",
-            requirement: "Do not use this to talk to another implementation until a published \
-                          vector has been wired in and passes.",
-            consequence: "The components are verified but their assembly is not.",
-            severity: Severity::Critical,
-        }],
+],
         edges: &[
             Edge { relation: Relation::BuiltOn, target: "aes-128" },
             Edge { relation: Relation::SupersededBy, target: "aes-256-gcm-siv" },

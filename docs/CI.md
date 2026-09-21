@@ -53,35 +53,75 @@ gh api -X POST repos/nervosys/IronCrypto/actions/runners/registration-token \
   --jq .token
 ```
 
-Then, on the machine that will run the jobs:
-
-```bash
-mkdir actions-runner && cd actions-runner
-# v2.337.0 was current when this was written; the page GitHub shows you when
-# you add a runner always names the release it expects.
-curl -o runner.zip -L https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x64-2.337.0.zip
-tar -xf runner.zip
-
-./config.cmd --url https://github.com/nervosys/IronCrypto --token <TOKEN>
-./run.cmd
-```
-
-`./run.cmd` runs in the foreground and stops when the terminal closes. To keep
-it running, install it as a service instead:
-
-```bash
-./svc.sh install    # Linux and macOS
-./svc.sh start
-```
+Then, on the machine that will run the jobs. **Not inside a user profile** --
+see below, it is the difference between a service that starts and one that does
+not:
 
 ```powershell
-.\svc.cmd install   # Windows, from an elevated prompt
-.\svc.cmd start
+mkdir C:\actions-runner; cd C:\actions-runner
+
+# v2.337.0 was current when this was written; the page GitHub shows you when you
+# add a runner always names the release it expects, with its digest.
+curl -o runner.zip -L https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-win-x64-2.337.0.zip
+(Get-FileHash runner.zip -Algorithm SHA256).Hash.ToLower()
+# 1150692afa94e71f872017e254ea55b6eece1eece3fe7e3a6d4c93d0a1b85cfc
+Expand-Archive runner.zip -DestinationPath . -Force; Remove-Item runner.zip
 ```
+
+Check the digest against the one on the release page before running any of it.
+This is a cryptography project; downloading and executing an unverified binary
+to test it would be an odd way to start.
+
+Register it, from an **elevated** prompt:
+
+```powershell
+.\config.cmd --url https://github.com/nervosys/IronCrypto --token <TOKEN> `
+  --unattended --name ironcrypto-win-x64 --labels self-hosted,windows,x64 `
+  --work _work --replace --runasservice
+```
+
+`--runasservice` installs it under `NT AUTHORITY\NETWORK SERVICE`, starts it,
+and sets it to start on boot. Without that flag you get `.\run.cmd`, which runs
+in the foreground and dies with the terminal.
+
+On Linux and macOS the service is a separate script instead:
+
+```bash
+./config.sh --url https://github.com/nervosys/IronCrypto --token <TOKEN>
+sudo ./svc.sh install
+sudo ./svc.sh start
+```
+
+There is no `svc.cmd` on Windows. The extracted Windows package contains `bin`,
+`externals`, `config.cmd`, `run.cmd` and two `run-helper` templates, and nothing
+else; `svc.sh` is the Unix path only.
+
+### Put it outside the user profile
+
+`C:\actions-runner`, not `C:\Users\<you>\actions-runner`. The service runs as
+`NT AUTHORITY\NETWORK SERVICE`, which cannot traverse another account's profile
+directory, and the runner checks this explicitly on startup:
+
+```
+System.UnauthorizedAccessException: Access to the path 'C:\Users\<you>' is denied.
+   at GitHub.Runner.Sdk.IOUtil.ValidateExecutePermission(String directory)
+```
+
+`ValidateExecutePermission` walks every ancestor of the runner directory, so
+granting permissions on the runner folder itself does not fix it -- the leaf is
+already fine and the path to it is not. The service installs happily and then
+fails to start, which is a confusing way to learn this.
 
 The workflow's `runs-on: [self-hosted]` matches any runner registered to this
 repository. To point it at one particular machine, give that runner a label
 during `config` and add the label to the list.
+
+### If the runner disappears
+
+The binaries are a common antivirus false positive. If the directory empties
+itself and the process vanishes together, check `Get-MpThreatDetection` and add
+an exclusion for the runner folder -- another reason to keep it at a fixed path
+outside the profile rather than somewhere incidental.
 
 ### What the runner needs
 

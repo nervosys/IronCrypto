@@ -126,7 +126,8 @@ fn ctr_xor<C: BlockCipher>(cipher: &C, counter_block: &[u8; 16], in_out: &mut [u
 
 /// Declare an AES-GCM-SIV over one AES key size.
 macro_rules! gcm_siv {
-    ($name:ident, $cipher:ty, $key_len:literal, $id:literal, $disp:literal) => {
+    ($name:ident, $cipher:ty, $key_len:literal, $id:literal, $disp:literal,
+     $kat_ct:literal, $kat_tag:literal) => {
         #[doc = concat!("RFC 8452 ", $disp, ". See the module docs on verification status.")]
         pub struct $name {
             key: [u8; $key_len],
@@ -235,10 +236,44 @@ macro_rules! gcm_siv {
         }
 
         impl SelfTest for $name {
-            /// Structural properties only; see the module docs. There is no
-            /// published vector wired in, and this test does not pretend
-            /// otherwise.
+            /// RFC 8452 appendix C, plus the structural properties a vector
+            /// cannot express.
+            ///
+            /// The vector is the part that says this computes AES-GCM-SIV
+            /// rather than something self-consistent. The checks after it cover
+            /// what no vector does: that a tampered tag is refused, that
+            /// changed associated data is refused, and that a failed open
+            /// clears the buffer instead of releasing unauthenticated
+            /// plaintext.
+            ///
+            /// All 50 published cases run in
+            /// `crates/iron-crypto/tests/vectors.rs`; this is the one the module
+            /// checks at startup, where FIPS 140-3 wants a known-answer test and
+            /// not a test suite.
             fn self_test() -> Result<()> {
+                // Key, nonce and associated data are shared between the two
+                // published cases; only the key length and the answer differ.
+                let mut key = [0u8; $key_len];
+                key[0] = 0x01;
+                let kat = <Self as Aead>::new(&key)?;
+
+                let mut nonce_kat = [0u8; NONCE_LEN];
+                nonce_kat[0] = 0x03;
+
+                let mut buf = [0x02u8, 0, 0, 0, 0, 0, 0, 0];
+                let mut tag = [0u8; TAG_LEN];
+                kat.seal_detached(&nonce_kat, &[0x01], &mut buf, &mut tag)?;
+
+                let mut want_ct = [0u8; 8];
+                let mut want_tag = [0u8; TAG_LEN];
+                ic_core::codec::hex_decode($kat_ct, &mut want_ct)?;
+                ic_core::codec::hex_decode($kat_tag, &mut want_tag)?;
+                ensure!(
+                    ic_core::ct::verify(&want_ct, &buf) && ic_core::ct::verify(&want_tag, &tag),
+                    SelfTestFailed,
+                    $id
+                );
+
                 let cipher = <Self as Aead>::new(&[0x42u8; $key_len])?;
                 let nonce = [0x24u8; NONCE_LEN];
 
@@ -286,14 +321,23 @@ gcm_siv!(
     crate::Aes128,
     16,
     "aes-128-gcm-siv",
-    "AES-128-GCM-SIV"
+    "AES-128-GCM-SIV",
+    // RFC 8452 appendix C.1: an 8-byte plaintext with one byte of associated
+    // data. Result = 1e6daba35669f427 3b0a1a2560969cdf790d99759abd1508,
+    // split here into the ciphertext and the tag the API returns separately.
+    b"1e6daba35669f427",
+    b"3b0a1a2560969cdf790d99759abd1508"
 );
 gcm_siv!(
     Aes256GcmSiv,
     crate::Aes256,
     32,
     "aes-256-gcm-siv",
-    "AES-256-GCM-SIV"
+    "AES-256-GCM-SIV",
+    // RFC 8452 appendix C.2, the same inputs at the larger key length.
+    // Result = 1de22967237a8132 91213f267e3b452f02d01ae33e4ec854.
+    b"1de22967237a8132",
+    b"91213f267e3b452f02d01ae33e4ec854"
 );
 
 #[cfg(test)]

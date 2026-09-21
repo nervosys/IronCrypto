@@ -108,14 +108,30 @@ fn experimental_algorithms_are_recorded_as_unverified() {
         rows.len()
     );
 
+    // The registry has to have been read at all, which is what an empty
+    // `experimental` list below cannot tell us on its own.
+    assert!(
+        REGISTRY.len() > 50,
+        "only {} registry entries; the registry did not load",
+        REGISTRY.len()
+    );
+
     let experimental: Vec<_> = REGISTRY
         .iter()
         .filter(|e| e.status == ImplStatus::Experimental)
         .collect();
-    assert!(
-        !experimental.is_empty(),
-        "no experimental entries found; the filter is wrong, not the registry"
-    );
+
+    // Currently none, and that is the goal state rather than a broken query:
+    // every algorithm here has been checked against values produced by
+    // something other than itself. This used to assert the list was non-empty,
+    // which was right while three entries carried the status and became wrong
+    // when the last one was promoted.
+    //
+    // The loop below is what matters, and it starts working again the moment an
+    // entry is registered experimental.
+    if experimental.is_empty() {
+        return;
+    }
 
     for e in experimental {
         let matched: Vec<&Row> = rows.iter().filter(|r| names(r, e.name)).collect();

@@ -361,13 +361,22 @@ mod tests {
         assert!(check("ml-kem-768").is_ok());
         assert!(check("ml-dsa-65").is_ok());
 
-        // AES-GCM-SIV still demonstrates the rule: it has working code and no
-        // published vector wired in, so availability refuses it regardless of
-        // what its approval status says.
+        // AES-GCM-SIV was the last example of the availability gate: working
+        // code, no published vector, refused whatever its approval status said.
+        // RFC 8452's vectors are in, so it is accepted now -- and returns
+        // NotApproved rather than Approved, which is the other half of the
+        // point. RFC 8452 is an IETF document; approval is NIST's to give.
         assert_eq!(
-            check("aes-256-gcm-siv").unwrap_err().kind(),
-            ErrorKind::Unsupported
+            check("aes-256-gcm-siv").unwrap(),
+            ServiceIndicator::NotApproved
         );
+
+        // Nothing in the registry is `experimental` any more, so the rule is
+        // shown with an `excluded` entry instead. MD5 is described so that a
+        // request for it gets a reasoned refusal rather than silence, and
+        // describing it must never make it callable.
+        assert_eq!(check("md5").unwrap_err().kind(), ErrorKind::Unsupported);
+        assert_eq!(check("sha-1").unwrap_err().kind(), ErrorKind::Unsupported);
 
         // Approved mode refuses unapproved algorithms.
         set_mode(Mode::Approved).unwrap();

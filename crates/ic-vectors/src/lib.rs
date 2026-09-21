@@ -267,12 +267,40 @@ mod tests {
     /// a different situation from a file that is there and incomplete.
     #[test]
     fn a_vector_file_without_provenance_is_refused() {
-        let dir =
-            std::env::temp_dir().join(format!("ic-vectors-provenance-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        // Under the workspace's own target directory, not the system temp
+        // directory. cargo already requires target/ to be writable, and
+        // .gitignore already covers it.
+        //
+        // This test has been flaky three times, each from depending on
+        // something outside itself: a process-wide environment variable that
+        // raced its sibling tests, a name built from the process id that
+        // collided with leftovers after Windows recycled it, and a subdirectory
+        // of %LOCALAPPDATA%\Temp that the user could create and then not write
+        // to, because that directory grants the user no inheritable rights on
+        // this machine. Nothing ambient is left.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        // `vectors_dir()` already locates the workspace root by looking for
+        // the `testvectors` marker, so its parent is the root.
+        let root = vectors_dir()
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let dir = root
+            .join("target")
+            .join("ic-vectors-tests")
+            .join(format!("{}-{unique}", std::process::id()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| panic!("could not create {}: {e}", dir.display()));
 
         let write = |name: &str, body: &str| {
-            std::fs::write(dir.join(format!("{name}.json")), body).unwrap();
+            let path = dir.join(format!("{name}.json"));
+            std::fs::write(&path, body)
+                .unwrap_or_else(|e| panic!("could not write {}: {e}", path.display()));
         };
 
         // Present and properly cited: loads, and carries the citation through.

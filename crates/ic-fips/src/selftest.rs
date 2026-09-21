@@ -92,6 +92,8 @@ static CASTS: &[Cast] = &[
     ("aes-192-gcm", ic_cipher::Aes192Gcm::self_test),
     ("aes-256-gcm", ic_cipher::Aes256Gcm::self_test),
     ("chacha20-poly1305", ic_cipher::ChaCha20Poly1305::self_test),
+    ("aes-128-gcm-siv", ic_cipher::Aes128GcmSiv::self_test),
+    ("aes-256-gcm-siv", ic_cipher::Aes256GcmSiv::self_test),
     ("aes-128-kw", ic_cipher::Aes128Kw::self_test),
     ("aes-256-kw", ic_cipher::Aes256Kw::self_test),
     ("aes-192-kwp", ic_cipher::Aes192Kwp::self_test),
@@ -314,7 +316,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 62;
+pub const TEST_COUNT: usize = 64;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -412,7 +414,7 @@ pub fn integrity_check() -> Result<()> {
 const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "9ac0bdd88be137ea362c1841e7c403f9952ff1dbffb76e71e3c05ee7891b6021";
+const INTEGRITY_TAG: &str = "dad8f818afda15a046af2b7bfa31e347cbe8006c1ee89ea48063cfd9c2f86d48";
 
 #[cfg(test)]
 mod tests {
