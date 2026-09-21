@@ -222,10 +222,20 @@ pub(crate) struct Tls12Gcm {
 impl Tls12AeadAlgorithm for Tls12Gcm {
     fn encrypter(&self, key: AeadKey, iv: &[u8], extra: &[u8]) -> Box<dyn MessageEncrypter> {
         // The write nonce is the 4-byte fixed IV from the key block followed by
-        // an 8-byte explicit part. The explicit part starts from `extra`, which
-        // is key block material rather than a counter, and then increments --
-        // so it does not repeat under one key even across a rekey that reuses
-        // a sequence number.
+        // an 8-byte explicit part, which is `extra` -- also key block material
+        // -- xored with the sequence number per record.
+        //
+        // RFC 5288 does not specify how to build the explicit part: the receiver
+        // uses whatever was sent, so any construction that does not repeat under
+        // one key interoperates. That freedom means there is no specification to
+        // check this against, so it was compared against rustls's own provider
+        // instead, which builds the same `write_iv || explicit` and xors the
+        // sequence into the last eight bytes. Their comment on the matter: "no
+        // specified construction. Thanks for that."
+        //
+        // `the_tls12_explicit_nonce_is_the_key_block_value_xored_with_the_sequence`
+        // pins the resulting bytes, because a comparison nobody wrote down is
+        // one that has to be made again.
         let mut nonce = [0u8; 12];
         nonce[..TLS12_FIXED_IV_LEN].copy_from_slice(iv);
         nonce[TLS12_FIXED_IV_LEN..].copy_from_slice(extra);

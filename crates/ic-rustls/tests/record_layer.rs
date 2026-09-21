@@ -294,6 +294,55 @@ fn a_tls12_record_survives_the_round_trip() {
     assert!(checked >= 6, "only {checked} records exercised");
 }
 
+/// The explicit nonce on the wire must be the fixed IV's partner xored with the
+/// sequence number.
+///
+/// Everything else in this file encrypts with this crate and decrypts with this
+/// crate, which establishes self-consistency and nothing about interoperability.
+/// This pins the actual bytes a peer would read.
+///
+/// RFC 5288 leaves the construction of the 8-byte explicit part open -- the
+/// receiver uses whatever was sent -- so there is no specification to check
+/// against and a change here would otherwise be invisible. The construction
+/// matches rustls's own provider, which builds `write_iv || explicit` and xors
+/// the sequence number into the last eight bytes; this records that as bytes so
+/// it outlives anyone remembering to compare.
+#[test]
+fn the_tls12_explicit_nonce_is_the_key_block_value_xored_with_the_sequence() {
+    let alg = tls12_aes256();
+    let shape = alg.key_block_shape();
+    assert_eq!(shape.fixed_iv_len, 4);
+    assert_eq!(shape.explicit_nonce_len, 8);
+
+    let iv = vec![0x5cu8; shape.fixed_iv_len];
+    let extra = vec![0x11u8; shape.explicit_nonce_len];
+    let mut enc = alg.encrypter(key(), &iv, &extra);
+
+    for (seq, want) in [
+        // 0x1111111111111111 xor the sequence number, big-endian.
+        (0u64, "1111111111111111"),
+        (1, "1111111111111110"),
+        (3, "1111111111111112"),
+        (0xff, "11111111111111ee"),
+        (0x0102030405060708, "1013121514171619"),
+    ] {
+        let sealed = enc
+            .encrypt(
+                OutboundPlainMessage {
+                    typ: ContentType::ApplicationData,
+                    version: ProtocolVersion::TLSv1_2,
+                    payload: b"x"[..].into(),
+                },
+                seq,
+            )
+            .unwrap();
+
+        let on_the_wire = &bytes_of(&sealed)[..8];
+        let got: String = on_the_wire.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(got, want, "explicit nonce at sequence {seq}");
+    }
+}
+
 #[test]
 fn a_tls12_record_is_bound_to_its_header() {
     {
