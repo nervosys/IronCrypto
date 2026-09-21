@@ -1,11 +1,9 @@
-//! Randomness, and the absence of a signing key provider.
+//! Randomness.
+//!
+//! Signing lives in `crate::sign`; this module used to hold a `KeyProvider`
+//! that refused every key, and no longer needs to.
 
-use alloc::sync::Arc;
-
-use rustls::crypto::{GetRandomFailed, KeyProvider, SecureRandom};
-use rustls::pki_types::PrivateKeyDer;
-use rustls::sign::SigningKey;
-use rustls::Error;
+use rustls::crypto::{GetRandomFailed, SecureRandom};
 
 /// The SP 800-90A HMAC\_DRBG, seeded from the operating system.
 ///
@@ -24,34 +22,6 @@ impl SecureRandom for Random {
     }
 
     /// Always false; see the crate documentation.
-    fn fips(&self) -> bool {
-        false
-    }
-}
-
-/// A key provider that holds no keys.
-///
-/// This provider verifies signatures but does not make them, so it cannot load
-/// a private key: there is no `SigningKey` implementation behind it. That means
-/// it can authenticate a peer -- which is what a client does to a server -- and
-/// cannot present a certificate of its own.
-///
-/// It refuses with a message saying so, rather than returning a key that fails
-/// later at a point far from the cause. Combine this provider's verification
-/// with another provider's `key_provider` if you need both halves.
-#[derive(Debug)]
-pub struct NoKeys;
-
-impl KeyProvider for NoKeys {
-    fn load_private_key(&self, _key: PrivateKeyDer<'static>) -> Result<Arc<dyn SigningKey>, Error> {
-        Err(Error::General(
-            "ic-rustls verifies signatures but does not produce them: it has no signing key \
-             provider, so it cannot present a certificate. Use it for client-side verification, \
-             or supply another provider's key_provider alongside it."
-                .into(),
-        ))
-    }
-
     fn fips(&self) -> bool {
         false
     }
@@ -81,26 +51,8 @@ mod tests {
         assert!(big.iter().any(|b| *b != 0));
     }
 
-    /// Loading a key must fail with an explanation, not a key that fails later.
     #[test]
-    fn loading_a_private_key_says_why_it_cannot() {
-        // The variant is built directly rather than parsed: the refusal happens
-        // before anything looks at the bytes, and `try_from` would reject this
-        // for its own reasons and test the wrong thing.
-        let der = PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
-            alloc::vec![0x30u8; 48],
-        ));
-        let err = NoKeys.load_private_key(der).unwrap_err();
-        let text = alloc::format!("{err}");
-        assert!(
-            text.contains("does not produce them") && text.contains("key_provider"),
-            "the refusal does not explain itself: {text}"
-        );
-    }
-
-    #[test]
-    fn neither_claims_fips_validation() {
+    fn the_random_source_claims_no_fips_validation() {
         assert!(!Random.fips());
-        assert!(!NoKeys.fips());
     }
 }

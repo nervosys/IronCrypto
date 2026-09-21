@@ -205,7 +205,7 @@ configuration in the process.
 | Hash | SHA-256, SHA-384 |
 | MAC | HMAC-SHA256, HMAC-SHA384 |
 | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
-| Signatures | ECDSA P-256/SHA-256, P-384/SHA-384 — verification |
+| Signatures | ECDSA P-256/SHA-256, P-384/SHA-384 — verified and produced |
 | Key exchange | X25519, ECDH P-256, ECDH P-384 |
 | Randomness | SP 800-90A HMAC\_DRBG, OS-seeded |
 
@@ -213,14 +213,22 @@ HKDF is rustls's own extract-and-expand over IronCrypto's HMAC rather than a
 second HKDF written for the occasion — HKDF is a construction, HMAC is the
 primitive — and the composition is checked against RFC 5869 appendix A.
 
-**It verifies signatures and does not make them.** There is no `KeyProvider`, so
-it can authenticate a server and cannot present a certificate of its own.
-Loading a private key returns an error saying exactly that, rather than one that
-surfaces later somewhere unhelpful.
+It also signs, so it can run a server or present a client certificate and not
+only authenticate one. `load_private_key` reads a PKCS#8 or a bare SEC1 EC key,
+and a key on a curve the provider cannot *verify* is refused rather than loaded
+— signing under a scheme this crate cannot check would advertise a capability
+it cannot complete, and the handshake would then fail at the peer instead of
+here, which is a much worse place to learn it. Signatures go out as the DER
+`Ecdsa-Sig-Value` TLS carries, encoded by the same `ic-pkix` that decodes them
+on the way in, so the two directions cannot drift apart. The round-trip test
+signs with this crate and verifies with this crate's verifier — separate
+modules, opposite `ic-pkix` calls — and both halves were mutation-checked:
+handing back the fixed-width `r || s` instead of the DER, and choosing a scheme
+that was never offered, each break it.
 
-Also absent: ChaCha20-Poly1305 suites (the cipher exists; the suite is not wired
-up), QUIC header protection, and the mismatched ECDSA pairings — a P-256 key
-signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
+Absent: RSA in either direction, ChaCha20-Poly1305 suites (the cipher exists;
+the suite is not wired up), QUIC header protection, and the mismatched ECDSA
+pairings — a P-256 key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
 assembling one inside the adapter, out of sight of that crate's vectors, would
 be worse than declining the chain.
 

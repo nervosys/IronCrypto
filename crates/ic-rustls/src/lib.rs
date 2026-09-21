@@ -45,7 +45,7 @@
 //! | Hash | SHA-256, SHA-384 |
 //! | MAC | HMAC-SHA256, HMAC-SHA384 |
 //! | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
-//! | Signatures | ECDSA P-256 with SHA-256, P-384 with SHA-384 |
+//! | Signatures | ECDSA P-256 with SHA-256, P-384 with SHA-384, verified and produced |
 //! | Key exchange | X25519, ECDH P-256, ECDH P-384 |
 //! | Randomness | SP 800-90A HMAC\_DRBG, seeded from the OS |
 //!
@@ -58,11 +58,9 @@
 //!
 //! - **ChaCha20-Poly1305 suites.** The cipher is implemented in `ic-cipher`;
 //!   the suite is simply not wired up yet.
-//! - **Signing.** This provider verifies signatures but supplies no
-//!   `KeyProvider`, so it cannot present a client certificate or run a server
-//!   that holds one. Loading a private key and signing with it is the missing
-//!   piece; verification, which is what a client needs to authenticate a
-//!   server, is here.
+//! - **RSA.** Neither verified nor signed. A peer that offers only RSA
+//!   certificates cannot be authenticated by this provider, and an RSA private
+//!   key is refused rather than loaded.
 //! - **QUIC.** rustls exposes header-protection keys for QUIC separately, and
 //!   nothing here implements them.
 //! - **FIPS validation.** Every `fips()` in this crate returns `false`, because
@@ -80,6 +78,7 @@ mod aead;
 mod hash;
 mod hmac;
 mod kx;
+mod sign;
 mod verify;
 
 use alloc::sync::Arc;
@@ -102,7 +101,7 @@ pub fn provider() -> CryptoProvider {
         kx_groups: default_kx_groups().to_vec(),
         signature_verification_algorithms: SUPPORTED_SIG_ALGS,
         secure_random: &random::Random,
-        key_provider: &random::NoKeys,
+        key_provider: &sign::Keys,
     }
 }
 
