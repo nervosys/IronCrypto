@@ -245,7 +245,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | MACs | HMAC (SHA-2 and SHA-3), CMAC-AES-128/192/256, KMAC128/256, Poly1305 |
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
-| AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV (experimental) |
+| AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV |
 | Post-quantum | ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204), both ACVP-checked |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
@@ -272,11 +272,6 @@ The ontology registers algorithms this library does **not** provide, marked
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
   `SubjectPublicKeyInfo` from any X.509 parser to `ic_pkix::PublicKeyInfo`.
-- **AES-GCM-SIV** — `experimental`, and the last algorithm here that is. Its
-  components are checked — POLYVAL against the GHASH construction of RFC 8452
-  Appendix A, AES against FIPS 197 — and their assembly is not. That is a
-  missing *file*, RFC 8452 Appendix C, rather than missing code: see
-  `testvectors/README.md`.
 - **Other ML-KEM and ML-DSA parameter sets** — only 768 and 65 are implemented.
   That is a decision about surface area, not about confidence.
 ### Timing
@@ -406,10 +401,15 @@ against values produced by something other than itself. That is a missing
 *file*, not missing code: drop an ACVP or RFC vector file into `testvectors/`
 and the matching test starts running. Without one it skips and says so.
 
-It worked. ML-KEM-768 and ML-DSA-65 were `experimental` until NIST's published
-ACVP vectors were dropped in — 105 cases across key generation, encapsulation
-and signing, every case in each parameter set rather than a selection. No code
-changed. AES-GCM-SIV is the one still waiting, on RFC 8452 Appendix C.
+It worked three times, and there is nothing left waiting. ML-KEM-768 and
+ML-DSA-65 were `experimental` until NIST's published ACVP vectors were dropped
+in — 105 cases across key generation, encapsulation and signing. AES-GCM-SIV
+followed, on RFC 8452 appendix C's 50 cases. Every case in each set rather than
+a selection, and no code changed for any of them.
+
+**No algorithm in the registry is `experimental`.** Every one that is
+implemented has been checked against values produced by something other than
+itself.
 
 `testvectors/README.md` has the format, the field names, and `jq` recipes for
 converting ACVP output.

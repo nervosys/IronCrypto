@@ -9,25 +9,21 @@ That arrangement exists for a specific reason. Algorithms are registered
 been checked against values produced by something other than themselves.
 Supplying a file is what closes that gap, and it takes no code.
 
-It has now closed for two of them. ML-KEM-768 and ML-DSA-65 are checked against
-NIST's published ACVP vectors and are registered `available`:
+It has now closed for all of them, and nothing in the registry is
+`experimental`:
 
 | algorithm | vectors | cases |
 |---|---|---|
 | `ml-kem-768` | ACVP `ML-KEM-keyGen-FIPS203`, `ML-KEM-encapDecap-FIPS203` | 25 key generation, 25 encapsulation |
 | `ml-dsa-65` | ACVP `ML-DSA-keyGen-FIPS204`, `ML-DSA-sigGen-FIPS204` | 25 key generation, 15 deterministic and 15 hedged signatures |
+| `aes-128-gcm-siv`, `aes-256-gcm-siv` | RFC 8452 appendix C | all 50, across C.1, C.2 and C.3 |
 
-Every case in each parameter set, not a selection. Choosing cases is how a
-vector file comes to prove that the cases which pass, pass.
+Every case in each set, not a selection. Choosing cases is how a vector file
+comes to prove that the cases which pass, pass.
 
-One remains open:
-
-| algorithm | what is verified | what is not |
-|---|---|---|
-| `aes-256-gcm-siv`, `aes-128-gcm-siv` | POLYVAL against the GHASH construction of RFC 8452 Appendix A, AES against FIPS 197 | that the assembly computes what other implementations compute |
-
-That gap is not a code problem. It is a missing *file* — RFC 8452 Appendix C —
-and supplying it promotes the algorithm without anybody writing code.
+None of it required code. The files were dropped in and the tests that were
+already written started checking against them, which is what this directory is
+for.
 
 ## Format
 

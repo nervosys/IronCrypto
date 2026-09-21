@@ -126,7 +126,19 @@ outside the profile rather than somewhere incidental.
 ### What the runner needs
 
 A Rust toolchain, and `bash` — the gate is a shell script, so on Windows that
-means Git Bash, which comes with Git for Windows. The workflow installs the four
+means Git Bash, which comes with Git for Windows.
+
+Being installed is not enough. As a service the runner uses the machine PATH,
+where the first `bash.exe` is `C:\Windows\System32ash.exe` — the WSL
+launcher, which exits 1 when no distribution is installed. Git Bash sits in
+`Gitin`, which the machine PATH does not usually carry; it carries `Git\cmd`,
+which holds `git.exe` and no `bash.exe`. So the workflow derives Git's install
+root from `git.exe` and prepends its `bin` before running anything, and the
+toolchain step prints which `bash` it ended up with. This only bites once the
+runner is a service — run interactively it inherits a user PATH that usually has
+Git Bash on it, so the failure appears exactly when the setup is made permanent.
+
+The workflow installs the four
 cross-compilation targets itself and prints the toolchain version before it
 starts, so a machine that has drifted shows up in the log rather than quietly
 producing a different answer from everyone else's.

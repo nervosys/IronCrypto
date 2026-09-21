@@ -41,6 +41,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `shell: bash` resolves against PATH, and on a Windows machine PATH the
+      # first `bash.exe` is `C:\Windows\System32\bash.exe` -- the WSL launcher,
+      # which exits 1 when no distribution is installed. Git Bash is present but
+      # in `Git\bin`, which the machine PATH does not carry; it carries
+      # `Git\cmd`, which holds `git.exe` and not `bash.exe`.
+      #
+      # This matters only when the runner is a service. Run interactively it
+      # inherits a user PATH that usually has Git Bash on it, so the failure
+      # appears the first time the runner is installed properly.
+      - name: Put Git Bash ahead of WSL on PATH
+        shell: pwsh
+        run: |
+          $git = (Get-Command git -ErrorAction Stop).Source
+          $root = $git
+          while ($root -and (Split-Path -Leaf $root) -ne 'Git') {
+            $root = Split-Path -Parent $root
+          }
+          if (-not $root) { throw "could not find the Git install root from $git" }
+          $bin = Join-Path $root 'bin'
+          if (-not (Test-Path (Join-Path $bin 'bash.exe'))) {
+            throw "no bash.exe in $bin"
+          }
+          Write-Host "using $bin"
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
       # A self-hosted runner keeps whatever was installed last time, which is
       # why this is a check rather than an install: a toolchain that drifted on
       # the machine should be visible in the log, not silently used.
@@ -51,6 +76,7 @@ jobs:
           cargo --version
           echo "installed targets:"
           rustup target list --installed
+          echo "bash: $(command -v bash)"
 
       # check.sh names the four targets it wants and reports any that are
       # missing rather than skipping them quietly, so an absent one shows up in

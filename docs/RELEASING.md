@@ -80,9 +80,8 @@ Reversing steps 1 and 3 cannot be corrected afterwards.
 - **Licence.** AGPL-3.0-or-later, with a commercial option. Public availability
   makes the copyleft everyone's problem to reason about rather than yours.
 - **Maturity.** No external audit; timing behaviour never measured on quiet
-  hardware; four algorithms registered `experimental`, meaning nothing has
-  checked them against a second implementation — including both post-quantum
-  schemes.
+  hardware. Every algorithm is now checked against published vectors, which is
+  a different and much weaker thing than an audit.
 - **No FIPS validation**, and `ic_ontology::runtime::has("fips-validated")`
   returns `false`. Publishing does not change that, and nothing in a release
   announcement should imply otherwise.
