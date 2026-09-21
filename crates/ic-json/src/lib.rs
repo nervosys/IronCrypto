@@ -175,12 +175,29 @@ fn write_string(s: &str, out: &mut String) {
     out.push('"');
 }
 
+/// How deeply arrays and objects may nest before parsing is refused.
+///
+/// Recursive descent uses stack in proportion to nesting, and a stack overflow
+/// in Rust is an abort rather than an error: nothing unwinds and no caller can
+/// recover. Before this limit existed, two kilobytes of `[[[[...]]]]` ended the
+/// process -- which matters because `icrypto mcp` parses JSON-RPC from whatever
+/// is on the other end of its stdin.
+///
+/// 64 is chosen against measurement rather than taste. The deepest document this
+/// project produces is the JSON Schema export, at 7; JSON-LD reaches 5 and the
+/// SBOM 6. That is an order of magnitude of headroom, and far below the roughly
+/// one thousand that exhausts the stack.
+pub const MAX_DEPTH: usize = 64;
+
 /// Parse a JSON document.
+///
+/// Nesting deeper than [`MAX_DEPTH`] is an error rather than a crash.
 pub fn parse(input: &str) -> Result<Json, String> {
     let bytes: Vec<char> = input.chars().collect();
     let mut p = Parser {
         input: &bytes,
         pos: 0,
+        depth: 0,
     };
     p.skip_ws();
     let value = p.value()?;
@@ -194,6 +211,8 @@ pub fn parse(input: &str) -> Result<Json, String> {
 struct Parser<'a> {
     input: &'a [char],
     pos: usize,
+    /// How many arrays and objects are open at this point.
+    depth: usize,
 }
 
 impl Parser<'_> {
@@ -334,7 +353,27 @@ impl Parser<'_> {
             .map_err(|_| format!("invalid number '{text}'"))
     }
 
+    /// Parse an array, counting the nesting.
+    ///
+    /// The counter is taken and released here rather than inside
+    /// `array_inner`, which returns from several places: a decrement missed on
+    /// one of them would leak depth and start rejecting long documents that are
+    /// not deep at all, which is worse than what this guards against and far
+    /// harder to notice.
     fn array(&mut self) -> Result<Json, String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(format!(
+                "nesting deeper than {MAX_DEPTH} at position {}",
+                self.pos
+            ));
+        }
+        let parsed = self.array_inner();
+        self.depth -= 1;
+        parsed
+    }
+
+    fn array_inner(&mut self) -> Result<Json, String> {
         self.expect('[')?;
         let mut items = Vec::new();
         self.skip_ws();
@@ -353,7 +392,27 @@ impl Parser<'_> {
         }
     }
 
+    /// Parse an object, counting the nesting.
+    ///
+    /// The counter is taken and released here rather than inside
+    /// `object_inner`, which returns from several places: a decrement missed on
+    /// one of them would leak depth and start rejecting long documents that are
+    /// not deep at all, which is worse than what this guards against and far
+    /// harder to notice.
     fn object(&mut self) -> Result<Json, String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(format!(
+                "nesting deeper than {MAX_DEPTH} at position {}",
+                self.pos
+            ));
+        }
+        let parsed = self.object_inner();
+        self.depth -= 1;
+        parsed
+    }
+
+    fn object_inner(&mut self) -> Result<Json, String> {
         self.expect('{')?;
         let mut map = BTreeMap::new();
         self.skip_ws();
@@ -407,6 +466,17 @@ mod tests {
         assert!(v.get("s").unwrap().as_f64().is_none());
     }
 
+    /// `n` copies of `unit`, comma separated.
+    fn alloc_join(n: usize, unit: &str) -> String {
+        vec![unit; n].join(",")
+    }
+
+    /// `n` copies of `unit`, comma separated, for units too large to repeat
+    /// cheaply by value.
+    fn alloc_join_with(n: usize, unit: &str) -> String {
+        (0..n).map(|_| unit).collect::<Vec<_>>().join(",")
+    }
+
     #[test]
     fn parses_scalars() {
         assert_eq!(parse("null").unwrap(), Json::Null);
@@ -439,6 +509,109 @@ mod tests {
         assert_eq!(parse(r#""A""#).unwrap(), Json::str("A"));
         // A surrogate pair for U+1F600.
         assert_eq!(parse(r#""😀""#).unwrap(), Json::str("\u{1F600}"));
+    }
+
+    /// Deep nesting is refused, not fatal.
+    ///
+    /// Before the limit existed, `"[" * 1000` overflowed the stack, and a stack
+    /// overflow in Rust aborts: nothing unwinds and no caller can recover. This
+    /// is the case that motivated it, and `icrypto mcp` is why it matters --
+    /// that server parses JSON-RPC from whatever is on the other end of its
+    /// stdin.
+    #[test]
+    fn deep_nesting_is_refused_rather_than_fatal() {
+        for depth in [MAX_DEPTH + 1, 1_000, 100_000] {
+            let deep = "[".repeat(depth) + &"]".repeat(depth);
+            let err = parse(&deep).expect_err("{depth} deep should be refused");
+            assert!(
+                err.contains("nesting"),
+                "the error should say what was wrong: {err}"
+            );
+
+            let deep = "{\"a\":".repeat(depth) + "1" + &"}".repeat(depth);
+            assert!(
+                parse(&deep).is_err(),
+                "{depth} deep objects should be refused"
+            );
+        }
+    }
+
+    /// The boundary is where it says it is.
+    ///
+    /// Off by one here is either a document refused that should parse or a
+    /// limit that is not the documented one.
+    #[test]
+    fn the_limit_is_exactly_where_it_claims() {
+        let at = "[".repeat(MAX_DEPTH) + &"]".repeat(MAX_DEPTH);
+        assert!(parse(&at).is_ok(), "{MAX_DEPTH} deep should parse");
+
+        let over = "[".repeat(MAX_DEPTH + 1) + &"]".repeat(MAX_DEPTH + 1);
+        assert!(parse(&over).is_err(), "{} deep should not", MAX_DEPTH + 1);
+    }
+
+    /// Depth is not length: a wide document is not a deep one.
+    ///
+    /// The easy mistake in a limit like this is to count the wrong thing and
+    /// start refusing large inputs, which would break the ontology exports --
+    /// 75 algorithms with their parameters and constraints, all of it shallow.
+    #[test]
+    fn a_wide_document_is_not_a_deep_one() {
+        let wide = format!("[{}]", vec!["1"; 50_000].join(","));
+        let parsed = parse(&wide).expect("a flat array of 50,000 items is not deep");
+        match parsed {
+            Json::Array(items) => assert_eq!(items.len(), 50_000),
+            other => panic!("expected an array, got {other:?}"),
+        }
+
+        // And the real thing: whatever this project emits must still parse.
+        // The deepest is the JSON Schema export at 7.
+        let nested = r#"{"a":{"b":{"c":{"d":{"e":{"f":{"g":[1,2,3]}}}}}}}"#;
+        assert!(parse(nested).is_ok());
+    }
+
+    /// The counter must be released, or siblings exhaust it.
+    ///
+    /// This is the bug a depth limit introduces rather than fixes, and it hides
+    /// from the obvious test. A single deep chain enters each level once, so a
+    /// missing decrement never shows; and `parse` builds a fresh parser every
+    /// call, so nothing leaks between documents either. The first version of
+    /// this test did both of those and stayed green when the release was
+    /// deleted.
+    ///
+    /// It shows up across siblings, where the counter should fall between one
+    /// value and the next. That shape is not contrived: the ontology export is
+    /// an object holding an array of seventy-five algorithm objects, every one
+    /// of them a sibling at depth 3.
+    #[test]
+    fn depth_is_released_between_siblings() {
+        // Far more siblings than MAX_DEPTH, and only two deep. This parses if
+        // and only if the counter comes back down between them.
+        let siblings = alloc_join(MAX_DEPTH * 8, "[]");
+        let doc = format!("[{siblings}]");
+        let parsed = parse(&doc).expect("wide and shallow should parse");
+        match parsed {
+            Json::Array(items) => assert_eq!(items.len(), MAX_DEPTH * 8),
+            other => panic!("expected an array, got {other:?}"),
+        }
+
+        // Objects too, which use the other wrapper.
+        let siblings = alloc_join(MAX_DEPTH * 8, "{}");
+        assert!(parse(&format!("[{siblings}]")).is_ok());
+
+        // And nested siblings: each branch goes deep, returns, and the next one
+        // starts from the same level rather than from where the last finished.
+        let branch = "[".repeat(MAX_DEPTH - 2) + &"]".repeat(MAX_DEPTH - 2);
+        let many = alloc_join_with(8, &branch);
+        assert!(
+            parse(&format!("[{many}]")).is_ok(),
+            "deep branches side by side should parse; the counter is not falling"
+        );
+
+        // A refusal must not leave the counter raised either: the early return
+        // on the limit is the exit most likely to skip a decrement.
+        let over = "[".repeat(MAX_DEPTH + 10) + &"]".repeat(MAX_DEPTH + 10);
+        assert!(parse(&over).is_err());
+        assert!(parse(&doc).is_ok(), "a refusal poisoned the next parse");
     }
 
     #[test]
