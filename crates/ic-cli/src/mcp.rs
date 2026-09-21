@@ -20,7 +20,7 @@
 
 use crate::ops;
 use ic_json::{parse, Json};
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 /// The MCP protocol revision this server implements.
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -585,13 +585,72 @@ pub fn handle(request: &Json) -> Option<Json> {
     Some(response)
 }
 
+/// The largest JSON-RPC message this server will hold in memory.
+///
+/// `lines()` grows a buffer until it meets a newline, so without a bound a peer
+/// that never sends one exhausts memory -- and `ic_json::parse` then multiplies
+/// whatever arrived by four, because it collects into `Vec<char>` and a char is
+/// four bytes.
+///
+/// 16 MiB is far above anything real. The largest calls here carry a
+/// hex-encoded payload for `crypto_digest` or a PEM file for `key_inspect`, and
+/// both are kilobytes.
+const MAX_MESSAGE: usize = 16 * 1024 * 1024;
+
 /// Serve MCP over stdin/stdout until end of input.
 pub fn serve() -> std::io::Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
+    serve_on(stdin.lock(), &mut stdout)
+}
 
-    for line in stdin.lock().lines() {
-        let line = line?;
+/// [`serve`], over any reader and writer.
+///
+/// Split out so the message bound and its recovery can be tested without a
+/// real stdin. The behaviour that matters there is not the refusal but what
+/// happens next: a peer that sends one oversized message must still be served
+/// the one after it.
+pub fn serve_on(mut input: impl BufRead, stdout: &mut impl Write) -> std::io::Result<()> {
+    loop {
+        let mut line = Vec::new();
+        // One byte past the limit, so an oversized message is recognised rather
+        // than silently truncated into something that might still parse.
+        let read = (&mut input)
+            .take(MAX_MESSAGE as u64 + 1)
+            .read_until(b'\n', &mut line)?;
+        if read == 0 {
+            break;
+        }
+
+        if line.len() > MAX_MESSAGE {
+            // The rest of this message is still in the stream. Discard it
+            // without buffering, so recovering from an oversized message does
+            // not itself hold it in memory, then carry on: one bad message is
+            // not a reason to stop serving.
+            // `read_until` rather than `read`: it stops *at* the newline, so
+            // it cannot consume the start of the next message. A plain `read`
+            // takes a fixed chunk wherever the boundary falls and swallows
+            // whatever follows -- which loses the message after this one, the
+            // opposite of carrying on. Three messages in, two responses out.
+            let mut sink = Vec::new();
+            while !line.ends_with(b"\n") {
+                sink.clear();
+                let n = (&mut input).take(65536).read_until(b'\n', &mut sink)?;
+                if n == 0 || sink.ends_with(b"\n") {
+                    break;
+                }
+            }
+            let response = error_response(
+                Json::Null,
+                -32700,
+                &format!("message larger than {MAX_MESSAGE} bytes"),
+            );
+            writeln!(stdout, "{response}")?;
+            stdout.flush()?;
+            continue;
+        }
+
+        let line = String::from_utf8_lossy(&line);
         if line.trim().is_empty() {
             continue;
         }
@@ -609,6 +668,89 @@ pub fn serve() -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod serve_tests {
+    use super::*;
+
+    /// A message larger than the bound is refused, and the next one is served.
+    ///
+    /// The refusal is the easy half. The half that goes wrong is the recovery:
+    /// the rest of the oversized message is still in the stream and has to be
+    /// discarded without crossing into the message behind it. The first attempt
+    /// used `read`, which takes a fixed chunk wherever the boundary falls, and
+    /// ate the following request -- three messages in, two responses out.
+    #[test]
+    fn an_oversized_message_is_refused_and_the_next_one_still_answered() {
+        let huge = "x".repeat(MAX_MESSAGE + 1024);
+        let input = format!(
+            concat!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list"}}"#,
+                "\n",
+                r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"crypto_digest","arguments":{{"algorithm":"sha2-256","data":"{}"}}}}}}"#,
+                "\n",
+                r#"{{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{{"name":"crypto_random","arguments":{{"bytes":4}}}}}}"#,
+                "\n"
+            ),
+            huge
+        );
+
+        let mut out = Vec::new();
+        serve_on(input.as_bytes(), &mut out).expect("serving should not fail");
+        let out = String::from_utf8(out).expect("responses are utf-8");
+        let responses: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+
+        assert_eq!(
+            responses.len(),
+            3,
+            "one response per message, including the refusal: {responses:#?}"
+        );
+        assert!(responses[0].contains("\"tools\""), "{}", responses[0]);
+        assert!(
+            responses[1].contains("-32700") && responses[1].contains("larger than"),
+            "the oversized message should be refused with a reason: {}",
+            responses[1]
+        );
+        assert!(
+            responses[2].contains("hex") && responses[2].contains("\"id\":3"),
+            "the message after the oversized one must still be served: {}",
+            responses[2]
+        );
+    }
+
+    /// A message at the bound is accepted, so the limit is where it says.
+    #[test]
+    fn a_message_within_the_bound_is_served() {
+        // Comfortably inside, and far larger than any real call.
+        let data = "ab".repeat(100_000);
+        let input = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"crypto_digest","arguments":{{"algorithm":"sha2-256","data":"{data}"}}}}}}"#
+        ) + "\n";
+        assert!(input.len() < MAX_MESSAGE);
+
+        let mut out = Vec::new();
+        serve_on(input.as_bytes(), &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            out.contains("digest") && !out.contains("larger than"),
+            "a large but permitted message should be served: {out}"
+        );
+    }
+
+    /// End of input ends the loop rather than spinning.
+    #[test]
+    fn empty_input_terminates() {
+        let mut out = Vec::new();
+        serve_on(&b""[..], &mut out).unwrap();
+        assert!(out.is_empty());
+
+        // And a message with no trailing newline is still served.
+        let one = br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let mut out = Vec::new();
+        serve_on(&one[..], &mut out).unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("tools"));
+    }
 }
 
 #[cfg(test)]
