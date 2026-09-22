@@ -15,6 +15,14 @@ ic-core = { path = "../crates/ic-core", features = ["std"] }
 aes = "0.8"
 aes-gcm = "0.10"
 cipher = "0.4"
+sha2 = "0.10"
+sha3 = "0.10"
+hmac = "0.12"
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = "2"
+p256 = "0.13"
+rand_core = "0.6"
 
 # There is no feature for the software path. RustCrypto's `aes` 0.8 selects it
 # with a cfg flag instead:

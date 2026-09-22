@@ -1,7 +1,4 @@
-//! Throughput of IronCrypto against RustCrypto, on the same buffer.
-//!
-//! Run it twice, because there are two honest comparisons and conflating them
-//! is how a benchmark misleads:
+//! Throughput of IronCrypto against the mature Rust implementations.
 //!
 //! ```text
 //! cargo run --release -- hw
@@ -10,41 +7,37 @@
 //!
 //! RustCrypto's `aes` 0.8 selects its software path with a cfg flag rather than
 //! a Cargo feature, so the second form rebuilds the dependency. The argument is
-//! only a label: nothing in this program can detect which path `aes` was
-//! compiled with, so it reports what it was told and the caller has to be
-//! right about it.
+//! only a label: nothing here can detect which path `aes` was compiled with, so
+//! it reports what it was told and the caller has to be right about it.
 //!
-//! The second is the one that matters for the portable backend. RustCrypto's
-//! software AES is fixsliced: constant-time and table-free, the same property
-//! IronCrypto's portable path is built for. Comparing IronCrypto's software
-//! path against RustCrypto's AES-NI path measures the instruction set, not the
-//! implementation.
+//! The software run is the one that matters for the portable backend.
+//! RustCrypto's software AES is fixsliced -- constant-time and table-free, the
+//! same property IronCrypto's portable path is built for -- so comparing the
+//! two measures the implementation. Comparing IronCrypto's software path
+//! against AES-NI measures the instruction set instead, which nobody needs a
+//! benchmark to predict.
 //!
-//! Timings are wall-clock over a large buffer, repeated, minimum taken. A
+//! Bulk figures are wall-clock over a large buffer, repeated, minimum taken. A
 //! minimum rather than a mean because the machine is shared with whatever else
-//! is running, and interference only ever makes a result slower.
+//! is running, and interference only ever makes a result slower. Per-operation
+//! figures are the same idea over an iteration count.
 
 use std::time::Instant;
 
 use aes::cipher::{BlockEncrypt, KeyInit as AesKeyInit};
 use aes_gcm::aead::AeadInPlace;
-use aes_gcm::KeyInit as GcmKeyInit;
-use ic_core::traits::{Aead, BlockCipher};
+use aes_gcm::KeyInit as _;
+use ic_core::traits::{Aead, BlockCipher, Digest, KeyAgreement, Mac, SignatureScheme};
 
-/// 4 MiB, big enough that per-call overhead is not what is being measured.
 const SIZE: usize = 4 * 1024 * 1024;
-
-/// Enough repeats to see a stable minimum without the slow paths taking all
-/// afternoon. The portable AES path is thousands of times slower than the
-/// rest, so it gets its own smaller buffer below.
 const REPEATS: usize = 5;
 
 fn mib_s(bytes: usize, secs: f64) -> f64 {
     (bytes as f64) / secs / (1024.0 * 1024.0)
 }
 
-/// Run `f` over `bytes` a few times and report the best rate seen.
-fn best(label: &str, bytes: usize, repeats: usize, mut f: impl FnMut()) -> f64 {
+/// Bulk throughput: best rate over `repeats` passes.
+fn bulk(label: &str, bytes: usize, repeats: usize, mut f: impl FnMut()) -> f64 {
     let mut fastest = f64::INFINITY;
     for _ in 0..repeats {
         let t = Instant::now();
@@ -55,103 +48,245 @@ fn best(label: &str, bytes: usize, repeats: usize, mut f: impl FnMut()) -> f64 {
         }
     }
     let rate = mib_s(bytes, fastest);
-    println!("  {label:<38} {rate:>12.2} MiB/s");
+    println!("  {label:<40} {rate:>12.1} MiB/s");
     rate
 }
 
+/// Per-operation cost: best microseconds over `repeats` batches of `iters`.
+fn per_op(label: &str, iters: usize, repeats: usize, mut f: impl FnMut()) -> f64 {
+    let mut fastest = f64::INFINITY;
+    for _ in 0..repeats {
+        let t = Instant::now();
+        for _ in 0..iters {
+            f();
+        }
+        let s = t.elapsed().as_secs_f64();
+        if s < fastest {
+            fastest = s;
+        }
+    }
+    let us = fastest / (iters as f64) * 1e6;
+    println!("  {label:<40} {us:>12.1} us/op");
+    us
+}
+
+/// `ic` against `other`, phrased so the direction is unambiguous.
+fn verdict(what: &str, ic: f64, other: f64, higher_is_better: bool) {
+    let (ratio, word) = if higher_is_better {
+        if ic >= other {
+            (ic / other, "faster")
+        } else {
+            (other / ic, "SLOWER")
+        }
+    } else if ic <= other {
+        (other / ic, "faster")
+    } else {
+        (ic / other, "SLOWER")
+    };
+    println!("  {what:<40} {ratio:>9.2}x {word}");
+}
+
 fn main() {
-    // A label, not a detection. See the module documentation.
     let soft = std::env::args().nth(1).as_deref() == Some("soft");
     println!();
-    println!("AES-256 throughput, 4 MiB buffer, best of {REPEATS}");
+    println!("IronCrypto vs RustCrypto/dalek — 4 MiB buffers, best of {REPEATS}");
     println!(
-        "RustCrypto path: {}",
+        "RustCrypto AES path: {}",
         if soft {
             "forced software (fixsliced)"
         } else {
             "runtime-detected (AES-NI where available)"
         }
     );
-    println!("IronCrypto backend: {:?}", ic_cipher::aes::active_backend());
-    println!();
+    println!(
+        "IronCrypto AES backend: {:?}",
+        ic_cipher::aes::active_backend()
+    );
 
     let key = [0x2au8; 32];
     let mut data = vec![0u8; SIZE];
+    let mut tag = [0u8; 16];
 
-    // -- raw block encryption ------------------------------------------------
-    println!("Raw AES-256 block encryption");
-
-    let ic_active = <ic_cipher::Aes256 as BlockCipher>::new(&key).unwrap();
-    let ic_fast = best("iron-crypto (active backend)", SIZE, REPEATS, || {
-        ic_active.encrypt_blocks(&mut data).unwrap();
+    // ---------------------------------------------------------------- AES ---
+    println!();
+    println!("AES-256, raw blocks");
+    let ic_aes = <ic_cipher::Aes256 as BlockCipher>::new(&key).unwrap();
+    let a = bulk("iron-crypto (active)", SIZE, REPEATS, || {
+        ic_aes.encrypt_blocks(&mut data).unwrap();
     });
-
     let rc_key = aes::cipher::generic_array::GenericArray::from_slice(&key);
     let rc = aes::Aes256::new(rc_key);
-    let rc_fast = best("rustcrypto aes", SIZE, REPEATS, || {
-        for chunk in data.chunks_exact_mut(16) {
-            let b = aes::cipher::generic_array::GenericArray::from_mut_slice(chunk);
-            rc.encrypt_block(b);
+    let b = bulk("rustcrypto aes", SIZE, REPEATS, || {
+        for c in data.chunks_exact_mut(16) {
+            rc.encrypt_block(aes::cipher::generic_array::GenericArray::from_mut_slice(c));
         }
     });
-
-    // The portable path is slow enough that 4 MiB would take minutes. Measure a
-    // smaller buffer and report the same unit, which is a rate either way.
     let small = 64 * 1024;
     let mut small_buf = vec![0u8; small];
-    let ic_portable = ic_cipher::Aes256::new_portable(&key).unwrap();
-    let ic_slow = best("iron-crypto (portable backend)", small, 3, || {
-        ic_portable.encrypt_blocks(&mut small_buf).unwrap();
+    let ic_port = ic_cipher::Aes256::new_portable(&key).unwrap();
+    let p = bulk("iron-crypto (portable)", small, 3, || {
+        ic_port.encrypt_blocks(&mut small_buf).unwrap();
     });
+    verdict("aes blocks, active vs rustcrypto", a, b, true);
+    verdict("aes blocks, portable vs rustcrypto", p, b, true);
 
-    // -- AEAD ---------------------------------------------------------------
+    // --------------------------------------------------------------- AEAD ---
     println!();
-    println!("AES-256-GCM, sealing in place");
-
+    println!("AEAD, sealing in place");
     let gcm = <ic_cipher::Aes256Gcm as Aead>::new(&key).unwrap();
-    let mut tag = [0u8; 16];
-    let ic_gcm = best("iron-crypto aes-256-gcm", SIZE, REPEATS, || {
+    let g1 = bulk("iron-crypto aes-256-gcm", SIZE, REPEATS, || {
         gcm.seal_detached(&[0u8; 12], b"", &mut data, &mut tag)
             .unwrap();
     });
-
-    let rc_gcm_key = aes_gcm::Key::<aes_gcm::Aes256Gcm>::from_slice(&key);
-    let rc_gcm = aes_gcm::Aes256Gcm::new(rc_gcm_key);
+    let rc_gcm = aes_gcm::Aes256Gcm::new(aes_gcm::Key::<aes_gcm::Aes256Gcm>::from_slice(&key));
     let nonce = aes_gcm::Nonce::from_slice(&[0u8; 12]);
-    let rc_gcm_rate = best("rustcrypto aes-gcm", SIZE, REPEATS, || {
-        let _ = rc_gcm.encrypt_in_place_detached(nonce, b"", &mut data).unwrap();
+    let g2 = bulk("rustcrypto aes-gcm", SIZE, REPEATS, || {
+        let _ = rc_gcm
+            .encrypt_in_place_detached(nonce, b"", &mut data)
+            .unwrap();
     });
+    verdict("aes-256-gcm", g1, g2, true);
 
-    println!();
-    println!("ChaCha20-Poly1305, for reference (no hardware path either way)");
     let cc = <ic_cipher::ChaCha20Poly1305 as Aead>::new(&key).unwrap();
-    best("iron-crypto chacha20-poly1305", SIZE, REPEATS, || {
+    let c1 = bulk("iron-crypto chacha20-poly1305", SIZE, REPEATS, || {
         cc.seal_detached(&[0u8; 12], b"", &mut data, &mut tag)
             .unwrap();
     });
+    let rc_cc = chacha20poly1305::ChaCha20Poly1305::new(chacha20poly1305::Key::from_slice(&key));
+    let cc_nonce = chacha20poly1305::Nonce::from_slice(&[0u8; 12]);
+    let c2 = bulk("rustcrypto chacha20poly1305", SIZE, REPEATS, || {
+        let _ = rc_cc
+            .encrypt_in_place_detached(cc_nonce, b"", &mut data)
+            .unwrap();
+    });
+    verdict("chacha20-poly1305", c1, c2, true);
 
-    // -- the ratios that were actually asked about --------------------------
+    // ------------------------------------------------------------- hashes ---
     println!();
-    println!("Ratios");
-    println!(
-        "  iron-crypto portable vs rustcrypto aes    {:>10.1}x slower",
-        rc_fast / ic_slow
-    );
-    println!(
-        "  iron-crypto portable vs its own aes-ni    {:>10.1}x slower",
-        ic_fast / ic_slow
-    );
-    println!(
-        "  iron-crypto gcm vs rustcrypto aes-gcm     {:>10.2}x",
-        rc_gcm_rate / ic_gcm
-    );
-    println!(
-        "  iron-crypto blocks vs rustcrypto aes      {:>10.2}x",
-        rc_fast / ic_fast
-    );
+    println!("Hashes");
+    let mut out32 = [0u8; 32];
+    let h1 = bulk("iron-crypto sha-256", SIZE, REPEATS, || {
+        out32 = iron_crypto::hash::Sha256::digest(&data);
+    });
+    let h2 = bulk("rustcrypto sha2 sha-256", SIZE, REPEATS, || {
+        use sha2::Digest;
+        let _ = sha2::Sha256::digest(&data);
+    });
+    verdict("sha-256", h1, h2, true);
+
+    let mut out64 = [0u8; 64];
+    let h3 = bulk("iron-crypto sha-512", SIZE, REPEATS, || {
+        out64 = iron_crypto::hash::Sha512::digest(&data);
+    });
+    let h4 = bulk("rustcrypto sha2 sha-512", SIZE, REPEATS, || {
+        use sha2::Digest;
+        let _ = sha2::Sha512::digest(&data);
+    });
+    verdict("sha-512", h3, h4, true);
+
+    let h5 = bulk("iron-crypto sha3-256", SIZE, REPEATS, || {
+        out32 = iron_crypto::hash::Sha3_256::digest(&data);
+    });
+    let h6 = bulk("rustcrypto sha3-256", SIZE, REPEATS, || {
+        use sha3::Digest;
+        let _ = sha3::Sha3_256::digest(&data);
+    });
+    verdict("sha3-256", h5, h6, true);
+
+    // ---------------------------------------------------------------- MAC ---
+    println!();
+    println!("HMAC-SHA256");
+    let m1 = bulk("iron-crypto hmac-sha256", SIZE, REPEATS, || {
+        let _ = iron_crypto::mac::HmacSha256::mac(&key, &data).unwrap();
+    });
+    let m2 = bulk("rustcrypto hmac", SIZE, REPEATS, || {
+        use hmac::Mac as _;
+        let mut m = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).unwrap();
+        m.update(&data);
+        let _ = m.finalize();
+    });
+    verdict("hmac-sha256", m1, m2, true);
+
+    // ---------------------------------------------------------- public key ---
+    println!();
+    println!("Public key, per operation (lower is better)");
+
+    let sk = [0x77u8; 32];
+    let mut pk = [0u8; 32];
+    iron_crypto::ec::X25519::public_key(&sk, &mut pk).unwrap();
+    let mut shared = [0u8; 32];
+    let x1 = per_op("iron-crypto x25519 agree", 200, 3, || {
+        iron_crypto::ec::X25519::agree(&sk, &pk, &mut shared).unwrap();
+    });
+    let d_sk = x25519_dalek::StaticSecret::from(sk);
+    let d_pk = x25519_dalek::PublicKey::from(pk);
+    let x2 = per_op("dalek x25519 agree", 200, 3, || {
+        let _ = d_sk.diffie_hellman(&d_pk);
+    });
+    verdict("x25519 agreement", x1, x2, false);
+
+    let msg = b"benchmark message";
+    let mut sig = [0u8; 64];
+    let e1 = per_op("iron-crypto ed25519 sign", 200, 3, || {
+        iron_crypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
+    });
+    let d_key = ed25519_dalek::SigningKey::from_bytes(&sk);
+    let e2 = per_op("dalek ed25519 sign", 200, 3, || {
+        use ed25519_dalek::Signer;
+        let _ = d_key.sign(msg);
+    });
+    verdict("ed25519 sign", e1, e2, false);
+
+    let mut ed_pk = [0u8; 32];
+    iron_crypto::ec::Ed25519::public_key(&sk, &mut ed_pk).unwrap();
+    iron_crypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
+    let e3 = per_op("iron-crypto ed25519 verify", 200, 3, || {
+        iron_crypto::ec::Ed25519::verify(&ed_pk, msg, &sig).unwrap();
+    });
+    let d_vk = d_key.verifying_key();
+    let d_sig = {
+        use ed25519_dalek::Signer;
+        d_key.sign(msg)
+    };
+    let e4 = per_op("dalek ed25519 verify", 200, 3, || {
+        use ed25519_dalek::Verifier;
+        d_vk.verify(msg, &d_sig).unwrap();
+    });
+    verdict("ed25519 verify", e3, e4, false);
+
+    let p_sk = [0x5au8; 32];
+    let mut p_sig = [0u8; 64];
+    let s1 = per_op("iron-crypto ecdsa p-256 sign", 200, 3, || {
+        iron_crypto::ec::p256::EcdsaP256Sha256::sign(&p_sk, msg, &mut p_sig).unwrap();
+    });
+    let p_key = p256::ecdsa::SigningKey::from_bytes(&p_sk.into()).unwrap();
+    let s2 = per_op("p256 crate ecdsa sign", 200, 3, || {
+        use p256::ecdsa::signature::Signer;
+        let _: p256::ecdsa::Signature = p_key.sign(msg);
+    });
+    verdict("ecdsa p-256 sign", s1, s2, false);
+
+    let mut p_pk = [0u8; 65];
+    iron_crypto::ec::p256::EcdsaP256Sha256::public_key(&p_sk, &mut p_pk).unwrap();
+    iron_crypto::ec::p256::EcdsaP256Sha256::sign(&p_sk, msg, &mut p_sig).unwrap();
+    let v1 = per_op("iron-crypto ecdsa p-256 verify", 200, 3, || {
+        iron_crypto::ec::p256::EcdsaP256Sha256::verify(&p_pk, msg, &p_sig).unwrap();
+    });
+    let p_vk = p256::ecdsa::VerifyingKey::from(&p_key);
+    let p_s: p256::ecdsa::Signature = {
+        use p256::ecdsa::signature::Signer;
+        p_key.sign(msg)
+    };
+    let v2 = per_op("p256 crate ecdsa verify", 200, 3, || {
+        use p256::ecdsa::signature::Verifier;
+        p_vk.verify(msg, &p_s).unwrap();
+    });
+    verdict("ecdsa p-256 verify", v1, v2, false);
+
     println!();
     if !soft {
-        println!("Note: labelled as the hardware run. For software vs software:");
+        println!("Labelled as the hardware run. For software vs software:");
         println!("  RUSTFLAGS=\"--cfg aes_force_soft\" cargo run --release -- soft");
+        println!();
     }
 }
