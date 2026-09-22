@@ -41,7 +41,7 @@
 //!
 //! | | |
 //! |---|---|
-//! | AEAD | AES-128-GCM and AES-256-GCM, for TLS 1.3 and TLS 1.2 |
+//! | AEAD | AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, for TLS 1.3 and TLS 1.2 |
 //! | Hash | SHA-256, SHA-384 |
 //! | MAC | HMAC-SHA256, HMAC-SHA384 |
 //! | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
@@ -56,8 +56,6 @@
 //!
 //! # What is not provided
 //!
-//! - **ChaCha20-Poly1305 suites.** The cipher is implemented in `ic-cipher`;
-//!   the suite is simply not wired up yet.
 //! - **RSA.** Neither verified nor signed. A peer that offers only RSA
 //!   certificates cannot be authenticated by this provider, and an RSA private
 //!   key is refused rather than loaded.
@@ -158,8 +156,11 @@ mod tests {
     fn the_provider_offers_what_it_says_it_does() {
         let p = provider();
 
-        // Four suites: AES-128 and AES-256 GCM, for TLS 1.3 and TLS 1.2.
-        assert_eq!(p.cipher_suites.len(), 4, "{:?}", p.cipher_suites);
+        // Six suites: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, each for
+        // TLS 1.3 and TLS 1.2. The literal is here to catch a *removal*, which
+        // the list below cannot: dropping a suite and its expectation together
+        // would otherwise pass.
+        assert_eq!(p.cipher_suites.len(), 6, "{:?}", p.cipher_suites);
         let names: alloc::vec::Vec<_> = p
             .cipher_suites
             .iter()
@@ -170,6 +171,8 @@ mod tests {
             "TLS13_AES_128_GCM_SHA256",
             "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
             "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+            "TLS13_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
         ] {
             assert!(
                 names.iter().any(|n| n == want),
@@ -210,7 +213,8 @@ mod tests {
             assert!(!alg.fips(), "a signature algorithm claims validation");
             checked += 1;
         }
-        assert!(checked >= 9, "only {checked} components examined");
+        // Six suites, three key exchange groups, two signature algorithms.
+        assert!(checked >= 11, "only {checked} components examined");
     }
 
     /// The suites must name the hash and HMAC this crate provides, or the key

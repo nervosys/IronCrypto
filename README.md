@@ -201,7 +201,7 @@ configuration in the process.
 
 | | |
 |---|---|
-| AEAD | AES-128-GCM, AES-256-GCM — TLS 1.3 and TLS 1.2 |
+| AEAD | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 — TLS 1.3 and TLS 1.2 |
 | Hash | SHA-256, SHA-384 |
 | MAC | HMAC-SHA256, HMAC-SHA384 |
 | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
@@ -226,9 +226,18 @@ modules, opposite `ic-pkix` calls — and both halves were mutation-checked:
 handing back the fixed-width `r || s` instead of the DER, and choosing a scheme
 that was never offered, each break it.
 
-Absent: RSA in either direction, ChaCha20-Poly1305 suites (the cipher exists;
-the suite is not wired up), QUIC header protection, and the mismatched ECDSA
-pairings — a P-256 key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
+ChaCha20-Poly1305 is offered for both TLS versions, after the AES suites —
+most hardware here has AES instructions, and on hardware that doesn't, having
+it in the list at all is what keeps the connection alive. TLS 1.2 frames it
+differently from AES-GCM, which is the part worth stating: RFC 7905 gives it
+the TLS 1.3 nonce construction and sends no explicit nonce. Get that wrong and
+records round-trip against this crate perfectly and interoperate with nothing,
+so a test measures the record length against the plaintext rather than against
+the encrypter's own promise, and pins that the two TLS 1.2 framings differ by
+exactly those eight bytes.
+
+Absent: RSA in either direction, QUIC header protection, and the mismatched
+ECDSA pairings — a P-256 key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
 assembling one inside the adapter, out of sight of that crate's vectors, would
 be worse than declining the chain.
 

@@ -1,10 +1,18 @@
 //! The record layer, driven through rustls's own types.
 //!
-//! This is the riskiest code in the crate. The cipher underneath is checked
-//! against the GCM specification's vectors in `ic-cipher`, and none of that
-//! says whether *this* crate frames a record correctly: what goes in the
-//! additional data, where the tag sits, which byte carries the content type,
-//! how the nonce is built from the sequence number.
+//! This is the riskiest code in the crate. The ciphers underneath are checked
+//! against their specifications' vectors in `ic-cipher`, and none of that says
+//! whether *this* crate frames a record correctly: what goes in the additional
+//! data, where the tag sits, which byte carries the content type, how the nonce
+//! is built from the sequence number.
+//!
+//! Each test runs over both 32-byte algorithms -- AES-256-GCM and
+//! ChaCha20-Poly1305 -- rather than over one with the other assumed to follow.
+//! Under TLS 1.3 they are framed identically and share an implementation, so
+//! that is cheap. Under TLS 1.2 they are *not*: RFC 7905 sends no explicit
+//! nonce where RFC 5288 sends eight bytes of one, and
+//! `a_tls12_chacha_record_carries_no_explicit_nonce` is there because every
+//! other test in this file passes just as happily on the wrong framing.
 //!
 //! Getting any of those wrong produces something that encrypts and decrypts
 //! perfectly well against itself and interoperates with nothing. So these tests
@@ -61,6 +69,55 @@ fn tls12_aes256() -> &'static dyn Tls12AeadAlgorithm {
     panic!("the AES-256 TLS 1.2 suite is missing");
 }
 
+/// The TLS 1.3 ChaCha20-Poly1305 algorithm.
+///
+/// Its key is thirty-two bytes, the same as AES-256, so unlike the AES-128
+/// suites it can be driven from an external test through the public `AeadKey`
+/// constructor. That is why both of the algorithms exercised below are the
+/// 32-byte ones.
+fn tls13_chacha() -> &'static dyn Tls13AeadAlgorithm {
+    for suite in ic_rustls::suites::ALL {
+        if let rustls::SupportedCipherSuite::Tls13(t) = suite {
+            if t.common.suite == rustls::CipherSuite::TLS13_CHACHA20_POLY1305_SHA256 {
+                assert_eq!(t.aead_alg.key_len(), 32);
+                return t.aead_alg;
+            }
+        }
+    }
+    panic!("the ChaCha20-Poly1305 TLS 1.3 suite is missing");
+}
+
+/// The TLS 1.2 ChaCha20-Poly1305 algorithm.
+fn tls12_chacha() -> &'static dyn Tls12AeadAlgorithm {
+    for suite in ic_rustls::suites::ALL {
+        if let rustls::SupportedCipherSuite::Tls12(t) = suite {
+            if t.common.suite == rustls::CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+            {
+                assert_eq!(t.aead_alg.key_block_shape().enc_key_len, 32);
+                return t.aead_alg;
+            }
+        }
+    }
+    panic!("the ChaCha20-Poly1305 TLS 1.2 suite is missing");
+}
+
+/// The two TLS 1.3 algorithms, so every framing test below covers both.
+fn tls13_algorithms() -> [(&'static str, &'static dyn Tls13AeadAlgorithm); 2] {
+    [
+        ("aes-256-gcm", tls13_aes256()),
+        ("chacha20-poly1305", tls13_chacha()),
+    ]
+}
+
+/// The two TLS 1.2 algorithms. These are *not* framed alike -- ChaCha20 sends
+/// no explicit nonce -- so running the same tests over both is the point.
+fn tls12_algorithms() -> [(&'static str, &'static dyn Tls12AeadAlgorithm); 2] {
+    [
+        ("aes-256-gcm", tls12_aes256()),
+        ("chacha20-poly1305", tls12_chacha()),
+    ]
+}
+
 fn key() -> AeadKey {
     AeadKey::from([0x2bu8; 32])
 }
@@ -74,9 +131,7 @@ fn bytes_of(msg: &rustls::crypto::cipher::OutboundOpaqueMessage) -> Vec<u8> {
 fn a_tls13_record_survives_the_round_trip() {
     let mut checked = 0;
 
-    {
-        let name = "aes-256-gcm";
-        let alg = tls13_aes256();
+    for (name, alg) in tls13_algorithms() {
         let mut enc = alg.encrypter(key(), Iv::copy(&[0x5cu8; 12]));
         let mut dec = alg.decrypter(key(), Iv::copy(&[0x5cu8; 12]));
 
@@ -125,14 +180,12 @@ fn a_tls13_record_survives_the_round_trip() {
         }
     }
 
-    assert!(checked >= 12, "only {checked} records exercised");
+    assert!(checked >= 24, "only {checked} records exercised");
 }
 
 #[test]
 fn a_tls13_record_is_bound_to_its_sequence_number() {
-    {
-        let name = "aes-256-gcm";
-        let alg = tls13_aes256();
+    for (name, alg) in tls13_algorithms() {
         let mut enc = alg.encrypter(key(), Iv::copy(&[0x5cu8; 12]));
         let mut dec = alg.decrypter(key(), Iv::copy(&[0x5cu8; 12]));
 
@@ -181,9 +234,7 @@ fn a_tls13_record_is_bound_to_its_sequence_number() {
 
 #[test]
 fn any_modification_to_a_tls13_record_is_refused() {
-    {
-        let name = "aes-256-gcm";
-        let alg = tls13_aes256();
+    for (name, alg) in tls13_algorithms() {
         let mut enc = alg.encrypter(key(), Iv::copy(&[0x5cu8; 12]));
         let mut dec = alg.decrypter(key(), Iv::copy(&[0x5cu8; 12]));
 
@@ -246,9 +297,7 @@ fn any_modification_to_a_tls13_record_is_refused() {
 fn a_tls12_record_survives_the_round_trip() {
     let mut checked = 0;
 
-    {
-        let name = "aes-256-gcm";
-        let alg = tls12_aes256();
+    for (name, alg) in tls12_algorithms() {
         let shape = alg.key_block_shape();
         let iv = vec![0x5cu8; shape.fixed_iv_len];
         let extra = vec![0x11u8; shape.explicit_nonce_len];
@@ -291,7 +340,7 @@ fn a_tls12_record_survives_the_round_trip() {
         }
     }
 
-    assert!(checked >= 6, "only {checked} records exercised");
+    assert!(checked >= 12, "only {checked} records exercised");
 }
 
 /// The explicit nonce on the wire must be the fixed IV's partner xored with the
@@ -343,11 +392,134 @@ fn the_tls12_explicit_nonce_is_the_key_block_value_xored_with_the_sequence() {
     }
 }
 
+/// TLS 1.2 with ChaCha20-Poly1305 must put nothing on the wire but ciphertext
+/// and tag.
+///
+/// RFC 7905 section 2 gives it the TLS 1.3 nonce construction: the whole
+/// 12-byte nonce comes from the key block and is xored with the sequence
+/// number, so there is no explicit part to send. Framing it like the AES-GCM
+/// suites -- eight bytes of nonce in front -- produces records that round-trip
+/// against this crate perfectly and that no other implementation can read,
+/// which is precisely the failure every other test in this file would miss.
+///
+/// So this checks the length against the plaintext rather than against the
+/// encrypter's own promise, and checks the two suites differ by exactly the
+/// eight bytes that distinguish them.
+#[test]
+fn a_tls12_chacha_record_carries_no_explicit_nonce() {
+    let chacha = tls12_chacha();
+    let shape = chacha.key_block_shape();
+    assert_eq!(shape.explicit_nonce_len, 0, "RFC 7905: nothing is explicit");
+    assert_eq!(
+        shape.fixed_iv_len, 12,
+        "RFC 7905: the whole nonce is implicit"
+    );
+
+    let iv = vec![0x5cu8; shape.fixed_iv_len];
+    let mut enc = chacha.encrypter(key(), &iv, &[]);
+
+    let gcm = tls12_aes256();
+    let gcm_shape = gcm.key_block_shape();
+    let mut gcm_enc = gcm.encrypter(
+        key(),
+        &vec![0x5cu8; gcm_shape.fixed_iv_len],
+        &vec![0x11u8; gcm_shape.explicit_nonce_len],
+    );
+
+    let mut checked = 0;
+    for payload in [&b""[..], &b"hello"[..], &[0x7eu8; 700][..]] {
+        let sealed = enc
+            .encrypt(
+                OutboundPlainMessage {
+                    typ: ContentType::ApplicationData,
+                    version: ProtocolVersion::TLSv1_2,
+                    payload: payload.into(),
+                },
+                5,
+            )
+            .unwrap();
+
+        // The plaintext, the tag, and not one byte more.
+        assert_eq!(
+            bytes_of(&sealed).len(),
+            payload.len() + 16,
+            "a {}-byte payload produced a record of {} bytes; anything longer \
+             means something was prepended",
+            payload.len(),
+            bytes_of(&sealed).len()
+        );
+
+        // And the AES-GCM suite, framed the other way, is longer by exactly the
+        // explicit nonce -- so the comparison above is measuring the difference
+        // that matters and not some constant both share.
+        let gcm_sealed = gcm_enc
+            .encrypt(
+                OutboundPlainMessage {
+                    typ: ContentType::ApplicationData,
+                    version: ProtocolVersion::TLSv1_2,
+                    payload: payload.into(),
+                },
+                5,
+            )
+            .unwrap();
+        assert_eq!(
+            bytes_of(&gcm_sealed).len() - bytes_of(&sealed).len(),
+            8,
+            "the two TLS 1.2 framings should differ by the explicit nonce alone"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 3);
+
+    // The implicit IV must actually reach the nonce: a receiver holding a
+    // different key block cannot read the record. Without this the test above
+    // would pass just as well on an encrypter that ignored `iv` entirely.
+    let mut wrong = chacha.decrypter(key(), &vec![0x5du8; shape.fixed_iv_len]);
+    let sealed = enc
+        .encrypt(
+            OutboundPlainMessage {
+                typ: ContentType::ApplicationData,
+                version: ProtocolVersion::TLSv1_2,
+                payload: b"attack at dawn"[..].into(),
+            },
+            5,
+        )
+        .unwrap();
+    let mut buf = bytes_of(&sealed);
+    assert!(
+        wrong
+            .decrypt(
+                InboundOpaqueMessage::new(
+                    ContentType::ApplicationData,
+                    ProtocolVersion::TLSv1_2,
+                    &mut buf,
+                ),
+                5,
+            )
+            .is_err(),
+        "a record decrypted under a different implicit IV, so the IV is unused"
+    );
+
+    let mut right = chacha.decrypter(key(), &iv);
+    let mut buf = bytes_of(&sealed);
+    assert!(
+        right
+            .decrypt(
+                InboundOpaqueMessage::new(
+                    ContentType::ApplicationData,
+                    ProtocolVersion::TLSv1_2,
+                    &mut buf,
+                ),
+                5,
+            )
+            .is_ok(),
+        "the matching IV should read it, or the check above proves nothing"
+    );
+}
+
 #[test]
 fn a_tls12_record_is_bound_to_its_header() {
-    {
-        let name = "aes-256-gcm";
-        let alg = tls12_aes256();
+    for (name, alg) in tls12_algorithms() {
         let shape = alg.key_block_shape();
         let iv = vec![0x5cu8; shape.fixed_iv_len];
         let extra = vec![0x11u8; shape.explicit_nonce_len];
