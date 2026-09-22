@@ -205,7 +205,7 @@ configuration in the process.
 | Hash | SHA-256, SHA-384 |
 | MAC | HMAC-SHA256, HMAC-SHA384 |
 | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
-| Signatures | ECDSA P-256/SHA-256, P-384/SHA-384 — verified and produced |
+| Signatures | ECDSA P-256/SHA-256, P-384/SHA-384 — verified and produced; RSA PKCS#1 v1.5 and PSS over SHA-256/384/512 — verified |
 | Key exchange | X25519, ECDH P-256, ECDH P-384 |
 | Randomness | SP 800-90A HMAC\_DRBG, OS-seeded |
 
@@ -236,8 +236,25 @@ so a test measures the record length against the plaintext rather than against
 the encrypter's own promise, and pins that the two TLS 1.2 framings differ by
 exactly those eight bytes.
 
-Absent: RSA in either direction, QUIC header protection, and the mismatched
-ECDSA pairings — a P-256 key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
+RSA signatures are verified, which is what makes the provider usable against
+the public web: most certificate chains out there are RSA, and TLS 1.3 needs
+PSS for the handshake signature while the certificates themselves are
+overwhelmingly PKCS#1 v1.5, so both paddings are required to authenticate one
+connection. The public key algorithm is `rsaEncryption` throughout, including
+for PSS — that is TLS's `rsa_pss_rsae_*`, a PSS signature made with an ordinary
+RSA key.
+
+One consequence worth stating plainly: **a modulus below 2048 bits is refused**,
+so a chain with a 1024-bit key fails here and would pass against some other
+providers. That isn't an oversight. `icrypto ontology show rsa-pkcs1-sha256`
+marks `rsa-modulus-at-least-2048-bits` as `critical`, `ic-rsa` enforces it, and
+a test pins the behaviour so it stays a decision on record rather than becoming
+a mysterious handshake failure someone later "fixes".
+
+Absent: RSA *signing* (verification only — a server on this provider needs an
+ECDSA certificate; `ic-rsa` can sign, so this is wiring rather than a missing
+primitive), QUIC header protection, and the mismatched ECDSA pairings — a P-256
+key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
 assembling one inside the adapter, out of sight of that crate's vectors, would
 be worse than declining the chain.
 

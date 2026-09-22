@@ -15,6 +15,9 @@ pub static ALL: &[SupportedCipherSuite] = &[
     TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
     TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
     TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+    TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 ];
 
 /// TLS 1.3 with AES-256-GCM and SHA-384.
@@ -115,6 +118,55 @@ pub static TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
         aead_alg: &aead::TLS12_CHACHA20_POLY1305,
     });
 
+/// TLS 1.2 with ECDHE, RSA, AES-256-GCM and SHA-384.
+///
+/// The RSA suites exist because most certificate chains on the public web are
+/// RSA. Without them the TLS 1.2 half of this provider can only talk to a
+/// server holding an ECDSA certificate, which is a minority of them.
+///
+/// They are listed after the ECDSA suites: where a server offers both, ECDSA is
+/// faster and smaller, and the order here is the order rustls proposes.
+pub static TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384: SupportedCipherSuite =
+    SupportedCipherSuite::Tls12(&rustls::Tls12CipherSuite {
+        common: CipherSuiteCommon {
+            suite: CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+            hash_provider: &hash::SHA384,
+            confidentiality_limit: 1 << 23,
+        },
+        prf_provider: &PrfUsingHmac(&hmac::SHA384),
+        kx: KeyExchangeAlgorithm::ECDHE,
+        sign: TLS12_RSA_SCHEMES,
+        aead_alg: &aead::TLS12_AES_256_GCM,
+    });
+
+/// TLS 1.2 with ECDHE, RSA, AES-128-GCM and SHA-256.
+pub static TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: SupportedCipherSuite =
+    SupportedCipherSuite::Tls12(&rustls::Tls12CipherSuite {
+        common: CipherSuiteCommon {
+            suite: CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+            hash_provider: &hash::SHA256,
+            confidentiality_limit: 1 << 23,
+        },
+        prf_provider: &PrfUsingHmac(&hmac::SHA256),
+        kx: KeyExchangeAlgorithm::ECDHE,
+        sign: TLS12_RSA_SCHEMES,
+        aead_alg: &aead::TLS12_AES_128_GCM,
+    });
+
+/// TLS 1.2 with ECDHE, RSA, ChaCha20-Poly1305 and SHA-256.
+pub static TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
+    SupportedCipherSuite::Tls12(&rustls::Tls12CipherSuite {
+        common: CipherSuiteCommon {
+            suite: CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+            hash_provider: &hash::SHA256,
+            confidentiality_limit: u64::MAX,
+        },
+        prf_provider: &PrfUsingHmac(&hmac::SHA256),
+        kx: KeyExchangeAlgorithm::ECDHE,
+        sign: TLS12_RSA_SCHEMES,
+        aead_alg: &aead::TLS12_CHACHA20_POLY1305,
+    });
+
 /// The signature schemes a TLS 1.2 ECDSA suite may use.
 ///
 /// These are exactly the pairings [`crate::verify`] implements. Listing one
@@ -123,6 +175,20 @@ pub static TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
 static TLS12_ECDSA_SCHEMES: &[SignatureScheme] = &[
     SignatureScheme::ECDSA_NISTP384_SHA384,
     SignatureScheme::ECDSA_NISTP256_SHA256,
+];
+
+/// The signature schemes a TLS 1.2 RSA suite may use, strongest first.
+///
+/// PSS ahead of PKCS#1 v1.5: both are verifiable here, and the ontology records
+/// PSS as superseding v1.5. The older padding stays because a great many TLS
+/// 1.2 servers sign the key exchange with it and will not offer anything else.
+static TLS12_RSA_SCHEMES: &[SignatureScheme] = &[
+    SignatureScheme::RSA_PSS_SHA512,
+    SignatureScheme::RSA_PSS_SHA384,
+    SignatureScheme::RSA_PSS_SHA256,
+    SignatureScheme::RSA_PKCS1_SHA512,
+    SignatureScheme::RSA_PKCS1_SHA384,
+    SignatureScheme::RSA_PKCS1_SHA256,
 ];
 
 #[cfg(test)]
@@ -157,7 +223,8 @@ mod tests {
                 checked += 1;
             }
         }
-        assert!(checked >= 6, "only {checked} advertised schemes examined");
+        // Three ECDSA suites at two schemes each, three RSA suites at six.
+        assert!(checked >= 24, "only {checked} advertised schemes examined");
     }
 
     /// Each suite's hash must match the one its name promises, because the key
@@ -184,6 +251,18 @@ mod tests {
                 &TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
                 HashAlgorithm::SHA256,
             ),
+            (
+                &TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+                HashAlgorithm::SHA384,
+            ),
+            (
+                &TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                HashAlgorithm::SHA256,
+            ),
+            (
+                &TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                HashAlgorithm::SHA256,
+            ),
         ] {
             let got = match suite {
                 SupportedCipherSuite::Tls13(t) => t.common.hash_provider.algorithm(),
@@ -198,7 +277,7 @@ mod tests {
     #[test]
     fn the_suites_are_ordered_and_distinct() {
         let names: alloc::vec::Vec<CipherSuite> = ALL.iter().map(|s| s.suite()).collect();
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 9);
         for (i, a) in names.iter().enumerate() {
             assert!(!names[i + 1..].contains(a), "{a:?} is listed twice");
         }

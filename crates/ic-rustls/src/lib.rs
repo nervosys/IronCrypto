@@ -45,7 +45,7 @@
 //! | Hash | SHA-256, SHA-384 |
 //! | MAC | HMAC-SHA256, HMAC-SHA384 |
 //! | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
-//! | Signatures | ECDSA P-256 with SHA-256, P-384 with SHA-384, verified and produced |
+//! | Signatures | ECDSA P-256/SHA-256 and P-384/SHA-384, verified and produced; RSA PKCS#1 v1.5 and PSS over SHA-256/384/512, verified |
 //! | Key exchange | X25519, ECDH P-256, ECDH P-384 |
 //! | Randomness | SP 800-90A HMAC\_DRBG, seeded from the OS |
 //!
@@ -56,9 +56,11 @@
 //!
 //! # What is not provided
 //!
-//! - **RSA.** Neither verified nor signed. A peer that offers only RSA
-//!   certificates cannot be authenticated by this provider, and an RSA private
-//!   key is refused rather than loaded.
+//! - **RSA signing.** RSA signatures are verified but not produced: a server
+//!   run on this provider needs an ECDSA certificate. `ic-rsa` can sign, so
+//!   this is wiring rather than a missing primitive. An RSA private key handed
+//!   to `load_private_key` is refused with a message saying so.
+//! - **RSA below 2048 bits.** Refused, deliberately. See `crate::verify`.
 //! - **QUIC.** rustls exposes header-protection keys for QUIC separately, and
 //!   nothing here implements them.
 //! - **FIPS validation.** Every `fips()` in this crate returns `false`, because
@@ -121,10 +123,20 @@ static KX_GROUPS: &[&dyn SupportedKxGroup] = &[&kx::X25519, &kx::SECP256R1, &kx:
 
 /// Signature verification algorithms, for certificate chains and for the
 /// handshake.
+/// `all` is what certificate chains are verified with, and `mapping` is what
+/// the handshake signature is looked up in. Both are needed: a chain signed
+/// with PKCS#1 v1.5 can carry a key that then signs the handshake with PSS, and
+/// TLS 1.3 requires exactly that combination.
 pub static SUPPORTED_SIG_ALGS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgorithms {
     all: &[
         &verify::ECDSA_P256_SHA256 as &dyn SignatureVerificationAlgorithm,
         &verify::ECDSA_P384_SHA384 as &dyn SignatureVerificationAlgorithm,
+        &verify::RSA_PKCS1_SHA256 as &dyn SignatureVerificationAlgorithm,
+        &verify::RSA_PKCS1_SHA384 as &dyn SignatureVerificationAlgorithm,
+        &verify::RSA_PKCS1_SHA512 as &dyn SignatureVerificationAlgorithm,
+        &verify::RSA_PSS_SHA256 as &dyn SignatureVerificationAlgorithm,
+        &verify::RSA_PSS_SHA384 as &dyn SignatureVerificationAlgorithm,
+        &verify::RSA_PSS_SHA512 as &dyn SignatureVerificationAlgorithm,
     ],
     mapping: &[
         (
@@ -134,6 +146,30 @@ pub static SUPPORTED_SIG_ALGS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgori
         (
             SignatureScheme::ECDSA_NISTP256_SHA256,
             &[&verify::ECDSA_P256_SHA256 as &dyn SignatureVerificationAlgorithm],
+        ),
+        (
+            SignatureScheme::RSA_PSS_SHA512,
+            &[&verify::RSA_PSS_SHA512 as &dyn SignatureVerificationAlgorithm],
+        ),
+        (
+            SignatureScheme::RSA_PSS_SHA384,
+            &[&verify::RSA_PSS_SHA384 as &dyn SignatureVerificationAlgorithm],
+        ),
+        (
+            SignatureScheme::RSA_PSS_SHA256,
+            &[&verify::RSA_PSS_SHA256 as &dyn SignatureVerificationAlgorithm],
+        ),
+        (
+            SignatureScheme::RSA_PKCS1_SHA512,
+            &[&verify::RSA_PKCS1_SHA512 as &dyn SignatureVerificationAlgorithm],
+        ),
+        (
+            SignatureScheme::RSA_PKCS1_SHA384,
+            &[&verify::RSA_PKCS1_SHA384 as &dyn SignatureVerificationAlgorithm],
+        ),
+        (
+            SignatureScheme::RSA_PKCS1_SHA256,
+            &[&verify::RSA_PKCS1_SHA256 as &dyn SignatureVerificationAlgorithm],
         ),
     ],
 };
@@ -156,11 +192,11 @@ mod tests {
     fn the_provider_offers_what_it_says_it_does() {
         let p = provider();
 
-        // Six suites: AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305, each for
-        // TLS 1.3 and TLS 1.2. The literal is here to catch a *removal*, which
-        // the list below cannot: dropping a suite and its expectation together
-        // would otherwise pass.
-        assert_eq!(p.cipher_suites.len(), 6, "{:?}", p.cipher_suites);
+        // Nine suites: three AEADs for TLS 1.3, and the same three for TLS 1.2
+        // once with an ECDSA certificate and once with an RSA one. The literal
+        // is here to catch a *removal*, which the list below cannot: dropping a
+        // suite and its expectation together would otherwise pass.
+        assert_eq!(p.cipher_suites.len(), 9, "{:?}", p.cipher_suites);
         let names: alloc::vec::Vec<_> = p
             .cipher_suites
             .iter()
@@ -173,6 +209,9 @@ mod tests {
             "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
             "TLS13_CHACHA20_POLY1305_SHA256",
             "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
         ] {
             assert!(
                 names.iter().any(|n| n == want),
@@ -184,9 +223,9 @@ mod tests {
         assert_eq!(p.kx_groups.len(), 3);
         assert_eq!(p.kx_groups[0].name(), rustls::NamedGroup::X25519);
 
-        // Both ECDSA pairings, and a mapping for each.
-        assert_eq!(p.signature_verification_algorithms.all.len(), 2);
-        assert_eq!(p.signature_verification_algorithms.mapping.len(), 2);
+        // Two ECDSA pairings and six RSA ones, with a mapping for each.
+        assert_eq!(p.signature_verification_algorithms.all.len(), 8);
+        assert_eq!(p.signature_verification_algorithms.mapping.len(), 8);
     }
 
     /// Nothing in the provider may report FIPS validation.
@@ -213,8 +252,8 @@ mod tests {
             assert!(!alg.fips(), "a signature algorithm claims validation");
             checked += 1;
         }
-        // Six suites, three key exchange groups, two signature algorithms.
-        assert!(checked >= 11, "only {checked} components examined");
+        // Nine suites, three key exchange groups, eight signature algorithms.
+        assert!(checked >= 20, "only {checked} components examined");
     }
 
     /// The suites must name the hash and HMAC this crate provides, or the key

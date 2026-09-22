@@ -18,6 +18,7 @@ ic-mac = { workspace = true, features = ["std"] }
 ic-cipher = { workspace = true, features = ["std"] }
 ic-drbg = { workspace = true, features = ["std"] }
 ic-ec = { workspace = true, features = ["std"] }
+ic-rsa = { workspace = true, features = ["std"] }
 ic-pkix = { workspace = true, features = ["std"] }
 
 # The one third-party dependency in this workspace, and the reason this crate
