@@ -300,7 +300,7 @@ leaving the stronger claim to stand for all of them.
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
-| Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
+| Backends | portable constant-time everywhere; on x86-64 AES-NI, `PCLMULQDQ`, SHA-NI and AVX2, each behind runtime detection |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
 | TLS and QUIC | a rustls `CryptoProvider`: TLS 1.2, TLS 1.3 and QUIC; AES-GCM and ChaCha20-Poly1305; ECDSA, Ed25519 and RSA, verified and produced; ECDH and X25519; HKDF and the TLS 1.2 PRF |
 
@@ -501,43 +501,69 @@ and multiplies GHASH bit by bit so that neither indexes memory with a secret.
 That closes the cache-timing channel table-driven AES leaves open, and it is
 slow:
 
-| | portable | AES-NI + PCLMULQDQ |
+| | portable | accelerated |
 |---|---|---|
-| AES-256, raw blocks | ~1.5 MiB/s | ~3.8–11 GiB/s |
-| AES-256-GCM | ~1 MiB/s | ~0.9 GiB/s |
-| ChaCha20-Poly1305 | ~0.2–0.4 GiB/s | unchanged (no AES path) |
+| AES-256, raw blocks | ~1.5 MiB/s | ~11 GiB/s (AES-NI) |
+| AES-256-GCM | ~1 MiB/s | ~2.3 GiB/s (AES-NI + PCLMULQDQ) |
+| ChaCha20-Poly1305 | ~0.4 GiB/s | ~1.5 GiB/s (AVX2) |
+| SHA-256 | ~0.3 GiB/s | ~2.3 GiB/s (SHA-NI) |
 
-Indicative figures from a Ryzen 9 9900X, and they move by a factor of two
-between runs depending on clocks, load and build profile — treat them as orders
-of magnitude, not benchmarks. Reproduce with `cargo test --release -p ic-cipher
---test throughput -- --ignored --nocapture`.
+Indicative figures from a Ryzen 9 9900X, moving by a factor of two between runs
+with clocks, load and build profile — orders of magnitude, not benchmarks.
 
-**The portable figure is bad even for a table-free implementation, and that is
-worth saying plainly.** Avoiding tables does not cost three orders of
-magnitude; this particular way of avoiding them does. Measured against
-RustCrypto's `aes`, which is fixsliced and equally table-free, on the same
-machine and buffer:
+### How that compares
 
-| AES-256 raw blocks | MiB/s | |
-|---|---|---|
-| iron-crypto, AES-NI | ~10 960 | |
-| rustcrypto `aes`, AES-NI | ~8 840 | iron-crypto ~1.2x faster |
-| rustcrypto `aes`, fixsliced software | ~68 | |
-| iron-crypto, portable | ~1.5 | **~44x slower than fixsliced** |
+Measured against RustCrypto and dalek on the same machine and buffers, by
+`bench/`. Ratios are IronCrypto against the other implementation:
 
-So on the default x86-64 path IronCrypto is competitive, and marginally ahead
-on raw blocks. The gap is entirely in the software fallback, and it is a gap
-against another constant-time implementation rather than against a table-driven
-one. Bitslicing or fixslicing would keep the security property and close most
-of it. That work has not been done; until it is, treat the portable AES path as
-correct and suitable for low volumes rather than as a general-purpose cipher,
-and prefer ChaCha20-Poly1305 where there is no AES hardware — which is what
-`icrypto recommend --no-aes-hardware` already tells you.
+| | |
+|---|---|
+| AES-256 blocks (AES-NI) | **1.23x faster** |
+| AES-256-GCM | **1.43x faster** |
+| ChaCha20-Poly1305 | **1.02x faster** |
+| SHA-256 | level |
+| HMAC-SHA256 | level |
+| X25519 agreement | 1.09x slower |
+| SHA3-256 | 1.33x slower |
+| SHA-512 | 1.77x slower |
+| ECDSA P-256 sign / verify | 1.86x / 2.19x slower |
+| Ed25519 verify | 7.17x slower |
+| Ed25519 sign | 13.81x slower |
+| AES-256 blocks, portable | ~5800x slower |
 
-One more thing the comparison turned up: AES-256-GCM is ~1.75x *slower* than
-`aes-gcm` on the same hardware path, despite the raw block cipher being faster.
-That points at GHASH or the AEAD glue rather than at AES, and is a separate
-question from the one above.
+The bulk symmetric work — the part a TLS connection or a file encryption
+actually spends its time in — is at or ahead of the fastest Rust
+implementations. What remains behind is public-key operations, where the gap is
+algorithmic rather than in the field arithmetic (X25519 is within 9%, so the
+arithmetic underneath is competitive; Ed25519 signing does two basepoint
+multiplications where dalek does one, and neither uses a precomputed comb), and
+the software AES fallback.
+
+**That fallback deserves saying plainly.** Avoiding lookup tables does not cost
+three orders of magnitude; *this* way of avoiding them does. RustCrypto's
+software AES is fixsliced — equally table-free, equally constant-time — and
+runs at ~68 MiB/s against IronCrypto's ~1.5. The S-box here is computed
+algebraically, thirteen field multiplications per byte, which is the slowest
+correct way to get the property. Bitslicing would keep it and close most of the
+gap. Until that work is done, treat the portable AES path as correct and
+suitable for low volumes rather than as a general-purpose cipher, and prefer
+ChaCha20-Poly1305 where there is no AES hardware — which is what
+`icrypto recommend --no-aes-hardware` already says.
+
+### Where the acceleration comes from
+
+| | |
+|---|---|
+| AES | AES-NI, and ARMv8 crypto extensions behind a feature |
+| GHASH | `PCLMULQDQ`, four blocks per group so the carry chain does not serialise |
+| SHA-256 | SHA-NI |
+| ChaCha20 | AVX2, eight blocks at a time |
+| Poly1305 | four blocks per group, reducing once instead of four times |
+
+Each is selected by runtime detection with the portable path as fallback, each
+is differentially tested against that portable path, and each reports which
+backend is live — a published vector passes whichever path runs, so it cannot
+tell you the backend executed at all.
 
 `bench/` holds the harness. It is excluded from the workspace, because
 comparing against RustCrypto means depending on it and the library's own
