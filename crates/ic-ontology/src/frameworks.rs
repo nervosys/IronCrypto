@@ -133,8 +133,13 @@ pub fn cve_posture() -> &'static str {
      rather than any assurance. One crate is outside this: `ic-rustls` \
      implements rustls's traits and so depends on rustls, which brings five \
      crates with it. Anything depending on `ic-rustls` inherits their \
-     advisories; nothing else here does. SECURITY.md carries the disclosure \
-     process."
+     advisories; nothing else here does, and those seven are pinned by \
+     `scripts/advisories.sh` to the versions that fixed what is known against \
+     them, which the build checks on every commit. A scanner will count more \
+     than seven: `Cargo.lock` names eighteen packages the compiler never \
+     builds, `ring` among them, so a report of 43 dependencies is describing \
+     the resolver's candidates rather than what ships. SECURITY.md carries the \
+     disclosure process and explains that discrepancy."
 }
 
 // ---------------------------------------------------------------------------
@@ -266,10 +271,10 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Use of Unmaintained Third Party Components",
         description: "The product depends on components whose maintenance status it does not control.",
-        bearing: "Every crate implementing cryptography here depends on nothing outside the workspace, checked per crate by scripts/no-third-party.sh, which CI and the pre-commit hook both run. This is the structural half of the CVE question: those crates have no transitive advisory surface because they have nothing transitive. The exception is ic-rustls, the rustls provider, which must depend on rustls to implement its traits; what rustls may bring is listed by name in that script, so it cannot grow unnoticed.",
+        bearing: "Two halves, and structure is only the first. Every crate implementing cryptography here depends on nothing outside the workspace, checked per crate by scripts/no-third-party.sh: those crates have no transitive advisory surface because they have nothing transitive. The exception is ic-rustls, which must depend on rustls to implement its traits, and for the seven crates that brings, having a short list is not the same as watching it -- an unmaintained component is one whose advisories nobody tracks any more. scripts/advisories.sh pins each to the version that fixed what is known against it and fails the build below that floor, so a downgrade into a known vulnerability cannot pass silently. It reads the build graph rather than Cargo.lock, which names eighteen packages this workspace never compiles, and it records the date the floors were last reviewed, because a floor can only go stale in one direction and no check can learn that by itself.",
         compliance: Compliance::Met {
-            file: "scripts/no-third-party.sh",
-            symbol: "cargo tree",
+            file: "scripts/advisories.sh",
+            symbol: "sort -V",
         },
         algorithms: &[],
         standards: &[],
