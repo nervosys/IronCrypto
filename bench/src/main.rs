@@ -161,6 +161,19 @@ fn main() {
     });
     verdict("chacha20-poly1305", c1, c2, true);
 
+    // Which half is the cost? The AEAD is a stream cipher and a one-time MAC,
+    // and they fail differently: a scalar ChaCha loses to SIMD, while Poly1305
+    // is a Horner chain like GHASH and can lose to its own latency. Guessing
+    // between them is how the GCM gap nearly got attributed to the cipher.
+    println!();
+    println!("ChaCha20-Poly1305, split");
+    bulk("  iron-crypto chacha20 keystream only", SIZE, REPEATS, || {
+        ic_cipher::chacha20_xor(&key, &[0u8; 12], 1, &mut data).unwrap();
+    });
+    bulk("  iron-crypto poly1305 only", SIZE, REPEATS, || {
+        let _ = <ic_cipher::Poly1305 as Mac>::mac(&key, &data).unwrap();
+    });
+
     // ------------------------------------------------------------- hashes ---
     println!();
     println!("Hashes");

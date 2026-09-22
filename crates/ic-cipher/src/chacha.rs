@@ -62,6 +62,26 @@ fn chacha20_block(key: &[u8; 32], counter: u32, nonce: &[u8; 12], out: &mut [u8;
     state.zeroize();
 }
 
+// Eight-way ChaCha20. `std` only, because the detection needs it.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+mod avx2;
+
+/// Whether this CPU has AVX2. Asked once; see the SHA-256 dispatch for why.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn avx2() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have = std::is_x86_feature_detected!("avx2");
+            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+            have
+        }
+    }
+}
+
 /// XOR `data` with the ChaCha20 keystream, starting at `counter`.
 pub fn chacha20_xor(key: &[u8], nonce: &[u8], counter: u32, data: &mut [u8]) -> Result<()> {
     ensure!(
@@ -78,6 +98,35 @@ pub fn chacha20_xor(key: &[u8], nonce: &[u8], counter: u32, data: &mut [u8]) -> 
     k.copy_from_slice(key);
     let mut n = [0u8; 12];
     n.copy_from_slice(nonce);
+
+    // Eight blocks at a time where the CPU can. The tail, and every target
+    // without AVX2, falls through to the block-at-a-time path below.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    let mut done = 0usize;
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if avx2() {
+        let groups = data.len() / avx2::STRIDE;
+        // The counter must not wrap silently. The scalar path below reports
+        // exhaustion; this has to reach the same conclusion before it starts,
+        // because it advances eight at a time and would otherwise step over the
+        // boundary rather than land on it.
+        let needed = (groups as u64) * (avx2::LANES as u64);
+        if (counter as u64).checked_add(needed).is_some() {
+            for g in 0..groups {
+                let ctr = counter.wrapping_add((g * avx2::LANES) as u32);
+                let at = g * avx2::STRIDE;
+                // SAFETY: `avx2()` confirmed the feature, and the slice is
+                // exactly STRIDE bytes by construction.
+                unsafe { avx2::eight_blocks(&k, &n, ctr, &mut data[at..at + avx2::STRIDE]) };
+            }
+            done = groups * avx2::STRIDE;
+        }
+    }
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    let (data, counter) = {
+        let advanced = counter.wrapping_add((done / 64) as u32);
+        (&mut data[done..], advanced)
+    };
 
     let mut block = [0u8; 64];
     for (i, chunk) in data.chunks_mut(64).enumerate() {
@@ -451,6 +500,66 @@ impl SelfTest for ChaCha20Poly1305 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The eight-way path must produce the same keystream as the block path.
+    ///
+    /// RFC 8439's vectors do not establish this. The longest of them is 114
+    /// bytes and the AVX2 stride is 512, so on this machine they exercise the
+    /// scalar path exclusively and would pass with the vector code producing
+    /// anything at all. This builds the expected keystream one block at a time
+    /// -- the function the RFC vectors do validate -- and compares.
+    ///
+    /// Lengths straddle the stride in both directions, including several whole
+    /// groups plus a tail, because the dispatch splits there and an off-by-one
+    /// in the split is the likely error rather than a wrong round function.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx2_keystream_matches_the_block_function() {
+        if !avx2() {
+            println!("no AVX2 on this CPU; the backend was not exercised");
+            return;
+        }
+
+        let key = [0x5au8; 32];
+        let nonce = [0x21u8; 12];
+
+        let mut checked = 0;
+        for len in [
+            0usize, 1, 63, 64, 65, 127, 511, 512, 513, 575, 576, 1023, 1024, 1025, 4096, 4097,
+        ] {
+            for counter in [0u32, 1, 7, 8, 9, 1000] {
+                let mut actual = std::vec![0u8; len];
+                chacha20_xor(&key, &nonce, counter, &mut actual).unwrap();
+
+                // The reference: one block at a time, no grouping.
+                let mut expect = std::vec![0u8; len];
+                let mut block = [0u8; 64];
+                for (i, chunk) in expect.chunks_mut(64).enumerate() {
+                    chacha20_block(&key, counter + i as u32, &nonce, &mut block);
+                    for (d, b) in chunk.iter_mut().zip(block.iter()) {
+                        *d ^= b;
+                    }
+                }
+
+                assert_eq!(
+                    actual, expect,
+                    "AVX2 and scalar keystreams differ at {len} bytes, counter {counter}"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 16 * 6, "the comparison did not run");
+    }
+
+    /// Say which path this build will take.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_active_chacha_path_is_reported() {
+        println!(
+            "chacha20 backend: {}",
+            if avx2() { "AVX2 (8 blocks)" } else { "scalar" }
+        );
+    }
     use ic_core::codec::{hex, unhex};
 
     #[test]

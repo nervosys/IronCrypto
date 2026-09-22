@@ -43,6 +43,8 @@
 #[allow(unsafe_code)]
 pub mod aes;
 
+// AVX2 for the ChaCha20 keystream, behind runtime detection.
+#[allow(unsafe_code)]
 pub mod chacha;
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 // The carry-less multiply instruction.
