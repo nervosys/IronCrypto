@@ -45,7 +45,7 @@
 //! | Hash | SHA-256, SHA-384 |
 //! | MAC | HMAC-SHA256, HMAC-SHA384 |
 //! | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
-//! | Signatures | ECDSA P-256/SHA-256 and P-384/SHA-384, verified and produced; RSA PKCS#1 v1.5 and PSS over SHA-256/384/512, verified |
+//! | Signatures | ECDSA P-256/SHA-256 and P-384/SHA-384; RSA PKCS#1 v1.5 and PSS over SHA-256/384/512. All verified and produced |
 //! | Key exchange | X25519, ECDH P-256, ECDH P-384 |
 //! | Randomness | SP 800-90A HMAC\_DRBG, seeded from the OS |
 //!
@@ -56,11 +56,13 @@
 //!
 //! # What is not provided
 //!
-//! - **RSA signing.** RSA signatures are verified but not produced: a server
-//!   run on this provider needs an ECDSA certificate. `ic-rsa` can sign, so
-//!   this is wiring rather than a missing primitive. An RSA private key handed
-//!   to `load_private_key` is refused with a message saying so.
-//! - **RSA below 2048 bits.** Refused, deliberately. See `crate::verify`.
+//! - **RSA below 2048 bits.** Refused, deliberately, when verifying and when
+//!   loading a key to sign with. See `crate::verify`.
+//! - **Ed25519.** `ic-ec` implements it and this provider does not offer it,
+//!   in either direction. Adding it means a `SignatureVerificationAlgorithm`
+//!   and a scheme in `crate::sign`, not new cryptography.
+//! - **The mismatched ECDSA pairings.** A P-256 key signed with SHA-384, or
+//!   the reverse. See `crate::verify`.
 //! - **QUIC.** rustls exposes header-protection keys for QUIC separately, and
 //!   nothing here implements them.
 //! - **FIPS validation.** Every `fips()` in this crate returns `false`, because

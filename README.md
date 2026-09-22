@@ -236,13 +236,24 @@ so a test measures the record length against the plaintext rather than against
 the encrypter's own promise, and pins that the two TLS 1.2 framings differ by
 exactly those eight bytes.
 
-RSA signatures are verified, which is what makes the provider usable against
+RSA is verified and signed, which is what makes the provider usable against
 the public web: most certificate chains out there are RSA, and TLS 1.3 needs
 PSS for the handshake signature while the certificates themselves are
 overwhelmingly PKCS#1 v1.5, so both paddings are required to authenticate one
 connection. The public key algorithm is `rsaEncryption` throughout, including
 for PSS — that is TLS's `rsa_pss_rsae_*`, a PSS signature made with an ordinary
 RSA key.
+
+Signing builds the key from its primes rather than from `n`, `e` and `d`, for
+two reasons that happen to agree. `ic-rsa` then derives `d` and the CRT values
+itself instead of reading the file's, so a file whose stored `dP`, `dQ` or
+`qInv` contradict its primes cannot make the implementation compute a wrong
+half and leak the factorization from one signature. It is also the only path
+that can use the CRT at all — the `n`/`e`/`d` constructor yields a key carrying
+no primes, which signs several times slower — so that one stays as a fallback
+for keys that genuinely lack them. The modulus the file states is checked
+against the one the primes produce; a key that disagrees is not the key the
+certificate names.
 
 One consequence worth stating plainly: **a modulus below 2048 bits is refused**,
 so a chain with a 1024-bit key fails here and would pass against some other
@@ -251,10 +262,9 @@ marks `rsa-modulus-at-least-2048-bits` as `critical`, `ic-rsa` enforces it, and
 a test pins the behaviour so it stays a decision on record rather than becoming
 a mysterious handshake failure someone later "fixes".
 
-Absent: RSA *signing* (verification only — a server on this provider needs an
-ECDSA certificate; `ic-rsa` can sign, so this is wiring rather than a missing
-primitive), QUIC header protection, and the mismatched ECDSA pairings — a P-256
-key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
+Absent: Ed25519 in either direction (`ic-ec` implements it; offering it means
+a verifier and a scheme, not new cryptography), QUIC header protection, and the
+mismatched ECDSA pairings — a P-256 key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
 assembling one inside the adapter, out of sight of that crate's vectors, would
 be worse than declining the chain.
 
