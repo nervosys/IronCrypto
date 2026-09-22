@@ -37,6 +37,24 @@ current requirement before relying on the specifics above — the constraint tha
 does not change is that the notification happens **before** anything goes
 public.
 
+**And it has changed.** Since 29 March 2021 the notification in §742.15(b) has
+applied to publicly available source code performing **"non-standard
+cryptography"**, which part 772 defines as proprietary or unpublished
+functionality. IronCrypto implements published standards only, so on its face
+the requirement may not apply to it at all. That reading is not one to act on
+without counsel: guidance written before the rule change — and some published
+since — still describes the older, broader requirement, so a quick check finds
+both answers. The determination, with the regulation quoted, is in
+[EXPORT.md](EXPORT.md).
+
+Send it regardless. Being wrong in the direction of not notifying cannot be
+corrected after publication; being wrong in the direction of notifying costs an
+email. When the conservative action and the cheap action are the same one,
+there is nothing to weigh.
+
+[EXPORT.md](EXPORT.md) has the notification text ready to send, what to record
+afterwards, and the pre-send checks.
+
 ## What counts as publishing
 
 All of these, not just the first:

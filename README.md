@@ -547,6 +547,8 @@ you which case you're in without your having to read this paragraph.
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | crate layout and design decisions |
 | [AGENTS.md](AGENTS.md) | instructions for agents working in this repo |
 | [SECURITY.md](SECURITY.md) | threat model, side-channel posture, reporting |
+| [RELEASING.md](docs/RELEASING.md) | why nothing goes public before the export notification |
+| [EXPORT.md](docs/EXPORT.md) | that notification, ready to send, and what to record |
 
 ## Test
 
