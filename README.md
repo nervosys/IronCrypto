@@ -277,8 +277,14 @@ refused, and for TLS 1.2 the content type and version bound into the header.
 
 ## What's implemented
 
-Everything below is validated against published test vectors — FIPS 180-4,
-FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/8439.
+Most of what is below is checked against published test vectors — FIPS 180-4,
+FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC
+2104/4231/5869/7748/8032/8439/8452/9001/9106. Not all of it: cSHAKE, ECDSA
+P-521 and CTR_DRBG have no published vector wired in, and PBKDF2 is
+reconstructed from its own definition because RFC 6070 publishes HMAC-SHA1
+only. Those rows are checked against independent reconstructions instead, and
+[`docs/FIPS.md`](docs/FIPS.md) says which is which per algorithm rather than
+leaving the stronger claim to stand for all of them.
 
 | class | algorithms |
 |---|---|
@@ -296,7 +302,7 @@ FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC 2104/4231/5869/7748/8032/843
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
 | Backends | portable constant-time everywhere; AES-NI + PCLMULQDQ on x86-64 |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
-| TLS | a rustls `CryptoProvider`: AES-GCM, SHA-2, HMAC, HKDF, ECDSA, ECDH, X25519 |
+| TLS and QUIC | a rustls `CryptoProvider`: TLS 1.2, TLS 1.3 and QUIC; AES-GCM and ChaCha20-Poly1305; ECDSA, Ed25519 and RSA, verified and produced; ECDH and X25519; HKDF and the TLS 1.2 PRF |
 
 ## What isn't — and why that's written down
 
