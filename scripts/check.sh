@@ -56,6 +56,14 @@ step "zero third-party dependencies"
 # used to exist drifted apart. See scripts/no-third-party.sh.
 "$(dirname "${BASH_SOURCE[0]}")/no-third-party.sh"
 
+step "advisory floors"
+# After the dependency check, because it only means anything if that one
+# passed: floors on a surface that just grew would be floors on the wrong set.
+# Offline -- it compares compiled versions against a table -- so it can gate a
+# commit. `cargo audit` runs too when installed, and does not gate, because it
+# fetches a database over the network. See scripts/advisories.sh.
+"$(dirname "${BASH_SOURCE[0]}")/advisories.sh"
+
 if [ "$quick" -eq 1 ]; then
     printf '\nquick check passed (cross-compilation skipped)\n'
     exit 0

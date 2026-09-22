@@ -88,6 +88,18 @@ jobs:
       # name under the old `ac-` prefix, so after the rename it reported all
       # sixteen of them as third-party and this job failed on every push.
       - run: scripts/no-third-party.sh
+      # Offline: compares compiled versions against the floors in the script.
+      # Runs after the check above because floors on a surface that just grew
+      # would be floors on the wrong set.
+      - run: scripts/advisories.sh
+      # The second opinion, which does reach the network. Not allowed to fail
+      # the job: it reads Cargo.lock and so reports packages this workspace
+      # never compiles. SECURITY.md says which ones and why.
+      - name: cargo audit (advisory, non-gating)
+        continue-on-error: true
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
 
   docs:
     name: docs

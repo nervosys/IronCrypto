@@ -66,10 +66,45 @@ believe it.
 In scope: the algorithms, their encodings, the parsing surface, constant-time
 construction, the ontology's accuracy about all of the above.
 
+Also in scope, and newer: `ic-rustls`. It is a rustls `CryptoProvider`, so it
+does not implement the TLS or QUIC state machines -- rustls does -- but it does
+implement record and packet protection for TLS 1.2, TLS 1.3 and QUIC, and those
+are protocol surfaces. Framing bugs there produce records that round-trip
+against this crate and interoperate with nothing, or worse, so they are worth
+reporting.
+
 Out of scope, because they are not implemented rather than because they do not
-matter: certificate path validation, TLS or any protocol, key storage, key
-distribution, and audit logging. If you find that the documentation implies any
-of these exist, that is itself a reportable defect.
+matter: certificate path validation, the TLS and QUIC state machines, key
+storage, key distribution, and audit logging. If you find that the
+documentation implies any of these exist, that is itself a reportable defect.
+
+## Dependencies, and reading a scanner's report about them
+
+The cryptographic crates depend on nothing outside this workspace. `ic-rustls`
+is the exception and depends on rustls plus six crates beneath it;
+`scripts/no-third-party.sh` asserts that the list is exactly those seven, per
+crate, on every build.
+
+`scripts/advisories.sh` pins each of the seven to the version that fixed the
+advisories known against it, and runs on every commit. It is offline: it
+compares compiled versions against a table, so it gates without reaching the
+network. The table carries the date it was last reviewed against RustSec,
+because a floor cannot learn about a new advisory by itself.
+
+**A scanner's crate count will not match that seven.** `cargo audit`,
+Dependabot and most SCA tools read `Cargo.lock`, which lists what the resolver
+considered, not what the compiler builds. This workspace's lock file names
+eighteen packages that are never compiled -- `ring` among them, an unactivated
+optional dependency of rustls, along with `cc`, `getrandom`, `libc`, `wasi`
+and the `windows-*` family. `cargo tree -i ring` returns nothing.
+
+So a report listing 43 dependencies is not wrong about the lock file and is not
+describing what ships. If one of those eighteen draws an advisory, expect a
+finding that does not apply here; confirm it with `cargo tree -i <crate>`
+before acting on it, and do not silence it globally, because the same name
+would become real if a feature change ever activated it. At the last review
+`cargo audit` reported no vulnerabilities at all, so this is a latent reporting
+hazard rather than a present one.
 
 ## Supported versions
 
