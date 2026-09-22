@@ -150,6 +150,21 @@ pub fn chacha20_xor(key: &[u8], nonce: &[u8], counter: u32, data: &mut [u8]) -> 
 pub struct Poly1305 {
     r: [u32; 5],
     s: [u32; 4],
+    /// `r^2`, `r^3`, `r^4`, for absorbing four blocks at a time.
+    ///
+    /// Poly1305 is a Horner evaluation -- `h = (h + m) * r` -- so each block
+    /// waits on the one before it, exactly as GHASH does. The same identity
+    /// unrolls it:
+    ///
+    /// ```text
+    /// h' = (h + m0)*r^4  +  m1*r^3  +  m2*r^2  +  m3*r
+    /// ```
+    ///
+    /// Four independent products rather than four dependent ones. It also
+    /// reduces once instead of four times: the products are summed while still
+    /// unreduced, which the limb bounds allow, so the carry chain runs once per
+    /// group rather than once per block.
+    powers: [[u32; 5]; 3],
     acc: [u32; 5],
     buf: [u8; 16],
     buffered: usize,
@@ -159,6 +174,9 @@ impl Drop for Poly1305 {
     fn drop(&mut self) {
         self.r.zeroize();
         self.s.zeroize();
+        for p in &mut self.powers {
+            p.zeroize();
+        }
         self.acc.zeroize();
         self.buf.zeroize();
     }
@@ -197,56 +215,91 @@ impl Poly1305 {
     }
 
     fn multiply_by_r(&mut self) {
-        let r = self.r;
-        let s: [u32; 4] = [r[1] * 5, r[2] * 5, r[3] * 5, r[4] * 5];
-        let h = self.acc;
-
-        let d0 = h[0] as u64 * r[0] as u64
-            + h[1] as u64 * s[3] as u64
-            + h[2] as u64 * s[2] as u64
-            + h[3] as u64 * s[1] as u64
-            + h[4] as u64 * s[0] as u64;
-        let d1 = h[0] as u64 * r[1] as u64
-            + h[1] as u64 * r[0] as u64
-            + h[2] as u64 * s[3] as u64
-            + h[3] as u64 * s[2] as u64
-            + h[4] as u64 * s[1] as u64;
-        let d2 = h[0] as u64 * r[2] as u64
-            + h[1] as u64 * r[1] as u64
-            + h[2] as u64 * r[0] as u64
-            + h[3] as u64 * s[3] as u64
-            + h[4] as u64 * s[2] as u64;
-        let d3 = h[0] as u64 * r[3] as u64
-            + h[1] as u64 * r[2] as u64
-            + h[2] as u64 * r[1] as u64
-            + h[3] as u64 * r[0] as u64
-            + h[4] as u64 * s[3] as u64;
-        let d4 = h[0] as u64 * r[4] as u64
-            + h[1] as u64 * r[3] as u64
-            + h[2] as u64 * r[2] as u64
-            + h[3] as u64 * r[1] as u64
-            + h[4] as u64 * r[0] as u64;
-
-        // Carry-propagate back into 26-bit limbs.
-        let mut c = (d0 >> 26) as u32;
-        self.acc[0] = d0 as u32 & 0x3ff_ffff;
-        let d1 = d1 + c as u64;
-        c = (d1 >> 26) as u32;
-        self.acc[1] = d1 as u32 & 0x3ff_ffff;
-        let d2 = d2 + c as u64;
-        c = (d2 >> 26) as u32;
-        self.acc[2] = d2 as u32 & 0x3ff_ffff;
-        let d3 = d3 + c as u64;
-        c = (d3 >> 26) as u32;
-        self.acc[3] = d3 as u32 & 0x3ff_ffff;
-        let d4 = d4 + c as u64;
-        c = (d4 >> 26) as u32;
-        self.acc[4] = d4 as u32 & 0x3ff_ffff;
-        self.acc[0] += c * 5;
-        c = self.acc[0] >> 26;
-        self.acc[0] &= 0x3ff_ffff;
-        self.acc[1] += c;
+        self.acc = reduce(mul_unreduced(self.acc, self.r, five_times(self.r)));
     }
+
+    /// Absorb four whole blocks with four independent products.
+    ///
+    /// Correct for the same reason the one-at-a-time path is; see `powers`.
+    fn absorb4(&mut self, blocks: &[u8]) {
+        debug_assert_eq!(blocks.len(), 64);
+        let mut m = [[0u32; 5]; 4];
+        for (i, slot) in m.iter_mut().enumerate() {
+            let b = &blocks[i * 16..(i + 1) * 16];
+            let t0 = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            let t1 = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+            let t2 = u32::from_le_bytes([b[8], b[9], b[10], b[11]]);
+            let t3 = u32::from_le_bytes([b[12], b[13], b[14], b[15]]);
+            // Whole blocks only, so the 2^128 bit is always set.
+            *slot = [
+                t0 & 0x3ff_ffff,
+                ((t0 >> 26) | (t1 << 6)) & 0x3ff_ffff,
+                ((t1 >> 20) | (t2 << 12)) & 0x3ff_ffff,
+                ((t2 >> 14) | (t3 << 18)) & 0x3ff_ffff,
+                (t3 >> 8) | (1 << 24),
+            ];
+        }
+
+        // The oldest block carries the accumulator and takes the highest power.
+        for (limb, a) in m[0].iter_mut().zip(self.acc) {
+            *limb += a;
+        }
+
+        let multipliers = [self.powers[2], self.powers[1], self.powers[0], self.r];
+        let mut d = [0u64; 5];
+        for (block, r) in m.iter().zip(multipliers) {
+            let part = mul_unreduced(*block, r, five_times(r));
+            for (acc, term) in d.iter_mut().zip(part) {
+                *acc += term;
+            }
+        }
+        self.acc = reduce(d);
+    }
+}
+
+/// `[5*r1, 5*r2, 5*r3, 5*r4]`, the companion the reduction folds in.
+fn five_times(r: [u32; 5]) -> [u32; 4] {
+    [r[1] * 5, r[2] * 5, r[3] * 5, r[4] * 5]
+}
+
+/// The five limb products, summed but not carried.
+///
+/// Each term is at most `2^27 * 5*2^26`, and five of them stay under `2^57`,
+/// so four of these vectors can be added before carrying without leaving
+/// `u64`. That headroom is what lets `absorb4` reduce once instead of四 times.
+fn mul_unreduced(h: [u32; 5], r: [u32; 5], s: [u32; 4]) -> [u64; 5] {
+    let m = |a: u32, b: u32| a as u64 * b as u64;
+    [
+        m(h[0], r[0]) + m(h[1], s[3]) + m(h[2], s[2]) + m(h[3], s[1]) + m(h[4], s[0]),
+        m(h[0], r[1]) + m(h[1], r[0]) + m(h[2], s[3]) + m(h[3], s[2]) + m(h[4], s[1]),
+        m(h[0], r[2]) + m(h[1], r[1]) + m(h[2], r[0]) + m(h[3], s[3]) + m(h[4], s[2]),
+        m(h[0], r[3]) + m(h[1], r[2]) + m(h[2], r[1]) + m(h[3], r[0]) + m(h[4], s[3]),
+        m(h[0], r[4]) + m(h[1], r[3]) + m(h[2], r[2]) + m(h[3], r[1]) + m(h[4], r[0]),
+    ]
+}
+
+/// Carry-propagate back into 26-bit limbs, folding `2^130` into `5`.
+fn reduce(d: [u64; 5]) -> [u32; 5] {
+    let mut acc = [0u32; 5];
+    let mut c = (d[0] >> 26) as u32;
+    acc[0] = d[0] as u32 & 0x3ff_ffff;
+    let d1 = d[1] + c as u64;
+    c = (d1 >> 26) as u32;
+    acc[1] = d1 as u32 & 0x3ff_ffff;
+    let d2 = d[2] + c as u64;
+    c = (d2 >> 26) as u32;
+    acc[2] = d2 as u32 & 0x3ff_ffff;
+    let d3 = d[3] + c as u64;
+    c = (d3 >> 26) as u32;
+    acc[3] = d3 as u32 & 0x3ff_ffff;
+    let d4 = d[4] + c as u64;
+    c = (d4 >> 26) as u32;
+    acc[4] = d4 as u32 & 0x3ff_ffff;
+    acc[0] += c * 5;
+    c = acc[0] >> 26;
+    acc[0] &= 0x3ff_ffff;
+    acc[1] += c;
+    acc
 }
 
 impl Mac for Poly1305 {
@@ -277,9 +330,20 @@ impl Mac for Poly1305 {
             u32::from_le_bytes([key[24], key[25], key[26], key[27]]),
             u32::from_le_bytes([key[28], key[29], key[30], key[31]]),
         ];
+        // r^2, r^3 and r^4, each from the previous by the same multiply the
+        // hot path uses. Once per key, off the hot path.
+        let rr = five_times(r);
+        let mut powers = [[0u32; 5]; 3];
+        let mut p = r;
+        for slot in powers.iter_mut() {
+            p = reduce(mul_unreduced(p, r, rr));
+            *slot = p;
+        }
+
         Ok(Self {
             r,
             s,
+            powers,
             acc: [0u32; 5],
             buf: [0u8; 16],
             buffered: 0,
@@ -298,6 +362,10 @@ impl Mac for Poly1305 {
             let block = self.buf;
             self.absorb_block(&block);
             self.buffered = 0;
+        }
+        while data.len() >= 64 {
+            self.absorb4(&data[..64]);
+            data = &data[64..];
         }
         let mut chunks = data.chunks_exact(16);
         for block in &mut chunks {
@@ -649,6 +717,65 @@ mod tests {
         tag[15] ^= 0x80;
         assert!(c.open_detached(&[2u8; 12], b"", &mut buf, &tag).is_err());
         assert_eq!(buf, vec![0u8; 6]);
+    }
+
+    /// The four-at-a-time Poly1305 must agree with the one-at-a-time path.
+    ///
+    /// RFC 8439's Poly1305 vector is 34 bytes and the group is 64, so it never
+    /// reaches `absorb4`: it would pass with the grouped arithmetic returning
+    /// anything. This drives both over lengths either side of the boundary and
+    /// compares the tags.
+    ///
+    /// The powers are the likely error. `r^2`, `r^3` and `r^4` are built from
+    /// `r` at construction, and a multiply that reduces wrongly, or passes the
+    /// key addend where it wants five times `r`, produces powers that are
+    /// self-consistent and wrong -- which every short vector still accepts.
+    #[test]
+    fn the_grouped_poly1305_agrees_with_the_serial_one() {
+        let key = [0x8eu8; 32];
+
+        let mut checked = 0;
+        for len in [
+            0usize, 1, 15, 16, 17, 31, 32, 63, 64, 65, 79, 80, 127, 128, 129, 255, 256, 1023, 1024,
+            1025,
+        ] {
+            let data: Vec<u8> = (0..len)
+                .map(|i| ((i as u64).wrapping_mul(0x9e37_79b9) >> 5) as u8)
+                .collect();
+
+            let grouped = Poly1305::mac(&key, &data).unwrap();
+
+            // The reference: absorb_block only, never absorb4.
+            let mut serial = Poly1305::new(&key).unwrap();
+            for chunk in data.chunks(16) {
+                serial.absorb_block(chunk);
+            }
+            let serial = serial.finalize();
+
+            assert_eq!(
+                grouped, serial,
+                "grouped and serial Poly1305 differ at {len} bytes"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 20, "the comparison did not run");
+    }
+
+    /// `r^2`, `r^3` and `r^4` must be powers of `r`.
+    ///
+    /// Checked against repeated single multiplication, which the RFC vector
+    /// validates, so a wrong multiplier in the precomputation fails here rather
+    /// than showing up as a wrong tag on long inputs only.
+    #[test]
+    fn the_poly1305_powers_are_powers_of_r() {
+        let m = Poly1305::new(&[0x3bu8; 32]).unwrap();
+        let mut expect = m.r;
+        for (i, stored) in m.powers.iter().enumerate() {
+            expect = reduce(mul_unreduced(expect, m.r, five_times(m.r)));
+            assert_eq!(*stored, expect, "power {} is not r^{}", i, i + 2);
+        }
+        assert_ne!(m.powers[0], m.powers[1]);
+        assert_ne!(m.powers[0], m.r);
     }
 
     #[test]
