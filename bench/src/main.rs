@@ -267,6 +267,17 @@ fn main() {
     });
     verdict("ed25519 verify", e3, e4, false);
 
+    // How much of ECDSA is the scalar multiplication? ECDH is exactly one, on
+    // an arbitrary point, so it separates the multiplication from RFC 6979
+    // nonce derivation and the modular inversion. Building a generator table
+    // is only worth it if the multiplication is where the time goes.
+    let mut ecdh_pk = [0u8; 65];
+    iron_crypto::ec::EcdhP256::public_key(&[0x5au8; 32], &mut ecdh_pk).unwrap();
+    let mut shared_p = [0u8; 32];
+    per_op("iron-crypto ecdh p-256 (one scalar mul)", 200, 3, || {
+        iron_crypto::ec::EcdhP256::agree(&[0x5au8; 32], &ecdh_pk, &mut shared_p).unwrap();
+    });
+
     let p_sk = [0x5au8; 32];
     let mut p_sig = [0u8; 64];
     let s1 = per_op("iron-crypto ecdsa p-256 sign", 200, 3, || {

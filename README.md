@@ -516,19 +516,21 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 Measured against RustCrypto and dalek on the same machine and buffers, by
 `bench/`. Ratios are IronCrypto against the other implementation:
 
+Three runs, so that a figure landing either side of parity is reported as
+parity rather than as whichever run flattered it:
+
 | | |
 |---|---|
-| AES-256 blocks (AES-NI) | **1.23x faster** |
-| AES-256-GCM | **1.43x faster** |
-| ChaCha20-Poly1305 | **1.02x faster** |
+| AES-256-GCM | **~1.40x faster** |
+| AES-256 blocks (AES-NI) | **~1.20x faster** |
+| ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
-| X25519 agreement | 1.09x slower |
-| SHA3-256 | 1.33x slower |
-| SHA-512 | 1.77x slower |
-| ECDSA P-256 sign / verify | 1.86x / 2.19x slower |
-| Ed25519 verify | 7.17x slower |
-| Ed25519 sign | 13.81x slower |
+| X25519 agreement | ~1.1x slower |
+| SHA3-256 | ~1.3x slower |
+| SHA-512 | ~1.75x slower |
+| ECDSA P-256 sign / verify | ~1.9x / ~2.1x slower |
+| Ed25519 sign / verify | ~3.4x / ~4.3x slower |
 | AES-256 blocks, portable | ~5800x slower |
 
 The bulk symmetric work — the part a TLS connection or a file encryption
@@ -536,8 +538,15 @@ actually spends its time in — is at or ahead of the fastest Rust
 implementations. What remains behind is public-key operations, where the gap is
 algorithmic rather than in the field arithmetic (X25519 is within 9%, so the
 arithmetic underneath is competitive; Ed25519 signing does two basepoint
-multiplications where dalek does one, and neither uses a precomputed comb), and
-the software AES fallback.
+multiplications where dalek does one, because the signing interface takes only
+the seed and so must re-derive the public key on every call), and the software
+AES fallback.
+
+Ed25519 uses a precomputed basepoint table; the remaining gap is that second
+multiplication and, for verification, the one against the public key, which no
+basepoint table can help. ECDSA has no such table yet, which is most of its
+gap: its scalar multiplication is the same bit-at-a-time ladder Ed25519 used
+before.
 
 **That fallback deserves saying plainly.** Avoiding lookup tables does not cost
 three orders of magnitude; *this* way of avoiding them does. RustCrypto's
