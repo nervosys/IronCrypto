@@ -391,12 +391,34 @@ workspace, so no advisory against another crate can apply to it. That claim is
 narrow on purpose and says nothing about defects in IronCrypto's own code.
 
 One crate is outside it. `ic-rustls` implements rustls's traits and so depends
-on rustls, which brings five crates with it; anything depending on `ic-rustls`
-inherits their advisories, and nothing else here does. `scripts/no-third-party.sh`
-enforces both halves: it lists by name what rustls may bring, so that set cannot
-grow unnoticed, and it checks every other crate individually rather than looking
-at the workspace as a whole — which is what lets the narrower claim still mean
-something. `SECURITY.md` has the disclosure process.
+on rustls, which brings six crates with it — `rustls-pki-types`,
+`rustls-webpki`, `subtle`, `untrusted`, `once_cell` and `zeroize`, seven in
+all. Anything depending on `ic-rustls` inherits their advisories, and nothing
+else here does. `scripts/no-third-party.sh` enforces both halves: it lists by
+name what rustls may bring, so that set cannot grow unnoticed, and it checks
+every other crate individually rather than looking at the workspace as a whole
+— which is what lets the narrower claim still mean something.
+
+Those seven are also held to a floor. `scripts/advisories.sh` pins each to the
+version that fixed what is known against it — rustls to 0.23.45 for
+RUSTSEC-2026-0285, rustls-webpki to 0.103.15 for RUSTSEC-2026-0104 — and fails
+the build below it, so a downgrade into a known vulnerability cannot pass
+quietly. It runs on every commit and needs no network, because it compares
+compiled versions against a table rather than fetching a database. The table
+carries the date it was last reviewed, since a floor can only go stale in one
+direction and no check learns that by itself. `cargo audit` runs beside it in
+CI and is not allowed to fail the build: a gate that breaks when a remote
+service is slow teaches people to bypass gates.
+
+**A scanner will count more than seven.** `cargo audit`, Dependabot and most
+SCA tools read `Cargo.lock`, which lists what the resolver considered rather
+than what the compiler builds — eighteen packages here are never compiled,
+`ring` among them, an optional dependency of rustls that no feature in this
+workspace enables. `cargo tree -i ring` returns nothing. So a report of 43
+dependencies is not wrong about the lock file and is not describing what ships;
+`SECURITY.md` says how to tell the two apart before acting on a finding.
+
+`SECURITY.md` has the disclosure process.
 
 ### The standards knowledgebase
 

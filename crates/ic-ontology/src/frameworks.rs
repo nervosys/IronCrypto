@@ -131,7 +131,7 @@ pub fn cve_posture() -> &'static str {
      `docs/FIPS.md` and the weakness classes in this module. No CVE has been issued against \
      IronCrypto, which at this stage reflects that it is a young and privately held project \
      rather than any assurance. One crate is outside this: `ic-rustls` \
-     implements rustls's traits and so depends on rustls, which brings five \
+     implements rustls's traits and so depends on rustls, which brings six \
      crates with it. Anything depending on `ic-rustls` inherits their \
      advisories; nothing else here does, and those seven are pinned by \
      `scripts/advisories.sh` to the versions that fixed what is known against \
@@ -271,7 +271,7 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Use of Unmaintained Third Party Components",
         description: "The product depends on components whose maintenance status it does not control.",
-        bearing: "Two halves, and structure is only the first. Every crate implementing cryptography here depends on nothing outside the workspace, checked per crate by scripts/no-third-party.sh: those crates have no transitive advisory surface because they have nothing transitive. The exception is ic-rustls, which must depend on rustls to implement its traits, and for the seven crates that brings, having a short list is not the same as watching it -- an unmaintained component is one whose advisories nobody tracks any more. scripts/advisories.sh pins each to the version that fixed what is known against it and fails the build below that floor, so a downgrade into a known vulnerability cannot pass silently. It reads the build graph rather than Cargo.lock, which names eighteen packages this workspace never compiles, and it records the date the floors were last reviewed, because a floor can only go stale in one direction and no check can learn that by itself.",
+        bearing: "Two halves, and structure is only the first. Every crate implementing cryptography here depends on nothing outside the workspace, checked per crate by scripts/no-third-party.sh: those crates have no transitive advisory surface because they have nothing transitive. The exception is ic-rustls, which must depend on rustls to implement its traits -- rustls and the six crates beneath it, seven in all -- and for those, having a short list is not the same as watching it -- an unmaintained component is one whose advisories nobody tracks any more. scripts/advisories.sh pins each to the version that fixed what is known against it and fails the build below that floor, so a downgrade into a known vulnerability cannot pass silently. It reads the build graph rather than Cargo.lock, which names eighteen packages this workspace never compiles, and it records the date the floors were last reviewed, because a floor can only go stale in one direction and no check can learn that by itself.",
         compliance: Compliance::Met {
             file: "scripts/advisories.sh",
             symbol: "sort -V",
@@ -350,7 +350,7 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Attack,
         title: "Supply Chain Compromise: Compromise Software Dependencies and Development Tools",
         description: "An adversary compromises a dependency so that the compromise reaches everyone who builds against it.",
-        bearing: "The cryptographic crates have no dependencies, so there is nothing there to compromise. ic-rustls is the exception and a real one: depending on rustls means depending on whoever publishes it and the five crates beneath it, which is the technique working as described. The build also still trusts the Rust toolchain, which is unclosed either way, and saying otherwise would be a claim this library cannot support.",
+        bearing: "The cryptographic crates have no dependencies, so there is nothing there to compromise. ic-rustls is the exception and a real one: depending on rustls means depending on whoever publishes it and the six crates beneath it, which is the technique working as described. The build also still trusts the Rust toolchain, which is unclosed either way, and saying otherwise would be a claim this library cannot support.",
         compliance: Compliance::Partial {
             file: "scripts/no-third-party.sh",
             symbol: "cargo tree",

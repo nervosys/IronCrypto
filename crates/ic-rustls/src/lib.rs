@@ -28,7 +28,9 @@
 //!
 //! A rustls provider cannot: it exists to implement rustls's traits, so it must
 //! depend on rustls, and rustls brings `rustls-pki-types`, `rustls-webpki`,
-//! `subtle` and `zeroize` with it. Rather than weaken the check, the boundary
+//! `subtle`, `untrusted`, `once_cell` and `zeroize` with it -- seven crates in
+//! total, which is what `scripts/no-third-party.sh` allows by name and
+//! `scripts/advisories.sh` holds to a version floor. Rather than weaken the check, the boundary
 //! is drawn here. This crate is excluded by name, the exclusion is one line
 //! with a reason beside it, and everything cryptographic stays on the other
 //! side: `ic-core`, `ic-hash`, `ic-mac`, `ic-cipher`, `ic-drbg`, `ic-ec` and

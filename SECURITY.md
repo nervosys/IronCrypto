@@ -93,10 +93,12 @@ because a floor cannot learn about a new advisory by itself.
 
 **A scanner's crate count will not match that seven.** `cargo audit`,
 Dependabot and most SCA tools read `Cargo.lock`, which lists what the resolver
-considered, not what the compiler builds. This workspace's lock file names
-eighteen packages that are never compiled -- `ring` among them, an unactivated
-optional dependency of rustls, along with `cc`, `getrandom`, `libc`, `wasi`
-and the `windows-*` family. `cargo tree -i ring` returns nothing.
+considered, not what the compiler builds. A resolved lock file for this
+workspace -- generated on demand, not committed, since this is a library --
+names eighteen packages that are never compiled: `ring` among them, an
+unactivated optional dependency of rustls, along with `cc`, `getrandom`,
+`libc`, `wasi` and the `windows-*` family. `cargo tree -i ring` returns
+nothing.
 
 So a report listing 43 dependencies is not wrong about the lock file and is not
 describing what ships. If one of those eighteen draws an advisory, expect a
