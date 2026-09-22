@@ -75,14 +75,14 @@ pub(crate) static TLS12_CHACHA20_POLY1305: Tls12Aead = Tls12Aead {
 /// an inference from the key length, because ChaCha20-Poly1305 and AES-256-GCM
 /// both take thirty-two bytes and are not interchangeable.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Suite {
+pub(crate) enum Suite {
     Aes128,
     Aes256,
     ChaCha20,
 }
 
 impl Suite {
-    fn key_len(self) -> usize {
+    pub(crate) fn key_len(self) -> usize {
         match self {
             Self::Aes128 => 16,
             Self::Aes256 | Self::ChaCha20 => 32,
@@ -90,7 +90,7 @@ impl Suite {
     }
 
     /// Bind a key to this suite's cipher.
-    fn cipher(self, key: &[u8]) -> Result<Cipher, Error> {
+    pub(crate) fn cipher(self, key: &[u8]) -> Result<Cipher, Error> {
         if key.len() != self.key_len() {
             return Err(Error::General(alloc::format!(
                 "{:?} takes a {}-byte key, not {}",
@@ -118,14 +118,20 @@ impl Suite {
 }
 
 /// One of the three AEADs, keyed.
-enum Cipher {
+pub(crate) enum Cipher {
     Aes128(ic_cipher::Aes128Gcm),
     Aes256(ic_cipher::Aes256Gcm),
     ChaCha20(ic_cipher::ChaCha20Poly1305),
 }
 
 impl Cipher {
-    fn seal(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &mut [u8]) -> Result<(), ()> {
+    pub(crate) fn seal(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        in_out: &mut [u8],
+        tag: &mut [u8],
+    ) -> Result<(), ()> {
         match self {
             Self::Aes128(c) => c.seal_detached(nonce, aad, in_out, tag),
             Self::Aes256(c) => c.seal_detached(nonce, aad, in_out, tag),
@@ -134,7 +140,13 @@ impl Cipher {
         .map_err(|_| ())
     }
 
-    fn open(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &[u8]) -> Result<(), ()> {
+    pub(crate) fn open(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        in_out: &mut [u8],
+        tag: &[u8],
+    ) -> Result<(), ()> {
         match self {
             Self::Aes128(c) => c.open_detached(nonce, aad, in_out, tag),
             Self::Aes256(c) => c.open_detached(nonce, aad, in_out, tag),

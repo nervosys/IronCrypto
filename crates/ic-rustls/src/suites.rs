@@ -5,7 +5,7 @@ use rustls::crypto::tls13::HkdfUsingHmac;
 use rustls::crypto::{CipherSuiteCommon, KeyExchangeAlgorithm};
 use rustls::{CipherSuite, SignatureScheme, SupportedCipherSuite};
 
-use crate::{aead, hash, hmac};
+use crate::{aead, hash, hmac, quic};
 
 /// Every suite this provider offers, strongest first.
 pub static ALL: &[SupportedCipherSuite] = &[
@@ -32,7 +32,7 @@ pub static TLS13_AES_256_GCM_SHA384: SupportedCipherSuite =
         },
         hkdf_provider: &HkdfUsingHmac(&hmac::SHA384),
         aead_alg: &aead::TLS13_AES_256_GCM,
-        quic: None,
+        quic: Some(&quic::AES_256_GCM),
     });
 
 /// TLS 1.3 with AES-128-GCM and SHA-256.
@@ -45,7 +45,7 @@ pub static TLS13_AES_128_GCM_SHA256: SupportedCipherSuite =
         },
         hkdf_provider: &HkdfUsingHmac(&hmac::SHA256),
         aead_alg: &aead::TLS13_AES_128_GCM,
-        quic: None,
+        quic: Some(&quic::AES_128_GCM),
     });
 
 /// TLS 1.3 with ChaCha20-Poly1305 and SHA-256.
@@ -67,7 +67,7 @@ pub static TLS13_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
         },
         hkdf_provider: &HkdfUsingHmac(&hmac::SHA256),
         aead_alg: &aead::TLS13_CHACHA20_POLY1305,
-        quic: None,
+        quic: Some(&quic::CHACHA20_POLY1305),
     });
 
 /// TLS 1.2 with ECDHE, ECDSA, AES-256-GCM and SHA-384.

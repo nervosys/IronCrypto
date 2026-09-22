@@ -48,6 +48,7 @@
 //! | Signatures | ECDSA P-256/SHA-256 and P-384/SHA-384; Ed25519; RSA PKCS#1 v1.5 and PSS over SHA-256/384/512. All verified and produced |
 //! | Key exchange | X25519, ECDH P-256, ECDH P-384 |
 //! | Randomness | SP 800-90A HMAC\_DRBG, seeded from the OS |
+//! | QUIC | Packet and header protection for all three AEADs, RFC 9001 |
 //!
 //! HKDF is rustls's own extract-and-expand over IronCrypto's HMAC, which is the
 //! right split: HKDF is a construction and HMAC is the primitive. The result is
@@ -60,8 +61,6 @@
 //!   loading a key to sign with. See `crate::verify`.
 //! - **The mismatched ECDSA pairings.** A P-256 key signed with SHA-384, or
 //!   the reverse. See `crate::verify`.
-//! - **QUIC.** rustls exposes header-protection keys for QUIC separately, and
-//!   nothing here implements them.
 //! - **FIPS validation.** Every `fips()` in this crate returns `false`, because
 //!   rustls is asking about a certificate and IronCrypto holds none.
 //!
@@ -77,6 +76,7 @@ mod aead;
 mod hash;
 mod hmac;
 mod kx;
+mod quic;
 mod sign;
 mod verify;
 
