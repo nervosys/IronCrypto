@@ -89,6 +89,22 @@ pub(crate) fn portable_ghash_mul(x: &mut [u8; BLOCK_LEN], h: &[u8; BLOCK_LEN]) {
 /// The GHASH universal hash over a sequence of 16-byte blocks.
 struct Ghash {
     h: [u8; BLOCK_LEN],
+    /// `H^2`, `H^3`, `H^4`, for absorbing four blocks at a time.
+    ///
+    /// GHASH is a serial chain by definition -- each block's product feeds the
+    /// next -- and on a CPU where one multiply has several cycles of latency
+    /// and issues one per cycle, that chain, not the multiplier, is what bounds
+    /// AES-GCM. Expanding four steps of the recurrence removes it:
+    ///
+    /// ```text
+    /// Y' = (Y ^ X0)*H^4  ^  X1*H^3  ^  X2*H^2  ^  X3*H
+    /// ```
+    ///
+    /// Four independent multiplies where there were four dependent ones. The
+    /// identity is just distributivity over XOR in GF(2^128), and every product
+    /// here is separately reduced, so this reuses `mul` exactly as it is rather
+    /// than introducing a second reduction to get wrong.
+    powers: [[u8; BLOCK_LEN]; 3],
     acc: [u8; BLOCK_LEN],
     /// Whether the `PCLMULQDQ` multiply is available. Decided once per value,
     /// from the CPU alone, so it is not a side channel.
@@ -101,11 +117,60 @@ struct Ghash {
 
 impl Ghash {
     fn new(h: [u8; BLOCK_LEN]) -> Self {
-        Self {
+        let mut me = Self {
             h,
+            powers: [[0u8; BLOCK_LEN]; 3],
             acc: [0u8; BLOCK_LEN],
             #[cfg(all(target_arch = "x86_64", feature = "std"))]
             accelerated: ghash_accelerated(),
+        };
+        // H^2, H^3, H^4, each built from the previous one by the same multiply
+        // the hot path uses. Once per key, off the hot path.
+        let mut p = h;
+        for slot in 0..3 {
+            me.mul_by(&mut p, &h);
+            me.powers[slot] = p;
+        }
+        me
+    }
+
+    /// `x *= y` in GCM's field, via whichever backend is live.
+    #[inline]
+    fn mul_by(&self, x: &mut [u8; BLOCK_LEN], y: &[u8; BLOCK_LEN]) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if self.accelerated {
+            // SAFETY: `accelerated` is only true when `ghash_accelerated()`
+            // confirmed both `pclmulqdq` and `ssse3`.
+            unsafe { crate::clmul::mul(x, y) };
+            return;
+        }
+        portable_ghash_mul(x, y);
+    }
+
+    /// Absorb four whole blocks with four independent multiplies.
+    ///
+    /// Correct for the same reason the one-at-a-time path is: see `powers`.
+    #[inline]
+    fn absorb4(&mut self, blocks: &[u8]) {
+        debug_assert_eq!(blocks.len(), BLOCK_LEN * 4);
+        let mut terms = [[0u8; BLOCK_LEN]; 4];
+        for (i, t) in terms.iter_mut().enumerate() {
+            t.copy_from_slice(&blocks[i * BLOCK_LEN..(i + 1) * BLOCK_LEN]);
+        }
+        // The first term carries the accumulator in, and takes the highest
+        // power because it is the oldest.
+        for j in 0..BLOCK_LEN {
+            terms[0][j] ^= self.acc[j];
+        }
+        let multipliers = [&self.powers[2], &self.powers[1], &self.powers[0], &self.h];
+        for (t, m) in terms.iter_mut().zip(multipliers) {
+            self.mul_by(t, m);
+        }
+        self.acc = terms[0];
+        for t in &terms[1..] {
+            for j in 0..BLOCK_LEN {
+                self.acc[j] ^= t[j];
+            }
         }
     }
 
@@ -123,7 +188,13 @@ impl Ghash {
     }
 
     /// Absorb `data`, zero-padding the final partial block.
-    fn update_padded(&mut self, data: &[u8]) {
+    fn update_padded(&mut self, mut data: &[u8]) {
+        // Whole groups of four first; the tail falls through to the serial
+        // path, which also handles the final partial block.
+        while data.len() >= BLOCK_LEN * 4 {
+            self.absorb4(&data[..BLOCK_LEN * 4]);
+            data = &data[BLOCK_LEN * 4..];
+        }
         for chunk in data.chunks(BLOCK_LEN) {
             let mut block = [0u8; BLOCK_LEN];
             block[..chunk.len()].copy_from_slice(chunk);
@@ -316,6 +387,83 @@ aes_gcm!(Aes256Gcm, Aes256, "aes-256-gcm", "AES-256-GCM", 32);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The four-at-a-time path must agree with the one-at-a-time path.
+    ///
+    /// The specification vectors do not establish this. The longest of them is
+    /// four blocks, so they barely reach `absorb4` and never exercise it
+    /// repeatedly or alongside a tail -- a version that was wrong from the
+    /// second group onward, or wrong about the remainder, would pass all of
+    /// them. This drives both paths over every length either side of the group
+    /// boundary and compares the accumulators.
+    #[test]
+    fn the_batched_ghash_agrees_with_the_serial_one() {
+        let h = [
+            0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b, 0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34,
+            0x2b, 0x2e,
+        ];
+
+        let mut checked = 0;
+        // Around one group, two groups, and the ragged lengths between.
+        for len in [
+            0usize, 1, 15, 16, 17, 31, 63, 64, 65, 79, 80, 127, 128, 129, 255, 256, 1024, 1025,
+        ] {
+            let data: std::vec::Vec<u8> = (0..len)
+                .map(|i| ((i as u64).wrapping_mul(0x9e37_79b9) >> 3) as u8)
+                .collect();
+
+            let mut batched = Ghash::new(h);
+            batched.update_padded(&data);
+
+            // The serial reference: one block at a time, no grouping.
+            let mut serial = Ghash::new(h);
+            for chunk in data.chunks(BLOCK_LEN) {
+                let mut block = [0u8; BLOCK_LEN];
+                block[..chunk.len()].copy_from_slice(chunk);
+                for j in 0..BLOCK_LEN {
+                    serial.acc[j] ^= block[j];
+                }
+                serial.mul_acc();
+            }
+
+            assert_eq!(
+                batched.acc, serial.acc,
+                "batched and serial GHASH disagree at {len} bytes"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 18, "the comparison did not run");
+
+        // And the grouping must actually have been used, or the agreement
+        // above is two serial paths agreeing with each other.
+        let long = std::vec![0xa5u8; BLOCK_LEN * 4];
+        let mut g = Ghash::new(h);
+        g.absorb4(&long);
+        let mut serial = Ghash::new(h);
+        for chunk in long.chunks(BLOCK_LEN) {
+            for j in 0..BLOCK_LEN {
+                serial.acc[j] ^= chunk[j];
+            }
+            serial.mul_acc();
+        }
+        assert_eq!(g.acc, serial.acc, "absorb4 alone disagrees with four steps");
+    }
+
+    /// `H^2`, `H^3` and `H^4` must be what they claim.
+    #[test]
+    fn the_precomputed_powers_are_powers_of_h() {
+        let h = [0x3cu8; BLOCK_LEN];
+        let g = Ghash::new(h);
+        let mut expect = h;
+        for (i, stored) in g.powers.iter().enumerate() {
+            g.mul_by(&mut expect, &h);
+            assert_eq!(*stored, expect, "power {} is not H^{}", i, i + 2);
+        }
+        // Distinct, so a table of copies would fail rather than pass.
+        assert_ne!(g.powers[0], g.powers[1]);
+        assert_ne!(g.powers[1], g.powers[2]);
+        assert_ne!(g.powers[0], h);
+    }
     use ic_core::codec::{hex, unhex};
 
     /// Runs one of the McGrew–Viega GCM test vectors end to end.
