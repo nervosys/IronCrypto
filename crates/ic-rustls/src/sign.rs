@@ -356,9 +356,11 @@ fn rsa_key_from(
     // them means the file cannot express that disagreement.
     //
     // It is also the fast path: a key built from `n`, `e` and `d` alone carries
-    // no primes, so signing cannot use the CRT and costs several times as much.
-    // That fallback exists for keys that genuinely lack primes, not as the
-    // ordinary case.
+    // no primes, so signing cannot use the CRT. `ic-rsa`'s own measurement --
+    // `key::tests::report_the_crt_speedup`, ignored by default and run with
+    // `--release` -- puts a 2048-bit private operation at 1.84ms with the CRT
+    // and 7.85ms without, a factor of 4.27 on that machine. So the fallback
+    // exists for keys that genuinely lack primes, not as the ordinary case.
     //
     // Either way the 2048-bit floor applies on this side as well as the
     // verifying one. See `crate::verify`.
