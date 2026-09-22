@@ -80,6 +80,18 @@ in `docs/FIPS.md`.
 An asserted constant that nobody checked is worse than no test: it looks like
 verification and is not.
 
+A vector you did check constrains only what its own bytes exercise. "Checked
+against the RFC" reads like a completeness claim and is not one. Where the code
+branches on something the vectors do not vary -- a header form, a key length, a
+padding choice -- test that distinction separately, against the rule rather than
+against a value. RFC 9001's three header-protection vectors all pass against an
+inverted long/short header rule, because the bit that separates the two happens
+to be zero in every one of them; `crates/ic-rustls/src/quic.rs` carries the test
+that does separate them, and `docs/FIPS.md` records why it has to exist.
+
+Break the thing and confirm the test fails. A test that passes on the broken
+code told you nothing, and finding that out costs one build.
+
 ## Before you finish
 
 ```console

@@ -144,11 +144,23 @@ that gap rather than close it.
 | PBKDF2 | reconstructed from the PRF XOR chain (RFC 6070 publishes HMAC-SHA1 only, which this library does not implement) |
 | RSA PKCS#1 v1.5 | the DigestInfo prefixes are rebuilt from the algorithm OID and checked against the constants in RFC 8017 §9.2; the encoded message is checked against an independent in-test construction; the CAST signatures are implementation-pinned |
 | RSA-PSS | MGF1 against an in-test transcription of RFC 8017 B.2.1; the encoder against the separately written verifier; the CAST signatures are implementation-pinned |
+| QUIC header protection | RFC 9001 appendix A.2, A.3 and A.5: AES with a four-byte and a two-byte packet number, and the separate ChaCha20 construction. Each transcribed with its derivation checked against the mask the RFC prints. **These vectors do not constrain the mask width**: in all three, bit `0x10` of the mask's first byte is zero, so the long-header rule (`& 0x0f`) and the short-header rule (`& 0x1f`) agree on every published example. Swapping the two leaves all three passing, which was confirmed by doing it, so the rule is checked separately against a sample where that bit is set |
 | RSA keys | the identity `(m^e)^d = m (mod n)`, which holds only if `p` and `q` are prime and `d` inverts `e`; Miller-Rabin is checked against Carmichael numbers, which a Fermat test would pass |
 
 Where a row says a vector is missing, supplying one needs no code: drop a file
 in `testvectors/` and the matching test starts checking against it. See
 `testvectors/README.md` for the format and for how to convert ACVP output.
+
+A published vector constrains only what its own bytes exercise. That sounds
+obvious and is easy to forget, because "checked against the RFC" reads like a
+completeness claim and is not one: the QUIC row above is a case where three
+authoritative vectors all passed against code with an inverted branch, because
+the bit that distinguishes the two branches happens to be zero in every
+published example. Where behaviour depends on a condition the vectors do not
+vary -- a header form, a key length, a padding choice -- the distinction needs
+its own test, driven by the rule rather than by a value. Breaking the code and
+confirming the test notices is the cheapest way to find out which case you are
+in.
 
 The DRBG, PBKDF2, and RSA rows are the weak ones, and are called out as such
 rather than being papered over. NIST's ACVP RSA vectors are not reproducible
