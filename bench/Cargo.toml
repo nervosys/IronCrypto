@@ -1,0 +1,31 @@
+[package]
+name = "ic-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Throughput comparison against other implementations. Not part of the library."
+
+[dependencies]
+iron-crypto = { path = "../crates/iron-crypto" }
+ic-cipher = { path = "../crates/ic-cipher" }
+ic-core = { path = "../crates/ic-core", features = ["std"] }
+
+# The comparison. These are here and nowhere else: `bench` is excluded from the
+# workspace so that nothing in the library's dependency graph changes.
+aes = "0.8"
+aes-gcm = "0.10"
+cipher = "0.4"
+
+# There is no feature for the software path. RustCrypto's `aes` 0.8 selects it
+# with a cfg flag instead:
+#
+#     RUSTFLAGS="--cfg aes_force_soft" cargo run --release -- soft
+#
+# That rebuilds the dependency onto its fixsliced implementation, which is the
+# like-for-like comparison for IronCrypto's portable backend. Without it the
+# crate detects AES-NI at runtime and the comparison is against hardware.
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

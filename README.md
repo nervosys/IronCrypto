@@ -503,14 +503,51 @@ slow:
 
 | | portable | AES-NI + PCLMULQDQ |
 |---|---|---|
-| AES-256, raw blocks | ~1.4 MiB/s | ~1.5–3 GiB/s |
-| AES-256-GCM | ~1 MiB/s | ~0.7 GiB/s |
+| AES-256, raw blocks | ~1.5 MiB/s | ~3.8–11 GiB/s |
+| AES-256-GCM | ~1 MiB/s | ~0.9 GiB/s |
 | ChaCha20-Poly1305 | ~0.2–0.4 GiB/s | unchanged (no AES path) |
 
 Indicative figures from a Ryzen 9 9900X, and they move by a factor of two
-between runs depending on clocks and load — treat them as orders of magnitude,
-not benchmarks. Reproduce with `cargo test --release -p ic-cipher --test
-throughput -- --ignored --nocapture`.
+between runs depending on clocks, load and build profile — treat them as orders
+of magnitude, not benchmarks. Reproduce with `cargo test --release -p ic-cipher
+--test throughput -- --ignored --nocapture`.
+
+**The portable figure is bad even for a table-free implementation, and that is
+worth saying plainly.** Avoiding tables does not cost three orders of
+magnitude; this particular way of avoiding them does. Measured against
+RustCrypto's `aes`, which is fixsliced and equally table-free, on the same
+machine and buffer:
+
+| AES-256 raw blocks | MiB/s | |
+|---|---|---|
+| iron-crypto, AES-NI | ~10 960 | |
+| rustcrypto `aes`, AES-NI | ~8 840 | iron-crypto ~1.2x faster |
+| rustcrypto `aes`, fixsliced software | ~68 | |
+| iron-crypto, portable | ~1.5 | **~44x slower than fixsliced** |
+
+So on the default x86-64 path IronCrypto is competitive, and marginally ahead
+on raw blocks. The gap is entirely in the software fallback, and it is a gap
+against another constant-time implementation rather than against a table-driven
+one. Bitslicing or fixslicing would keep the security property and close most
+of it. That work has not been done; until it is, treat the portable AES path as
+correct and suitable for low volumes rather than as a general-purpose cipher,
+and prefer ChaCha20-Poly1305 where there is no AES hardware — which is what
+`icrypto recommend --no-aes-hardware` already tells you.
+
+One more thing the comparison turned up: AES-256-GCM is ~1.75x *slower* than
+`aes-gcm` on the same hardware path, despite the raw block cipher being faster.
+That points at GHASH or the AEAD glue rather than at AES, and is a separate
+question from the one above.
+
+`bench/` holds the harness. It is excluded from the workspace, because
+comparing against RustCrypto means depending on it and the library's own
+dependency graph stays empty:
+
+```sh
+cd bench
+cargo run --release -- hw
+RUSTFLAGS="--cfg aes_force_soft" cargo run --release -- soft
+```
 
 This is why `recommend` asks the CPU rather than assuming: without AES
 instructions it steers you to ChaCha20-Poly1305, and with them it picks

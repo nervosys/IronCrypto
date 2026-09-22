@@ -21,6 +21,13 @@ members = [
     "crates/ic-rustls",
 ]
 
+# Not a workspace member, and deliberately so. `bench/` compares this library
+# against RustCrypto's, which means depending on RustCrypto; excluding it keeps
+# that dependency out of the workspace graph entirely, so
+# `scripts/no-third-party.sh` and the SBOM see exactly what they saw before. It
+# is a measurement tool, not part of the library, and nothing ships from it.
+exclude = ["bench"]
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
