@@ -10,6 +10,9 @@
 use crate::field::Fe;
 use crate::scalar;
 use ic_core::ct::Choice;
+
+// The precomputed basepoint table. See the module for why it is `std` only.
+mod basepoint_table;
 use ic_core::traits::{Algorithm, Digest, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Sha512;
@@ -92,6 +95,18 @@ impl Point {
     }
 
     /// Constant-time conditional move.
+    /// Negate in place when `choice` is set.
+    ///
+    /// On a twisted Edwards curve `-(x, y, z, t)` is `(-x, y, z, -t)`, so this
+    /// is two field negations and a pair of conditional moves. Used by the
+    /// signed-digit basepoint table, which stores only positive multiples.
+    fn conditional_negate(&mut self, choice: Choice) {
+        let nx = self.x.neg();
+        let nt = self.t.neg();
+        Fe::cmov(&mut self.x, &nx, choice);
+        Fe::cmov(&mut self.t, &nt, choice);
+    }
+
     fn cmov(&mut self, other: &Point, choice: Choice) {
         Fe::cmov(&mut self.x, &other.x, choice);
         Fe::cmov(&mut self.y, &other.y, choice);
@@ -173,6 +188,22 @@ impl Point {
 }
 
 /// The Ed25519 base point.
+/// `scalar * B`, through the precomputed table where there is one.
+///
+/// Every basepoint multiplication in this module goes through here rather than
+/// calling `mul_scalar` on the basepoint directly, so the two paths cannot
+/// drift apart and a caller cannot accidentally take the slow one.
+fn mul_basepoint(scalar: &[u8; 32]) -> Point {
+    #[cfg(feature = "std")]
+    {
+        basepoint_table::table().mul(scalar)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        basepoint().mul_scalar(scalar)
+    }
+}
+
 fn basepoint() -> Point {
     // The encoding is a compile-time constant and is known to be valid, so the
     // decompression cannot fail.
@@ -236,12 +267,12 @@ impl SignatureScheme for Ed25519 {
         );
 
         let (mut a, mut prefix) = expand_seed(private_key);
-        let pk = basepoint().mul_scalar(&a).compress();
+        let pk = mul_basepoint(&a).compress();
 
         // r = H(prefix || M), deterministic — Ed25519 needs no RNG at signing
         // time, which removes an entire class of nonce-reuse failures.
         let mut r = hash_to_scalar(&[&prefix, message]);
-        let big_r = basepoint().mul_scalar(&r).compress();
+        let big_r = mul_basepoint(&r).compress();
 
         let k = hash_to_scalar(&[&big_r, &pk, message]);
         let s = scalar::mul_add(&k, &a, &r);
@@ -287,7 +318,7 @@ impl SignatureScheme for Ed25519 {
         let k = hash_to_scalar(&[&big_r, &pk_bytes, message]);
 
         // Check [S]B == R + [k]A.
-        let lhs = basepoint().mul_scalar(&s);
+        let lhs = mul_basepoint(&s);
         let rhs = r_point.add(&a_point.mul_scalar(&k));
 
         if ic_core::ct::verify(&lhs.compress(), &rhs.compress()) {
