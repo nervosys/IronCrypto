@@ -18,11 +18,19 @@
 //! and [`ic_core::traits::SelfTest`], so `ic-fips` can drive their known-answer
 //! tests generically.
 #![cfg_attr(not(feature = "std"), no_std)]
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid`, and the difference is the point: one module is
+// allowed unsafe and every other line in this crate is a compile error. The
+// allowance below marks the only place a CPU intrinsic is called. This crate
+// forbade it outright until SHA-256 gained a SHA-NI backend, which was worth
+// roughly seven times the throughput on hardware that has it and cannot be
+// written any other way.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
 pub mod blake2;
+// SHA-NI, behind runtime detection. See `sha2::x86`.
+#[allow(unsafe_code)]
 mod sha2;
 mod sha3;
 pub mod sp800_185;

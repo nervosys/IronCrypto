@@ -11,6 +11,36 @@
 use ic_core::traits::{Algorithm, Digest, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
+// SHA-NI, where the CPU has it. Only under `std`, because the detection does:
+// a `no_std` build has no way to ask, and guessing wrong is an illegal
+// instruction rather than a wrong answer.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+mod x86;
+
+/// Whether this CPU has the instructions [`x86::compress`] needs.
+///
+/// Asked once. `is_x86_feature_detected!` is not free, and SHA-256 is called
+/// often enough on small inputs that paying for the query per block would show
+/// up in exactly the workloads this is meant to help.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn sha_ni() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    // 0 not yet asked, 1 yes, 2 no.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have = std::is_x86_feature_detected!("sha")
+                && std::is_x86_feature_detected!("sse2")
+                && std::is_x86_feature_detected!("ssse3")
+                && std::is_x86_feature_detected!("sse4.1");
+            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+            have
+        }
+    }
+}
+
 const K256: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -187,6 +217,29 @@ impl Core256 {
         w.zeroize();
     }
 
+    /// Compress a whole number of blocks, using the hardware path when there
+    /// is one.
+    ///
+    /// Taking a run rather than a block at a time is the point: the SHA-NI
+    /// backend shuffles the state into and out of its register layout once per
+    /// call, so feeding it one block at a time would pay that on every block.
+    fn compress_blocks(&mut self, data: &[u8]) {
+        debug_assert!(data.len() % 64 == 0);
+        if data.is_empty() {
+            return;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if sha_ni() {
+            // SAFETY: `sha_ni()` is exactly the feature test this requires, and
+            // the length is a multiple of the block size by the assertion above.
+            unsafe { x86::compress(&mut self.h, data) };
+            return;
+        }
+        for block in data.chunks_exact(64) {
+            self.compress(block);
+        }
+    }
+
     fn update(&mut self, mut data: &[u8]) {
         self.len = self.len.wrapping_add(data.len() as u64);
         if self.buffered > 0 {
@@ -203,11 +256,9 @@ impl Core256 {
             self.compress(&block);
             self.buffered = 0;
         }
-        let mut chunks = data.chunks_exact(64);
-        for block in &mut chunks {
-            self.compress(block);
-        }
-        let rest = chunks.remainder();
+        let whole = data.len() - data.len() % 64;
+        self.compress_blocks(&data[..whole]);
+        let rest = &data[whole..];
         self.buf[..rest.len()].copy_from_slice(rest);
         self.buffered = rest.len();
     }
@@ -542,6 +593,70 @@ sha2_64!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hardware path must agree with the portable one, block for block.
+    ///
+    /// The published vectors above do not establish this. They pass whichever
+    /// path runs, so on a machine with SHA-NI they check the backend and on one
+    /// without they check the fallback -- and either way they cannot notice
+    /// that the two disagree, which is the failure a second implementation
+    /// introduces. This runs both over the same input and compares the states.
+    ///
+    /// It reports which path it took rather than asserting one, because a CPU
+    /// without the instructions is a legitimate machine to run the suite on.
+    /// What it does assert is that the comparison happened when it could.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_sha_ni_backend_agrees_with_the_portable_one() {
+        if !sha_ni() {
+            println!("no SHA-NI on this CPU; the backend was not exercised");
+            return;
+        }
+
+        // Lengths either side of the block boundary, and long enough to run the
+        // message schedule over several blocks.
+        let mut checked = 0;
+        for blocks in [1usize, 2, 3, 4, 7, 16] {
+            let mut data = vec![0u8; blocks * 64];
+            // Not random, but not uniform either: a counter through a couple of
+            // multiplications, so every byte position varies between cases.
+            for (i, b) in data.iter_mut().enumerate() {
+                *b = ((i as u64).wrapping_mul(0x9e37_79b9).rotate_left(7) & 0xff) as u8;
+            }
+
+            // FIPS 180-4 section 5.3.3, the same value the macro below passes.
+            const IV: [u32; 8] = [
+                0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+                0x5be0cd19,
+            ];
+            let mut portable = Core256::new(IV);
+            for block in data.chunks_exact(64) {
+                portable.compress(block);
+            }
+
+            let mut hardware = Core256::new(IV);
+            // SAFETY: guarded by the `sha_ni()` check above.
+            unsafe { x86::compress(&mut hardware.h, &data) };
+
+            assert_eq!(
+                portable.h, hardware.h,
+                "SHA-NI and portable disagree after {blocks} blocks"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 6, "the comparison did not run");
+    }
+
+    /// Say which path this build will take, so a benchmark or a vector run is
+    /// not silently measuring the fallback.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_active_sha256_path_is_reported() {
+        println!(
+            "sha-256 backend: {}",
+            if sha_ni() { "SHA-NI" } else { "portable" }
+        );
+    }
 
     #[test]
     fn nist_abc_vectors() {
