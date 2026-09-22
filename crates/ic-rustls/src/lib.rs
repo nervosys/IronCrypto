@@ -45,7 +45,7 @@
 //! | Hash | SHA-256, SHA-384 |
 //! | MAC | HMAC-SHA256, HMAC-SHA384 |
 //! | KDF | HKDF, as rustls's `HkdfUsingHmac` over the above |
-//! | Signatures | ECDSA P-256/SHA-256 and P-384/SHA-384; RSA PKCS#1 v1.5 and PSS over SHA-256/384/512. All verified and produced |
+//! | Signatures | ECDSA P-256/SHA-256 and P-384/SHA-384; Ed25519; RSA PKCS#1 v1.5 and PSS over SHA-256/384/512. All verified and produced |
 //! | Key exchange | X25519, ECDH P-256, ECDH P-384 |
 //! | Randomness | SP 800-90A HMAC\_DRBG, seeded from the OS |
 //!
@@ -58,9 +58,6 @@
 //!
 //! - **RSA below 2048 bits.** Refused, deliberately, when verifying and when
 //!   loading a key to sign with. See `crate::verify`.
-//! - **Ed25519.** `ic-ec` implements it and this provider does not offer it,
-//!   in either direction. Adding it means a `SignatureVerificationAlgorithm`
-//!   and a scheme in `crate::sign`, not new cryptography.
 //! - **The mismatched ECDSA pairings.** A P-256 key signed with SHA-384, or
 //!   the reverse. See `crate::verify`.
 //! - **QUIC.** rustls exposes header-protection keys for QUIC separately, and
@@ -133,6 +130,7 @@ pub static SUPPORTED_SIG_ALGS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgori
     all: &[
         &verify::ECDSA_P256_SHA256 as &dyn SignatureVerificationAlgorithm,
         &verify::ECDSA_P384_SHA384 as &dyn SignatureVerificationAlgorithm,
+        &verify::ED25519 as &dyn SignatureVerificationAlgorithm,
         &verify::RSA_PKCS1_SHA256 as &dyn SignatureVerificationAlgorithm,
         &verify::RSA_PKCS1_SHA384 as &dyn SignatureVerificationAlgorithm,
         &verify::RSA_PKCS1_SHA512 as &dyn SignatureVerificationAlgorithm,
@@ -148,6 +146,10 @@ pub static SUPPORTED_SIG_ALGS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgori
         (
             SignatureScheme::ECDSA_NISTP256_SHA256,
             &[&verify::ECDSA_P256_SHA256 as &dyn SignatureVerificationAlgorithm],
+        ),
+        (
+            SignatureScheme::ED25519,
+            &[&verify::ED25519 as &dyn SignatureVerificationAlgorithm],
         ),
         (
             SignatureScheme::RSA_PSS_SHA512,
@@ -225,9 +227,9 @@ mod tests {
         assert_eq!(p.kx_groups.len(), 3);
         assert_eq!(p.kx_groups[0].name(), rustls::NamedGroup::X25519);
 
-        // Two ECDSA pairings and six RSA ones, with a mapping for each.
-        assert_eq!(p.signature_verification_algorithms.all.len(), 8);
-        assert_eq!(p.signature_verification_algorithms.mapping.len(), 8);
+        // Two ECDSA pairings, Ed25519, and six RSA ones, with a mapping each.
+        assert_eq!(p.signature_verification_algorithms.all.len(), 9);
+        assert_eq!(p.signature_verification_algorithms.mapping.len(), 9);
     }
 
     /// Nothing in the provider may report FIPS validation.
@@ -254,8 +256,8 @@ mod tests {
             assert!(!alg.fips(), "a signature algorithm claims validation");
             checked += 1;
         }
-        // Nine suites, three key exchange groups, eight signature algorithms.
-        assert!(checked >= 20, "only {checked} components examined");
+        // Nine suites, three key exchange groups, nine signature algorithms.
+        assert!(checked >= 21, "only {checked} components examined");
     }
 
     /// The suites must name the hash and HMAC this crate provides, or the key

@@ -19,14 +19,14 @@
 //! that decodes in the other direction for [`crate::verify`], which keeps one
 //! implementation of that mapping rather than two that could disagree.
 //!
-//! # ECDSA and RSA
+//! # ECDSA, Ed25519 and RSA
 //!
 //! The scheme chosen must be one [`crate::verify`] can check. Offering to sign
 //! with something this provider cannot verify would let a handshake proceed to
 //! a point where the peer expects a signature nothing here can produce a
-//! counterpart for. An Ed25519 key is therefore refused by
-//! [`KeyProvider::load_private_key`] with a message saying so, even though
-//! `ic_ec` implements it.
+//! counterpart for. An X25519 key is therefore refused by
+//! [`KeyProvider::load_private_key`] with a message saying so: it is a key
+//! agreement key, and no signature scheme uses it.
 //!
 //! RSA keys are built from their primes rather than from `n`, `e` and `d`.
 //! `ic_rsa` then derives the CRT parameters itself instead of reading the
@@ -117,10 +117,27 @@ impl KeyProvider for Keys {
                 let key = rsa_key_from(modulus, public_exponent, private_exponent, prime1, prime2)?;
                 Ok(Arc::new(RsaSigningKey { key: Arc::new(key) }))
             }
+            ic_pkix::PrivateKeyInfo::Ed25519(seed) => {
+                // `ic_pkix` already refuses any length but 32, in the parser as
+                // well as the writer, so this cannot fire today. It is kept
+                // because the cost is one comparison and the consequence of
+                // that invariant being relaxed upstream would be a seed handed
+                // to `ic_ec` for it to reject less informatively. No test
+                // covers it, because no input reaches it.
+                if seed.len() != 32 {
+                    return Err(Error::General(format!(
+                        "an ed25519 seed is 32 bytes, not {}",
+                        seed.len()
+                    )));
+                }
+                Ok(Arc::new(Ed25519SigningKey {
+                    seed: seed.to_vec(),
+                }))
+            }
             other => Err(Error::General(format!(
-                "ic-rustls signs with ECDSA and RSA; this key is {}, which crate::verify cannot \
-                 check, so offering to sign with it would advertise something this provider \
-                 cannot complete",
+                "ic-rustls signs with ECDSA, Ed25519 and RSA; this key is {}, which crate::verify \
+                 cannot check, so offering to sign with it would advertise something this \
+                 provider cannot complete",
                 other.algorithm().id()
             ))),
         }
@@ -247,6 +264,73 @@ impl Signer for EcdsaSigner {
 // ---------------------------------------------------------------------------
 // RSA
 // ---------------------------------------------------------------------------
+
+/// An Ed25519 key.
+///
+/// The scheme fixes the hash and the curve together, so there is nothing to
+/// choose: one key, one scheme, one 64-byte signature.
+struct Ed25519SigningKey {
+    /// The 32-byte seed. Not the expanded scalar -- `ic_ec` expands it per
+    /// operation and wipes what it expanded.
+    seed: Vec<u8>,
+}
+
+impl core::fmt::Debug for Ed25519SigningKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Ed25519SigningKey(..)")
+    }
+}
+
+impl Drop for Ed25519SigningKey {
+    fn drop(&mut self) {
+        self.seed.zeroize();
+    }
+}
+
+impl SigningKey for Ed25519SigningKey {
+    fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
+        offered.contains(&SignatureScheme::ED25519).then(|| {
+            Box::new(Ed25519Signer {
+                seed: self.seed.clone(),
+            }) as Box<dyn Signer>
+        })
+    }
+
+    fn algorithm(&self) -> SignatureAlgorithm {
+        SignatureAlgorithm::ED25519
+    }
+}
+
+struct Ed25519Signer {
+    seed: Vec<u8>,
+}
+
+impl core::fmt::Debug for Ed25519Signer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Ed25519Signer(..)")
+    }
+}
+
+impl Drop for Ed25519Signer {
+    fn drop(&mut self) {
+        self.seed.zeroize();
+    }
+}
+
+impl Signer for Ed25519Signer {
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
+        // Ed25519 hashes the message itself, twice, as part of the scheme. As
+        // everywhere else here, the message is passed through unhashed.
+        let mut sig = [0u8; 64];
+        ic_ec::Ed25519::sign(&self.seed, message, &mut sig)
+            .map_err(|e| Error::General(format!("signing failed: {e}")))?;
+        Ok(sig.to_vec())
+    }
+
+    fn scheme(&self) -> SignatureScheme {
+        SignatureScheme::ED25519
+    }
+}
 
 /// Build an RSA private key from the fields a PKCS#8 or PKCS#1 file carries.
 ///
@@ -574,17 +658,19 @@ mod tests {
     /// of here.
     #[test]
     fn a_key_this_provider_cannot_verify_with_is_refused() {
-        // Ed25519: implemented in ic-ec, deliberately not offered here.
+        // X25519: a key agreement key, not a signing key at all. `ic-ec`
+        // implements it and no signature scheme uses it, so it is the case this
+        // arm exists for.
         let mut der = [0u8; 128];
-        let n = ic_pkix::PrivateKeyInfo::Ed25519(&[3u8; 32])
+        let n = ic_pkix::PrivateKeyInfo::X25519(&[3u8; 32])
             .to_der(&mut der)
             .unwrap();
-        let ed = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der[..n].to_vec()));
-        let err = Keys.load_private_key(ed).unwrap_err();
+        let x = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der[..n].to_vec()));
+        let err = Keys.load_private_key(x).unwrap_err();
         let text = format!("{err}");
         assert!(
-            text.contains("ECDSA") && text.contains("cannot"),
-            "the refusal should say why: {text}"
+            text.contains("x25519") && text.contains("cannot"),
+            "the refusal should name the key and say why: {text}"
         );
 
         // Rubbish, which must be an error rather than a panic.
@@ -602,6 +688,73 @@ mod tests {
     #[test]
     fn the_key_provider_claims_no_fips_validation() {
         assert!(!Keys.fips());
+    }
+
+    /// An Ed25519 signature must verify through this provider's own verifier.
+    ///
+    /// Ed25519 has no pairing to choose and no DER wrapper, so this is the
+    /// simplest of the three round trips -- which is the reason to write it
+    /// down rather than assume it: there is nothing here to go subtly wrong,
+    /// so a failure would mean something plainly wrong, like a seed used where
+    /// an expanded scalar was wanted.
+    #[test]
+    fn an_ed25519_signature_verifies_through_this_providers_verifier() {
+        use rustls::pki_types::SignatureVerificationAlgorithm;
+
+        let seed = [0x9du8; 32];
+        let mut der = [0u8; 128];
+        let n = ic_pkix::PrivateKeyInfo::Ed25519(&seed)
+            .to_der(&mut der)
+            .unwrap();
+        let key = Keys
+            .load_private_key(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                der[..n].to_vec(),
+            )))
+            .unwrap();
+        assert_eq!(key.algorithm(), SignatureAlgorithm::ED25519);
+
+        let signer = key
+            .choose_scheme(&[SignatureScheme::ED25519])
+            .expect("an Ed25519 key should choose the Ed25519 scheme");
+        assert_eq!(signer.scheme(), SignatureScheme::ED25519);
+
+        let message = b"the transcript a CertificateVerify covers";
+        let sig = signer.sign(message).expect("signing should work");
+        assert_eq!(sig.len(), 64, "an Ed25519 signature is 64 bytes");
+
+        let mut public = [0u8; 32];
+        ic_ec::Ed25519::public_key(&seed, &mut public).unwrap();
+        crate::verify::ED25519
+            .verify_signature(&public, message, &sig)
+            .expect("a signature this provider made must verify through its own verifier");
+        assert!(crate::verify::ED25519
+            .verify_signature(&public, b"a different transcript", &sig)
+            .is_err());
+
+        // Deterministic, by RFC 8032: no nonce to repeat or leak.
+        assert_eq!(signer.sign(message).unwrap(), sig);
+
+        // And nothing but Ed25519 is offered by this key.
+        assert!(key.choose_scheme(&[]).is_none());
+        assert!(key
+            .choose_scheme(&[
+                SignatureScheme::ECDSA_NISTP256_SHA256,
+                SignatureScheme::RSA_PSS_SHA256
+            ])
+            .is_none());
+
+        // A seed of the wrong length cannot reach the loader at all: `ic_pkix`
+        // refuses 31 bytes in both directions, so there is no PKCS#8 document
+        // to hand over. Asserted here rather than left implicit, because the
+        // first version of this test tried to build one, silently got nothing,
+        // and skipped -- proving only that the encoder had declined.
+        let mut short = [0u8; 128];
+        assert!(
+            ic_pkix::PrivateKeyInfo::Ed25519(&[1u8; 31])
+                .to_der(&mut short)
+                .is_err(),
+            "the encoder accepted a 31-byte seed"
+        );
     }
 
     /// One 2048-bit key, generated once and shared by the RSA tests.

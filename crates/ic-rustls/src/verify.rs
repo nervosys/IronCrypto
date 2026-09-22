@@ -116,6 +116,50 @@ impl SignatureVerificationAlgorithm for Ecdsa {
 }
 
 // ---------------------------------------------------------------------------
+// Ed25519
+// ---------------------------------------------------------------------------
+
+/// Ed25519, RFC 8032.
+///
+/// One algorithm rather than a family: the hash is part of the scheme, so there
+/// is no pairing to get wrong and no variant to choose. The signature is a
+/// fixed 64 bytes and the public key 32, both raw -- unlike ECDSA there is no
+/// DER wrapper on the way in.
+pub(crate) static ED25519: Ed25519 = Ed25519;
+
+/// See [`ED25519`].
+#[derive(Debug)]
+pub(crate) struct Ed25519;
+
+impl SignatureVerificationAlgorithm for Ed25519 {
+    fn verify_signature(
+        &self,
+        public_key: &[u8],
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<(), InvalidSignature> {
+        // `ic_ec` checks the lengths, rejects a non-canonical `s`, and refuses
+        // a public key that does not decompress -- all on attacker input, all
+        // returning rather than panicking.
+        ic_ec::Ed25519::verify(public_key, message, signature).map_err(|_| InvalidSignature)
+    }
+
+    /// Ed25519 names the same algorithm for the key and for the signature.
+    fn public_key_alg_id(&self) -> AlgorithmIdentifier {
+        alg_id::ED25519
+    }
+
+    fn signature_alg_id(&self) -> AlgorithmIdentifier {
+        alg_id::ED25519
+    }
+
+    /// Always false; see the note on the hash adapter.
+    fn fips(&self) -> bool {
+        false
+    }
+}
+
+// ---------------------------------------------------------------------------
 // RSA
 // ---------------------------------------------------------------------------
 

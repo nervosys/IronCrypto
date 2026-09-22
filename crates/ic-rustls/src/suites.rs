@@ -172,7 +172,12 @@ pub static TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
 /// These are exactly the pairings [`crate::verify`] implements. Listing one
 /// that is not verifiable would let a handshake get as far as a certificate
 /// this provider then cannot check.
+/// Ed25519 belongs here rather than in a family of its own: RFC 8422 carries
+/// it in the ECDHE_ECDSA suites, so a TLS 1.2 server holding an Ed25519
+/// certificate negotiates one of these. rustls's own provider lists it first,
+/// and this follows.
 static TLS12_ECDSA_SCHEMES: &[SignatureScheme] = &[
+    SignatureScheme::ED25519,
     SignatureScheme::ECDSA_NISTP384_SHA384,
     SignatureScheme::ECDSA_NISTP256_SHA256,
 ];
@@ -223,8 +228,8 @@ mod tests {
                 checked += 1;
             }
         }
-        // Three ECDSA suites at two schemes each, three RSA suites at six.
-        assert!(checked >= 24, "only {checked} advertised schemes examined");
+        // Three ECDSA suites at three schemes each, three RSA suites at six.
+        assert!(checked >= 27, "only {checked} advertised schemes examined");
     }
 
     /// Each suite's hash must match the one its name promises, because the key
