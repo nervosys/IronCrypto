@@ -19,13 +19,22 @@
 //! that decodes in the other direction for [`crate::verify`], which keeps one
 //! implementation of that mapping rather than two that could disagree.
 //!
-//! # ECDSA only
+//! # ECDSA and RSA
 //!
 //! The scheme chosen must be one [`crate::verify`] can check. Offering to sign
 //! with something this provider cannot verify would let a handshake proceed to
 //! a point where the peer expects a signature nothing here can produce a
-//! counterpart for. RSA keys and Ed25519 keys are refused by
-//! [`KeyProvider::load_private_key`] with a message saying so.
+//! counterpart for. An Ed25519 key is therefore refused by
+//! [`KeyProvider::load_private_key`] with a message saying so, even though
+//! `ic_ec` implements it.
+//!
+//! RSA keys are built from their primes rather than from `n`, `e` and `d`.
+//! `ic_rsa` then derives the CRT parameters itself instead of reading the
+//! file's, so a file whose `dP`, `dQ` or `qInv` disagree with its primes cannot
+//! produce the faulted half that leaks a factorization -- and the key signs on
+//! the fast path, which the `n`/`e`/`d` form cannot. The modulus the file
+//! states is checked against the one the primes produce, because a key that is
+//! not the one the certificate names would sign things nothing verifies.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -58,13 +67,10 @@ impl KeyProvider for Keys {
             PrivateKeyDer::Sec1(k) => {
                 ic_pkix::private_key::parse_ec_private_key(k.secret_sec1_der(), None)
             }
-            PrivateKeyDer::Pkcs1(_) => {
-                return Err(Error::General(
-                    "ic-rustls signs with ECDSA; a PKCS#1 key is RSA, which crate::verify \
-                     cannot check either, so offering to sign with it would advertise \
-                     something this provider cannot complete"
-                        .into(),
-                ))
+            // A bare PKCS#1 `RSAPrivateKey`, the body of a
+            // `-----BEGIN RSA PRIVATE KEY-----` file.
+            PrivateKeyDer::Pkcs1(k) => {
+                ic_pkix::private_key::parse_rsa_private_key(k.secret_pkcs1_der())
             }
             _ => return Err(Error::General("unrecognised private key format".into())),
         };
@@ -100,10 +106,21 @@ impl KeyProvider for Keys {
                     secret: private_key.to_vec(),
                 }))
             }
+            ic_pkix::PrivateKeyInfo::Rsa {
+                modulus,
+                public_exponent,
+                private_exponent,
+                prime1,
+                prime2,
+                ..
+            } => {
+                let key = rsa_key_from(modulus, public_exponent, private_exponent, prime1, prime2)?;
+                Ok(Arc::new(RsaSigningKey { key: Arc::new(key) }))
+            }
             other => Err(Error::General(format!(
-                "ic-rustls signs with ECDSA; this key is {}, which crate::verify cannot check, \
-                 so offering to sign with it would advertise something this provider cannot \
-                 complete",
+                "ic-rustls signs with ECDSA and RSA; this key is {}, which crate::verify cannot \
+                 check, so offering to sign with it would advertise something this provider \
+                 cannot complete",
                 other.algorithm().id()
             ))),
         }
@@ -220,6 +237,180 @@ impl Signer for EcdsaSigner {
         })?;
         fixed.zeroize();
         Ok(der[..n].to_vec())
+    }
+
+    fn scheme(&self) -> SignatureScheme {
+        self.scheme
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RSA
+// ---------------------------------------------------------------------------
+
+/// Build an RSA private key from the fields a PKCS#8 or PKCS#1 file carries.
+///
+/// Separate from [`Keys::load_private_key`] so its result can be inspected: the
+/// two properties worth asserting -- that the key takes the CRT path, and that
+/// a file whose primes contradict its modulus is refused -- are invisible
+/// through the `SigningKey` trait object, and a test that could only go through
+/// the trait would end up testing `ic_rsa`'s constructors instead of this
+/// crate's choice between them.
+fn rsa_key_from(
+    modulus: &[u8],
+    public_exponent: u64,
+    private_exponent: &[u8],
+    prime1: &[u8],
+    prime2: &[u8],
+) -> Result<ic_rsa::RsaPrivateKey, Error> {
+    // Built from the primes, which does two things at once.
+    //
+    // `ic_rsa` derives `d` and the CRT parameters from `p` and `q` in one place
+    // rather than reading the file's `dP`, `dQ` and `qInv`. A key whose stored
+    // CRT values disagree with its primes computes a wrong half and, from the
+    // signature, leaks the factorization -- the classic fault attack. Deriving
+    // them means the file cannot express that disagreement.
+    //
+    // It is also the fast path: a key built from `n`, `e` and `d` alone carries
+    // no primes, so signing cannot use the CRT and costs several times as much.
+    // That fallback exists for keys that genuinely lack primes, not as the
+    // ordinary case.
+    //
+    // Either way the 2048-bit floor applies on this side as well as the
+    // verifying one. See `crate::verify`.
+    let key = if prime1.is_empty() || prime2.is_empty() {
+        ic_rsa::RsaPrivateKey::from_components(modulus, public_exponent, private_exponent)
+    } else {
+        ic_rsa::RsaPrivateKey::from_primes(prime1, prime2, public_exponent)
+    }
+    .map_err(|e| Error::General(format!("unusable RSA key: {e}")))?;
+
+    // The primes must actually describe the modulus in the file. If they do
+    // not, this is not the key the certificate names, and signing with it would
+    // produce signatures nothing verifies.
+    let mut derived = alloc::vec![0u8; key.public_key().size()];
+    key.public_key()
+        .modulus_bytes(&mut derived)
+        .map_err(|e| Error::General(format!("unusable RSA key: {e}")))?;
+    if derived != modulus {
+        return Err(Error::General(
+            "the RSA key's primes do not multiply to the modulus it carries".into(),
+        ));
+    }
+    Ok(key)
+}
+
+/// The RSA schemes this provider will sign with, in preference order.
+///
+/// PSS ahead of PKCS#1 v1.5, and the stronger hash ahead of the weaker within
+/// each. TLS 1.3 will only offer the PSS ones, so the v1.5 entries matter for
+/// TLS 1.2 peers that offer nothing else -- and the peer's offer is what bounds
+/// the choice, so listing them costs nothing against a modern peer.
+///
+/// Every entry is a scheme [`crate::verify`] can also check. That is the same
+/// rule the ECDSA side follows and for the same reason.
+const RSA_SCHEMES: &[SignatureScheme] = &[
+    SignatureScheme::RSA_PSS_SHA512,
+    SignatureScheme::RSA_PSS_SHA384,
+    SignatureScheme::RSA_PSS_SHA256,
+    SignatureScheme::RSA_PKCS1_SHA512,
+    SignatureScheme::RSA_PKCS1_SHA384,
+    SignatureScheme::RSA_PKCS1_SHA256,
+];
+
+/// An RSA key that has been parsed and is ready to sign.
+///
+/// The key is behind an `Arc` because `ic_rsa::RsaPrivateKey` is sized for a
+/// 4096-bit modulus whether or not the key is one, and `choose_scheme` may be
+/// called more than once. Sharing it beats copying several kilobytes per
+/// signature.
+struct RsaSigningKey {
+    key: Arc<ic_rsa::RsaPrivateKey>,
+}
+
+/// Written out rather than derived: `Debug` on a type holding a private key
+/// should not be able to print one, and a derive would print whatever the
+/// fields grow into later.
+impl core::fmt::Debug for RsaSigningKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RsaSigningKey(..)")
+    }
+}
+
+impl SigningKey for RsaSigningKey {
+    fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
+        // This crate's preference order decides, among what the peer allows.
+        // Scanning `offered` instead would let the peer pick PKCS#1 v1.5 when
+        // it would also have accepted PSS.
+        let scheme = *RSA_SCHEMES.iter().find(|s| offered.contains(s))?;
+        Some(Box::new(RsaSigner {
+            key: Arc::clone(&self.key),
+            scheme,
+        }))
+    }
+
+    fn algorithm(&self) -> SignatureAlgorithm {
+        SignatureAlgorithm::RSA
+    }
+}
+
+/// One RSA key bound to one scheme.
+struct RsaSigner {
+    key: Arc<ic_rsa::RsaPrivateKey>,
+    scheme: SignatureScheme,
+}
+
+impl core::fmt::Debug for RsaSigner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RsaSigner(..)")
+    }
+}
+
+impl Signer for RsaSigner {
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
+        // As on the ECDSA side, the message arrives unhashed and `ic_rsa`
+        // hashes it, so it is passed through rather than pre-hashed.
+        let mut sig = alloc::vec![0u8; self.key.public_key().size()];
+
+        let signed = match self.scheme {
+            SignatureScheme::RSA_PKCS1_SHA256 => {
+                ic_rsa::Pkcs1Sha256::sign(&self.key, message, &mut sig)
+            }
+            SignatureScheme::RSA_PKCS1_SHA384 => {
+                ic_rsa::Pkcs1Sha384::sign(&self.key, message, &mut sig)
+            }
+            SignatureScheme::RSA_PKCS1_SHA512 => {
+                ic_rsa::Pkcs1Sha512::sign(&self.key, message, &mut sig)
+            }
+            // PSS is randomized, so signing needs entropy where PKCS#1 v1.5
+            // does not. A fresh generator per signature, as in `crate::random`.
+            scheme @ (SignatureScheme::RSA_PSS_SHA256
+            | SignatureScheme::RSA_PSS_SHA384
+            | SignatureScheme::RSA_PSS_SHA512) => {
+                let mut rng = ic_drbg::Rng::from_os()
+                    .map_err(|e| Error::General(format!("no randomness for PSS: {e}")))?;
+                match scheme {
+                    SignatureScheme::RSA_PSS_SHA256 => {
+                        ic_rsa::PssSha256::sign(&self.key, message, &mut rng, &mut sig)
+                    }
+                    SignatureScheme::RSA_PSS_SHA384 => {
+                        ic_rsa::PssSha384::sign(&self.key, message, &mut rng, &mut sig)
+                    }
+                    _ => ic_rsa::PssSha512::sign(&self.key, message, &mut rng, &mut sig),
+                }
+            }
+            // Unreachable: `choose_scheme` only ever builds this with a scheme
+            // from RSA_SCHEMES. Returned rather than panicked because a panic
+            // here would be reachable from a handshake if that ever stopped
+            // being true.
+            other => {
+                return Err(Error::General(format!(
+                    "ic-rustls cannot sign with {other:?}"
+                )))
+            }
+        };
+        signed.map_err(|e| Error::General(format!("signing failed: {e}")))?;
+        Ok(sig)
     }
 
     fn scheme(&self) -> SignatureScheme {
@@ -411,5 +602,263 @@ mod tests {
     #[test]
     fn the_key_provider_claims_no_fips_validation() {
         assert!(!Keys.fips());
+    }
+
+    /// One 2048-bit key, generated once and shared by the RSA tests.
+    fn rsa_key() -> &'static ic_rsa::RsaPrivateKey {
+        use std::sync::OnceLock;
+        static KEY: OnceLock<ic_rsa::RsaPrivateKey> = OnceLock::new();
+        KEY.get_or_init(|| {
+            let mut rng = ic_drbg::Rng::from_os().expect("os randomness");
+            ic_rsa::generate(2048, &mut rng).expect("rsa key generation")
+        })
+    }
+
+    /// That key as a PKCS#8 `PrivateKeyInfo`, the way a file carries it.
+    fn rsa_pkcs8(key: &ic_rsa::RsaPrivateKey) -> PrivateKeyDer<'static> {
+        let half = key.size() / 2;
+        let (mut modulus, mut d) = (alloc::vec![0u8; key.size()], alloc::vec![0u8; key.size()]);
+        let (mut p, mut q) = (alloc::vec![0u8; half], alloc::vec![0u8; half]);
+        let (mut dp, mut dq, mut qinv) = (
+            alloc::vec![0u8; half],
+            alloc::vec![0u8; half],
+            alloc::vec![0u8; half],
+        );
+        key.public_key().modulus_bytes(&mut modulus).unwrap();
+        key.exponent_bytes(&mut d).unwrap();
+        key.prime_bytes(&mut p, &mut q).unwrap();
+        key.crt_exponent_bytes(&mut dp, &mut dq, &mut qinv).unwrap();
+
+        let mut der = alloc::vec![0u8; 4096];
+        let n = ic_pkix::PrivateKeyInfo::Rsa {
+            modulus: &modulus,
+            public_exponent: key.public_key().exponent(),
+            private_exponent: &d,
+            prime1: &p,
+            prime2: &q,
+            exponent1: &dp,
+            exponent2: &dq,
+            coefficient: &qinv,
+        }
+        .to_der(&mut der)
+        .unwrap();
+        der.truncate(n);
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der))
+    }
+
+    /// An RSA signature must verify through this provider's own verifier, for
+    /// every scheme the key will choose.
+    ///
+    /// Same shape as the ECDSA round trip: signing and verification are
+    /// different modules reaching `ic_rsa` from opposite directions, so
+    /// agreeing is evidence. The cross-check matters for the same reason it
+    /// does in `crate::verify` -- it is what catches a scheme that signs under
+    /// one hash and is named for another.
+    #[test]
+    fn rsa_signatures_verify_through_this_providers_verifier() {
+        use rustls::pki_types::SignatureVerificationAlgorithm;
+
+        let key = Keys.load_private_key(rsa_pkcs8(rsa_key())).unwrap();
+        assert_eq!(key.algorithm(), SignatureAlgorithm::RSA);
+
+        let mut spki = alloc::vec![0u8; rsa_key().size()];
+        rsa_key().public_key().modulus_bytes(&mut spki).unwrap();
+        let mut pk_der = alloc::vec![0u8; 1024];
+        let n =
+            ic_pkix::write_rsa_public_key(&spki, rsa_key().public_key().exponent(), &mut pk_der)
+                .unwrap();
+        let pk = &pk_der[..n];
+
+        let message = b"the transcript a CertificateVerify covers";
+        let mut checked = 0;
+        for scheme in RSA_SCHEMES {
+            let signer = key
+                .choose_scheme(&[*scheme])
+                .unwrap_or_else(|| panic!("{scheme:?} is listed but was not choosable"));
+            assert_eq!(signer.scheme(), *scheme);
+
+            let sig = signer.sign(message).expect("signing should work");
+
+            let verifier: &dyn SignatureVerificationAlgorithm = match *scheme {
+                SignatureScheme::RSA_PKCS1_SHA256 => &crate::verify::RSA_PKCS1_SHA256,
+                SignatureScheme::RSA_PKCS1_SHA384 => &crate::verify::RSA_PKCS1_SHA384,
+                SignatureScheme::RSA_PKCS1_SHA512 => &crate::verify::RSA_PKCS1_SHA512,
+                SignatureScheme::RSA_PSS_SHA256 => &crate::verify::RSA_PSS_SHA256,
+                SignatureScheme::RSA_PSS_SHA384 => &crate::verify::RSA_PSS_SHA384,
+                SignatureScheme::RSA_PSS_SHA512 => &crate::verify::RSA_PSS_SHA512,
+                other => panic!("{other:?} is in RSA_SCHEMES but has no verifier"),
+            };
+            verifier
+                .verify_signature(pk, message, &sig)
+                .unwrap_or_else(|_| {
+                    panic!("{scheme:?}: a signature this provider made did not verify")
+                });
+            assert!(
+                verifier
+                    .verify_signature(pk, b"a different transcript", &sig)
+                    .is_err(),
+                "{scheme:?}: verified against the wrong message"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 6, "not every RSA scheme was exercised");
+    }
+
+    /// The loaded key must use the CRT, and must be the key the file describes.
+    ///
+    /// Both are properties of how `load_private_key` builds the key rather than
+    /// of `ic_rsa`. Building from `n`, `e` and `d` would still sign correctly
+    /// and would silently cost several times as much per signature, so nothing
+    /// else here would notice.
+    #[test]
+    fn a_loaded_rsa_key_takes_the_crt_path() {
+        let key = rsa_key();
+        let half = key.size() / 2;
+        let (mut p, mut q) = (alloc::vec![0u8; half], alloc::vec![0u8; half]);
+        let (mut d, mut modulus) = (alloc::vec![0u8; key.size()], alloc::vec![0u8; key.size()]);
+        key.prime_bytes(&mut p, &mut q).unwrap();
+        key.exponent_bytes(&mut d).unwrap();
+        key.public_key().modulus_bytes(&mut modulus).unwrap();
+        let e = key.public_key().exponent();
+
+        // The loader's own result, given everything a PKCS#8 file carries.
+        // Asserting on `ic_rsa`'s constructors instead would test that crate
+        // rather than this one's choice between them, and would still pass if
+        // the loader were switched back to the slow path.
+        let loaded = rsa_key_from(&modulus, e, &d, &p, &q).unwrap();
+        assert!(
+            loaded.uses_crt(),
+            "the loader built a key without CRT parameters, so every signature \
+             it makes costs several times what it should"
+        );
+
+        // The contrast that makes the assertion above mean something: handed no
+        // primes, the same function returns a key that cannot use the CRT, so
+        // `uses_crt` distinguishes the two paths rather than always being true.
+        let without_primes = rsa_key_from(&modulus, e, &d, &[], &[]).unwrap();
+        assert!(
+            !without_primes.uses_crt(),
+            "the n/e/d fallback should not carry CRT parameters"
+        );
+
+        // And the two must sign identically, since the fallback is a real path
+        // and not merely a slower wrong answer.
+        let mut a = alloc::vec![0u8; loaded.size()];
+        let mut b = alloc::vec![0u8; without_primes.size()];
+        ic_rsa::Pkcs1Sha256::sign(&loaded, b"message", &mut a).unwrap();
+        ic_rsa::Pkcs1Sha256::sign(&without_primes, b"message", &mut b).unwrap();
+        assert_eq!(a, b, "the CRT and non-CRT paths disagreed");
+    }
+
+    /// A key whose primes do not match its stated modulus is refused.
+    ///
+    /// Such a file is not the key the certificate names. Loading it would give
+    /// a signer whose signatures verify against nothing, and the failure would
+    /// surface at the peer rather than here.
+    #[test]
+    fn an_rsa_key_whose_primes_contradict_its_modulus_is_refused() {
+        let key = rsa_key();
+        let half = key.size() / 2;
+        let (mut p, mut q) = (alloc::vec![0u8; half], alloc::vec![0u8; half]);
+        let (mut dp, mut dq, mut qinv) = (
+            alloc::vec![0u8; half],
+            alloc::vec![0u8; half],
+            alloc::vec![0u8; half],
+        );
+        let (mut modulus, mut d) = (alloc::vec![0u8; key.size()], alloc::vec![0u8; key.size()]);
+        key.prime_bytes(&mut p, &mut q).unwrap();
+        key.crt_exponent_bytes(&mut dp, &mut dq, &mut qinv).unwrap();
+        key.exponent_bytes(&mut d).unwrap();
+        key.public_key().modulus_bytes(&mut modulus).unwrap();
+
+        // A modulus from a *different* key, so the primes no longer describe it.
+        let mut other = ic_drbg::Rng::from_os().unwrap();
+        let other_key = ic_rsa::generate(2048, &mut other).unwrap();
+        let mut other_modulus = alloc::vec![0u8; other_key.size()];
+        other_key
+            .public_key()
+            .modulus_bytes(&mut other_modulus)
+            .unwrap();
+
+        let mut der = alloc::vec![0u8; 4096];
+        let n = ic_pkix::PrivateKeyInfo::Rsa {
+            modulus: &other_modulus,
+            public_exponent: key.public_key().exponent(),
+            private_exponent: &d,
+            prime1: &p,
+            prime2: &q,
+            exponent1: &dp,
+            exponent2: &dq,
+            coefficient: &qinv,
+        }
+        .to_der(&mut der)
+        .unwrap();
+        der.truncate(n);
+
+        let err = Keys
+            .load_private_key(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(der)))
+            .expect_err("a key whose primes contradict its modulus was accepted");
+        let text = format!("{err}");
+        assert!(
+            text.contains("modulus"),
+            "the refusal should say what was wrong: {text}"
+        );
+
+        // The same construction with the matching modulus loads, so the
+        // rejection is about the mismatch and not about this encoding path.
+        assert!(Keys.load_private_key(rsa_pkcs8(key)).is_ok());
+    }
+
+    /// An RSA key must not offer a scheme the peer did not, and an ECDSA-only
+    /// offer must not be answered by an RSA key.
+    #[test]
+    fn an_rsa_key_only_chooses_an_offered_rsa_scheme() {
+        let key = Keys.load_private_key(rsa_pkcs8(rsa_key())).unwrap();
+
+        assert!(key.choose_scheme(&[]).is_none());
+        assert!(key
+            .choose_scheme(&[
+                SignatureScheme::ECDSA_NISTP256_SHA256,
+                SignatureScheme::ED25519
+            ])
+            .is_none());
+
+        // Preference is this crate's, not the peer's order: offered both, PSS
+        // wins over PKCS#1 v1.5.
+        let signer = key
+            .choose_scheme(&[
+                SignatureScheme::RSA_PKCS1_SHA256,
+                SignatureScheme::RSA_PSS_SHA256,
+            ])
+            .expect("one of the two should be chosen");
+        assert_eq!(
+            signer.scheme(),
+            SignatureScheme::RSA_PSS_SHA256,
+            "PKCS#1 v1.5 was chosen where PSS was also on offer"
+        );
+    }
+
+    /// Two PSS signatures over one message must differ.
+    ///
+    /// PSS is randomized. Two identical signatures would mean the salt is not
+    /// fresh, which is the failure that makes PSS no better than v1.5.
+    #[test]
+    fn pss_signatures_are_randomized() {
+        let key = Keys.load_private_key(rsa_pkcs8(rsa_key())).unwrap();
+        let signer = key
+            .choose_scheme(&[SignatureScheme::RSA_PSS_SHA256])
+            .unwrap();
+        let a = signer.sign(b"one message").unwrap();
+        let b = signer.sign(b"one message").unwrap();
+        assert_ne!(a, b, "two PSS signatures over one message were identical");
+
+        // Whereas PKCS#1 v1.5 is deterministic, so this is a property of the
+        // padding and not of the test happening to compare different things.
+        let signer = key
+            .choose_scheme(&[SignatureScheme::RSA_PKCS1_SHA256])
+            .unwrap();
+        let a = signer.sign(b"one message").unwrap();
+        let b = signer.sign(b"one message").unwrap();
+        assert_eq!(a, b, "PKCS#1 v1.5 should be deterministic");
     }
 }

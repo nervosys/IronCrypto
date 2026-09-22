@@ -250,7 +250,12 @@ impl<'a> PrivateKeyInfo<'a> {
 }
 
 /// Parse a PKCS#1 `RSAPrivateKey`.
-fn parse_rsa_private_key(input: &[u8]) -> Result<PrivateKeyInfo<'_>> {
+///
+/// This is the body of a `-----BEGIN RSA PRIVATE KEY-----` file, and also what
+/// a PKCS#8 `PrivateKeyInfo` wraps for an RSA key. Public for the first case:
+/// a caller handed a bare `RSAPrivateKey` has no PKCS#8 envelope to go through,
+/// exactly as with [`parse_ec_private_key`].
+pub fn parse_rsa_private_key(input: &[u8]) -> Result<PrivateKeyInfo<'_>> {
     let mut outer = Reader::new(input);
     let mut seq = outer.sequence()?;
     outer.finish()?;
