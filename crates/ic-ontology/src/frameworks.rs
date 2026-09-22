@@ -556,10 +556,46 @@ mod tests {
                 "{} names {symbol:?}, absent from {file}",
                 c.id
             );
+
+            // And it must appear as code, not only in prose.
+            //
+            // `contains` alone accepts a symbol that occurs nowhere but a
+            // comment, which is the weakest possible form of this evidence: a
+            // control could cite a function that was deleted, keep passing on
+            // the sentence that still mentions it, and read as satisfied. The
+            // citation is the whole claim here, so it has to point at something
+            // that runs.
+            //
+            // A line-level test rather than a parse. `symbol` is documented as
+            // "a symbol or phrase", and some controls legitimately cite a
+            // phrase -- `cargo tree` for T1195.001 -- so requiring a `fn`
+            // declaration would reject honest entries. Requiring one
+            // non-comment line rejects the dishonest ones and nothing else.
+            //
+            // The comment marker depends on the language, and getting that
+            // wrong is not a detail: two controls cite `scripts/no-third-party.sh`,
+            // where comments open with `#`. A version of this check that knew
+            // only `//` accepted a citation pointing at shell prose, which is
+            // exactly what it exists to reject. `#` is not treated as a comment
+            // in Rust, where it opens an attribute.
+            let comment = if file.ends_with(".rs") { "//" } else { "#" };
+            let in_code = text
+                .lines()
+                .any(|line| line.contains(symbol) && !line.trim_start().starts_with(comment));
+            assert!(
+                in_code,
+                "{} cites {symbol:?} in {file}, where it appears only in a comment. \
+                 Evidence has to name something that runs, not something a sentence \
+                 mentions.",
+                c.id
+            );
             checked += 1;
         }
+        // The literal is the count today. It catches a control losing its
+        // evidence and being quietly downgraded to a variant this loop skips,
+        // which a floor of 14 would have let through.
         assert!(
-            checked >= 14,
+            checked >= 22,
             "too few controls are wired to code: {checked}"
         );
     }
