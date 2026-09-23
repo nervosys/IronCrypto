@@ -169,14 +169,17 @@ impl Projective {
     /// `(X : Y : Z)` stands for `(X/Z, Y/Z)`, and extended coordinates want
     /// `T` with `X*Y = T*Z`, so `T = X*Y/Z`. Only needed once, at the end.
     fn to_extended_from_projective(self) -> Point {
-        let z_inv = self.z.invert();
-        let x = self.x.mul(&z_inv);
-        let y = self.y.mul(&z_inv);
+        // Four multiplications, not an inversion. `(X : Y : Z)` stands for
+        // `(X/Z, Y/Z)`, and extended coordinates want `T` with `X*Y = T*Z`;
+        // scaling every coordinate by `Z` gives `(XZ : YZ : Z^2 : XY)`, which
+        // satisfies that directly. Dividing through by `Z` instead would be an
+        // exponentiation -- about two hundred and fifty squarings -- to reach
+        // the same point in a representation nothing here needs.
         Point {
-            x,
-            y,
-            z: Fe::ONE,
-            t: x.mul(&y),
+            x: self.x.mul(&self.z),
+            y: self.y.mul(&self.z),
+            z: self.z.square(),
+            t: self.x.mul(&self.y),
         }
     }
 
@@ -386,6 +389,27 @@ impl Point {
             y: pp.add(&mm),
             z: zz2.add(&tt2d),
             t: zz2.sub(&tt2d),
+        }
+    }
+
+    /// `self - other`, for an affine Niels point.
+    ///
+    /// Negating one of these swaps its sums and differences and negates
+    /// `2d·x·y`, so the subtraction is the addition with two operands
+    /// exchanged and one sign flipped. Doing it here rather than by negating a
+    /// copy of the table entry avoids copying it at all -- an entry is three
+    /// field elements, and the variable-time path has no reason to touch it
+    /// with conditional moves.
+    pub(crate) fn sub_affine_niels(&self, other: &AffineNiels) -> Completed {
+        let pp = self.y.add(&self.x).mul(&other.ymx);
+        let mm = self.y.sub(&self.x).mul(&other.ypx);
+        let tt2d = self.t.mul(&other.t2d);
+        let zz2 = self.z.add(&self.z);
+        Completed {
+            x: pp.sub(&mm),
+            y: pp.add(&mm),
+            z: zz2.sub(&tt2d),
+            t: zz2.add(&tt2d),
         }
     }
 
@@ -641,11 +665,12 @@ fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
         }
         if naf_b[i] != 0 {
             let e = t.to_extended();
-            let mut n = odd_b[(naf_b[i].unsigned_abs() as usize) / 2];
-            if naf_b[i] < 0 {
-                n.conditional_negate(Choice::from_u8(1));
-            }
-            t = e.add_affine_niels(&n);
+            let n = &odd_b[(naf_b[i].unsigned_abs() as usize) / 2];
+            t = if naf_b[i] > 0 {
+                e.add_affine_niels(n)
+            } else {
+                e.sub_affine_niels(n)
+            };
         }
         if i == 0 {
             return t.to_extended();
@@ -1627,6 +1652,9 @@ field and point primitives, nanoseconds:"
         let an = a_point.to_affine_niels();
         ns("Projective::double  (4S)", &mut || {
             core::hint::black_box(core::hint::black_box(&proj).double());
+        });
+        ns("Projective::double_projective", &mut || {
+            core::hint::black_box(core::hint::black_box(proj).double_projective());
         });
         ns("Completed::to_projective (3M)", &mut || {
             core::hint::black_box(core::hint::black_box(&comp).to_projective());

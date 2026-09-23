@@ -321,6 +321,32 @@ Edwards point primitives (lower is better)");
         });
         verdict("double-scalar multiplication", m0, m1, false);
 
+        // A scalar with one bit set: the recoding then has one non-zero digit,
+        // so this is a chain of doublings with almost no additions. Timed
+        // against the dense case above it separates the two costs, which is
+        // the only way to tell "our doublings are slower" from "we do more
+        // additions" without being able to instrument dalek.
+        let mut sparse = [0u8; 32];
+        sparse[31] = 0x08;
+        let d_sparse = DScalar::from_bytes_mod_order(sparse);
+        let s0 = per_op("iron-crypto [k]A + [s]B, sparse", 2000, 5, || {
+            std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
+                std::hint::black_box(&ours),
+                &sparse,
+                &sparse,
+            ));
+        });
+        let s1 = per_op("dalek [k]A + [s]B, sparse", 2000, 5, || {
+            std::hint::black_box(
+                curve25519_dalek::edwards::EdwardsPoint::vartime_double_scalar_mul_basepoint(
+                    &d_sparse,
+                    std::hint::black_box(&theirs),
+                    &d_sparse,
+                ),
+            );
+        });
+        verdict("double-scalar, sparse (doublings only)", s0, s1, false);
+
         let b0 = per_op("iron-crypto [s]B (const time)", 5000, 5, || {
             std::hint::black_box(ic_ec::ed25519::mul_basepoint_for_bench(std::hint::black_box(
                 &kb,
