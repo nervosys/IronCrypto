@@ -74,4 +74,4 @@ By submitting a pull request to this repository, you indicate your agreement to
 this CLA. Your Git commit metadata (name and email) serves as your electronic
 signature.
 
-If your organization requires a corporate CLA, please contact licensing@nervosys.com.
+If your organization requires a corporate CLA, please contact licensing@nervosys.ai.

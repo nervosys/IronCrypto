@@ -313,36 +313,47 @@ fn m(x: u64, y: u64) -> u128 {
 /// Fold five 128-bit products back into 51-bit limbs.
 #[inline]
 fn carry_reduce(r: [u128; 5]) -> Fe {
-    // One 128-bit pass, then a 64-bit one.
+    // The five carries are extracted independently, not chained.
     //
-    // This used to make both passes over the `u128` array. It does not need
-    // to: after the first pass every limb is below `2^51`, so the second is
-    // ordinary 64-bit work, and on x86-64 a 128-bit shift and mask is several
-    // instructions where the 64-bit form is one. The second pass is on the hot
-    // path of every field multiplication and squaring, which is to say of
-    // everything on this curve.
-    let mut out = [0u64; 5];
-    let mut carry: u128 = 0;
-    for (slot, limb) in out.iter_mut().zip(r) {
-        let v = limb + carry;
-        carry = v >> 51;
-        *slot = (v & MASK as u128) as u64;
-    }
+    // This used to walk the limbs in order, each iteration adding the previous
+    // carry before computing its own -- five 128-bit shift-and-mask steps on a
+    // single dependency chain, on the hot path of every multiplication and
+    // squaring. Nothing about the reduction requires that order: each `r[i]`
+    // already holds its full product sum, so every carry can be taken at once
+    // and delivered to its neighbour afterwards, which is five independent
+    // shifts the scheduler can overlap instead of five it cannot.
+    //
+    // The bound that makes it safe: both operands of a product have limbs
+    // below 2^52, so `r[i] < 5 * 19 * 2^104 < 2^110.3` and `c[i] < 2^59.3`.
+    // The largest quantity below is `c[4] * 19 < 2^63.6`, which is why the
+    // scaled carry still fits in a u64. `limbs_at_their_maximum_do_not_carry_
+    // out_of_a_u64` drives that worst case, and an arithmetic overflow there
+    // is a panic in a debug build rather than a wrong answer in a release one.
+    let c: [u64; 5] = [
+        (r[0] >> 51) as u64,
+        (r[1] >> 51) as u64,
+        (r[2] >> 51) as u64,
+        (r[3] >> 51) as u64,
+        (r[4] >> 51) as u64,
+    ];
+    let mut out: [u64; 5] = [
+        (r[0] as u64 & MASK) + c[4] * 19,
+        (r[1] as u64 & MASK) + c[0],
+        (r[2] as u64 & MASK) + c[1],
+        (r[3] as u64 & MASK) + c[2],
+        (r[4] as u64 & MASK) + c[3],
+    ];
 
-    // The carry out of the top re-enters at the bottom scaled by 19. A product
-    // of two reduced elements leaves that carry below 2^56, so `carry * 19`
-    // and the limb it lands on both stay inside a u64 -- which is what lets
-    // the second pass drop to 64 bits.
-    out[0] += (carry as u64) * 19;
-
-    let mut c = out[0] >> 51;
+    // One short 64-bit pass to settle what those additions carried. Serial,
+    // but over small numbers and only once.
+    let mut carry = out[0] >> 51;
     out[0] &= MASK;
     for slot in out.iter_mut().skip(1) {
-        *slot += c;
-        c = *slot >> 51;
+        *slot += carry;
+        carry = *slot >> 51;
         *slot &= MASK;
     }
-    out[0] += c * 19;
+    out[0] += carry * 19;
     Fe(out)
 }
 
@@ -487,5 +498,90 @@ mod tests {
         a[31] &= 0x7f;
         b[31] |= 0x80;
         assert_eq!(Fe::from_bytes(&a).to_bytes(), Fe::from_bytes(&b).to_bytes());
+    }
+
+    /// The serial carry chain `carry_reduce` replaced, kept as an oracle.
+    ///
+    /// It is the implementation the RFC 7748 and 8032 vectors were passing
+    /// against before the parallel form went in, so agreeing with it on
+    /// arbitrary limb patterns is the evidence that the rewrite changed the
+    /// schedule and not the arithmetic.
+    fn carry_reduce_serial(r: [u128; 5]) -> Fe {
+        let mut out = [0u64; 5];
+        let mut carry: u128 = 0;
+        for (slot, limb) in out.iter_mut().zip(r) {
+            let v = limb + carry;
+            carry = v >> 51;
+            *slot = (v & MASK as u128) as u64;
+        }
+        out[0] += (carry as u64) * 19;
+        let mut c = out[0] >> 51;
+        out[0] &= MASK;
+        for slot in out.iter_mut().skip(1) {
+            *slot += c;
+            c = *slot >> 51;
+            *slot &= MASK;
+        }
+        out[0] += c * 19;
+        Fe(out)
+    }
+
+    /// Build the limb products the way `mul` does, without reducing.
+    fn raw_products(a: &[u64; 5], b: &[u64; 5]) -> [u128; 5] {
+        let m = |x: u64, y: u64| (x as u128) * (y as u128);
+        let (b1, b2, b3, b4) = (b[1] * 19, b[2] * 19, b[3] * 19, b[4] * 19);
+        [
+            m(a[0], b[0]) + m(a[1], b4) + m(a[2], b3) + m(a[3], b2) + m(a[4], b1),
+            m(a[0], b[1]) + m(a[1], b[0]) + m(a[2], b4) + m(a[3], b3) + m(a[4], b2),
+            m(a[0], b[2]) + m(a[1], b[1]) + m(a[2], b[0]) + m(a[3], b4) + m(a[4], b3),
+            m(a[0], b[3]) + m(a[1], b[2]) + m(a[2], b[1]) + m(a[3], b[0]) + m(a[4], b4),
+            m(a[0], b[4]) + m(a[1], b[3]) + m(a[2], b[2]) + m(a[3], b[1]) + m(a[4], b[0]),
+        ]
+    }
+
+    /// The worst case the safety argument rests on.
+    ///
+    /// `add` does not reduce, so a limb reaching `mul` can be as large as
+    /// `2^52 - 2`. Every limb is put there at once, which maximises every
+    /// product sum simultaneously -- a state the curve itself may never reach,
+    /// which is the point of testing it rather than arguing about it. In a
+    /// debug build the scaled carry overflowing a u64 panics here.
+    #[test]
+    fn limbs_at_their_maximum_do_not_carry_out_of_a_u64() {
+        let max = [(1u64 << 52) - 2; 5];
+        let r = raw_products(&max, &max);
+        assert_eq!(
+            carry_reduce(r).to_bytes(),
+            carry_reduce_serial(r).to_bytes(),
+            "parallel and serial carry disagree at the limb maximum"
+        );
+    }
+
+    /// The two carry forms agree on arbitrary limb patterns.
+    #[test]
+    fn parallel_carry_agrees_with_the_serial_one() {
+        let mut state = 0x243f_6a88_85a3_08d3u64;
+        let mut next = || {
+            // xorshift64*, enough to walk the limb space without a dependency.
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        };
+        for _ in 0..20_000 {
+            let mut a = [0u64; 5];
+            let mut b = [0u64; 5];
+            for i in 0..5 {
+                // The full range `mul` promises to accept, endpoints included.
+                a[i] = next() % (1 << 52);
+                b[i] = next() % (1 << 52);
+            }
+            let r = raw_products(&a, &b);
+            assert_eq!(
+                carry_reduce(r).to_bytes(),
+                carry_reduce_serial(r).to_bytes(),
+                "disagreement on a={a:?} b={b:?}"
+            );
+        }
     }
 }

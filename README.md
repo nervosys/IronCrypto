@@ -660,7 +660,7 @@ IronCrypto is dual-licensed:
   terminates TLS, signs tokens, or encrypts customer data makes that service a
   derivative work.
 - **[Commercial](LICENSE-COMMERCIAL.md)** for proprietary, embedded, or SaaS use
-  without AGPL obligations. Contact licensing@nervosys.com.
+  without AGPL obligations. Contact licensing@nervosys.ai.
 
 Contributions require agreement to the [CLA](CLA.md); see
 [CONTRIBUTING.md](CONTRIBUTING.md).

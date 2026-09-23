@@ -34,7 +34,7 @@ Then a **commercial license** is available from NERVOSYS.
 
 For commercial licensing inquiries, please contact:
 
-- **Email**: licensing@nervosys.com
+- **Email**: licensing@nervosys.ai
 - **GitHub**: [github.com/nervosys](https://github.com/nervosys)
 
 Commercial licenses are available with flexible terms tailored to your needs, including per-seat, per-deployment, and enterprise-wide options.

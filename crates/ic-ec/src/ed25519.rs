@@ -998,4 +998,110 @@ mod tests {
     fn self_test_passes() {
         Ed25519::self_test().unwrap();
     }
+
+    /// Where verification's time actually goes.
+    ///
+    /// Ignored: it is a measurement, not an assertion. Run it with
+    /// `cargo test -p ic-ec --release -- --ignored --nocapture where_verify_spends`
+    /// before changing anything here, because the answer decided what was
+    /// worth doing and a guess would not have.
+    #[test]
+    #[ignore = "diagnostic, not a test"]
+    fn where_verify_spends_its_time() {
+        use std::time::Instant;
+
+        let seed = [7u8; 32];
+        let key = Ed25519Key::from_seed(&seed).unwrap();
+        let msg = b"benchmark message";
+        let mut sig = [0u8; 64];
+        key.sign(msg, &mut sig).unwrap();
+        let pk = *key.public_key();
+
+        let mut big_r = [0u8; 32];
+        big_r.copy_from_slice(&sig[..32]);
+        let mut s_sc = [0u8; 32];
+        s_sc.copy_from_slice(&sig[32..]);
+
+        let n = 2000;
+        let time = |label: &str, f: &mut dyn FnMut()| {
+            let mut best = f64::INFINITY;
+            for _ in 0..5 {
+                let t = Instant::now();
+                for _ in 0..n {
+                    f();
+                }
+                let e = t.elapsed().as_secs_f64() / n as f64 * 1e6;
+                if e < best {
+                    best = e;
+                }
+            }
+            println!("  {label:<34} {best:>9.2} us");
+            best
+        };
+
+        let a_point = Point::decompress(&pk).unwrap();
+        let k = hash_to_scalar(&[&big_r, &pk, msg]);
+
+        println!(
+            "
+ed25519 verify, cost breakdown:"
+        );
+        let d = time("decompress (x2 per verify)", &mut || {
+            core::hint::black_box(Point::decompress(&pk));
+        });
+        let h = time("hash_to_scalar", &mut || {
+            core::hint::black_box(hash_to_scalar(&[&big_r, &pk, msg]));
+        });
+        let b = time("mul_basepoint (const time)", &mut || {
+            core::hint::black_box(mul_basepoint(&s_sc));
+        });
+        let v = time("mul_scalar_vartime", &mut || {
+            core::hint::black_box(a_point.mul_scalar_vartime(&k));
+        });
+        println!(
+            "  {:<34} {:>9.2} us",
+            "-- accounted for",
+            2.0 * d + h + b + v
+        );
+
+        // One level down: if the point ops are slow, the field ops are why.
+        println!(
+            "
+field and point primitives, nanoseconds:"
+        );
+        let nn = 200_000;
+        let ns = |label: &str, f: &mut dyn FnMut()| {
+            let mut best = f64::INFINITY;
+            for _ in 0..5 {
+                let t = Instant::now();
+                for _ in 0..nn {
+                    f();
+                }
+                let e = t.elapsed().as_secs_f64() / nn as f64 * 1e9;
+                if e < best {
+                    best = e;
+                }
+            }
+            println!("  {label:<34} {best:>9.2} ns");
+        };
+        let fx = a_point.x;
+        let fy = a_point.y;
+        ns("Fe::mul", &mut || {
+            core::hint::black_box(core::hint::black_box(&fx).mul(core::hint::black_box(&fy)));
+        });
+        ns("Fe::square", &mut || {
+            core::hint::black_box(core::hint::black_box(&fx).square());
+        });
+        ns("Fe::add", &mut || {
+            core::hint::black_box(core::hint::black_box(&fx).add(core::hint::black_box(&fy)));
+        });
+        ns("Point::double", &mut || {
+            core::hint::black_box(core::hint::black_box(&a_point).double());
+        });
+        ns("Point::add", &mut || {
+            core::hint::black_box(
+                core::hint::black_box(&a_point).add(core::hint::black_box(&a_point)),
+            );
+        });
+    }
 }
