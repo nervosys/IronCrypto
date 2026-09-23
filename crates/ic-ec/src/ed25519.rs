@@ -214,6 +214,25 @@ impl Point {
         acc
     }
 
+    /// Whether two points are the same, without leaving projective space.
+    ///
+    /// `(X : Y : Z)` stands for the affine point `(X/Z, Y/Z)`, so two are equal
+    /// exactly when `X1*Z2 == X2*Z1` and `Y1*Z2 == Y2*Z1`. That is four
+    /// multiplications.
+    ///
+    /// The obvious alternative is to compress both and compare the bytes, and
+    /// that is what verification used to do -- but compression divides by `Z`,
+    /// and a division here is an exponentiation: roughly two hundred and fifty
+    /// squarings each, five hundred to answer a question four multiplications
+    /// settle.
+    ///
+    /// `to_bytes` is used only to canonicalise the two sides before comparing,
+    /// which costs a carry chain and no inversion.
+    fn eq_projective(&self, other: &Point) -> bool {
+        self.x.mul(&other.z).to_bytes() == other.x.mul(&self.z).to_bytes()
+            && self.y.mul(&other.z).to_bytes() == other.y.mul(&self.z).to_bytes()
+    }
+
     /// Compress to the 32-byte RFC 8032 encoding.
     pub fn compress(&self) -> [u8; 32] {
         let z_inv = self.z.invert();
@@ -546,7 +565,11 @@ impl SignatureScheme for Ed25519 {
         // so the constant-time ladder protects nothing and costs work.
         let rhs = r_point.add(&a_point.mul_scalar_vartime(&k));
 
-        if ic_core::ct::verify(&lhs.compress(), &rhs.compress()) {
+        // Compared projectively rather than by compressing both sides, which
+        // would be two field inversions to answer a question four
+        // multiplications settle. Nothing here is secret, so the comparison
+        // need not be constant time either.
+        if lhs.eq_projective(&rhs) {
             Ok(())
         } else {
             Err(ic_core::err!(AuthenticationFailed, "ed25519"))
@@ -663,6 +686,44 @@ mod tests {
             Point::IDENTITY.double().compress(),
             Point::IDENTITY.compress()
         );
+    }
+
+    /// Projective equality must agree with comparing compressed encodings.
+    ///
+    /// The two answer the same question by different routes -- one divides by
+    /// Z, the other cross-multiplies -- so agreement is the argument. It has to
+    /// hold for equal points given *different* representatives, which is the
+    /// case the whole optimisation rests on, so the test scales one side by a
+    /// factor and checks it still compares equal.
+    #[test]
+    fn projective_equality_agrees_with_compressed_equality() {
+        let b = basepoint();
+        let mut points = std::vec![Point::IDENTITY, b];
+        let mut p = b;
+        for _ in 0..6 {
+            p = p.double();
+            points.push(p);
+        }
+
+        let mut checked = 0;
+        for (i, a) in points.iter().enumerate() {
+            for (j, c) in points.iter().enumerate() {
+                let projective = a.eq_projective(c);
+                let compressed = a.compress() == c.compress();
+                assert_eq!(
+                    projective, compressed,
+                    "projective and compressed equality differ for {i} vs {j}"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 64, "the comparison did not run");
+
+        // The case that matters: the same point with a different Z. Adding the
+        // identity re-scales the representation without moving the point.
+        let scaled = b.add(&Point::IDENTITY);
+        assert!(b.eq_projective(&scaled), "equal points with different Z");
+        assert_eq!(b.compress(), scaled.compress());
     }
 
     #[test]

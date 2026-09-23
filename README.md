@@ -534,7 +534,7 @@ parity rather than as whichever run flattered it:
 | SHA-512 | ~1.3-1.75x slower |
 
 | Ed25519 sign, cached key | ~1.86x slower |
-| Ed25519 verify | ~2.8x slower |
+| Ed25519 verify | ~2.6x slower |
 | AES-256 blocks, portable | ~5800x slower |
 
 The bulk symmetric work — the part a TLS connection or a file encryption
