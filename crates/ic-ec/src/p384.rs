@@ -50,6 +50,10 @@ mont_field!(
 #[derive(Debug, Clone, Copy)]
 pub struct P384;
 
+// Its own generator table, with its own storage; see the macro, which
+// emits the table under `std` and the ladder without it.
+crate::generator_table_for!(P384);
+
 impl Curve for P384 {
     type Field = Fp;
     type Scalar = Fn;

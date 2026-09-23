@@ -27,7 +27,7 @@ use ic_core::traits::{Digest, Mac};
 use ic_core::{ensure, Result, Zeroize};
 
 /// A curve paired with the hash and MAC its signatures use.
-pub trait EcdsaCurve: Curve {
+pub trait EcdsaCurve: Curve + crate::nist::gentable::HasGeneratorTable {
     /// The message digest, at the curve's security level.
     type Digest: Digest;
     /// HMAC over the same digest, for RFC 6979.
@@ -243,8 +243,7 @@ pub fn sign<C: EcdsaCurve>(private_key: &[u8], message: &[u8], signature: &mut [
     for attempt in 0..8 {
         let k = rfc6979_nonce::<C>(private_key, h1, attempt)?;
 
-        let point = Point::<C>::generator()
-            .mul_scalar(&k)
+        let point = Point::<C>::mul_generator(&k)
             .to_affine()
             .ok_or(ic_core::err!(Internal, "kG is the identity"))?;
         let r = C::scalar_reduce_slice(point.x.to_bytes().as_ref());

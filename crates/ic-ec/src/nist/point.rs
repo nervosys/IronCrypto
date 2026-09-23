@@ -220,7 +220,17 @@ impl<C: Curve> Point<C> {
 
     /// Constant-time conditional move.
     #[inline]
-    fn cmov(a: &mut Self, b: &Self, choice: Choice) {
+    /// Negate in place when `choice` is set.
+    ///
+    /// On a short Weierstrass curve `-(x, y, z)` is `(x, -y, z)`, so this is
+    /// one field negation and a conditional move. Used by the signed-digit
+    /// generator table, which stores only positive multiples.
+    pub(crate) fn conditional_negate(&mut self, choice: Choice) {
+        let ny = self.y.neg();
+        <C::Field as Field>::cmov(&mut self.y, &ny, choice);
+    }
+
+    pub(crate) fn cmov(a: &mut Self, b: &Self, choice: Choice) {
         C::Field::cmov(&mut a.x, &b.x, choice);
         C::Field::cmov(&mut a.y, &b.y, choice);
         C::Field::cmov(&mut a.z, &b.z, choice);
@@ -259,8 +269,25 @@ impl<C: Curve> Point<C> {
     ///
     /// Verification operates entirely on public values, so this makes no
     /// constant-time claim beyond what it inherits from the primitives.
-    pub fn mul_double(a: &C::Scalar, p: &Self, b: &C::Scalar) -> Self {
-        Self::generator().mul_scalar(a).add(&p.mul_scalar(b))
+    pub fn mul_double(a: &C::Scalar, p: &Self, b: &C::Scalar) -> Self
+    where
+        C: super::gentable::HasGeneratorTable,
+    {
+        Self::mul_generator(a).add(&p.mul_scalar(b))
+    }
+
+    /// `scalar * G`, through the precomputed table where there is one.
+    ///
+    /// Every generator multiplication goes through here rather than calling
+    /// `mul_scalar` on the generator, so the two cannot drift apart and no
+    /// caller takes the slow path by accident. Only the generator half of
+    /// verification benefits; the other multiplication is against the public
+    /// key and stays on the ladder.
+    pub fn mul_generator(scalar: &C::Scalar) -> Self
+    where
+        C: super::gentable::HasGeneratorTable,
+    {
+        C::mul_generator(scalar)
     }
 
     /// Convert to affine coordinates, or `None` for the identity.
