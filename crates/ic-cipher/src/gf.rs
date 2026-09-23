@@ -35,6 +35,40 @@ pub const fn mul(mut a: u8, mut b: u8) -> u8 {
     p
 }
 
+/// `x * x` in GF(2^8), without the bit-serial loop.
+///
+/// Squaring is linear over GF(2) -- `(a + b)^2 = a^2 + b^2`, since the cross
+/// term appears twice and cancels -- so squaring a polynomial doubles every
+/// exponent and nothing else. That is the bits of `x` spread apart with zeros
+/// between them, followed by a reduction, where the general multiply runs its
+/// bit-serial loop eight times round.
+///
+/// It matters because [`inv`] squares seven times and multiplies six: more than
+/// half of the S-box was the general routine doing work that squaring does not
+/// need. Only the even positions above 7 can be set after spreading, so the
+/// reduction folds in four constants rather than seven.
+///
+/// Constant time: each constant is masked by its own bit, no branches.
+///
+/// `squaring_matches_the_general_multiply` checks this against `mul(x, x)` for
+/// every one of the 256 inputs, which is the whole domain.
+#[inline(always)]
+pub const fn square(x: u8) -> u8 {
+    // Spread bit i to position 2i.
+    let t = x as u16;
+    let t = (t | (t << 4)) & 0x0f0f;
+    let t = (t | (t << 2)) & 0x3333;
+    let t = (t | (t << 1)) & 0x5555;
+
+    // x^8, x^10, x^12 and x^14 reduced mod x^8 + x^4 + x^3 + x + 1.
+    let mut r = (t & 0xff) as u8;
+    r ^= 0x1b & (((t >> 8) & 1) as u8).wrapping_neg();
+    r ^= 0x6c & (((t >> 10) & 1) as u8).wrapping_neg();
+    r ^= 0xab & (((t >> 12) & 1) as u8).wrapping_neg();
+    r ^= 0x9a & (((t >> 14) & 1) as u8).wrapping_neg();
+    r
+}
+
 /// `x * 2` in GF(2^8), the AES `xtime` operation.
 #[inline(always)]
 pub const fn xtime(a: u8) -> u8 {
@@ -45,14 +79,15 @@ pub const fn xtime(a: u8) -> u8 {
 /// Multiplicative inverse in GF(2^8), with `inv(0) == 0`.
 ///
 /// Computed as `x^254` via the square-and-multiply chain for `0b1111_1110`,
-/// which is 7 squarings and 6 multiplications, all constant-time.
+/// which is 7 squarings and 6 multiplications, all constant-time. The
+/// squarings go through [`square`] rather than the general multiply.
 #[inline(always)]
 pub const fn inv(x: u8) -> u8 {
     let mut r = x;
     let mut bit = 6i32;
     // Exponent 254 = 0b11111110; the leading 1 is the initial `r = x`.
     while bit >= 0 {
-        r = mul(r, r);
+        r = square(r);
         if bit > 0 {
             r = mul(r, x);
         }
@@ -128,6 +163,18 @@ mod tests {
     fn xtime_matches_multiplication_by_two() {
         for x in 0..=255u8 {
             assert_eq!(xtime(x), mul(x, 2));
+        }
+    }
+
+    /// Closed-form squaring against the general multiply, over the whole domain.
+    ///
+    /// Not a sample: GF(2^8) has 256 elements, so this is every input there is,
+    /// checked against the routine the S-box vectors already validate. A
+    /// squaring that is wrong for one byte cannot hide from it.
+    #[test]
+    fn squaring_matches_the_general_multiply() {
+        for x in 0..=u8::MAX {
+            assert_eq!(square(x), mul(x, x), "square({x:#04x})");
         }
     }
 }
