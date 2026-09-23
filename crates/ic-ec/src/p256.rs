@@ -389,6 +389,41 @@ mod tests {
         assert!(bool::from(p.add(&p).ct_eq(&p.double())));
     }
 
+    /// The variable-time path must agree with the constant-time ladder.
+    ///
+    /// The RFC 6979 vectors reach it with a couple of scalars, which says
+    /// little about a recoding whose digit pattern differs for every scalar.
+    /// The values here stress it: zero, one, a scalar that carries at every
+    /// position, alternating bits, and the top of the byte range -- which is
+    /// above the group order and so exercises the carry the extra limb exists
+    /// for.
+    #[test]
+    fn the_vartime_multiplication_agrees_with_the_ladder() {
+        let g = Point::generator();
+
+        let mut checked = 0;
+        for raw in [
+            [0u8; 32],
+            {
+                let mut v = [0u8; 32];
+                v[31] = 1;
+                v
+            },
+            [0xffu8; 32],
+            [0x55u8; 32],
+            [0xaau8; 32],
+            [0x9du8; 32],
+        ] {
+            let k = Fn::from_bytes_reduced(&raw);
+            assert!(
+                bool::from(g.mul_scalar_vartime(&k).ct_eq(&g.mul_scalar(&k))),
+                "vartime and ladder differ for {raw:02x?}"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 6, "the comparison did not run");
+    }
+
     #[test]
     fn scalar_multiplication_matches_repeated_addition() {
         let g = Point::generator();

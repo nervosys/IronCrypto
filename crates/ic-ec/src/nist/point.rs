@@ -265,6 +265,58 @@ impl<C: Curve> Point<C> {
         acc
     }
 
+    /// Negate: on a short Weierstrass curve `-(x, y, z)` is `(x, -y, z)`.
+    fn negate(&self) -> Self {
+        Self {
+            x: self.x,
+            y: self.y.neg(),
+            z: self.z,
+        }
+    }
+
+    /// Scalar multiplication that is **not** constant time.
+    ///
+    /// # When this is allowed
+    ///
+    /// Only on values an attacker already has. Verification is the case: the
+    /// signature, the public key and the message are public, so there is no
+    /// secret whose timing could leak. ECDH and signing must never call this --
+    /// their scalars are private keys.
+    ///
+    /// # What it does instead
+    ///
+    /// A width-5 non-adjacent form, as [`crate::ed25519`] uses. Roughly one
+    /// digit in six is non-zero, so the additions drop from one per bit to
+    /// about a sixth of that. The doublings remain: an arbitrary point has no
+    /// precomputed table to remove them, and the generator -- which does -- is
+    /// handled by [`Self::mul_generator`].
+    pub fn mul_scalar_vartime(&self, scalar: &C::Scalar) -> Self {
+        // 1P, 3P, 5P .. 15P.
+        let twice = self.double();
+        let mut odd = [*self; 8];
+        for i in 1..8 {
+            odd[i] = odd[i - 1].add(&twice);
+        }
+
+        let bytes = scalar.to_bytes();
+        let (naf, len) = wnaf5(bytes.as_ref());
+
+        let mut acc = Self::identity();
+        for i in (0..len).rev() {
+            acc = acc.double();
+            let digit = naf[i];
+            if digit != 0 {
+                let entry = &odd[(digit.unsigned_abs() as usize) / 2];
+                acc = if digit > 0 {
+                    acc.add(entry)
+                } else {
+                    acc.add(&entry.negate())
+                };
+            }
+        }
+        acc
+    }
+
     /// `a*G + b*P`, for signature verification.
     ///
     /// Verification operates entirely on public values, so this makes no
@@ -273,7 +325,9 @@ impl<C: Curve> Point<C> {
     where
         C: super::gentable::HasGeneratorTable,
     {
-        Self::mul_generator(a).add(&p.mul_scalar(b))
+        // Both halves are public here. The generator gets its table; the
+        // other point gets the non-adjacent form.
+        Self::mul_generator(a).add(&p.mul_scalar_vartime(b))
     }
 
     /// `scalar * G`, through the precomputed table where there is one.
@@ -289,7 +343,92 @@ impl<C: Curve> Point<C> {
     {
         C::mul_generator(scalar)
     }
+}
 
+/// Limbs for the widest scalar, plus one for the carry.
+///
+/// P-521's scalar is 66 bytes, so nine limbs hold it and a tenth holds the
+/// carry a negative digit can push out of the top. The Ed25519 version of this
+/// shipped without that tenth limb and lost the carry for scalars near the top
+/// of the range; the scalars arriving here are reduced modulo the group order
+/// and could not trigger it, which is the same argument that was false for the
+/// generator table's recoding. So the room is given rather than argued for.
+const WNAF_LIMBS: usize = 10;
+
+/// Digits for the widest scalar: `8 * 66`, with room to run past the top.
+const WNAF_DIGITS: usize = 8 * 66 + 2;
+
+/// Width-5 non-adjacent form, and how many digits of it are used.
+///
+/// `bytes` is big-endian, as `Field::to_bytes` produces. Each non-zero digit is
+/// odd and in `[-15, 15]`, and no two are adjacent.
+///
+/// Variable time by construction: the loop length and digit pattern depend on
+/// the scalar. See [`Point::mul_scalar_vartime`] for when that is allowed.
+fn wnaf5(bytes: &[u8]) -> ([i8; WNAF_DIGITS], usize) {
+    let mut naf = [0i8; WNAF_DIGITS];
+    let mut k = [0u64; WNAF_LIMBS];
+    for (i, byte) in bytes.iter().rev().enumerate() {
+        k[i / 8] |= (*byte as u64) << ((i % 8) * 8);
+    }
+
+    let mut i = 0;
+    while k.iter().any(|&x| x != 0) {
+        if k[0] & 1 == 1 {
+            let mut d = (k[0] & 0x1f) as i64;
+            if d >= 16 {
+                d -= 32;
+            }
+            naf[i] = d as i8;
+            if d > 0 {
+                wnaf_sub(&mut k, d as u64);
+            } else {
+                wnaf_add(&mut k, d.unsigned_abs());
+            }
+        }
+        wnaf_shr1(&mut k);
+        i += 1;
+    }
+    (naf, i)
+}
+
+/// `k -= v`.
+fn wnaf_sub(k: &mut [u64; WNAF_LIMBS], v: u64) {
+    let (d, mut borrow) = k[0].overflowing_sub(v);
+    k[0] = d;
+    for limb in k.iter_mut().skip(1) {
+        if !borrow {
+            break;
+        }
+        let (d, b) = limb.overflowing_sub(1);
+        *limb = d;
+        borrow = b;
+    }
+}
+
+/// `k += v`.
+fn wnaf_add(k: &mut [u64; WNAF_LIMBS], v: u64) {
+    let (d, mut carry) = k[0].overflowing_add(v);
+    k[0] = d;
+    for limb in k.iter_mut().skip(1) {
+        if !carry {
+            break;
+        }
+        let (d, c) = limb.overflowing_add(1);
+        *limb = d;
+        carry = c;
+    }
+}
+
+/// `k >>= 1`.
+fn wnaf_shr1(k: &mut [u64; WNAF_LIMBS]) {
+    for i in 0..WNAF_LIMBS - 1 {
+        k[i] = (k[i] >> 1) | (k[i + 1] << 63);
+    }
+    k[WNAF_LIMBS - 1] >>= 1;
+}
+
+impl<C: Curve> Point<C> {
     /// Convert to affine coordinates, or `None` for the identity.
     pub fn to_affine(&self) -> Option<AffinePoint<C>> {
         if bool::from(self.is_identity()) {

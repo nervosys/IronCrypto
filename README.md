@@ -523,6 +523,7 @@ parity rather than as whichever run flattered it:
 |---|---|
 | AES-256-GCM | **~1.40x faster** |
 | ECDSA P-256 sign | **~2.0x faster** |
+| ECDSA P-256 verify | **~1.4x faster** |
 | AES-256 blocks (AES-NI) | **~1.20x faster** |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
@@ -530,7 +531,7 @@ parity rather than as whichever run flattered it:
 | X25519 agreement | ~1.1x slower |
 | SHA3-256 | ~1.3x slower |
 | SHA-512 | ~1.75x slower |
-| ECDSA P-256 verify | ~1.3x slower |
+
 | Ed25519 sign, cached key | ~1.95x slower |
 | Ed25519 verify | ~3x slower |
 | AES-256 blocks, portable | ~5800x slower |
