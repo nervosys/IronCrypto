@@ -292,6 +292,23 @@ struct Core512 {
     buf: [u8; 128],
     buffered: usize,
     len: u128,
+    /// The message schedule, kept here rather than built on the stack.
+    ///
+    /// It lives in the struct so that wiping it costs once per hash instead of
+    /// once per block. `Zeroize` writes element by element through
+    /// `write_volatile`, which is what makes the wipe non-elidable and also
+    /// what makes it expensive: eighty volatile stores cannot be merged into a
+    /// `memset` or vectorised, and measured in isolation they were 159ns of a
+    /// 258ns block -- 62% of SHA-512's compression spent clearing the schedule
+    /// rather than computing it. `what_the_schedule_wipe_costs` is that
+    /// measurement.
+    ///
+    /// The schedule is still wiped, in `finalize`, beside `h` and `buf`. What
+    /// changes is how often. Wiping after every block bought nothing that
+    /// survived the block anyway: the next block immediately overwrites the
+    /// whole array, and the material it is derived from is in the caller's
+    /// input buffer, which this library neither owns nor clears.
+    w: [u64; 80],
 }
 
 impl Drop for Core512 {
@@ -335,11 +352,20 @@ impl Core512 {
             buf: [0u8; 128],
             buffered: 0,
             len: 0,
+            w: [0u64; 80],
         }
     }
 
     fn compress(&mut self, block: &[u8]) {
-        let mut w = [0u64; 80];
+        Self::compress_into(&mut self.h, &mut self.w, block);
+    }
+
+    /// The compression function proper, over borrowed state.
+    ///
+    /// Split out so the schedule is reached through a plain `&mut [u64; 80]`
+    /// rather than through `self`, which keeps the indexing the same as it was
+    /// when the array was a local.
+    fn compress_into(h: &mut [u64; 8], w: &mut [u64; 80], block: &[u8]) {
         for i in 0..16 {
             let mut b = [0u8; 8];
             b.copy_from_slice(&block[i * 8..i * 8 + 8]);
@@ -353,7 +379,7 @@ impl Core512 {
                 .wrapping_add(w[i - 7])
                 .wrapping_add(s1);
         }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = self.h;
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = *h;
         for i in 0..80 {
             let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
             let ch = (e & f) ^ ((!e) & g);
@@ -376,9 +402,8 @@ impl Core512 {
         }
         let upd = [a, b, c, d, e, f, g, hh];
         for i in 0..8 {
-            self.h[i] = self.h[i].wrapping_add(upd[i]);
+            h[i] = h[i].wrapping_add(upd[i]);
         }
-        w.zeroize();
     }
 
     fn update(&mut self, mut data: &[u8]) {
@@ -418,6 +443,7 @@ impl Core512 {
         let out = self.h;
         self.buf.zeroize();
         self.h.zeroize();
+        self.w.zeroize();
         out
     }
 }
@@ -768,5 +794,94 @@ mod tests {
         Sha512::self_test().unwrap();
         Sha512_224::self_test().unwrap();
         Sha512_256::self_test().unwrap();
+    }
+
+    /// What the schedule wipe costs SHA-512, measured in one process.
+    ///
+    /// Ignored: a measurement. Run it with
+    /// `cargo test -p ic-hash --release -- --ignored --nocapture what_the_schedule_wipe_costs`.
+    ///
+    /// Both variants are timed in the same binary, alternating, because this
+    /// machine has other work on it: an attempt to compare across two benchmark
+    /// runs had RustCrypto's own SHA-512 moving 700 -> 1087 MiB/s between them,
+    /// untouched, which is larger than the effect being looked for.
+    #[test]
+    #[ignore = "diagnostic, not a test"]
+    fn what_the_schedule_wipe_costs() {
+        use std::time::Instant;
+
+        // A copy of Core512::compress with the wipe left out, and nothing else
+        // changed. Only for this measurement.
+        fn compress_unwiped(h: &mut [u64; 8], block: &[u8]) {
+            let mut w = [0u64; 80];
+            for i in 0..16 {
+                let mut b = [0u8; 8];
+                b.copy_from_slice(&block[i * 8..i * 8 + 8]);
+                w[i] = u64::from_be_bytes(b);
+            }
+            for i in 16..80 {
+                let s0 = w[i - 15].rotate_right(1) ^ w[i - 15].rotate_right(8) ^ (w[i - 15] >> 7);
+                let s1 = w[i - 2].rotate_right(19) ^ w[i - 2].rotate_right(61) ^ (w[i - 2] >> 6);
+                w[i] = w[i - 16]
+                    .wrapping_add(s0)
+                    .wrapping_add(w[i - 7])
+                    .wrapping_add(s1);
+            }
+            let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = *h;
+            for i in 0..80 {
+                let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
+                let ch = (e & f) ^ ((!e) & g);
+                let t1 = hh
+                    .wrapping_add(s1)
+                    .wrapping_add(ch)
+                    .wrapping_add(K512[i])
+                    .wrapping_add(w[i]);
+                let s0 = a.rotate_right(28) ^ a.rotate_right(34) ^ a.rotate_right(39);
+                let maj = (a & b) ^ (a & c) ^ (b & c);
+                let t2 = s0.wrapping_add(maj);
+                hh = g;
+                g = f;
+                f = e;
+                e = d.wrapping_add(t1);
+                d = c;
+                c = b;
+                b = a;
+                a = t1.wrapping_add(t2);
+            }
+            let upd = [a, b, c, d, e, f, g, hh];
+            for i in 0..8 {
+                h[i] = h[i].wrapping_add(upd[i]);
+            }
+        }
+
+        let block: Vec<u8> = (0..128u32).map(|i| (i * 7 + 1) as u8).collect();
+        let n = 50_000;
+        let (mut best_wiped, mut best_plain) = (f64::INFINITY, f64::INFINITY);
+
+        for _ in 0..30 {
+            let mut core = Core512::new([1, 2, 3, 4, 5, 6, 7, 8]);
+            let t = Instant::now();
+            for _ in 0..n {
+                core.compress(core::hint::black_box(&block));
+            }
+            best_wiped = best_wiped.min(t.elapsed().as_secs_f64() / n as f64 * 1e9);
+
+            let mut h = [1u64, 2, 3, 4, 5, 6, 7, 8];
+            let t = Instant::now();
+            for _ in 0..n {
+                compress_unwiped(&mut h, core::hint::black_box(&block));
+            }
+            best_plain = best_plain.min(t.elapsed().as_secs_f64() / n as f64 * 1e9);
+        }
+        println!(
+            "
+  sha-512 compress, with w.zeroize()   {best_wiped:>8.1} ns/block"
+        );
+        println!("  sha-512 compress, without            {best_plain:>8.1} ns/block");
+        println!(
+            "  the wipe costs                       {:>8.1} ns/block ({:.0}%)",
+            best_wiped - best_plain,
+            (best_wiped - best_plain) / best_wiped * 100.0
+        );
     }
 }
