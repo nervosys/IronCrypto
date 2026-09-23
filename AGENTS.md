@@ -92,6 +92,28 @@ that does separate them, and `docs/FIPS.md` records why it has to exist.
 Break the thing and confirm the test fails. A test that passes on the broken
 code told you nothing, and finding that out costs one build.
 
+## Measuring a change
+
+`bench/` compares this library against RustCrypto and dalek. It is excluded
+from the workspace, so their crates never enter the dependency graph.
+
+Compare a change against itself, under the same conditions, minutes apart. Two
+runs taken an hour apart on a machine that is also compiling are not a
+comparison: a SHA-512 change here once scored as 1.24x faster across runs and
+was a regression under a controlled A/B. Prefer `git stash`, measure, restore,
+measure. Trust only effects large enough to clear the noise you can see in the
+spread, and report a figure that lands either side of parity as parity.
+
+Before reaching for intrinsics, find out where the time goes. ECDH is one
+scalar multiplication, so it separates that cost from the rest of a signature;
+splitting an AEAD tells you whether the cipher or the MAC is the limit. Both
+diagnostics changed what was worth doing here.
+
+The changes that paid were ones the compiler cannot make: breaking a serial
+dependency chain, selecting a hardware instruction, changing the algorithm.
+Hand-unrolling and rearranging scalar code did not pay, twice, because LLVM had
+already done it -- see the note above `Core512` in `crates/ic-hash/src/sha2.rs`.
+
 ## Before you finish
 
 ```console

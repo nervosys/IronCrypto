@@ -530,7 +530,7 @@ parity rather than as whichever run flattered it:
 | HMAC-SHA256 | level |
 | X25519 agreement | ~1.1x slower |
 | SHA3-256 | ~1.3x slower |
-| SHA-512 | ~1.75x slower |
+| SHA-512 | ~1.3-1.75x slower |
 
 | Ed25519 sign, cached key | ~1.95x slower |
 | Ed25519 verify | ~3x slower |
@@ -568,6 +568,13 @@ gap. Until that work is done, treat the portable AES path as correct and
 suitable for low volumes rather than as a general-purpose cipher, and prefer
 ChaCha20-Poly1305 where there is no AES hardware — which is what
 `icrypto recommend --no-aes-hardware` already says.
+
+SHA-512 has no hardware instruction on x86 the way SHA-256 does, so it runs the
+portable path. Two source-level optimisations were tried and reverted -- a
+rolling schedule window and an eight-fold round unroll -- both measured by
+controlled A/B, neither an improvement. `crates/ic-hash/src/sha2.rs` records
+why, so the next reader does not repeat them. The gap that remains wants a
+vectorised message schedule.
 
 ### Where the acceleration comes from
 

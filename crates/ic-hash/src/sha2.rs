@@ -304,6 +304,30 @@ impl Drop for Core512 {
     }
 }
 
+/// SHA-512's compression, and what has already been tried on it.
+///
+/// It runs about 1.3 to 1.75 times behind RustCrypto's, which has an AVX2
+/// backend for the message schedule. There is no SHA-512 instruction on x86 the
+/// way there is for SHA-256, so the portable path below is what runs.
+///
+/// Two source-level optimisations were measured and reverted, and are recorded
+/// so they are not tried a third time:
+///
+/// - **A rolling sixteen-word schedule window** instead of the eighty-word
+///   array. The array is 640 bytes cleared per 128-byte block, five bytes wiped
+///   per byte hashed, which looks like the cost. A controlled A/B showed it
+///   *slower*: 640 bytes sits in L1, and the modulo indexing defeats whatever
+///   unrolling the flat array was getting.
+/// - **Unrolling the round loop by eight**, naming the working variables in
+///   rotation so the eight moves per round disappear. No measurable change in
+///   either direction; LLVM already renames and unrolls this shape.
+///
+/// Both failed the same way: the waste was visible in the source and absent
+/// from the object code. What did pay elsewhere in this workspace was work the
+/// compiler cannot do -- breaking a serial dependency chain, selecting a
+/// hardware instruction, changing the algorithm. The remaining gap here is the
+/// vectorised schedule, and even that addresses only the third or so of the
+/// work the schedule represents, since the rounds are inherently serial.
 impl Core512 {
     const fn new(iv: [u64; 8]) -> Self {
         Self {
