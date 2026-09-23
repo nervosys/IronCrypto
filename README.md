@@ -522,6 +522,7 @@ parity rather than as whichever run flattered it:
 | | |
 |---|---|
 | AES-256-GCM | **~1.40x faster** |
+| ECDSA P-256 sign | **~2.0x faster** |
 | AES-256 blocks (AES-NI) | **~1.20x faster** |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
@@ -529,7 +530,7 @@ parity rather than as whichever run flattered it:
 | X25519 agreement | ~1.1x slower |
 | SHA3-256 | ~1.3x slower |
 | SHA-512 | ~1.75x slower |
-| ECDSA P-256 sign / verify | ~1.9x / ~2.1x slower |
+| ECDSA P-256 verify | ~1.3x slower |
 | Ed25519 sign / verify | ~3.4x / ~4.3x slower |
 | AES-256 blocks, portable | ~5800x slower |
 
@@ -544,9 +545,11 @@ AES fallback.
 
 Ed25519 uses a precomputed basepoint table; the remaining gap is that second
 multiplication and, for verification, the one against the public key, which no
-basepoint table can help. ECDSA has no such table yet, which is most of its
-gap: its scalar multiplication is the same bit-at-a-time ladder Ed25519 used
-before.
+basepoint table can help. ECDSA now has one too, which is why signing moved from
+1.9x behind to 2.0x ahead: a diagnostic showed one scalar multiplication cost
+146.8us against 159.5us for a whole signature, so the ladder was essentially
+all of it. Verification keeps a gap because its second multiplication is
+against the public key, which no generator table helps.
 
 **That fallback deserves saying plainly.** Avoiding lookup tables does not cost
 three orders of magnitude; *this* way of avoiding them does. RustCrypto's
