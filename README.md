@@ -211,7 +211,7 @@ let config = rustls::ClientConfig::builder_with_provider(ic_rustls::arc_provider
 Or `ic_rustls::provider().install_default()` once, for every rustls
 configuration in the process.
 
-| | |
+| rustls slot | what IronCrypto supplies |
 |---|---|
 | AEAD | AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 — TLS 1.3 and TLS 1.2 |
 | Hash | SHA-256, SHA-384 |
@@ -525,73 +525,64 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 ### How that compares
 
-Measured against RustCrypto and dalek on the same machine and buffers, by
-`bench/`. Ratios are IronCrypto against the other implementation:
+Measured by `bench/` against RustCrypto and dalek, on the same machine and the
+same buffers, best of three runs. A figure landing either side of 1.0 across
+runs is reported as parity rather than as whichever run flattered it.
 
-Three runs, so that a figure landing either side of parity is reported as
-parity rather than as whichever run flattered it:
-
-| | |
+| operation | against the fastest Rust implementation |
 |---|---|
-| AES-256-GCM | **~1.40x faster** |
-| ECDSA P-256 sign | **~2.0x faster** |
-| ECDSA P-256 verify | **~1.4x faster** |
-| AES-256 blocks (AES-NI) | **~1.20x faster** |
+| ECDSA P-256, sign | **~2.0x faster** |
+| ECDSA P-256, verify | **~1.4x faster** |
+| AES-256-GCM | **~1.4x faster** |
+| AES-256 blocks, AES-NI | **~1.2x faster** |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
 | X25519 agreement | level |
-
 | SHA3-256 | ~1.3x slower |
-| SHA-512 | ~1.3-1.75x slower |
-
-| Ed25519 sign, cached key | ~1.86x slower |
-| Ed25519 verify | ~2.6x slower |
+| SHA-512 | ~1.3–1.75x slower |
+| Ed25519, sign | ~1.9x slower |
+| Ed25519, verify | ~2.6x slower |
 | AES-256 blocks, portable | ~5800x slower |
 
-The bulk symmetric work — the part a TLS connection or a file encryption
-actually spends its time in — is at or ahead of the fastest Rust
-implementations. What remains behind is public-key operations, where the gap is
-algorithmic rather than in the field arithmetic (X25519 is within 9%, so the
-arithmetic underneath is competitive; Ed25519 signing does two basepoint
-multiplication per signature more than dalek did, because the seed-only
-interface must re-derive the public key every call), and the software AES
-fallback.
+The bulk symmetric work — what a TLS connection or a file encryption actually
+spends its time in — is at or ahead of the fastest Rust implementations. What
+remains behind is some of the public-key work and the software AES fallback.
 
-Ed25519 uses a precomputed basepoint table, and `Ed25519Key` derives the public
-key once so signing performs one basepoint multiplication rather than two --
-44.7us from a seed against 23.5us from a held key, which is what dalek's
-`SigningKey` has always done and what makes the comparison like-for-like.
-Verification's remaining gap is its multiplication against the public key,
-which no basepoint table can help; it uses a width-5 non-adjacent form instead,
-which is variable time and allowed to be -- the signature, the key and the
-message are all public, so there is no secret whose timing could leak. ECDSA now has one too, which is why signing moved from
-1.9x behind to 2.0x ahead: a diagnostic showed one scalar multiplication cost
-146.8us against 159.5us for a whole signature, so the ladder was essentially
-all of it. Verification keeps a gap because its second multiplication is
-against the public key, which no generator table helps.
+**The public-key gap is algorithmic, not arithmetic.** X25519 is level, and it
+runs on the same field code as Ed25519, so the arithmetic underneath is
+competitive. Both curves use a precomputed table for their fixed generator, and
+`Ed25519Key` derives the public key once at construction so that signing
+performs one basepoint multiplication instead of two — 44.7µs from a bare seed
+against 23.5µs from a held key, which is what dalek's `SigningKey` has always
+done and what makes the comparison like-for-like. What no table can help is
+verification's multiplication against the *public key*, which is different every
+time; that uses a width-5 non-adjacent form instead, variable time and allowed
+to be, since the signature, the key and the message are all public and there is
+no secret whose timing could leak.
 
-**That fallback deserves saying plainly.** Avoiding lookup tables does not cost
-three orders of magnitude; *this* way of avoiding them does. RustCrypto's
-software AES is fixsliced — equally table-free, equally constant-time — and
-runs at ~68 MiB/s against IronCrypto's ~1.5. The S-box here is computed
+**The AES fallback deserves saying plainly.** Avoiding lookup tables does not
+cost three orders of magnitude; *this* way of avoiding them does. RustCrypto's
+software AES is fixsliced — equally table-free, equally constant-time — and runs
+at ~68 MiB/s against IronCrypto's ~1.5. The S-box here is computed
 algebraically, thirteen field multiplications per byte, which is the slowest
 correct way to get the property. Bitslicing would keep it and close most of the
 gap. Until that work is done, treat the portable AES path as correct and
 suitable for low volumes rather than as a general-purpose cipher, and prefer
-ChaCha20-Poly1305 where there is no AES hardware — which is what
-`ic recommend --no-aes-hardware` already says.
+ChaCha20-Poly1305 where there is no AES hardware. That is already the advice
+you get: `ic recommend encrypt-message` reads the CPU, and on a machine without
+AES acceleration it selects ChaCha20-Poly1305 over AES-GCM.
 
-SHA-512 has no hardware instruction on x86 the way SHA-256 does, so it runs the
-portable path. Two source-level optimisations were tried and reverted -- a
-rolling schedule window and an eight-fold round unroll -- both measured by
-controlled A/B, neither an improvement. `crates/ic-hash/src/sha2.rs` records
-why, so the next reader does not repeat them. The gap that remains wants a
-vectorised message schedule.
+**SHA-512 has no hardware instruction** on x86 the way SHA-256 does, so it runs
+the portable path. Two source-level optimisations were tried and reverted — a
+rolling schedule window and an eight-fold round unroll — both measured by
+controlled A/B, neither an improvement, because the compiler had already done
+the work. `crates/ic-hash/src/sha2.rs` records why, so the next reader does not
+repeat them. The gap that remains wants a vectorised message schedule.
 
 ### Where the acceleration comes from
 
-| | |
+| primitive | how it is accelerated |
 |---|---|
 | AES | AES-NI, and ARMv8 crypto extensions behind a feature |
 | GHASH | `PCLMULQDQ`, four blocks per group so the carry chain does not serialise |
@@ -616,8 +607,8 @@ RUSTFLAGS="--cfg aes_force_soft" cargo run --release -- soft
 
 This is why `recommend` asks the CPU rather than assuming: without AES
 instructions it steers you to ChaCha20-Poly1305, and with them it picks
-AES-256-GCM, which is then the faster of the two. `ic_ontology::runtime::backend()`
-reports which backend is live.
+AES-256-GCM, which is then the faster of the two.
+`ic_ontology::runtime::backend()` reports which backend is live.
 
 The accelerated paths are not independently trusted — they are differentially
 tested against the portable ones, block for block, and the portable ones are
@@ -635,14 +626,15 @@ Against aws-lc-rs, BoringSSL, and OpenSSL, IronCrypto leads on portability
 agent-facing ontology, which none of them has. With the NIST curves and RSA
 signatures in place it covers the algorithms most deployments actually reach
 for, post-quantum included. It still trails on RSA encryption, on X.509
-certificate handling, and — decisively — on validation status. Pick accordingly, and note that the ontology will tell
-you which case you're in without your having to read this paragraph.
+certificate handling, and — decisively — on validation status. Pick
+accordingly, and note that the ontology will tell you which case you are in
+without your having to read this paragraph.
 
 ---
 
 ## Docs
 
-| | |
+| document | what is in it |
 |---|---|
 | [ONTOLOGY.md](docs/ONTOLOGY.md) | the vocabulary, the query model, the export formats |
 | [FIPS.md](docs/FIPS.md) | what is implemented, what validation would require |
