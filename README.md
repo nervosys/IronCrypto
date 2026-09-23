@@ -111,23 +111,25 @@ to one that still does not.
 
 ## Install
 
-**IronCrypto is not published.** It is not on crates.io, and this repository is
-private, so `iron-crypto = "0.1"` does not resolve — that line used to be here
-and it never worked.
+```toml
+[dependencies]
+iron-crypto = "0.1"
+```
 
-Publishing it is an export, and requires notifying BIS and the NSA's ENC
-Encryption Request Coordinator first, under 15 CFR 742.15(b). Every crate
-carries `publish = false` so that `cargo publish` fails rather than doing it by
-accident. See [docs/RELEASING.md](docs/RELEASING.md).
-
-Until then, with access to the repository:
+**A release is in progress as this is written, and not finished.** The crates
+go out one at a time: crates.io rate-limits *new* crate names to roughly one
+every ten minutes, and there are eighteen of them. The primitives are up;
+`iron-crypto`, the facade that re-exports them, is further down the dependency
+order and lands last along with `ic-cli` and `ic-rustls`. Until it does, the
+line above will not resolve — depend on the primitive crates directly, or on a
+checkout:
 
 ```toml
 [dependencies]
-iron-crypto = { git = "ssh://git@github.com/nervosys/IronCrypto.git" }
+ic-cipher = "0.1"   # AES, ChaCha20, the AEADs
+ic-hash = "0.1"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.1"       # the NIST curves, X25519, Ed25519
 ```
-
-Or against a local checkout:
 
 ```toml
 [dependencies]
@@ -137,6 +139,16 @@ iron-crypto = { path = "../IronCrypto/crates/iron-crypto" }
 ```console
 $ cargo install --path crates/ic-cli   # the `ic` CLI and MCP server
 ```
+
+Publishing this is an export: encryption source code under ECCN 5D002 requires
+notifying BIS and the NSA's ENC Encryption Request Coordinator first, under
+15 CFR 742.15(b). That notification was sent before any of this went out —
+which is the order that matters, because nothing undoes a publish.
+[docs/RELEASING.md](docs/RELEASING.md) has the procedure and
+[docs/EXPORT.md](docs/EXPORT.md) the determination behind it.
+
+The repository is still private, so the `repository` link in the published
+manifests does not resolve for anyone who has not been given access.
 
 ## Use
 

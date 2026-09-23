@@ -65,10 +65,10 @@ All of these, not just the first:
 - putting a release tarball at a public URL
 - a public fork, or granting access broadly enough to amount to one
 
-## What stops it happening by accident
+## What used to stop it happening by accident
 
-`publish = false` is set in `[workspace.package]` and inherited by all seventeen
-crates, so `cargo publish` fails:
+`publish = false` was set in `[workspace.package]` and inherited by all
+eighteen crates, so `cargo publish` failed:
 
 ```console
 $ cargo publish -p iron-crypto --dry-run
@@ -76,10 +76,20 @@ error: `iron-crypto` cannot be published.
 `package.publish` must be set to `true` or a non-empty list in Cargo.toml to publish.
 ```
 
-`every_crate_publishes_together`, in `crates/ic-cli/src/sbom.rs`, asserts
-that every member inherits it and that none overrides it — because a line in a
-manifest with nothing watching it is a line someone removes while doing
-something else.
+That flag is now `true`: the notification was sent, and the release followed.
+The guard did its job — it held until the condition it was waiting on was met,
+which is the whole of what a flag like that is for.
+
+`every_crate_publishes_together`, in `crates/ic-cli/src/sbom.rs`, still asserts
+that every member inherits the workspace setting and that none overrides it. The
+value is no longer the property worth holding; the agreement is. A crate left
+behind at `false` breaks a release halfway through, and a crate that goes `true`
+on its own exports by itself — because a line in a manifest with nothing
+watching it is a line someone changes while doing something else.
+
+For the next release the ordering below still applies in full. A new version of
+an existing crate is as much an export as the first one was, and `publish = true`
+means nothing now refuses on your behalf.
 
 Nothing guards repository visibility, which is a GitHub setting rather than
 anything in the tree. It is the easier mistake to make: one toggle, no
