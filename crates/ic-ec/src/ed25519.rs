@@ -1185,6 +1185,12 @@ field and point primitives, nanoseconds:"
         ns("Fe::add", &mut || {
             core::hint::black_box(core::hint::black_box(&fx).add(core::hint::black_box(&fy)));
         });
+        ns("Fe::sub", &mut || {
+            core::hint::black_box(core::hint::black_box(&fx).sub(core::hint::black_box(&fy)));
+        });
+        ns("Fe::neg", &mut || {
+            core::hint::black_box(core::hint::black_box(&fx).neg());
+        });
         ns("Point::double", &mut || {
             core::hint::black_box(core::hint::black_box(&a_point).double());
         });

@@ -332,6 +332,16 @@ impl Drop for Core512 {
 /// whose volatile writes cannot be merged into a `memset`. The schedule now
 /// lives in the struct and is wiped once per hash. See the note on `w`.
 ///
+/// The remaining gap is not scalar slack, and it is worth saying why before
+/// anyone looks for some. At 715 MiB/s this compresses a block in about 180ns,
+/// which on this machine is roughly 2900 instructions in 600 cycles: close to
+/// five per cycle, near what a four-wide core can retire. RustCrypto's 1070
+/// MiB/s would need better than seven per cycle for the same instruction count,
+/// which is not possible -- so they are executing fewer instructions, not
+/// scheduling the same ones better. `sha2 0.10.9` has an AVX2 SHA-512 backend
+/// in `sha512/x86.rs`, selected by runtime detection; that is the difference.
+/// Matching it means writing one, not tuning this.
+///
 /// Two source-level optimisations were measured and reverted, and are recorded
 /// so they are not tried a third time:
 ///

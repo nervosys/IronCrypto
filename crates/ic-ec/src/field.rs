@@ -85,6 +85,34 @@ impl Fe {
     }
 
     /// Field multiplication.
+    // What has already been tried on the field multiply, so it is not tried
+    // again. Curve25519 is doublings almost entirely and a doubling is four
+    // multiplications and four squarings, so this function is most of Ed25519
+    // and X25519.
+    //
+    // - **`#[inline(always)]` on `mul`, `square`, `add`, `sub` and
+    //   `carry_reduce`.** The per-crate assembly shows `Point::double` calling
+    //   them rather than inlining, with a 480-byte frame, which looks like the
+    //   problem. Measured: Ed25519 verify went from 1.59x behind dalek to
+    //   1.96x, reproducibly. The bodies are large enough that forcing them
+    //   inline costs more in spills than the calls cost. Under the benchmark's
+    //   profile LLVM already inlines them; the out-of-line copies are for other
+    //   callers.
+    // - **Removing `weak_reduce` from `sub`.** Also looks like waste: a
+    //   doubling does five of them, each a serial carry chain. Measured with
+    //   the diagnostic in `ed25519.rs`: `sub` is 2.14ns against `add` at
+    //   0.92ns, so all five are about 6ns of a 96ns doubling. Not where the
+    //   time is.
+    //
+    // Where the time is: 160 `mul` instructions in a doubling against 775
+    // `mov`. Five `u128` accumulators and two five-limb operands do not fit in
+    // sixteen registers, so the schoolbook spills, and that is a property of
+    // the shape rather than of the instruction selection. `-C
+    // target-cpu=native` turns the `mul`s into `mulx` and drops the moves to
+    // 475 -- 18% fewer instructions -- and buys 2% end to end. dalek gains 16%
+    // from the same flag, because it has an AVX2 field backend that engages
+    // there and this does not. That backend, not scheduling, is the remaining
+    // gap on Ed25519.
     #[inline]
     pub fn mul(&self, other: &Fe) -> Fe {
         let a = &self.0;
