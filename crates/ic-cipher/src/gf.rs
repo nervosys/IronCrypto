@@ -11,8 +11,12 @@
 //! with `x^-1 = x^254` evaluated by square-and-multiply over the Rijndael
 //! field. Every operation is a branch-free bitwise sequence, so no secret ever
 //! reaches an address bus. That closes the cache-timing channel that table-based
-//! AES (the default in many portable C implementations) leaves open, at the cost
-//! of throughput — see the crate docs for the backend roadmap.
+//! AES (the default in many portable C implementations) leaves open.
+//!
+//! What is here is the byte-at-a-time form. It still runs AES decryption and
+//! the key schedule, but encryption goes through [`crate::aes::bitslice`],
+//! which does the same algebra for sixty-four bytes at once and is some forty
+//! times faster for it.
 
 /// The Rijndael reduction polynomial, x^8 + x^4 + x^3 + x + 1, low byte.
 const MODULUS: u8 = 0x1b;

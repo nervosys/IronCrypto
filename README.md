@@ -533,74 +533,67 @@ of the differences below.
 
 | operation | against the fastest Rust implementation |
 |---|---|
-| ECDSA P-256, sign | **~2.0x faster** |
+| ECDSA P-256, sign | **~1.9x faster** |
 | ECDSA P-256, verify | **~1.5x faster** |
 | AES-256-GCM | **~1.4x faster** |
+| AES-256 blocks, AES-NI | **~1.3x faster** |
 | X25519 agreement | **~1.3x faster** |
-| AES-256 blocks, AES-NI | **~1.2x faster** |
 | SHA3-256 | **~1.05x faster** |
+| AES-256 blocks, portable | level |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
-| SHA-512 | ~1.5x slower |
+| SHA-512 | ~1.55x slower |
 | Ed25519, sign | ~1.6x slower |
 | Ed25519, verify | ~1.6x slower |
-| AES-256 blocks, portable | ~20-27x slower |
 
-The bulk symmetric work -- what a TLS connection or a file encryption actually
-spends its time in -- is at or ahead of the fastest Rust implementations. What
-remains behind is Ed25519, SHA-512, and the software AES fallback.
+The portable AES row is against RustCrypto's *software* AES, which is fixsliced
+and is the like-for-like comparison. Measuring it against AES-NI instead gives
+~133x, which measures the instruction set rather than the implementation.
 
-**Finding where the time went mattered more than optimising.** Three of the
-figures above moved because a measurement contradicted the obvious explanation.
+**Finding where the time went mattered more than optimising.** Every figure that
+moved did so because a measurement contradicted the obvious explanation.
 SHA3-256 was assumed to need a faster permutation; timed on its own the
-permutation was already ahead, and the cost was in `absorb`, which walked the
-input a byte at a time and spent as long feeding the sponge as mixing it.
-SHA-512 was assumed to need a vectorised schedule; 62% of its compression turned
-out to be the per-block `zeroize` of that schedule, whose volatile writes cannot
-be merged into a `memset`. Verification was assumed to need faster field
-arithmetic; what it needed was to stop running two chains of doublings where one
-would do. In each case the guess would have been work spent on the smaller half.
+permutation was already ahead, and the cost was in `absorb`, walking the input a
+byte at a time. SHA-512 was assumed to need a vectorised schedule; 62% of its
+compression turned out to be the per-block `zeroize` of that schedule, whose
+volatile writes cannot be merged into a `memset`. Verification was assumed to
+need faster field arithmetic; what it needed was to stop running two chains of
+doublings where one would do. In each case the guess would have been effort
+spent on the smaller half.
 
-**The Ed25519 gap is now narrow enough to be worth naming precisely.** Signing
-and verification are both about 1.6x behind dalek. Both curves use a precomputed
-table for their fixed generator, and `Ed25519Key` derives the public key once at
-construction so signing performs one basepoint multiplication instead of two --
-worth about 1.7x over signing from a bare seed, which is what dalek's
-`SigningKey` does and what makes the comparison like-for-like. Verification adds
-the two scalars in one interleaved pass sharing a single chain of doublings, and
-indexes its tables directly rather than scanning them with conditional moves,
-since a signature, a public key and a message are all public. What is left is
-the constant-time basepoint table that signing still needs, which stores four
-field elements per entry where three would do.
+**The portable AES is bitsliced.** It holds the state transposed -- eight `u64`
+planes, plane `i` bit `j` being bit `i` of byte `j` -- so a field multiplication
+is sixty-four `AND`s and a reduction on whole words, each carrying four blocks.
+That is what took it from 1.6 MiB/s to ~63, and from 27x behind RustCrypto's
+fixsliced AES to level with it. CTR, GCM and GCM-SIV take the same path, since
+all three generate their keystream through the batch interface.
 
-**The AES fallback deserves saying plainly.** The honest comparison is against
-RustCrypto's software AES, which is fixsliced -- equally table-free, equally
-constant-time -- and that is the ~20-27x above. Measuring the portable path
-against AES-NI instead gives a number in the thousands, which measures the
-instruction set rather than the implementation and is not a figure anyone should
-quote, including this file, which used to.
+Encryption only: the inverse S-box and inverse MixColumns are a separate piece
+of work, and the modes that move volume only run forwards. Decryption stays on
+the byte-at-a-time path, which is correct and slow.
 
-Avoiding lookup tables does not cost twenty times; *this* way of avoiding them
-does. The S-box is computed algebraically, and the inversion it needs is seven
-squarings and six multiplications. Squaring is linear over GF(2), so it is now a
-few shifts and masks rather than the general bit-serial multiply, which was
-worth about 1.6x on its own. The rest of the gap is that fixslicing does many
-blocks at once in bit-parallel form where this computes one S-box at a time;
-closing it means bitslicing, which is a larger change than any of the above.
-Until then, treat the portable AES path as correct and suitable for low volumes
-rather than as a general-purpose cipher, and prefer ChaCha20-Poly1305 where
-there is no AES hardware. That is already the advice you get: `ic recommend
-encrypt-message` reads the CPU, and on a machine without AES acceleration it
-selects ChaCha20-Poly1305 over AES-GCM.
+Nothing in it is a transcribed circuit. The squaring matrix was produced by
+squaring each basis element with the byte-at-a-time multiply; the reduction
+follows `x^8 = x^4 + x^3 + x + 1`; ShiftRows and MixColumns were derived from
+the byte-at-a-time versions. The multiplication is checked against that version
+over all 65536 input pairs -- every pair it can be given, not a sample -- and
+the assembled cipher against it block for block.
 
-**SHA-512 has no hardware instruction** on x86 the way SHA-256 does, so it runs
-the portable path. Beyond the schedule wipe, two source-level optimisations were
-tried and reverted -- a rolling schedule window and an eight-fold round unroll --
-both measured by controlled A/B, neither an improvement, because the compiler had
-already done the work. `crates/ic-hash/src/sha2.rs` records why, so the next
-reader does not repeat them. The gap that remains wants a vectorised message
-schedule.
+**What is left is Ed25519 and SHA-512.** Signing and verification are both about
+1.6x behind dalek, down from 1.9x and 2.6x. Verification now adds its two
+scalars in one interleaved pass sharing a single chain of doublings, and indexes
+its tables directly rather than scanning them with conditional moves, since a
+signature, a public key and a message are all public. What remains is the
+constant-time basepoint table that signing still needs, which stores four field
+elements per entry where three would do.
+
+SHA-512 has no hardware instruction on x86 the way SHA-256 does. Beyond the
+schedule wipe, two source-level optimisations were tried and reverted -- a
+rolling schedule window and an eight-fold round unroll -- both measured by
+controlled A/B, neither an improvement, because the compiler had already done
+the work. `crates/ic-hash/src/sha2.rs` records why, so the next reader does not
+repeat them. The gap that remains wants a vectorised message schedule.
 
 ### Where the acceleration comes from
 

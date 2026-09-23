@@ -19,15 +19,20 @@
 //!
 //! ## Backend status
 //!
-//! This is the **portable constant-time backend**. AES computes its S-box
-//! algebraically and GHASH multiplies bit by bit, so neither touches a
-//! key-dependent memory address — the cache-timing channel that table-driven
-//! AES leaves open is closed by construction. The cost is throughput: expect
-//! single-digit MB/s rather than the GB/s an AES-NI or bitsliced backend
-//! delivers. Hardware backends are a planned addition behind the same traits,
-//! and the ontology reports which backend is active via
-//! `ic_ontology::runtime::backend()`, so an agent can decide whether a workload
-//! belongs here.
+//! AES computes its S-box algebraically and GHASH multiplies without tables, so
+//! neither touches a key-dependent memory address — the cache-timing channel
+//! that table-driven AES leaves open is closed by construction.
+//!
+//! Three backends sit behind the same traits, chosen by the CPU and never by
+//! key material: AES-NI with PCLMULQDQ on x86-64, the ARMv8 crypto extensions
+//! behind a feature, and a portable one everywhere else. The portable AES path
+//! is bitsliced for encryption — four blocks at a time in transposed form, at
+//! roughly the rate of RustCrypto's fixsliced implementation. Decryption is
+//! not bitsliced and runs a byte at a time, which is correct and slow; the
+//! modes that move volume (CTR, GCM, GCM-SIV) only encrypt.
+//!
+//! `ic_ontology::runtime::backend()` reports which one is active, so an agent
+//! can decide whether a workload belongs here.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
 // Every unsafe operation inside an unsafe fn must be marked explicitly, so the
