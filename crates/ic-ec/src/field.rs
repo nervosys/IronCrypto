@@ -69,19 +69,35 @@ impl Fe {
         Fe::ZERO.sub(self)
     }
 
-    /// One pass of carry propagation, leaving every limb below 2^51.
+    /// One pass of carry propagation.
+    ///
+    /// Leaves every limb just above 2^51 rather than strictly below it -- each
+    /// keeps its own carry-in, and limb 0 keeps nineteen times the one that
+    /// came off the top. That is well inside the 2^52 a multiplication
+    /// accepts, and not paying a second pass to tidy it is the point.
     #[inline]
     fn weak_reduce(self) -> Fe {
-        let mut r = self.0;
-        let mut carry = r[0] >> 51;
-        r[0] &= MASK;
-        for i in 1..5 {
-            r[i] += carry;
-            carry = r[i] >> 51;
-            r[i] &= MASK;
-        }
-        r[0] += carry.wrapping_mul(19);
-        Fe(r)
+        // The five carries taken at once, for the same reason `carry_reduce`
+        // takes its at once: walking the limbs in order puts all five on one
+        // dependency chain, and nothing about the reduction requires that.
+        //
+        // This one runs on every `sub`, and `sub` is three of the operations
+        // in a point doubling, so it is on the hot path of every scalar
+        // multiplication on this curve.
+        //
+        // The bound: `sub` forms `self + 2p - other` with limbs below 2^52, so
+        // each input limb is below 2^53 and each carry below 4. Nineteen times
+        // the top carry is under 80, which is why the scaled carry cannot
+        // overflow here even without a second pass.
+        let r = self.0;
+        let c = [r[0] >> 51, r[1] >> 51, r[2] >> 51, r[3] >> 51, r[4] >> 51];
+        Fe([
+            (r[0] & MASK) + c[4].wrapping_mul(19),
+            (r[1] & MASK) + c[0],
+            (r[2] & MASK) + c[1],
+            (r[3] & MASK) + c[2],
+            (r[4] & MASK) + c[3],
+        ])
     }
 
     /// Field multiplication.

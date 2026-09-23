@@ -164,6 +164,54 @@ impl Completed {
 }
 
 impl Projective {
+    /// Recover extended coordinates from projective ones.
+    ///
+    /// `(X : Y : Z)` stands for `(X/Z, Y/Z)`, and extended coordinates want
+    /// `T` with `X*Y = T*Z`, so `T = X*Y/Z`. Only needed once, at the end.
+    fn to_extended_from_projective(self) -> Point {
+        let z_inv = self.z.invert();
+        let x = self.x.mul(&z_inv);
+        let y = self.y.mul(&z_inv);
+        Point {
+            x,
+            y,
+            z: Fe::ONE,
+            t: x.mul(&y),
+        }
+    }
+
+    /// Double and stay projective, without writing the completed form out.
+    ///
+    /// The same arithmetic as `double()` followed by
+    /// [`Completed::to_projective`], with the intermediate kept in locals. A
+    /// `Completed` is four field elements, 160 bytes, and in a chain of
+    /// doublings it exists only to be consumed by the very next statement;
+    /// spilling and reloading it is pure traffic. This is the path taken at
+    /// every position where the recoding has nothing to add, which is most of
+    /// them.
+    fn double_projective(self) -> Projective {
+        let xx = self.x.square();
+        let yy = self.y.square();
+        let zz2 = {
+            let t = self.z.square();
+            t.add(&t)
+        };
+        let xy_sq = self.x.add(&self.y).square();
+        let yy_plus_xx = yy.add(&xx);
+        let yy_minus_xx = yy.sub(&xx);
+
+        let cx = xy_sq.sub(&yy_plus_xx);
+        let cy = yy_plus_xx;
+        let cz = yy_minus_xx;
+        let ct = zz2.sub(&yy_minus_xx);
+
+        Projective {
+            x: cx.mul(&ct),
+            y: cy.mul(&cz),
+            z: cz.mul(&ct),
+        }
+    }
+
     /// `dbl-2008-hwcd` for `a = -1`, stopping at the completed form.
     ///
     /// Four squarings and no multiplications at all: every multiplication in a
@@ -571,6 +619,16 @@ fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
     // come out of the completed form instead of four.
     let mut acc = Point::IDENTITY.to_projective();
     loop {
+        // Nothing to add here, which is the common case: double straight back
+        // to projective without materialising the completed form.
+        if naf_a[i] == 0 && naf_b[i] == 0 {
+            acc = acc.double_projective();
+            if i == 0 {
+                return acc.to_extended_from_projective();
+            }
+            i -= 1;
+            continue;
+        }
         let mut t = acc.double();
         if naf_a[i] != 0 {
             let e = t.to_extended();
@@ -1550,6 +1608,23 @@ field and point primitives, nanoseconds:"
         });
         ns("Fe::neg", &mut || {
             core::hint::black_box(core::hint::black_box(&fx).neg());
+        });
+        let proj = a_point.to_projective();
+        let comp = proj.double();
+        let an = a_point.to_affine_niels();
+        ns("Projective::double  (4S)", &mut || {
+            core::hint::black_box(core::hint::black_box(&proj).double());
+        });
+        ns("Completed::to_projective (3M)", &mut || {
+            core::hint::black_box(core::hint::black_box(&comp).to_projective());
+        });
+        ns("Completed::to_extended (4M)", &mut || {
+            core::hint::black_box(core::hint::black_box(&comp).to_extended());
+        });
+        ns("Point::add_affine_niels (3M)", &mut || {
+            core::hint::black_box(
+                core::hint::black_box(&a_point).add_affine_niels(core::hint::black_box(&an)),
+            );
         });
         ns("Point::double", &mut || {
             core::hint::black_box(core::hint::black_box(&a_point).double());
