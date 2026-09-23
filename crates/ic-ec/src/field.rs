@@ -89,28 +89,26 @@ impl Fe {
     pub fn mul(&self, other: &Fe) -> Fe {
         let a = &self.0;
         let b = &other.0;
-        // 19 * b_i terms let the reduction fold back into the low limbs.
-        let b1_19 = (b[1] as u128) * 19;
-        let b2_19 = (b[2] as u128) * 19;
-        let b3_19 = (b[3] as u128) * 19;
-        let b4_19 = (b[4] as u128) * 19;
 
-        let a0 = a[0] as u128;
-        let a1 = a[1] as u128;
-        let a2 = a[2] as u128;
-        let a3 = a[3] as u128;
-        let a4 = a[4] as u128;
-        let b0 = b[0] as u128;
-        let b1 = b[1] as u128;
-        let b2 = b[2] as u128;
-        let b3 = b[3] as u128;
-        let b4 = b[4] as u128;
+        // The 19s are computed in 64 bits, and every product below is
+        // `u64 * u64 -> u128`.
+        //
+        // They used to be `(b[i] as u128) * 19`, which makes the scaled value a
+        // 128-bit quantity with no bound the compiler can see under 2^64 -- so
+        // each product became a full 128x128 multiply, three instructions and
+        // some adds where one `mul` would do. A limb is below 2^52 and 19 times
+        // it is below 2^57, so the scaling belongs in 64 bits and the compiler
+        // can then see that both operands of every product fit.
+        let b1_19 = b[1] * 19;
+        let b2_19 = b[2] * 19;
+        let b3_19 = b[3] * 19;
+        let b4_19 = b[4] * 19;
 
-        let r0 = a0 * b0 + a1 * b4_19 + a2 * b3_19 + a3 * b2_19 + a4 * b1_19;
-        let r1 = a0 * b1 + a1 * b0 + a2 * b4_19 + a3 * b3_19 + a4 * b2_19;
-        let r2 = a0 * b2 + a1 * b1 + a2 * b0 + a3 * b4_19 + a4 * b3_19;
-        let r3 = a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0 + a4 * b4_19;
-        let r4 = a0 * b4 + a1 * b3 + a2 * b2 + a3 * b1 + a4 * b0;
+        let r0 = m(a[0], b[0]) + m(a[1], b4_19) + m(a[2], b3_19) + m(a[3], b2_19) + m(a[4], b1_19);
+        let r1 = m(a[0], b[1]) + m(a[1], b[0]) + m(a[2], b4_19) + m(a[3], b3_19) + m(a[4], b2_19);
+        let r2 = m(a[0], b[2]) + m(a[1], b[1]) + m(a[2], b[0]) + m(a[3], b4_19) + m(a[4], b3_19);
+        let r3 = m(a[0], b[3]) + m(a[1], b[2]) + m(a[2], b[1]) + m(a[3], b[0]) + m(a[4], b4_19);
+        let r4 = m(a[0], b[4]) + m(a[1], b[3]) + m(a[2], b[2]) + m(a[3], b[1]) + m(a[4], b[0]);
 
         carry_reduce([r0, r1, r2, r3, r4])
     }
@@ -131,27 +129,23 @@ impl Fe {
         // This is on the hot path everywhere: four squarings per Edwards
         // doubling, four per Montgomery ladder step, and a few hundred in a
         // field inversion.
+        // Scalings in 64 bits, products as `u64 * u64 -> u128`; see `mul`.
+        // A limb is below 2^52, so 38 times it is below 2^58.
         let a = &self.0;
-        let a0 = a[0] as u128;
-        let a1 = a[1] as u128;
-        let a2 = a[2] as u128;
-        let a3 = a[3] as u128;
-        let a4 = a[4] as u128;
-
-        let a0_2 = a0 * 2;
-        let a1_2 = a1 * 2;
-        let a1_38 = a1 * 38;
-        let a2_38 = a2 * 38;
-        let a3_38 = a3 * 38;
-        let a3_19 = a3 * 19;
-        let a4_19 = a4 * 19;
+        let a0_2 = a[0] * 2;
+        let a1_2 = a[1] * 2;
+        let a1_38 = a[1] * 38;
+        let a2_38 = a[2] * 38;
+        let a3_38 = a[3] * 38;
+        let a3_19 = a[3] * 19;
+        let a4_19 = a[4] * 19;
 
         // r_k = sum_{i+j=k} a_i a_j + 19 * sum_{i+j=k+5} a_i a_j
-        let r0 = a0 * a0 + a1_38 * a4 + a2_38 * a3;
-        let r1 = a0_2 * a1 + a2_38 * a4 + a3_19 * a3;
-        let r2 = a0_2 * a2 + a1 * a1 + a3_38 * a4;
-        let r3 = a0_2 * a3 + a1_2 * a2 + a4_19 * a4;
-        let r4 = a0_2 * a4 + a1_2 * a3 + a2 * a2;
+        let r0 = m(a[0], a[0]) + m(a1_38, a[4]) + m(a2_38, a[3]);
+        let r1 = m(a0_2, a[1]) + m(a2_38, a[4]) + m(a3_19, a[3]);
+        let r2 = m(a0_2, a[2]) + m(a[1], a[1]) + m(a3_38, a[4]);
+        let r3 = m(a0_2, a[3]) + m(a1_2, a[2]) + m(a4_19, a[4]);
+        let r4 = m(a0_2, a[4]) + m(a1_2, a[3]) + m(a[2], a[2]);
 
         carry_reduce([r0, r1, r2, r3, r4])
     }
@@ -305,6 +299,15 @@ impl Fe {
     pub fn is_negative(&self) -> Choice {
         Choice::from_u8(self.to_bytes()[0] & 1)
     }
+}
+
+/// One 64x64 multiplication, widened.
+///
+/// Written out so both operands are visibly `u64`: that is what lets the
+/// compiler emit a single widening multiply instead of a 128-bit one.
+#[inline(always)]
+fn m(x: u64, y: u64) -> u128 {
+    (x as u128) * (y as u128)
 }
 
 /// Fold five 128-bit products back into 51-bit limbs.
