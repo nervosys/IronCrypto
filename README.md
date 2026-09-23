@@ -116,13 +116,9 @@ to one that still does not.
 iron-crypto = "0.1"
 ```
 
-**A release is in progress as this is written, and not finished.** The crates
-go out one at a time: crates.io rate-limits *new* crate names to roughly one
-every ten minutes, and there are eighteen of them. The primitives are up;
-`iron-crypto`, the facade that re-exports them, is further down the dependency
-order and lands last along with `ic-cli` and `ic-rustls`. Until it does, the
-line above will not resolve — depend on the primitive crates directly, or on a
-checkout:
+All eighteen crates are on crates.io. `iron-crypto` is the facade and
+re-exports the rest; depend on the primitives directly if you want a smaller
+graph:
 
 ```toml
 [dependencies]
@@ -131,13 +127,8 @@ ic-hash = "0.1"     # SHA-2, SHA-3, SHAKE, BLAKE2
 ic-ec = "0.1"       # the NIST curves, X25519, Ed25519
 ```
 
-```toml
-[dependencies]
-iron-crypto = { path = "../IronCrypto/crates/iron-crypto" }
-```
-
 ```console
-$ cargo install --path crates/ic-cli   # the `ic` CLI and MCP server
+$ cargo install ic-cli   # the `ic` CLI and MCP server
 ```
 
 Publishing this is an export: encryption source code under ECCN 5D002 requires
@@ -674,6 +665,7 @@ without your having to read this paragraph.
 | [ONTOLOGY.md](docs/ONTOLOGY.md) | the vocabulary, the query model, the export formats |
 | [FIPS.md](docs/FIPS.md) | what is implemented, what validation would require |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | crate layout and design decisions |
+| [CHANGELOG.md](CHANGELOG.md) | what changed between releases |
 | [AGENTS.md](AGENTS.md) | instructions for agents working in this repo |
 | [SECURITY.md](SECURITY.md) | threat model, side-channel posture, reporting |
 | [RELEASING.md](docs/RELEASING.md) | why nothing goes public before the export notification |

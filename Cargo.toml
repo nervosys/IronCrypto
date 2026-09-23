@@ -29,7 +29,7 @@ members = [
 exclude = ["bench"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.75"
 license = "AGPL-3.0-or-later"
@@ -56,22 +56,22 @@ categories = ["cryptography", "no-std"]
 publish = true
 
 [workspace.dependencies]
-ic-core = { path = "crates/ic-core", version = "0.1.1", default-features = false }
-ic-hash = { path = "crates/ic-hash", version = "0.1.1", default-features = false }
-ic-mac = { path = "crates/ic-mac", version = "0.1.1", default-features = false }
-ic-kdf = { path = "crates/ic-kdf", version = "0.1.1", default-features = false }
-ic-cipher = { path = "crates/ic-cipher", version = "0.1.1", default-features = false }
-ic-drbg = { path = "crates/ic-drbg", version = "0.1.1", default-features = false }
-ic-ec = { path = "crates/ic-ec", version = "0.1.1", default-features = false }
-ic-rsa = { path = "crates/ic-rsa", version = "0.1.1", default-features = false }
-ic-pkix = { path = "crates/ic-pkix", version = "0.1.1", default-features = false }
-ic-mlkem = { path = "crates/ic-mlkem", version = "0.1.1", default-features = false }
-ic-mldsa = { path = "crates/ic-mldsa", version = "0.1.1", default-features = false }
-ic-json = { path = "crates/ic-json", version = "0.1.1" }
-ic-vectors = { path = "crates/ic-vectors", version = "0.1.1" }
-ic-fips = { path = "crates/ic-fips", version = "0.1.1", default-features = false }
-ic-ontology = { path = "crates/ic-ontology", version = "0.1.1", default-features = false }
-iron-crypto = { path = "crates/iron-crypto", version = "0.1.1", default-features = false }
+ic-core = { path = "crates/ic-core", version = "0.1.2", default-features = false }
+ic-hash = { path = "crates/ic-hash", version = "0.1.2", default-features = false }
+ic-mac = { path = "crates/ic-mac", version = "0.1.2", default-features = false }
+ic-kdf = { path = "crates/ic-kdf", version = "0.1.2", default-features = false }
+ic-cipher = { path = "crates/ic-cipher", version = "0.1.2", default-features = false }
+ic-drbg = { path = "crates/ic-drbg", version = "0.1.2", default-features = false }
+ic-ec = { path = "crates/ic-ec", version = "0.1.2", default-features = false }
+ic-rsa = { path = "crates/ic-rsa", version = "0.1.2", default-features = false }
+ic-pkix = { path = "crates/ic-pkix", version = "0.1.2", default-features = false }
+ic-mlkem = { path = "crates/ic-mlkem", version = "0.1.2", default-features = false }
+ic-mldsa = { path = "crates/ic-mldsa", version = "0.1.2", default-features = false }
+ic-json = { path = "crates/ic-json", version = "0.1.2" }
+ic-vectors = { path = "crates/ic-vectors", version = "0.1.2" }
+ic-fips = { path = "crates/ic-fips", version = "0.1.2", default-features = false }
+ic-ontology = { path = "crates/ic-ontology", version = "0.1.2", default-features = false }
+iron-crypto = { path = "crates/iron-crypto", version = "0.1.2", default-features = false }
 
 [profile.release]
 opt-level = 3
