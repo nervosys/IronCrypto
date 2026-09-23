@@ -542,8 +542,8 @@ of the differences below.
 | AES-256 blocks, portable | level |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
+| SHA-512 | level |
 | HMAC-SHA256 | level |
-| SHA-512 | ~1.55x slower |
 | Ed25519, sign | ~1.6x slower |
 | Ed25519, verify | ~1.6x slower |
 
@@ -588,12 +588,32 @@ signature, a public key and a message are all public. What remains is the
 constant-time basepoint table that signing still needs, which stores four field
 elements per entry where three would do.
 
-SHA-512 has no hardware instruction on x86 the way SHA-256 does. Beyond the
-schedule wipe, two source-level optimisations were tried and reverted -- a
-rolling schedule window and an eight-fold round unroll -- both measured by
-controlled A/B, neither an improvement, because the compiler had already done
-the work. `crates/ic-hash/src/sha2.rs` records why, so the next reader does not
-repeat them. The gap that remains wants a vectorised message schedule.
+SHA-512 has no hardware instruction on x86 the way SHA-256 does, and computing
+its message schedule with AVX2 as a pass of its own does not pay -- 107.6ns
+against the scalar schedule's 104.2ns, because AVX2 has no 64-bit rotate. What
+pays is that the eighty rounds are a latency chain which cannot fill a wide
+core's issue slots, while the schedule does not depend on them and is more than
+half the block. Interleaved into the rounds, four words every five, it runs in
+the slots the chain leaves empty: 184 to 117 ns/block, and level with
+RustCrypto's own AVX2 backend.
+
+**Ed25519 is the one still behind, and for a specific reason.** A doubling is
+160 multiply instructions against 775 moves: five 128-bit accumulators and two
+five-limb operands do not fit in sixteen registers, so the schoolbook spills.
+That is the shape rather than the instruction selection -- `-C
+target-cpu=native` turns the multiplies into `mulx` and drops the moves to 475,
+and buys 2% end to end, while dalek gains 16% from the same flag because it has
+an AVX2 field backend that engages there.
+
+Building one was measured rather than assumed. A four-wide AVX2 multiply is
+real -- 24.35ns against 43.83ns for four scalar ones, verified lane for lane --
+but the primitive is not the point layer. 77% of a doubling is its four
+multiplications and four squarings; the rest is additions across coordinates,
+which in a four-lane layout become lane shuffles rather than disappearing. Even
+an optimistic shuffle cost leaves verification around 24us against dalek's
+19.8: it narrows the gap and does not close it, and it would cost `ic-ec` its
+`forbid(unsafe_code)`, which no other crate here has.
+`crates/ic-ec/src/field.rs` records the numbers.
 
 ### Where the acceleration comes from
 

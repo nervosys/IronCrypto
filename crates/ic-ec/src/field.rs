@@ -104,6 +104,30 @@ impl Fe {
     //   0.92ns, so all five are about 6ns of a 96ns doubling. Not where the
     //   time is.
     //
+    // - **A four-wide AVX2 field multiply.** This one was built and measured
+    //   rather than argued about, because the primitive really is faster:
+    //   24.35ns for four multiplications against 43.83ns for four scalar ones,
+    //   1.80x, verified lane for lane against `mul`. AVX2 has no 64x64
+    //   multiply, so it needs ten limbs alternating 26 and 25 bits instead of
+    //   five of 51 -- ten of those come to exactly 255, which keeps the
+    //   reduction constant at 19 -- and the products were generated from that
+    //   layout and checked against integer arithmetic mod p before any of it
+    //   was written.
+    //
+    //   It was not kept, because the primitive is not the point layer. 77% of
+    //   a doubling is its four multiplications and four squarings; the rest is
+    //   additions and subtractions across coordinates, and in a four-lane
+    //   layout those do not disappear, they become lane shuffles. Two `mul4`
+    //   calls are 48.7ns against the 73.8ns of field work they replace, so
+    //   even a shuffle cost of 20ns -- optimistic -- leaves a doubling at
+    //   68.7ns against 96ns, and verification at about 24us against dalek's
+    //   19.8. It narrows the gap and does not close it, and it would cost this
+    //   crate its `forbid(unsafe_code)`, which no other crate here has.
+    //
+    //   What dalek gets from its own AVX2 backend is 19.8 -> 16.6us, so the
+    //   target moves too. Closing this properly means their whole point layer,
+    //   not a faster multiply.
+    //
     // Where the time is: 160 `mul` instructions in a doubling against 775
     // `mov`. Five `u128` accumulators and two five-limb operands do not fit in
     // sixteen registers, so the schoolbook spills, and that is a property of
