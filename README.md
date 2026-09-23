@@ -526,59 +526,81 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 ### How that compares
 
 Measured by `bench/` against RustCrypto and dalek, on the same machine and the
-same buffers, best of three runs. A figure landing either side of 1.0 across
-runs is reported as parity rather than as whichever run flattered it.
+same buffers. Each figure is the median of five runs, because the machine is
+shared: a single pair of runs had RustCrypto's own SHA-512 moving 700 to 1087
+MiB/s with nothing changed in either implementation, which is larger than most
+of the differences below.
 
 | operation | against the fastest Rust implementation |
 |---|---|
 | ECDSA P-256, sign | **~2.0x faster** |
-| ECDSA P-256, verify | **~1.4x faster** |
+| ECDSA P-256, verify | **~1.5x faster** |
 | AES-256-GCM | **~1.4x faster** |
+| X25519 agreement | **~1.3x faster** |
 | AES-256 blocks, AES-NI | **~1.2x faster** |
+| SHA3-256 | **~1.05x faster** |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
-| X25519 agreement | level |
-| SHA3-256 | ~1.3x slower |
-| SHA-512 | ~1.3–1.75x slower |
-| Ed25519, sign | ~1.9x slower |
-| Ed25519, verify | ~2.6x slower |
-| AES-256 blocks, portable | ~5800x slower |
+| SHA-512 | ~1.5x slower |
+| Ed25519, sign | ~1.6x slower |
+| Ed25519, verify | ~1.6x slower |
+| AES-256 blocks, portable | ~20-27x slower |
 
-The bulk symmetric work — what a TLS connection or a file encryption actually
-spends its time in — is at or ahead of the fastest Rust implementations. What
-remains behind is some of the public-key work and the software AES fallback.
+The bulk symmetric work -- what a TLS connection or a file encryption actually
+spends its time in -- is at or ahead of the fastest Rust implementations. What
+remains behind is Ed25519, SHA-512, and the software AES fallback.
 
-**The public-key gap is algorithmic, not arithmetic.** X25519 is level, and it
-runs on the same field code as Ed25519, so the arithmetic underneath is
-competitive. Both curves use a precomputed table for their fixed generator, and
-`Ed25519Key` derives the public key once at construction so that signing
-performs one basepoint multiplication instead of two — 44.7µs from a bare seed
-against 23.5µs from a held key, which is what dalek's `SigningKey` has always
-done and what makes the comparison like-for-like. What no table can help is
-verification's multiplication against the *public key*, which is different every
-time; that uses a width-5 non-adjacent form instead, variable time and allowed
-to be, since the signature, the key and the message are all public and there is
-no secret whose timing could leak.
+**Finding where the time went mattered more than optimising.** Three of the
+figures above moved because a measurement contradicted the obvious explanation.
+SHA3-256 was assumed to need a faster permutation; timed on its own the
+permutation was already ahead, and the cost was in `absorb`, which walked the
+input a byte at a time and spent as long feeding the sponge as mixing it.
+SHA-512 was assumed to need a vectorised schedule; 62% of its compression turned
+out to be the per-block `zeroize` of that schedule, whose volatile writes cannot
+be merged into a `memset`. Verification was assumed to need faster field
+arithmetic; what it needed was to stop running two chains of doublings where one
+would do. In each case the guess would have been work spent on the smaller half.
 
-**The AES fallback deserves saying plainly.** Avoiding lookup tables does not
-cost three orders of magnitude; *this* way of avoiding them does. RustCrypto's
-software AES is fixsliced — equally table-free, equally constant-time — and runs
-at ~68 MiB/s against IronCrypto's ~1.5. The S-box here is computed
-algebraically, thirteen field multiplications per byte, which is the slowest
-correct way to get the property. Bitslicing would keep it and close most of the
-gap. Until that work is done, treat the portable AES path as correct and
-suitable for low volumes rather than as a general-purpose cipher, and prefer
-ChaCha20-Poly1305 where there is no AES hardware. That is already the advice
-you get: `ic recommend encrypt-message` reads the CPU, and on a machine without
-AES acceleration it selects ChaCha20-Poly1305 over AES-GCM.
+**The Ed25519 gap is now narrow enough to be worth naming precisely.** Signing
+and verification are both about 1.6x behind dalek. Both curves use a precomputed
+table for their fixed generator, and `Ed25519Key` derives the public key once at
+construction so signing performs one basepoint multiplication instead of two --
+worth about 1.7x over signing from a bare seed, which is what dalek's
+`SigningKey` does and what makes the comparison like-for-like. Verification adds
+the two scalars in one interleaved pass sharing a single chain of doublings, and
+indexes its tables directly rather than scanning them with conditional moves,
+since a signature, a public key and a message are all public. What is left is
+the constant-time basepoint table that signing still needs, which stores four
+field elements per entry where three would do.
+
+**The AES fallback deserves saying plainly.** The honest comparison is against
+RustCrypto's software AES, which is fixsliced -- equally table-free, equally
+constant-time -- and that is the ~20-27x above. Measuring the portable path
+against AES-NI instead gives a number in the thousands, which measures the
+instruction set rather than the implementation and is not a figure anyone should
+quote, including this file, which used to.
+
+Avoiding lookup tables does not cost twenty times; *this* way of avoiding them
+does. The S-box is computed algebraically, and the inversion it needs is seven
+squarings and six multiplications. Squaring is linear over GF(2), so it is now a
+few shifts and masks rather than the general bit-serial multiply, which was
+worth about 1.6x on its own. The rest of the gap is that fixslicing does many
+blocks at once in bit-parallel form where this computes one S-box at a time;
+closing it means bitslicing, which is a larger change than any of the above.
+Until then, treat the portable AES path as correct and suitable for low volumes
+rather than as a general-purpose cipher, and prefer ChaCha20-Poly1305 where
+there is no AES hardware. That is already the advice you get: `ic recommend
+encrypt-message` reads the CPU, and on a machine without AES acceleration it
+selects ChaCha20-Poly1305 over AES-GCM.
 
 **SHA-512 has no hardware instruction** on x86 the way SHA-256 does, so it runs
-the portable path. Two source-level optimisations were tried and reverted — a
-rolling schedule window and an eight-fold round unroll — both measured by
-controlled A/B, neither an improvement, because the compiler had already done
-the work. `crates/ic-hash/src/sha2.rs` records why, so the next reader does not
-repeat them. The gap that remains wants a vectorised message schedule.
+the portable path. Beyond the schedule wipe, two source-level optimisations were
+tried and reverted -- a rolling schedule window and an eight-fold round unroll --
+both measured by controlled A/B, neither an improvement, because the compiler had
+already done the work. `crates/ic-hash/src/sha2.rs` records why, so the next
+reader does not repeat them. The gap that remains wants a vectorised message
+schedule.
 
 ### Where the acceleration comes from
 

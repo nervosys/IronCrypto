@@ -323,9 +323,14 @@ impl Drop for Core512 {
 
 /// SHA-512's compression, and what has already been tried on it.
 ///
-/// It runs about 1.3 to 1.75 times behind RustCrypto's, which has an AVX2
-/// backend for the message schedule. There is no SHA-512 instruction on x86 the
-/// way there is for SHA-256, so the portable path below is what runs.
+/// It runs about 1.5 times behind RustCrypto's, which has an AVX2 backend for
+/// the message schedule. There is no SHA-512 instruction on x86 the way there
+/// is for SHA-256, so the portable path below is what runs.
+///
+/// What closed the gap from 1.76x was not an optimisation of the arithmetic at
+/// all: 62% of the compression was the per-block `zeroize` of the schedule,
+/// whose volatile writes cannot be merged into a `memset`. The schedule now
+/// lives in the struct and is wiped once per hash. See the note on `w`.
 ///
 /// Two source-level optimisations were measured and reverted, and are recorded
 /// so they are not tried a third time:
