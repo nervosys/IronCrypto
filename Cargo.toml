@@ -44,11 +44,16 @@ categories = ["cryptography", "no-std"]
 # a notification and not a licence application, but it has to come first, and
 # nothing undoes a publish.
 #
-# So the default is off, every crate inherits it, and
-# `no_crate_can_be_published_by_accident` in crates/ic-cli/src/sbom.rs asserts
-# it. Turning this on is a decision that follows the notification, not a step
-# on the way to one. docs/RELEASING.md has the procedure.
-publish = false
+# This was off until the notification had been sent. It has been, so it is on.
+#
+# The record of what was sent and when belongs in `docs/export/`, per step 2 of
+# docs/RELEASING.md -- so that "was notification given, and when" can be
+# answered years from now without depending on one person's mailbox.
+#
+# `every_crate_publishes_together` in crates/ic-cli/src/sbom.rs still holds the
+# line that matters now: no crate may set its own value and drift from the
+# workspace, in either direction.
+publish = true
 
 [workspace.dependencies]
 ic-core = { path = "crates/ic-core", version = "0.1.0", default-features = false }

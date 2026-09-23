@@ -397,27 +397,35 @@ mod tests {
     ///
     /// See docs/RELEASING.md.
     #[test]
-    fn no_crate_can_be_published_by_accident() {
+    fn every_crate_publishes_together() {
         let root = workspace_root();
 
+        // The workspace must state a setting rather than leave it to Cargo's
+        // default, so that turning it on or off is a visible edit with the
+        // reasoning beside it.
         let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
         assert!(
-            workspace.contains("publish = false"),
-            "the workspace no longer defaults to publish = false, so `cargo              publish` would attempt an export that needs a notification first"
+            workspace.contains("publish = true") || workspace.contains("publish = false"),
+            "the workspace states no publish setting, so the default decides it and nothing records why"
         );
 
+        // And no crate may set its own. This was `false` everywhere until the
+        // export notification had been sent; the value is a decision on record
+        // now, but the property that matters either way is that one crate
+        // cannot drift from the rest. A crate left at `false` breaks a release
+        // halfway through; a crate that goes `true` early exports on its own.
         let mut checked = 0;
         for name in manifest_members() {
             let path = root.join("crates").join(&name).join("Cargo.toml");
             let text =
                 std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("{name} has no manifest"));
             assert!(
-                text.contains("publish.workspace = true") || text.contains("publish = false"),
-                "{name} does not inherit publish = false, so it can be published                  on its own"
+                text.contains("publish.workspace = true"),
+                "{name} does not inherit the workspace publish setting"
             );
             assert!(
-                !text.contains("publish = true"),
-                "{name} sets publish = true"
+                !text.contains("publish = true") && !text.contains("publish = false"),
+                "{name} sets its own publish value instead of inheriting"
             );
             checked += 1;
         }

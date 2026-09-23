@@ -76,7 +76,7 @@ error: `iron-crypto` cannot be published.
 `package.publish` must be set to `true` or a non-empty list in Cargo.toml to publish.
 ```
 
-`no_crate_can_be_published_by_accident`, in `crates/ic-cli/src/sbom.rs`, asserts
+`every_crate_publishes_together`, in `crates/ic-cli/src/sbom.rs`, asserts
 that every member inherits it and that none overrides it — because a line in a
 manifest with nothing watching it is a line someone removes while doing
 something else.
