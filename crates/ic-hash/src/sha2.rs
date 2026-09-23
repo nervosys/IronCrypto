@@ -17,6 +17,28 @@ use ic_core::{ensure, Result, Zeroize};
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 mod x86;
 
+// SHA-512's schedule, four words at a time. Same reasoning as `x86`: only
+// under `std`, because the detection needs it.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+mod avx2_512;
+
+/// Whether this CPU has AVX2, asked once.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn avx2() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    // 0 not yet asked, 1 yes, 2 no.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have = std::is_x86_feature_detected!("avx2");
+            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+            have
+        }
+    }
+}
+
 /// Whether this CPU has the instructions [`x86::compress`] needs.
 ///
 /// Asked once. `is_x86_feature_detected!` is not free, and SHA-256 is called
@@ -372,15 +394,26 @@ impl Core512 {
     }
 
     fn compress(&mut self, block: &[u8]) {
-        Self::compress_into(&mut self.h, &mut self.w, block);
+        // The schedule is about a third of the work and is the only part with
+        // anything to run in parallel; the rounds are a chain. So the backends
+        // differ in how `w` is filled and share everything after it.
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test this requires, and `block`
+            // is one block by `update`'s chunking.
+            unsafe { avx2_512::compress(&mut self.h, &mut self.w, block) };
+            return;
+        }
+        Self::schedule(&mut self.w, block);
+        Self::rounds(&mut self.h, &self.w);
     }
 
-    /// The compression function proper, over borrowed state.
+    /// Build the message schedule.
     ///
-    /// Split out so the schedule is reached through a plain `&mut [u64; 80]`
-    /// rather than through `self`, which keeps the indexing the same as it was
-    /// when the array was a local.
-    fn compress_into(h: &mut [u64; 8], w: &mut [u64; 80], block: &[u8]) {
+    /// The AVX2 backend does not call this -- it interleaves the same steps
+    /// into its round loop, which is the whole reason it is faster -- but it is
+    /// checked against that backend word for word.
+    fn schedule(w: &mut [u64; 80], block: &[u8]) {
         for i in 0..16 {
             let mut b = [0u8; 8];
             b.copy_from_slice(&block[i * 8..i * 8 + 8]);
@@ -394,6 +427,10 @@ impl Core512 {
                 .wrapping_add(w[i - 7])
                 .wrapping_add(s1);
         }
+    }
+
+    /// The eighty rounds.
+    fn rounds(h: &mut [u64; 8], w: &[u64; 80]) {
         let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = *h;
         for i in 0..80 {
             let s1 = e.rotate_right(14) ^ e.rotate_right(18) ^ e.rotate_right(41);
