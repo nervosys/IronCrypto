@@ -42,7 +42,7 @@
 
 use ic_core::ct::Choice;
 
-use super::{basepoint, Point};
+use super::{basepoint, AffineNiels, Point};
 
 /// Digits per scalar, radix 16 over 256 bits.
 const DIGITS: usize = 64;
@@ -53,18 +53,22 @@ const ENTRIES: usize = 8;
 /// One table per *pair* of digits; see the module note.
 const TABLES: usize = DIGITS / 2;
 
-/// `1..=8` times some fixed multiple of the basepoint.
-struct Window([Point; ENTRIES]);
+/// `1..=8` times some fixed multiple of the basepoint, in affine Niels form.
+///
+/// Affine because an entry is only ever added to something: storing
+/// `(y+x, y-x, 2d·x·y)` makes that addition three multiplications instead of
+/// nine, and stores three field elements instead of four, which is a quarter
+/// less for the conditional-move scan below to walk.
+struct Window([AffineNiels; ENTRIES]);
 
 impl Window {
     /// Build the multiples of `base`.
     fn new(base: &Point) -> Self {
-        let mut entries = [Point::IDENTITY; ENTRIES];
-        entries[0] = *base;
+        let mut multiples = [*base; ENTRIES];
         for i in 1..ENTRIES {
-            entries[i] = entries[i - 1].add(base);
+            multiples[i] = multiples[i - 1].add(base);
         }
-        Self(entries)
+        Self(core::array::from_fn(|i| multiples[i].to_affine_niels()))
     }
 
     /// `digit * base`, for `digit` in `[-8, 8]`, without indexing by it.
@@ -72,12 +76,12 @@ impl Window {
     /// Reads every entry and selects with conditional moves. Indexing would be
     /// a secret-dependent memory access, which is exactly what this workspace
     /// avoids elsewhere at considerably greater cost.
-    fn select(&self, digit: i8) -> Point {
+    fn select(&self, digit: i8) -> AffineNiels {
         let negative = Choice::from_u8((digit as u8) >> 7);
         // |digit|, computed without a branch.
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
 
-        let mut out = Point::IDENTITY;
+        let mut out = AffineNiels::IDENTITY;
         for (i, entry) in self.0.iter().enumerate() {
             // `magnitude == i + 1`, as a Choice.
             let hit = Choice::from_u8(u8::from(magnitude == (i as u8 + 1)));
@@ -119,13 +123,17 @@ impl Table {
         // even ones. Both halves read the same tables; see the module note.
         let mut acc = Point::IDENTITY;
         for i in (1..DIGITS).step_by(2) {
-            acc = acc.add(&self.windows[i / 2].select(digits[i]));
+            acc = acc
+                .add_affine_niels(&self.windows[i / 2].select(digits[i]))
+                .to_extended();
         }
         for _ in 0..4 {
             acc = acc.double();
         }
         for i in (0..DIGITS).step_by(2) {
-            acc = acc.add(&self.windows[i / 2].select(digits[i]));
+            acc = acc
+                .add_affine_niels(&self.windows[i / 2].select(digits[i]))
+                .to_extended();
         }
         acc
     }
@@ -185,9 +193,9 @@ pub fn table() -> &'static Table {
 /// Signing must not call this. See
 /// [`double_scalar_mul_vartime`][super::double_scalar_mul_vartime].
 #[cfg(feature = "std")]
-pub(super) fn odd_multiples() -> &'static [Point; 64] {
+pub(super) fn odd_multiples() -> &'static [AffineNiels; 64] {
     use std::sync::OnceLock;
-    static ODD: OnceLock<[Point; 64]> = OnceLock::new();
+    static ODD: OnceLock<[AffineNiels; 64]> = OnceLock::new();
     ODD.get_or_init(|| {
         let b = basepoint();
         let twice = b.double();
@@ -195,7 +203,9 @@ pub(super) fn odd_multiples() -> &'static [Point; 64] {
         for i in 1..64 {
             out[i] = out[i - 1].add(&twice);
         }
-        out
+        // Affine Niels, since every one of them exists only to be added:
+        // three multiplications each instead of nine.
+        core::array::from_fn(|i| out[i].to_affine_niels())
     })
 }
 

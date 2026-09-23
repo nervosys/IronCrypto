@@ -228,12 +228,12 @@ fn main() {
     let mut pk = [0u8; 32];
     iron_crypto::ec::X25519::public_key(&sk, &mut pk).unwrap();
     let mut shared = [0u8; 32];
-    let x1 = per_op("iron-crypto x25519 agree", 200, 3, || {
+    let x1 = per_op("iron-crypto x25519 agree", 3000, 5, || {
         iron_crypto::ec::X25519::agree(&sk, &pk, &mut shared).unwrap();
     });
     let d_sk = x25519_dalek::StaticSecret::from(sk);
     let d_pk = x25519_dalek::PublicKey::from(pk);
-    let x2 = per_op("dalek x25519 agree", 200, 3, || {
+    let x2 = per_op("dalek x25519 agree", 3000, 5, || {
         let _ = d_sk.diffie_hellman(&d_pk);
     });
     verdict("x25519 agreement", x1, x2, false);
@@ -244,15 +244,15 @@ fn main() {
     // comparing it against the seed-only call had IronCrypto doing a second
     // basepoint multiplication dalek never pays. `Ed25519Key` is the
     // equivalent; both figures are kept so the cost of that derivation shows.
-    let e0 = per_op("iron-crypto ed25519 sign (from seed)", 200, 3, || {
+    let e0 = per_op("iron-crypto ed25519 sign (from seed)", 3000, 5, || {
         iron_crypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
     });
     let ic_key = iron_crypto::ec::Ed25519Key::from_seed(&sk).unwrap();
-    let e1 = per_op("iron-crypto ed25519 sign (cached key)", 200, 3, || {
+    let e1 = per_op("iron-crypto ed25519 sign (cached key)", 3000, 5, || {
         ic_key.sign(msg, &mut sig).unwrap();
     });
     let d_key = ed25519_dalek::SigningKey::from_bytes(&sk);
-    let e2 = per_op("dalek ed25519 sign", 200, 3, || {
+    let e2 = per_op("dalek ed25519 sign", 3000, 5, || {
         use ed25519_dalek::Signer;
         let _ = d_key.sign(msg);
     });
@@ -262,7 +262,101 @@ fn main() {
     let mut ed_pk = [0u8; 32];
     iron_crypto::ec::Ed25519::public_key(&sk, &mut ed_pk).unwrap();
     iron_crypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
-    let e3 = per_op("iron-crypto ed25519 verify", 200, 3, || {
+    // Point primitives against dalek's, directly. Everything above is a whole
+    // operation, which cannot separate "our field arithmetic is slower" from
+    // "our scalar multiplication does more work". These can.
+    println!("
+Edwards point primitives (lower is better)");
+    {
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        use ic_ec::ed25519::Point;
+
+        let seed = [9u8; 32];
+        let mut pk = [0u8; 32];
+        <ic_ec::Ed25519 as SignatureScheme>::public_key(&seed, &mut pk).unwrap();
+        let ours = Point::decompress(&pk).unwrap();
+        let theirs = CompressedEdwardsY(pk).decompress().unwrap();
+
+        let a0 = per_op("iron-crypto point add", 20000, 5, || {
+            std::hint::black_box(std::hint::black_box(&ours).add(std::hint::black_box(&ours)));
+        });
+        let a1 = per_op("dalek point add", 20000, 5, || {
+            std::hint::black_box(std::hint::black_box(&theirs) + std::hint::black_box(&theirs));
+        });
+        verdict("point addition", a0, a1, false);
+
+        let d0 = per_op("iron-crypto point double", 20000, 5, || {
+            std::hint::black_box(std::hint::black_box(&ours).double());
+        });
+        let d1 = per_op("dalek point double (via mul by 2)", 20000, 5, || {
+            let two = curve25519_dalek::scalar::Scalar::from(2u64);
+            std::hint::black_box(std::hint::black_box(&theirs) * two);
+        });
+        println!("  (dalek has no public double; the row above is a scalar mul, not comparable)");
+        let _ = (d0, d1);
+
+        // The double-scalar multiplication on its own, which is what
+        // verification spends most of its time in.
+        use curve25519_dalek::scalar::Scalar as DScalar;
+        let mut kb = [0u8; 32];
+        kb.copy_from_slice(&pk);
+        kb[31] &= 0x0f;
+        let k = DScalar::from_bytes_mod_order(kb);
+        let s = DScalar::from_bytes_mod_order(kb);
+        let m0 = per_op("iron-crypto [k]A + [s]B", 2000, 5, || {
+            std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
+                std::hint::black_box(&ours),
+                &kb,
+                &kb,
+            ));
+        });
+        let m1 = per_op("dalek [k]A + [s]B", 2000, 5, || {
+            std::hint::black_box(
+                curve25519_dalek::edwards::EdwardsPoint::vartime_double_scalar_mul_basepoint(
+                    &k,
+                    std::hint::black_box(&theirs),
+                    &s,
+                ),
+            );
+        });
+        verdict("double-scalar multiplication", m0, m1, false);
+
+        let b0 = per_op("iron-crypto [s]B (const time)", 5000, 5, || {
+            std::hint::black_box(ic_ec::ed25519::mul_basepoint_for_bench(std::hint::black_box(
+                &kb,
+            )));
+        });
+        let b1 = per_op("dalek [s]B (const time)", 5000, 5, || {
+            std::hint::black_box(curve25519_dalek::edwards::EdwardsPoint::mul_base(
+                std::hint::black_box(&k),
+            ));
+        });
+        verdict("basepoint multiplication", b0, b1, false);
+
+        let p0 = per_op("iron-crypto compress", 20000, 5, || {
+            std::hint::black_box(std::hint::black_box(&ours).compress());
+        });
+        let p1 = per_op("dalek compress", 20000, 5, || {
+            std::hint::black_box(std::hint::black_box(&theirs).compress());
+        });
+        verdict("compression", p0, p1, false);
+
+        let c0 = per_op("iron-crypto decompress", 20000, 5, || {
+            std::hint::black_box(Point::decompress(std::hint::black_box(&pk)));
+        });
+        let c1 = per_op("dalek decompress", 20000, 5, || {
+            std::hint::black_box(CompressedEdwardsY(std::hint::black_box(pk)).decompress());
+        });
+        verdict("decompression", c0, c1, false);
+    }
+
+    // Held, not rebuilt per call -- the like-for-like comparison with dalek's
+    // VerifyingKey, which caches its decompressed point the same way.
+    let ic_vk = ic_ec::Ed25519VerifyKey::from_bytes(&ed_pk).unwrap();
+    let e3 = per_op("iron-crypto ed25519 verify", 3000, 5, || {
+        ic_vk.verify(msg, &sig).unwrap();
+    });
+    let e3b = per_op("iron-crypto ed25519 verify (from bytes)", 3000, 5, || {
         iron_crypto::ec::Ed25519::verify(&ed_pk, msg, &sig).unwrap();
     });
     let d_vk = d_key.verifying_key();
@@ -270,11 +364,12 @@ fn main() {
         use ed25519_dalek::Signer;
         d_key.sign(msg)
     };
-    let e4 = per_op("dalek ed25519 verify", 200, 3, || {
+    let e4 = per_op("dalek ed25519 verify", 3000, 5, || {
         use ed25519_dalek::Verifier;
         d_vk.verify(msg, &d_sig).unwrap();
     });
     verdict("ed25519 verify", e3, e4, false);
+    verdict("ed25519 verify, bytes vs held key", e3b, e3, false);
 
     // How much of ECDSA is the scalar multiplication? ECDH is exactly one, on
     // an arbitrary point, so it separates the multiplication from RFC 6979

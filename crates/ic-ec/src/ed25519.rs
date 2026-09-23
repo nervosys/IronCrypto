@@ -59,6 +59,135 @@ pub struct Point {
     t: Fe,
 }
 
+/// A point part-way through a group operation: `(X : Y : Z : T)` standing for
+/// the affine point `(X/Z, Y/T)`.
+///
+/// Both the doubling and the addition formulas naturally produce this form --
+/// it is what they compute before the four multiplications that put the result
+/// back into extended coordinates. Keeping it is what makes a chain of
+/// doublings cheaper: a doubling reads only `X`, `Y` and `Z`, so on the way to
+/// another doubling the `T` those four multiplications would produce is never
+/// read, and three of them suffice instead of four.
+#[derive(Clone, Copy)]
+pub(crate) struct Completed {
+    x: Fe,
+    y: Fe,
+    z: Fe,
+    t: Fe,
+}
+
+/// `(X : Y : Z)`, standing for `(X/Z, Y/Z)`. No `T`.
+///
+/// What a doubling needs and all it needs.
+#[derive(Clone, Copy)]
+pub(crate) struct Projective {
+    x: Fe,
+    y: Fe,
+    z: Fe,
+}
+
+/// A point rearranged for addition: `(Y+X, Y-X, Z, 2d·T)`.
+///
+/// The addition formula wants those four quantities and nothing else, so a
+/// point that will be added many times -- every entry of every table here --
+/// stores them instead of `(X, Y, Z, T)`. That turns an addition from nine
+/// multiplications into four: the two sums and differences are already formed,
+/// and `2d·T` has already been scaled.
+#[derive(Clone, Copy)]
+pub(crate) struct Niels {
+    ypx: Fe,
+    ymx: Fe,
+    z: Fe,
+    t2d: Fe,
+}
+
+/// A point with `Z = 1`, rearranged for addition: `(y+x, y-x, 2d·x·y)`.
+///
+/// [`Niels`] without the `Z`, which removes the one multiplication that used
+/// it. Worth the field inversion it costs to build, for a table entry that
+/// will be added sixty-four times per signature and never changes.
+#[derive(Clone, Copy)]
+pub(crate) struct AffineNiels {
+    ypx: Fe,
+    ymx: Fe,
+    t2d: Fe,
+}
+
+impl AffineNiels {
+    /// The neutral element: `x = 0`, `y = 1`.
+    pub(crate) const IDENTITY: AffineNiels = AffineNiels {
+        ypx: Fe::ONE,
+        ymx: Fe::ONE,
+        t2d: Fe::ZERO,
+    };
+
+    /// Negation swaps the sums and differences and negates `2d·x·y`, which is
+    /// what `-(x, y) = (-x, y)` comes to in this form.
+    pub(crate) fn conditional_negate(&mut self, choice: Choice) {
+        let swapped_p = self.ymx;
+        let swapped_m = self.ypx;
+        let nt = self.t2d.neg();
+        Fe::cmov(&mut self.ypx, &swapped_p, choice);
+        Fe::cmov(&mut self.ymx, &swapped_m, choice);
+        Fe::cmov(&mut self.t2d, &nt, choice);
+    }
+
+    pub(crate) fn cmov(&mut self, other: &AffineNiels, choice: Choice) {
+        Fe::cmov(&mut self.ypx, &other.ypx, choice);
+        Fe::cmov(&mut self.ymx, &other.ymx, choice);
+        Fe::cmov(&mut self.t2d, &other.t2d, choice);
+    }
+}
+
+impl Completed {
+    /// Drop to `(X : Y : Z)`, which is three multiplications.
+    fn to_projective(self) -> Projective {
+        Projective {
+            x: self.x.mul(&self.t),
+            y: self.y.mul(&self.z),
+            z: self.z.mul(&self.t),
+        }
+    }
+
+    /// Back to extended coordinates, which is four.
+    ///
+    /// Only needed before an addition, since that is the only operation that
+    /// reads `T`.
+    fn to_extended(self) -> Point {
+        Point {
+            x: self.x.mul(&self.t),
+            y: self.y.mul(&self.z),
+            z: self.z.mul(&self.t),
+            t: self.x.mul(&self.y),
+        }
+    }
+}
+
+impl Projective {
+    /// `dbl-2008-hwcd` for `a = -1`, stopping at the completed form.
+    ///
+    /// Four squarings and no multiplications at all: every multiplication in a
+    /// doubling belongs to the conversion out of the completed form, which is
+    /// why it is worth not doing that conversion in full.
+    fn double(&self) -> Completed {
+        let xx = self.x.square();
+        let yy = self.y.square();
+        let zz2 = {
+            let t = self.z.square();
+            t.add(&t)
+        };
+        let xy_sq = self.x.add(&self.y).square();
+        let yy_plus_xx = yy.add(&xx);
+        let yy_minus_xx = yy.sub(&xx);
+        Completed {
+            x: xy_sq.sub(&yy_plus_xx),
+            y: yy_plus_xx,
+            z: yy_minus_xx,
+            t: zz2.sub(&yy_minus_xx),
+        }
+    }
+}
+
 impl Point {
     /// The neutral element `(0, 1)`.
     pub const IDENTITY: Point = Point {
@@ -121,19 +250,98 @@ impl Point {
         }
     }
 
-    /// Constant-time conditional move.
-    /// Negate in place when `choice` is set.
-    ///
-    /// On a twisted Edwards curve `-(x, y, z, t)` is `(-x, y, z, -t)`, so this
-    /// is two field negations and a pair of conditional moves. Used by the
-    /// signed-digit basepoint table, which stores only positive multiples.
-    fn conditional_negate(&mut self, choice: Choice) {
-        let nx = self.x.neg();
-        let nt = self.t.neg();
-        Fe::cmov(&mut self.x, &nx, choice);
-        Fe::cmov(&mut self.t, &nt, choice);
+    /// Drop `T`, which a doubling does not read.
+    fn to_projective(self) -> Projective {
+        Projective {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+        }
     }
 
+    /// Rearrange for repeated addition. See [`Niels`].
+    fn to_niels(self) -> Niels {
+        Niels {
+            ypx: self.y.add(&self.x),
+            ymx: self.y.sub(&self.x),
+            z: self.z,
+            t2d: self.t.mul(&D2),
+        }
+    }
+
+    /// `self + other`, in four multiplications, stopping at the completed form.
+    ///
+    /// The same `add-2008-hwcd-3` group law [`Point::add`] uses. It costs four
+    /// rather than nine because `other` arrives with its sums, differences and
+    /// `2d·T` already formed, and because the result is left completed rather
+    /// than converted back.
+    fn add_niels(&self, other: &Niels) -> Completed {
+        let pp = self.y.add(&self.x).mul(&other.ypx);
+        let mm = self.y.sub(&self.x).mul(&other.ymx);
+        let tt2d = self.t.mul(&other.t2d);
+        let zz = self.z.mul(&other.z);
+        let zz2 = zz.add(&zz);
+        Completed {
+            x: pp.sub(&mm),
+            y: pp.add(&mm),
+            z: zz2.add(&tt2d),
+            t: zz2.sub(&tt2d),
+        }
+    }
+
+    /// `self - other`.
+    ///
+    /// Negating a Niels point swaps its sums and differences and negates
+    /// `2d·T`, which is cheaper than negating the point it came from and
+    /// rebuilding it.
+    fn sub_niels(&self, other: &Niels) -> Completed {
+        let pp = self.y.add(&self.x).mul(&other.ymx);
+        let mm = self.y.sub(&self.x).mul(&other.ypx);
+        let tt2d = self.t.mul(&other.t2d);
+        let zz = self.z.mul(&other.z);
+        let zz2 = zz.add(&zz);
+        Completed {
+            x: pp.sub(&mm),
+            y: pp.add(&mm),
+            z: zz2.sub(&tt2d),
+            t: zz2.add(&tt2d),
+        }
+    }
+
+    /// Rearrange for repeated addition, with `Z` divided out. See
+    /// [`AffineNiels`].
+    ///
+    /// Costs a field inversion, which is why it is done when a table is built
+    /// and never on a hot path.
+    pub(crate) fn to_affine_niels(self) -> AffineNiels {
+        let z_inv = self.z.invert();
+        let x = self.x.mul(&z_inv);
+        let y = self.y.mul(&z_inv);
+        AffineNiels {
+            ypx: y.add(&x),
+            ymx: y.sub(&x),
+            t2d: x.mul(&y).mul(&D2),
+        }
+    }
+
+    /// `self + other`, in three multiplications.
+    ///
+    /// One fewer than [`Point::add_niels`]: `other` has `Z = 1`, so the
+    /// product of the two `Z`s is just this one's, doubled.
+    pub(crate) fn add_affine_niels(&self, other: &AffineNiels) -> Completed {
+        let pp = self.y.add(&self.x).mul(&other.ypx);
+        let mm = self.y.sub(&self.x).mul(&other.ymx);
+        let tt2d = self.t.mul(&other.t2d);
+        let zz2 = self.z.add(&self.z);
+        Completed {
+            x: pp.sub(&mm),
+            y: pp.add(&mm),
+            z: zz2.add(&tt2d),
+            t: zz2.sub(&tt2d),
+        }
+    }
+
+    /// Constant-time conditional move.
     fn cmov(&mut self, other: &Point, choice: Choice) {
         Fe::cmov(&mut self.x, &other.x, choice);
         Fe::cmov(&mut self.y, &other.y, choice);
@@ -324,14 +532,27 @@ fn mul_basepoint(scalar: &[u8; 32]) -> Point {
 /// about a third as many additions.
 ///
 /// Both properties are why this is not the function signing calls.
+/// [`double_scalar_mul_vartime`], reachable from the benchmark.
+///
+/// The benchmark lives outside this workspace and cannot see private items,
+/// and comparing whole signatures cannot separate "our field arithmetic is
+/// slower" from "our scalar multiplication does more work". This is how that
+/// question gets answered rather than guessed at.
+#[cfg(feature = "std")]
+#[doc(hidden)]
+pub fn double_scalar_mul_vartime_for_bench(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
+    double_scalar_mul_vartime(a, k, s)
+}
+
 #[cfg(feature = "std")]
 fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
-    // 1A, 3A, 5A .. 15A, built for this call.
+    // 1A, 3A, 5A .. 15A, in Niels form, built for this call.
     let twice = a.double();
-    let mut odd_a = [*a; 8];
+    let mut odd = [*a; 8];
     for i in 1..8 {
-        odd_a[i] = odd_a[i - 1].add(&twice);
+        odd[i] = odd[i - 1].add(&twice);
     }
+    let odd_a: [Niels; 8] = core::array::from_fn(|i| odd[i].to_niels());
     let odd_b = basepoint_table::odd_multiples();
 
     let naf_a = wnaf(k, 5);
@@ -344,31 +565,43 @@ fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
         i -= 1;
     }
 
-    let mut acc = Point::IDENTITY;
+    // The accumulator is carried in whichever form the next step wants: a
+    // doubling reads only X, Y and Z, and an addition is the only thing that
+    // reads T. So a position with no addition pays three multiplications to
+    // come out of the completed form instead of four.
+    let mut acc = Point::IDENTITY.to_projective();
     loop {
-        acc = acc.double();
+        let mut t = acc.double();
         if naf_a[i] != 0 {
-            let e = &odd_a[(naf_a[i].unsigned_abs() as usize) / 2];
-            acc = if naf_a[i] > 0 {
-                acc.add(e)
+            let e = t.to_extended();
+            let n = &odd_a[(naf_a[i].unsigned_abs() as usize) / 2];
+            t = if naf_a[i] > 0 {
+                e.add_niels(n)
             } else {
-                acc.add(&e.negate())
+                e.sub_niels(n)
             };
         }
         if naf_b[i] != 0 {
-            let e = &odd_b[(naf_b[i].unsigned_abs() as usize) / 2];
-            acc = if naf_b[i] > 0 {
-                acc.add(e)
-            } else {
-                acc.add(&e.negate())
-            };
+            let e = t.to_extended();
+            let mut n = odd_b[(naf_b[i].unsigned_abs() as usize) / 2];
+            if naf_b[i] < 0 {
+                n.conditional_negate(Choice::from_u8(1));
+            }
+            t = e.add_affine_niels(&n);
         }
         if i == 0 {
-            break;
+            return t.to_extended();
         }
+        acc = t.to_projective();
         i -= 1;
     }
-    acc
+}
+
+/// [`mul_basepoint`], reachable from the benchmark. See
+/// [`double_scalar_mul_vartime_for_bench`].
+#[doc(hidden)]
+pub fn mul_basepoint_for_bench(scalar: &[u8; 32]) -> Point {
+    mul_basepoint(scalar)
 }
 
 fn basepoint() -> Point {
@@ -611,7 +844,56 @@ impl SignatureScheme for Ed25519 {
     }
 
     fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+        // One shot: recover the point, verify, discard. A caller verifying
+        // more than once against the same key should hold an
+        // `Ed25519VerifyKey` and pay the decompression once.
+        Ed25519VerifyKey::from_bytes(public_key)?.verify(message, signature)
+    }
+}
+
+/// A public key with its point already recovered.
+///
+/// Verification needs the public key as a curve point, and decompressing one
+/// is a field exponentiation -- about two microseconds, against the twenty a
+/// verification takes. A key used more than once should not pay that more than
+/// once, which is the same reason [`Ed25519Key`] exists on the signing side.
+///
+/// The point is stored negated, because the equation verification checks is
+/// `[S]B + [k](-A) == R`, so that is the form every signature wants.
+///
+/// [`Ed25519::verify`] builds one of these and throws it away, which is the
+/// right thing for a caller with one signature and the wrong thing for a
+/// caller with many.
+pub struct Ed25519VerifyKey {
+    /// The compressed encoding, which the challenge hash needs verbatim.
+    compressed: [u8; 32],
+    /// `-A`, decompressed once.
+    neg_a: Point,
+}
+
+impl Ed25519VerifyKey {
+    /// Decompress `public_key`, rejecting anything not on the curve.
+    pub fn from_bytes(public_key: &[u8]) -> Result<Self> {
         ensure!(public_key.len() == 32, InvalidLength, "ed25519 public key");
+        let mut compressed = [0u8; 32];
+        compressed.copy_from_slice(public_key);
+        let a = Point::decompress(&compressed).ok_or(ic_core::err!(
+            MalformedEncoding,
+            "ed25519 public key is not on the curve"
+        ))?;
+        Ok(Self {
+            compressed,
+            neg_a: a.negate(),
+        })
+    }
+
+    /// The key as it was given.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.compressed
+    }
+
+    /// Verify `signature` over `message`.
+    pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<()> {
         ensure!(signature.len() == 64, InvalidLength, "ed25519 signature");
 
         let mut big_r = [0u8; 32];
@@ -619,47 +901,31 @@ impl SignatureScheme for Ed25519 {
         let mut s = [0u8; 32];
         s.copy_from_slice(&signature[32..]);
 
-        // RFC 8032 §5.1.7: reject a non-canonical S. Without this check the
-        // signature is malleable, and any system that treats a signature as a
-        // unique identifier becomes attackable.
+        // RFC 8032 section 5.1.7: reject a non-canonical S. Without this check
+        // the signature is malleable, and any system that treats a signature
+        // as a unique identifier becomes attackable.
         ensure!(
             scalar::is_canonical(&s),
             MalformedEncoding,
             "ed25519 signature S is not reduced"
         );
 
-        let mut pk_bytes = [0u8; 32];
-        pk_bytes.copy_from_slice(public_key);
-        let a_point = Point::decompress(&pk_bytes).ok_or(ic_core::err!(
-            MalformedEncoding,
-            "ed25519 public key is not on the curve"
-        ))?;
         let r_point = Point::decompress(&big_r).ok_or(ic_core::err!(
             MalformedEncoding,
             "ed25519 signature R is not on the curve"
         ))?;
 
-        let k = hash_to_scalar(&[&big_r, &pk_bytes, message]);
+        let k = hash_to_scalar(&[&big_r, &self.compressed, message]);
 
-        // The check is [S]B == R + [k]A, rearranged to [S]B + [k](-A) == R so
-        // that both multiplications are one interleaved pass sharing a single
-        // chain of doublings. Negating A is two field negations; running the
-        // two scalars separately would be a second two hundred and fifty-five
-        // doublings.
-        //
-        // Everything here is public -- the signature, the key, the message --
-        // so neither multiplication has to be constant time, and neither is.
+        // [S]B + [k](-A) == R, in one interleaved pass sharing a single chain
+        // of doublings. Everything here is public, so neither multiplication
+        // is constant time.
         #[cfg(feature = "std")]
-        let lhs = double_scalar_mul_vartime(&a_point.negate(), &k, &s);
+        let lhs = double_scalar_mul_vartime(&self.neg_a, &k, &s);
         #[cfg(not(feature = "std"))]
-        let lhs = mul_basepoint(&s).add(&a_point.negate().mul_scalar_vartime(&k));
-        let rhs = r_point;
+        let lhs = mul_basepoint(&s).add(&self.neg_a.mul_scalar_vartime(&k));
 
-        // Compared projectively rather than by compressing both sides, which
-        // would be two field inversions to answer a question four
-        // multiplications settle. Nothing here is secret, so the comparison
-        // need not be constant time either.
-        if lhs.eq_projective(&rhs) {
+        if lhs.eq_projective(&r_point) {
             Ok(())
         } else {
             Err(ic_core::err!(AuthenticationFailed, "ed25519"))
@@ -1089,6 +1355,83 @@ mod tests {
         Ed25519::self_test().unwrap();
     }
 
+    /// A few points on the curve, for the formula tests below.
+    fn sample_points(n: usize) -> Vec<Point> {
+        let mut out = Vec::new();
+        let mut p = basepoint();
+        for _ in 0..n {
+            out.push(p);
+            p = p.double().add(&basepoint());
+        }
+        out
+    }
+
+    /// The completed-coordinate doubling is the extended one.
+    ///
+    /// `Projective::double` produces four squarings and no multiplications,
+    /// and the multiplications a doubling needs move into whichever conversion
+    /// follows. That is only sound if the two routes agree, and the signs are
+    /// where it would go wrong: the completed form this uses differs from the
+    /// one the extended formula implies by a factor of -1 in two coordinates,
+    /// which cancels projectively and would not cancel if one of them were
+    /// dropped.
+    #[test]
+    fn the_completed_doubling_agrees_with_the_extended_one() {
+        for p in sample_points(40) {
+            let want = p.double();
+            let got = p.to_projective().double().to_extended();
+            assert!(got.eq_projective(&want), "doubling disagrees");
+            // And through the projective form, which is the route a chain of
+            // doublings actually takes.
+            let chained = p.to_projective().double().to_projective().double();
+            let twice = p.double().double();
+            assert!(chained.to_extended().eq_projective(&twice), "two doublings");
+        }
+    }
+
+    /// Niels addition is the nine-multiplication addition.
+    #[test]
+    fn niels_addition_agrees_with_the_general_one() {
+        let pts = sample_points(20);
+        for p in &pts {
+            for q in &pts {
+                let want = p.add(q);
+                let got = p.add_niels(&q.to_niels()).to_extended();
+                assert!(got.eq_projective(&want), "add_niels disagrees");
+
+                let want_sub = p.add(&q.negate());
+                let got_sub = p.sub_niels(&q.to_niels()).to_extended();
+                assert!(got_sub.eq_projective(&want_sub), "sub_niels disagrees");
+            }
+        }
+    }
+
+    /// Affine-Niels addition is the general addition.
+    ///
+    /// It drops the `Z` multiply on the assumption that the stored point has
+    /// `Z = 1`, which `to_affine_niels` arranges by inverting. If that
+    /// inversion or the `2d·x·y` were wrong the result would still be a point
+    /// on the curve, just the wrong one, so it is checked against the addition
+    /// the published vectors validate.
+    #[test]
+    fn affine_niels_addition_agrees_with_the_general_one() {
+        let pts = sample_points(20);
+        for p in &pts {
+            for q in &pts {
+                let want = p.add(q);
+                let got = p.add_affine_niels(&q.to_affine_niels()).to_extended();
+                assert!(got.eq_projective(&want), "add_affine_niels disagrees");
+
+                // And the negated form, which the table's sign handling uses.
+                let mut n = q.to_affine_niels();
+                n.conditional_negate(ic_core::ct::Choice::from_u8(1));
+                let want_neg = p.add(&q.negate());
+                let got_neg = p.add_affine_niels(&n).to_extended();
+                assert!(got_neg.eq_projective(&want_neg), "negated form disagrees");
+            }
+        }
+    }
+
     /// Where verification's time actually goes.
     ///
     /// Ignored: it is a measurement, not an assertion. Run it with
@@ -1145,8 +1488,25 @@ ed25519 verify, cost breakdown:"
         let b = time("mul_basepoint (const time)", &mut || {
             core::hint::black_box(mul_basepoint(&s_sc));
         });
-        let v = time("mul_scalar_vartime", &mut || {
-            core::hint::black_box(a_point.mul_scalar_vartime(&k));
+        let v = time("double_scalar_mul_vartime", &mut || {
+            core::hint::black_box(double_scalar_mul_vartime(&a_point.negate(), &k, &s_sc));
+        });
+        time("  of which: 255 doublings", &mut || {
+            let mut p = a_point;
+            for _ in 0..255 {
+                p = p.double();
+            }
+            core::hint::black_box(p);
+        });
+        time("  of which: 79 additions", &mut || {
+            let mut p = a_point;
+            for _ in 0..79 {
+                p = p.add(&a_point);
+            }
+            core::hint::black_box(p);
+        });
+        time("compress (one inversion)", &mut || {
+            core::hint::black_box(a_point.compress());
         });
         println!(
             "  {:<34} {:>9.2} us",
@@ -1199,5 +1559,56 @@ field and point primitives, nanoseconds:"
                 core::hint::black_box(&a_point).add(core::hint::black_box(&a_point)),
             );
         });
+    }
+
+    /// How many point operations a verification actually performs.
+    #[test]
+    #[ignore = "diagnostic, not a test"]
+    fn count_the_point_operations() {
+        let mut doublings = 0usize;
+        let mut adds_a = 0usize;
+        let mut adds_b = 0usize;
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let trials = 200;
+        for _ in 0..trials {
+            let mut kb = [0u8; 32];
+            for c in kb.chunks_exact_mut(8) {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                c.copy_from_slice(&state.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes());
+            }
+            kb[31] &= 0x0f;
+            let na = wnaf(&kb, 5);
+            let nb = wnaf(&kb, 8);
+            let mut i = 257;
+            while i > 0 && na[i] == 0 && nb[i] == 0 {
+                i -= 1;
+            }
+            doublings += i + 1;
+            adds_a += na.iter().filter(|d| **d != 0).count();
+            adds_b += nb.iter().filter(|d| **d != 0).count();
+        }
+        let d = doublings as f64 / trials as f64;
+        let aa = adds_a as f64 / trials as f64;
+        let ab = adds_b as f64 / trials as f64;
+        println!(
+            "
+  per double-scalar multiplication, averaged over {trials} scalars:"
+        );
+        println!("    doublings                  {d:>8.1}");
+        println!("    additions, w=5 table (A)   {aa:>8.1}");
+        println!("    additions, w=8 table (B)   {ab:>8.1}");
+        println!("    additions, building A      {:>8.1}", 8.0);
+        println!("    ---");
+        println!("    total additions            {:>8.1}", aa + ab + 8.0);
+        println!(
+            "    field muls, at 4M+4S per doubling and 9M per addition: {:>6.0}",
+            d * 8.0 + (aa + ab + 8.0) * 9.0
+        );
+        println!(
+            "    the same at dalek's 3M+4S and 7M:                      {:>6.0}",
+            d * 7.0 + (aa + ab + 8.0) * 7.0
+        );
     }
 }

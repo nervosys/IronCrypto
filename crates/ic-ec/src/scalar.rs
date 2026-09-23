@@ -45,23 +45,141 @@ fn conditional_subtract_l(r: &mut [u32; 9]) {
     }
 }
 
+/// The balanced base-2^21 digits of `-c`, where `L = 2^252 + c`.
+///
+/// `c` is 125 bits against `L`'s 253, and that is the whole reason this
+/// reduction is cheap: `2^252 = L - c`, so `2^252 ≡ -c`, and folding a high
+/// limb down multiplies it by something a fifth of the modulus rather than
+/// something the size of it.
+///
+/// Derived, not transcribed: these are the balanced base-2^21 digits of
+/// `-(L - 2^252)`, and `the_folding_constants_are_the_digits_of_minus_c`
+/// recomputes them from `L` and checks. They agree with the constants ref10
+/// publishes, which is the cross-check that the derivation is the right one.
+const NEG_C_DIGITS: [i64; 6] = [666_643, 470_296, 654_183, -997_805, 136_657, -683_901];
+
+/// Limbs in the working representation: 21 bits each, covering 512 bits.
+const LIMBS: usize = 25;
+
+/// Carry `limbs[i]` into `limbs[i + 1]`, keeping the representation balanced.
+#[inline]
+fn carry(limbs: &mut [i64; LIMBS], i: usize) {
+    let c = (limbs[i] + (1 << 20)) >> 21;
+    limbs[i] -= c << 21;
+    limbs[i + 1] += c;
+}
+
 /// Reduce a 512-bit little-endian integer modulo `L`.
+///
+/// This used to be long division, one bit at a time: 512 rounds of shifting a
+/// nine-limb accumulator and conditionally subtracting `L`, some fifteen
+/// thousand operations. Signing does three of these -- two to turn a hash into
+/// a scalar and one inside `mul_add` -- and they were about a third of its
+/// time.
+///
+/// Folding instead. A limb at position `21i` for `i >= 12` carries a factor of
+/// `2^252`, which is congruent to `-c`, so it can be pushed down twelve places
+/// and multiplied by the six digits of `-c`. Thirteen such folds clear
+/// everything above `2^252`, and the carries between them keep every limb
+/// inside an `i64`.
+///
+/// Constant time: the loops are fixed, the folding is data-independent, and
+/// the final subtractions are masked. The scalar being reduced is secret when
+/// signing.
 pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
-    let mut r = [0u32; 9];
-    for bit_index in (0..512).rev() {
-        // r <<= 1
-        let mut carry = 0u32;
-        for limb in r.iter_mut() {
-            let next = *limb >> 31;
-            *limb = (*limb << 1) | carry;
-            carry = next;
+    // Unpack into 21-bit limbs.
+    let mut limbs = [0i64; LIMBS];
+    for (i, slot) in limbs.iter_mut().enumerate() {
+        let bit = i * 21;
+        let mut v = 0u64;
+        for j in 0..21 {
+            let b = bit + j;
+            if b < 512 {
+                v |= (((input[b / 8] >> (b % 8)) & 1) as u64) << j;
+            }
         }
-        // Bring in the next input bit.
-        r[0] |= ((input[bit_index / 8] >> (bit_index % 8)) & 1) as u32;
-        conditional_subtract_l(&mut r);
+        *slot = v as i64;
     }
 
+    // Fold everything at or above 2^252 down, in rounds of carry-then-fold.
+    //
+    // The two steps have to alternate rather than interleave. A carry pass
+    // writes into the limb above, so carrying inside the folding loop puts
+    //a value back into a position the downward loop has already passed and will
+    // never fold again. Carrying first bounds every limb below 2^21, which is
+    // what keeps the products inside an i64: a digit is under 2^20, so a limb
+    // receives at most six contributions under 2^41 each.
+    //
+    // Three rounds suffice -- a fold divides the excess above 2^252 by roughly
+    // 2^127, so 2^512 comes down to 2^252 + 2^133 and then to nothing -- and
+    // four are run because the count is fixed rather than tested, this being
+    // constant-time code. `folding_agrees_with_long_division` covers the
+    // largest input there is, which is where too few rounds would show.
+    for _round in 0..4 {
+        for k in 0..LIMBS - 1 {
+            carry(&mut limbs, k);
+        }
+        for i in (12..LIMBS).rev() {
+            let t = limbs[i];
+            limbs[i] = 0;
+            for (j, d) in NEG_C_DIGITS.iter().enumerate() {
+                limbs[i - 12 + j] += d * t;
+            }
+        }
+    }
+    // Folding subtracts `c` times the high part, so the residue is congruent
+    // to the input but may be negative -- it lies in roughly `(-L, L)`. Two
+    // copies of `L` are added to put it safely above zero; the conditional
+    // subtractions at the end take them off again.
+    //
+    // `L = 2^252 + c`, and `2^252` is exactly limb 12, so adding `L` is one
+    // increment there and the digits of `c` at the bottom. `c`'s digits are
+    // the negation of the folding constants, which is where they come from.
+    for _ in 0..2 {
+        limbs[12] += 1;
+        for (j, d) in NEG_C_DIGITS.iter().enumerate() {
+            limbs[j] -= d;
+        }
+    }
+    for k in 0..13 {
+        carry(&mut limbs, k);
+    }
+
+    // Now non-negative. Settle into 21-bit limbs.
+    let mut u = [0u64; 14];
+    let mut borrow: i64 = 0;
+    for (slot, &l) in u.iter_mut().zip(limbs.iter().take(14)) {
+        let v = l + borrow;
+        let m = v & ((1 << 21) - 1);
+        borrow = (v - m) >> 21;
+        *slot = m as u64;
+    }
+    debug_assert!(borrow >= 0, "reduction left a negative value");
+
+    // Pack the 21-bit limbs into the 32-byte little-endian encoding.
     let mut out = [0u8; 32];
+    for (i, &v) in u.iter().enumerate() {
+        for j in 0..21 {
+            if (v >> j) & 1 == 1 {
+                let b = i * 21 + j;
+                if b < 256 {
+                    out[b / 8] |= 1 << (b % 8);
+                }
+            }
+        }
+    }
+
+    // At most a couple of multiples of L remain.
+    let mut r = [0u32; 9];
+    for i in 0..8 {
+        let mut b = [0u8; 4];
+        b.copy_from_slice(&out[i * 4..i * 4 + 4]);
+        r[i] = u32::from_le_bytes(b);
+    }
+    conditional_subtract_l(&mut r);
+    conditional_subtract_l(&mut r);
+    conditional_subtract_l(&mut r);
+    conditional_subtract_l(&mut r);
     for i in 0..8 {
         out[i * 4..i * 4 + 4].copy_from_slice(&r[i].to_le_bytes());
     }
@@ -216,5 +334,100 @@ mod tests {
         let direct = mul_add(&a, &b, &[0u8; 32]);
         let pre = mul_add(&reduce(&a), &reduce(&b), &[0u8; 32]);
         assert_eq!(direct, pre);
+    }
+
+    /// The long division the folding replaced, kept as an oracle.
+    ///
+    /// Transcribed unchanged from the previous revision. It is obviously
+    /// correct -- it is school long division with a conditional subtract at
+    /// every bit -- and unusably slow, which is the combination an oracle
+    /// wants.
+    fn reduce_wide_by_long_division(input: &[u8; 64]) -> [u8; 32] {
+        let mut r = [0u32; 9];
+        for bit_index in (0..512).rev() {
+            let mut carry = 0u32;
+            for limb in r.iter_mut() {
+                let next = *limb >> 31;
+                *limb = (*limb << 1) | carry;
+                carry = next;
+            }
+            r[0] |= ((input[bit_index / 8] >> (bit_index % 8)) & 1) as u32;
+            conditional_subtract_l(&mut r);
+        }
+        let mut out = [0u8; 32];
+        for i in 0..8 {
+            out[i * 4..i * 4 + 4].copy_from_slice(&r[i].to_le_bytes());
+        }
+        out
+    }
+
+    /// The folding constants are the digits of `-c`, recomputed from `L`.
+    ///
+    /// They are the one part of this that looks like magic numbers, so they
+    /// are checked against the definition rather than against a reference.
+    #[test]
+    fn the_folding_constants_are_the_digits_of_minus_c() {
+        // c = L - 2^252, from L's own bytes.
+        let mut c = [0u8; 32];
+        c.copy_from_slice(&L);
+        // Clear bit 252, which is L's leading term.
+        c[31] &= !0x10;
+        // Balanced base-2^21 digits of -c, low to high.
+        let mut v: i128 = 0;
+        for (i, b) in c.iter().enumerate().take(16) {
+            v |= (*b as i128) << (8 * i);
+        }
+        let mut v = -v;
+        let mut got = [0i64; 6];
+        for slot in got.iter_mut() {
+            let mut d = (v & ((1 << 21) - 1)) as i64;
+            if d >= 1 << 20 {
+                d -= 1 << 21;
+            }
+            *slot = d;
+            v = (v - d as i128) >> 21;
+        }
+        assert_eq!(v, 0, "c did not fit in six digits");
+        assert_eq!(got, NEG_C_DIGITS);
+    }
+
+    /// The folding reduction against the long division, over random inputs.
+    ///
+    /// Every bit pattern the folding can be handed, including the ones that
+    /// make a limb go negative and borrow: the balanced representation is
+    /// where this would go wrong, and it goes wrong on particular inputs
+    /// rather than on all of them.
+    #[test]
+    fn folding_agrees_with_long_division() {
+        let mut state = 0x2f6d_9c1b_a473_e850u64;
+        let mut next = || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        };
+        for case in 0..3_000 {
+            let mut input = [0u8; 64];
+            match case {
+                0 => {}
+                1 => input = [0xff; 64],
+                2 => input[0] = 1,
+                3 => input[63] = 0x80,
+                _ => {
+                    for chunk in input.chunks_exact_mut(8) {
+                        chunk.copy_from_slice(&next().to_le_bytes());
+                    }
+                    // Sometimes only the low half, so the fold has little to do.
+                    if case % 5 == 0 {
+                        input[32..].fill(0);
+                    }
+                }
+            }
+            assert_eq!(
+                reduce_wide(&input),
+                reduce_wide_by_long_division(&input),
+                "case {case}, input {input:?}"
+            );
+        }
     }
 }
