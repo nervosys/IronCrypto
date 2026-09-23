@@ -538,14 +538,14 @@ builds were going.
 | ECDSA P-256, verify | **~1.4x faster** |
 | X25519 agreement | **~1.3x faster** |
 | AES-256 blocks, AES-NI | **~1.25x faster** |
-| Ed25519, sign | **~1.15x faster** |
+| Ed25519, sign | **~1.17x faster** |
 | SHA3-256 | **~1.05x faster** |
 | AES-256 blocks, portable | level |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
 | SHA-512 | ~1.1x slower |
-| Ed25519, verify | ~1.3x slower |
+| Ed25519, verify | ~1.25x slower |
 
 The portable AES row is against RustCrypto's *software* AES, which is fixsliced
 and is the like-for-like comparison; against AES-NI it is ~133x, which measures
@@ -588,12 +588,20 @@ double-scalar multiplication from 2715 field multiplications to about 2300.
 **Verification is the row still behind, and it is behind evenly.** Timing a
 scalar with a single bit set against a dense one separates the doublings from
 the additions, and doing each scalar alone separates the two tables. Every
-piece lands in the same narrow band: the chain of doublings is 1.10x behind,
+piece lands in the same narrow band: the chain of doublings is 1.09x behind,
 the additions against the eight-entry table 1.16x, the additions against the
-basepoint table 1.11x. There is no one slow step to find -- the operation
-counts match dalek's, the coordinate systems match, and each individual
-multiplication is a little slower, which across some 2300 of them comes to
-1.25x on the multiplication and 1.3x on the verification around it.
+basepoint table 1.11x.
+
+There is no one slow step left to find. The operation counts match dalek's,
+the coordinate systems match, the window widths match, and a doubling issues
+the same 135 multiply instructions either way -- four squarings of fifteen
+products and three multiplications of twenty-five. What differs is how much
+else is in the instruction stream competing with the multiplier for issue
+slots, and six rounds of trying to reduce it have each either done nothing or
+made it worse: three arrangements of the carry (the one here is the best of
+them, confirmed by instruction count and by measurement), dalek's own term
+ordering, a narrower basepoint window, fusing the conversion into the
+addition, and inlining the point operations.
 
 An AVX2 field backend was built far enough to measure -- a four-wide multiply
 is real, 24.35ns against 43.83ns for four scalar ones -- and not kept, because
