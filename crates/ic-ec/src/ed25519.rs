@@ -1549,6 +1549,19 @@ ed25519 verify, cost breakdown:"
         let v = time("double_scalar_mul_vartime", &mut || {
             core::hint::black_box(double_scalar_mul_vartime(&a_point.negate(), &k, &s_sc));
         });
+        time("  of which: wnaf(k,5)+wnaf(s,8)", &mut || {
+            core::hint::black_box(wnaf(&k, 5));
+            core::hint::black_box(wnaf(&s_sc, 8));
+        });
+        time("  of which: odd_a table build", &mut || {
+            let twice = a_point.double();
+            let mut odd = [a_point; 8];
+            for i in 1..8 {
+                odd[i] = odd[i - 1].add(&twice);
+            }
+            let t: [Niels; 8] = core::array::from_fn(|i| odd[i].to_niels());
+            core::hint::black_box(t);
+        });
         time("  of which: 255 doublings", &mut || {
             let mut p = a_point;
             for _ in 0..255 {
