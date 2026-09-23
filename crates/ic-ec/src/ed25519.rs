@@ -89,9 +89,36 @@ impl Point {
         }
     }
 
-    /// Point doubling, via the same complete formula.
+    /// Point doubling, `dbl-2008-hwcd` for `a = -1`.
+    ///
+    /// Adding a point to itself works and was what this did, but the general
+    /// addition costs nine multiplications and needs both operands' `T`. The
+    /// dedicated formula is four multiplications and four squarings, and does
+    /// not read `T` at all -- doubling is a function of `X`, `Y` and `Z` alone.
+    ///
+    /// Worth the separate formula because scalar multiplication is doublings
+    /// almost entirely: the non-adjacent form leaves about forty additions
+    /// against two hundred and fifty-six doublings.
     pub fn double(&self) -> Point {
-        self.add(self)
+        let aa = self.x.square();
+        let bb = self.y.square();
+        let c = self.z.square();
+        let c = c.add(&c);
+        // a = -1, so D = a*A = -A.
+        let d = aa.neg();
+        // E = (X+Y)^2 - A - B, which is 2*X*Y without a multiplication.
+        let xy = self.x.add(&self.y);
+        let e = xy.square().sub(&aa).sub(&bb);
+        let g = d.add(&bb);
+        let f = g.sub(&c);
+        let h = d.sub(&bb);
+
+        Point {
+            x: e.mul(&f),
+            y: g.mul(&h),
+            t: e.mul(&h),
+            z: f.mul(&g),
+        }
     }
 
     /// Constant-time conditional move.
@@ -607,6 +634,35 @@ mod tests {
             hex(&expected_y.to_bytes())
         );
         assert_eq!(hex(&b.compress()), hex(&BASEPOINT_COMPRESSED));
+    }
+
+    /// The dedicated doubling must agree with adding a point to itself.
+    ///
+    /// `add` is what RFC 8032's vectors validate, so it is the oracle here.
+    /// The two formulas are different enough -- one reads `T`, the other does
+    /// not -- that agreeing on the basepoint alone would not be convincing, so
+    /// this walks a chain of multiples and doubles each one.
+    #[test]
+    fn doubling_agrees_with_adding_a_point_to_itself() {
+        let mut p = basepoint();
+        let mut checked = 0;
+        for _ in 0..16 {
+            assert_eq!(
+                p.double().compress(),
+                p.add(&p).compress(),
+                "dedicated doubling and self-addition differ"
+            );
+            p = p.add(&basepoint());
+            checked += 1;
+        }
+        assert_eq!(checked, 16, "the comparison did not run");
+
+        // The identity doubles to itself, which the formula has to get right
+        // without a special case.
+        assert_eq!(
+            Point::IDENTITY.double().compress(),
+            Point::IDENTITY.compress()
+        );
     }
 
     #[test]

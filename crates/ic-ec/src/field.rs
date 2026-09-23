@@ -118,7 +118,42 @@ impl Fe {
     /// Field squaring.
     #[inline]
     pub fn square(&self) -> Fe {
-        self.mul(self)
+        // Twenty-five limb products become fifteen.
+        //
+        // In `a * b` every pair `(i, j)` is distinct, so all twenty-five
+        // appear. Squaring pairs `i` with `j` and `j` with `i` to the same
+        // product, so each off-diagonal term is computed once and doubled --
+        // which is a shift, not a multiplication. The 19s are the same
+        // reduction the general multiply uses, folding `2^255 = 19` back into
+        // the low limbs, pre-multiplied into the doubled coefficients where
+        // both apply.
+        //
+        // This is on the hot path everywhere: four squarings per Edwards
+        // doubling, four per Montgomery ladder step, and a few hundred in a
+        // field inversion.
+        let a = &self.0;
+        let a0 = a[0] as u128;
+        let a1 = a[1] as u128;
+        let a2 = a[2] as u128;
+        let a3 = a[3] as u128;
+        let a4 = a[4] as u128;
+
+        let a0_2 = a0 * 2;
+        let a1_2 = a1 * 2;
+        let a1_38 = a1 * 38;
+        let a2_38 = a2 * 38;
+        let a3_38 = a3 * 38;
+        let a3_19 = a3 * 19;
+        let a4_19 = a4 * 19;
+
+        // r_k = sum_{i+j=k} a_i a_j + 19 * sum_{i+j=k+5} a_i a_j
+        let r0 = a0 * a0 + a1_38 * a4 + a2_38 * a3;
+        let r1 = a0_2 * a1 + a2_38 * a4 + a3_19 * a3;
+        let r2 = a0_2 * a2 + a1 * a1 + a3_38 * a4;
+        let r3 = a0_2 * a3 + a1_2 * a2 + a4_19 * a4;
+        let r4 = a0_2 * a4 + a1_2 * a3 + a2 * a2;
+
+        carry_reduce([r0, r1, r2, r3, r4])
     }
 
     /// Repeated squaring, `self^(2^n)`.
@@ -274,32 +309,83 @@ impl Fe {
 
 /// Fold five 128-bit products back into 51-bit limbs.
 #[inline]
-fn carry_reduce(mut r: [u128; 5]) -> Fe {
-    let mut carry = r[0] >> 51;
-    r[0] &= MASK as u128;
-    for i in 1..5 {
-        r[i] += carry;
-        carry = r[i] >> 51;
-        r[i] &= MASK as u128;
-    }
-    // The carry out of the top limb re-enters at the bottom scaled by 19.
-    r[0] += carry * 19;
-
+fn carry_reduce(r: [u128; 5]) -> Fe {
+    // One 128-bit pass, then a 64-bit one.
+    //
+    // This used to make both passes over the `u128` array. It does not need
+    // to: after the first pass every limb is below `2^51`, so the second is
+    // ordinary 64-bit work, and on x86-64 a 128-bit shift and mask is several
+    // instructions where the 64-bit form is one. The second pass is on the hot
+    // path of every field multiplication and squaring, which is to say of
+    // everything on this curve.
     let mut out = [0u64; 5];
-    let mut c = r[0] >> 51;
-    out[0] = (r[0] & MASK as u128) as u64;
-    for i in 1..5 {
-        let v = r[i] + c;
-        c = v >> 51;
-        out[i] = (v & MASK as u128) as u64;
+    let mut carry: u128 = 0;
+    for (slot, limb) in out.iter_mut().zip(r) {
+        let v = limb + carry;
+        carry = v >> 51;
+        *slot = (v & MASK as u128) as u64;
     }
-    out[0] += (c as u64) * 19;
+
+    // The carry out of the top re-enters at the bottom scaled by 19. A product
+    // of two reduced elements leaves that carry below 2^56, so `carry * 19`
+    // and the limb it lands on both stay inside a u64 -- which is what lets
+    // the second pass drop to 64 bits.
+    out[0] += (carry as u64) * 19;
+
+    let mut c = out[0] >> 51;
+    out[0] &= MASK;
+    for slot in out.iter_mut().skip(1) {
+        *slot += c;
+        c = *slot >> 51;
+        *slot &= MASK;
+    }
+    out[0] += c * 19;
     Fe(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Squaring must agree with multiplying a value by itself.
+    ///
+    /// The dedicated formula reaches the same answer by a different route --
+    /// fifteen products where the general one has twenty-five, with the
+    /// off-diagonal terms doubled rather than recomputed -- so agreement is
+    /// the whole correctness argument. `mul` is what the RFC 7748 and RFC 8032
+    /// vectors validate, which makes it the oracle.
+    ///
+    /// The values include zero, one, the largest limbs the representation
+    /// holds unreduced, and values that carry out of every limb, because the
+    /// doubling is where this formula can overflow if the bounds are wrong.
+    #[test]
+    fn squaring_agrees_with_multiplication() {
+        let mut cases = std::vec![
+            Fe::ZERO,
+            Fe::ONE,
+            Fe([1, 1, 1, 1, 1]),
+            Fe([(1u64 << 51) - 1; 5]),
+            Fe([(1u64 << 51) - 1, 0, (1u64 << 51) - 1, 0, (1u64 << 51) - 1]),
+            Fe([0, (1u64 << 51) - 1, 0, (1u64 << 51) - 1, 0]),
+        ];
+        // And a spread of pseudo-random field elements.
+        let mut x = Fe([0x51a2, 0x9e37, 0x79b9, 0x7f4a, 0x7c15]);
+        for _ in 0..16 {
+            x = x.mul(&Fe([3, 5, 7, 11, 13])).add(&Fe::ONE);
+            cases.push(x);
+        }
+
+        let mut checked = 0;
+        for f in &cases {
+            assert_eq!(
+                f.square().to_bytes(),
+                f.mul(f).to_bytes(),
+                "square and mul-by-self differ"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 22, "the comparison did not run");
+    }
 
     fn fe(v: u64) -> Fe {
         Fe::from_u64(v)

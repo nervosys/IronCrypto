@@ -528,12 +528,13 @@ parity rather than as whichever run flattered it:
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
-| X25519 agreement | ~1.1x slower |
+| X25519 agreement | level |
+
 | SHA3-256 | ~1.3x slower |
 | SHA-512 | ~1.3-1.75x slower |
 
-| Ed25519 sign, cached key | ~1.95x slower |
-| Ed25519 verify | ~3x slower |
+| Ed25519 sign, cached key | ~1.86x slower |
+| Ed25519 verify | ~2.8x slower |
 | AES-256 blocks, portable | ~5800x slower |
 
 The bulk symmetric work — the part a TLS connection or a file encryption
