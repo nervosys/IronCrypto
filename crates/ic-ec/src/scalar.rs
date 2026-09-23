@@ -87,18 +87,22 @@ fn carry(limbs: &mut [i64; LIMBS], i: usize) {
 /// the final subtractions are masked. The scalar being reduced is secret when
 /// signing.
 pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
-    // Unpack into 21-bit limbs.
+    // Unpack into 21-bit limbs, eight bytes at a time.
+    //
+    // A limb spans at most four bytes, so one unaligned 64-bit read and a
+    // shift produces it. Doing this a bit at a time -- 525 iterations with a
+    // bounds test each -- cost more than the folding it feeds.
+    //
+    // The scratch buffer is eight bytes longer than the input so the read for
+    // the top limb stays in bounds rather than needing a special case.
+    let mut padded = [0u8; 72];
+    padded[..64].copy_from_slice(input);
     let mut limbs = [0i64; LIMBS];
     for (i, slot) in limbs.iter_mut().enumerate() {
         let bit = i * 21;
-        let mut v = 0u64;
-        for j in 0..21 {
-            let b = bit + j;
-            if b < 512 {
-                v |= (((input[b / 8] >> (b % 8)) & 1) as u64) << j;
-            }
-        }
-        *slot = v as i64;
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&padded[bit / 8..bit / 8 + 8]);
+        *slot = ((u64::from_le_bytes(b) >> (bit % 8)) & ((1 << 21) - 1)) as i64;
     }
 
     // Fold everything at or above 2^252 down, in rounds of carry-then-fold.
@@ -156,18 +160,18 @@ pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
     }
     debug_assert!(borrow >= 0, "reduction left a negative value");
 
-    // Pack the 21-bit limbs into the 32-byte little-endian encoding.
-    let mut out = [0u8; 32];
-    for (i, &v) in u.iter().enumerate() {
-        for j in 0..21 {
-            if (v >> j) & 1 == 1 {
-                let b = i * 21 + j;
-                if b < 256 {
-                    out[b / 8] |= 1 << (b % 8);
-                }
-            }
-        }
+    // Pack the 21-bit limbs into the 32-byte little-endian encoding, eight
+    // bytes at a time for the same reason.
+    let mut wide = [0u8; 40];
+    for (i, &v) in u.iter().enumerate().take(13) {
+        let bit = i * 21;
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&wide[bit / 8..bit / 8 + 8]);
+        let merged = u64::from_le_bytes(b) | (v << (bit % 8));
+        wide[bit / 8..bit / 8 + 8].copy_from_slice(&merged.to_le_bytes());
     }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&wide[..32]);
 
     // At most a couple of multiples of L remain.
     let mut r = [0u32; 9];
