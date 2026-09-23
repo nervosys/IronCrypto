@@ -130,6 +130,63 @@ impl Point {
         acc
     }
 
+    /// Negate: `-(x, y, z, t)` is `(-x, y, z, -t)`.
+    fn negate(&self) -> Point {
+        Point {
+            x: self.x.neg(),
+            y: self.y,
+            z: self.z,
+            t: self.t.neg(),
+        }
+    }
+
+    /// Scalar multiplication that is **not** constant time.
+    ///
+    /// # When this is allowed
+    ///
+    /// Only on values an attacker already has. Verification is the case: the
+    /// signature, the public key and the message are all public, so there is no
+    /// secret whose timing could leak, and the constant-time ladder buys
+    /// nothing there but work. Signing must never call this -- the scalar is
+    /// derived from the seed.
+    ///
+    /// # What it does instead
+    ///
+    /// A width-5 non-adjacent form. Recoding the scalar into signed odd digits
+    /// leaves roughly one position in six non-zero, so the additions drop from
+    /// one per bit to about forty in total; the doublings remain, because an
+    /// arbitrary point has no precomputed table to take them away. Only odd
+    /// multiples are stored, eight of them, since a negative digit negates on
+    /// the way out.
+    ///
+    /// The saving is real but bounded: the doublings dominate and they cannot
+    /// be avoided here. The basepoint half of verification is the one that got
+    /// a table.
+    pub fn mul_scalar_vartime(&self, scalar: &[u8; 32]) -> Point {
+        // 1P, 3P, 5P .. 15P.
+        let twice = self.double();
+        let mut odd = [*self; 8];
+        for i in 1..8 {
+            odd[i] = odd[i - 1].add(&twice);
+        }
+
+        let naf = wnaf5(scalar);
+        let mut acc = Point::IDENTITY;
+        for digit in naf.iter().rev() {
+            acc = acc.double();
+            if *digit != 0 {
+                // digit is odd and in [-15, 15]; |digit|/2 indexes the table.
+                let entry = &odd[(digit.unsigned_abs() as usize) / 2];
+                acc = if *digit > 0 {
+                    acc.add(entry)
+                } else {
+                    acc.add(&entry.negate())
+                };
+            }
+        }
+        acc
+    }
+
     /// Compress to the 32-byte RFC 8032 encoding.
     pub fn compress(&self) -> [u8; 32] {
         let z_inv = self.z.invert();
@@ -229,6 +286,85 @@ fn expand_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
     a[31] &= 127;
     a[31] |= 64;
     (a, prefix)
+}
+
+/// Width-5 non-adjacent form of a 256-bit scalar.
+///
+/// Each non-zero digit is odd and lies in `[-15, 15]`, and no two non-zero
+/// digits are adjacent, which is what keeps the density near one in six. The
+/// array has room to run past the top of the scalar.
+///
+/// Variable time by construction: the loop length and the digit pattern depend
+/// on the scalar. See [`Point::mul_scalar_vartime`] for when that is allowed.
+fn wnaf5(scalar: &[u8; 32]) -> [i8; 258] {
+    let mut naf = [0i8; 258];
+    // Five limbs for a four-limb scalar. A negative digit adds to `k`, and for
+    // a scalar near 2^256 that carries out of the top: on four limbs it wraps
+    // to zero, the loop stops early, and the representation is silently short.
+    // The scalars that reach this are reduced modulo the group order and could
+    // not trigger it -- which is exactly the assumption that was wrong for the
+    // NIST recoding, so the room is given rather than argued for.
+    let mut k = [0u64; 5];
+    for (i, limb) in k.iter_mut().take(4).enumerate() {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&scalar[i * 8..i * 8 + 8]);
+        *limb = u64::from_le_bytes(b);
+    }
+
+    let mut i = 0;
+    while k.iter().any(|&x| x != 0) {
+        if k[0] & 1 == 1 {
+            let mut d = (k[0] & 0x1f) as i64;
+            if d >= 16 {
+                d -= 32;
+            }
+            naf[i] = d as i8;
+            if d > 0 {
+                sub_u64(&mut k, d as u64);
+            } else {
+                add_u64(&mut k, d.unsigned_abs());
+            }
+        }
+        shr1(&mut k);
+        i += 1;
+    }
+    naf
+}
+
+/// `k -= v`, for `v` small enough not to borrow past the top.
+fn sub_u64(k: &mut [u64; 5], v: u64) {
+    let (d, mut borrow) = k[0].overflowing_sub(v);
+    k[0] = d;
+    for limb in k.iter_mut().skip(1) {
+        if !borrow {
+            break;
+        }
+        let (d, b) = limb.overflowing_sub(1);
+        *limb = d;
+        borrow = b;
+    }
+}
+
+/// `k += v`, for `v` small enough not to carry past the top.
+fn add_u64(k: &mut [u64; 5], v: u64) {
+    let (d, mut carry) = k[0].overflowing_add(v);
+    k[0] = d;
+    for limb in k.iter_mut().skip(1) {
+        if !carry {
+            break;
+        }
+        let (d, c) = limb.overflowing_add(1);
+        *limb = d;
+        carry = c;
+    }
+}
+
+/// `k >>= 1`.
+fn shr1(k: &mut [u64; 5]) {
+    for i in 0..4 {
+        k[i] = (k[i] >> 1) | (k[i + 1] << 63);
+    }
+    k[4] >>= 1;
 }
 
 /// `SHA-512(parts...)` reduced modulo the group order.
@@ -379,7 +515,9 @@ impl SignatureScheme for Ed25519 {
 
         // Check [S]B == R + [k]A.
         let lhs = mul_basepoint(&s);
-        let rhs = r_point.add(&a_point.mul_scalar(&k));
+        // Everything here is public -- the signature, the key, the message --
+        // so the constant-time ladder protects nothing and costs work.
+        let rhs = r_point.add(&a_point.mul_scalar_vartime(&k));
 
         if ic_core::ct::verify(&lhs.compress(), &rhs.compress()) {
             Ok(())
@@ -639,6 +777,86 @@ mod tests {
             }
         }
         assert_eq!(checked, 9, "the comparison did not run");
+    }
+
+    /// The variable-time path must agree with the constant-time one.
+    ///
+    /// RFC 8032's vectors reach it with a handful of scalars, which says little
+    /// about a recoding whose digit pattern is different for every scalar. This
+    /// drives both over scalars picked to stress the recoding: zero, one, a
+    /// value that carries at every position, alternating bits, and the top of
+    /// the range.
+    #[test]
+    fn the_vartime_multiplication_agrees_with_the_ladder() {
+        let p = basepoint();
+
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        let mut two = [0u8; 32];
+        two[0] = 2;
+        let mut top = [0xffu8; 32];
+        top[31] = 0x7f;
+
+        let mut checked = 0;
+        for scalar in [
+            [0u8; 32],
+            one,
+            two,
+            [0xffu8; 32],
+            [0x55u8; 32],
+            [0xaau8; 32],
+            top,
+            [0x9du8; 32],
+        ] {
+            let fast = p.mul_scalar_vartime(&scalar);
+            let slow = p.mul_scalar(&scalar);
+            assert_eq!(
+                fast.compress(),
+                slow.compress(),
+                "vartime and ladder differ for {scalar:02x?}"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 8, "the comparison did not run");
+    }
+
+    /// The recoding must represent the scalar, with the digits it promises.
+    #[test]
+    fn the_wnaf_digits_are_odd_sparse_and_faithful() {
+        for scalar in [[1u8; 32], [0x9du8; 32], [0xffu8; 32], [0x55u8; 32]] {
+            let naf = wnaf5(&scalar);
+
+            let mut previous_nonzero: Option<usize> = None;
+            for (i, d) in naf.iter().enumerate() {
+                if *d == 0 {
+                    continue;
+                }
+                assert!(d % 2 != 0, "digit {d} at {i} is not odd");
+                assert!((-15..=15).contains(d), "digit {d} at {i} is out of range");
+                if let Some(j) = previous_nonzero {
+                    assert!(i - j >= 5, "digits at {j} and {i} are adjacent");
+                }
+                previous_nonzero = Some(i);
+            }
+
+            // And it evaluates back to the scalar, modulo a small prime that
+            // has nothing to do with the curve.
+            const M: u128 = 1_000_000_007;
+            let mut from_digits = 0u128;
+            let mut power = 1u128;
+            for d in naf {
+                let term = ((d as i128).rem_euclid(M as i128)) as u128;
+                from_digits = (from_digits + term * power) % M;
+                power = power * 2 % M;
+            }
+            let mut from_bytes = 0u128;
+            let mut p = 1u128;
+            for byte in scalar {
+                from_bytes = (from_bytes + (byte as u128) * p) % M;
+                p = p * 256 % M;
+            }
+            assert_eq!(from_digits, from_bytes, "recoding changed the value");
+        }
     }
 
     #[test]

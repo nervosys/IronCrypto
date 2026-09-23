@@ -532,7 +532,7 @@ parity rather than as whichever run flattered it:
 | SHA-512 | ~1.75x slower |
 | ECDSA P-256 verify | ~1.3x slower |
 | Ed25519 sign, cached key | ~1.95x slower |
-| Ed25519 verify | ~5x slower |
+| Ed25519 verify | ~3x slower |
 | AES-256 blocks, portable | ~5800x slower |
 
 The bulk symmetric work — the part a TLS connection or a file encryption
@@ -548,8 +548,10 @@ Ed25519 uses a precomputed basepoint table, and `Ed25519Key` derives the public
 key once so signing performs one basepoint multiplication rather than two --
 44.7us from a seed against 23.5us from a held key, which is what dalek's
 `SigningKey` has always done and what makes the comparison like-for-like.
-Verification's gap is its multiplication against the public key, which no
-basepoint table can help. ECDSA now has one too, which is why signing moved from
+Verification's remaining gap is its multiplication against the public key,
+which no basepoint table can help; it uses a width-5 non-adjacent form instead,
+which is variable time and allowed to be -- the signature, the key and the
+message are all public, so there is no secret whose timing could leak. ECDSA now has one too, which is why signing moved from
 1.9x behind to 2.0x ahead: a diagnostic showed one scalar multiplication cost
 146.8us against 159.5us for a whole signature, so the ladder was essentially
 all of it. Verification keeps a gap because its second multiplication is
