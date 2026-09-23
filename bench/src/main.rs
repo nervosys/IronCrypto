@@ -240,15 +240,24 @@ fn main() {
 
     let msg = b"benchmark message";
     let mut sig = [0u8; 64];
-    let e1 = per_op("iron-crypto ed25519 sign", 200, 3, || {
+    // dalek's SigningKey derives its public key once at construction, so
+    // comparing it against the seed-only call had IronCrypto doing a second
+    // basepoint multiplication dalek never pays. `Ed25519Key` is the
+    // equivalent; both figures are kept so the cost of that derivation shows.
+    let e0 = per_op("iron-crypto ed25519 sign (from seed)", 200, 3, || {
         iron_crypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
+    });
+    let ic_key = iron_crypto::ec::Ed25519Key::from_seed(&sk).unwrap();
+    let e1 = per_op("iron-crypto ed25519 sign (cached key)", 200, 3, || {
+        ic_key.sign(msg, &mut sig).unwrap();
     });
     let d_key = ed25519_dalek::SigningKey::from_bytes(&sk);
     let e2 = per_op("dalek ed25519 sign", 200, 3, || {
         use ed25519_dalek::Signer;
         let _ = d_key.sign(msg);
     });
-    verdict("ed25519 sign", e1, e2, false);
+    verdict("ed25519 sign (cached vs dalek)", e1, e2, false);
+    verdict("ed25519 sign, seed vs cached", e0, e1, false);
 
     let mut ed_pk = [0u8; 32];
     iron_crypto::ec::Ed25519::public_key(&sk, &mut ed_pk).unwrap();

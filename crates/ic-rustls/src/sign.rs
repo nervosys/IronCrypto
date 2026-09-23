@@ -130,9 +130,9 @@ impl KeyProvider for Keys {
                         seed.len()
                     )));
                 }
-                Ok(Arc::new(Ed25519SigningKey {
-                    seed: seed.to_vec(),
-                }))
+                let key = ic_ec::Ed25519Key::from_seed(seed)
+                    .map_err(|e| Error::General(format!("unusable Ed25519 key: {e}")))?;
+                Ok(Arc::new(Ed25519SigningKey { key: Arc::new(key) }))
             }
             other => Err(Error::General(format!(
                 "ic-rustls signs with ECDSA, Ed25519 and RSA; this key is {}, which crate::verify \
@@ -270,9 +270,13 @@ impl Signer for EcdsaSigner {
 /// The scheme fixes the hash and the curve together, so there is nothing to
 /// choose: one key, one scheme, one 64-byte signature.
 struct Ed25519SigningKey {
-    /// The 32-byte seed. Not the expanded scalar -- `ic_ec` expands it per
-    /// operation and wipes what it expanded.
-    seed: Vec<u8>,
+    /// The expanded key, with its public key already derived.
+    ///
+    /// Held rather than the seed because RFC 8032 signing needs the public key
+    /// in its hash, so a signer given only a seed re-derives it -- a second
+    /// basepoint multiplication on every signature, which is most of what one
+    /// costs. A server signs many times with one certificate key.
+    key: Arc<ic_ec::Ed25519Key>,
 }
 
 impl core::fmt::Debug for Ed25519SigningKey {
@@ -281,17 +285,11 @@ impl core::fmt::Debug for Ed25519SigningKey {
     }
 }
 
-impl Drop for Ed25519SigningKey {
-    fn drop(&mut self) {
-        self.seed.zeroize();
-    }
-}
-
 impl SigningKey for Ed25519SigningKey {
     fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
         offered.contains(&SignatureScheme::ED25519).then(|| {
             Box::new(Ed25519Signer {
-                seed: self.seed.clone(),
+                key: Arc::clone(&self.key),
             }) as Box<dyn Signer>
         })
     }
@@ -302,7 +300,7 @@ impl SigningKey for Ed25519SigningKey {
 }
 
 struct Ed25519Signer {
-    seed: Vec<u8>,
+    key: Arc<ic_ec::Ed25519Key>,
 }
 
 impl core::fmt::Debug for Ed25519Signer {
@@ -311,18 +309,13 @@ impl core::fmt::Debug for Ed25519Signer {
     }
 }
 
-impl Drop for Ed25519Signer {
-    fn drop(&mut self) {
-        self.seed.zeroize();
-    }
-}
-
 impl Signer for Ed25519Signer {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         // Ed25519 hashes the message itself, twice, as part of the scheme. As
         // everywhere else here, the message is passed through unhashed.
         let mut sig = [0u8; 64];
-        ic_ec::Ed25519::sign(&self.seed, message, &mut sig)
+        self.key
+            .sign(message, &mut sig)
             .map_err(|e| Error::General(format!("signing failed: {e}")))?;
         Ok(sig.to_vec())
     }

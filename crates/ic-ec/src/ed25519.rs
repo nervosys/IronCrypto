@@ -243,6 +243,80 @@ fn hash_to_scalar(parts: &[&[u8]]) -> [u8; 32] {
     scalar::reduce_wide(&wide)
 }
 
+/// A signing key with its public key already derived.
+///
+/// # Why this exists
+///
+/// RFC 8032 signing needs the public key: it goes into the hash that produces
+/// `k`. [`Ed25519::sign`] takes only the 32-byte seed, so it has to derive the
+/// public key on every call -- a second basepoint multiplication, and with the
+/// table in place that is most of what a signature now costs.
+///
+/// A key that is used more than once should derive it once. That is what a TLS
+/// server does with a certificate key, and what dalek's `SigningKey` does,
+/// which is why comparing `Ed25519::sign` against it was comparing two
+/// different amounts of work.
+///
+/// The trait method still exists and still takes a seed. This changes nothing
+/// for a caller signing once; it halves the cost for a caller signing twice.
+pub struct Ed25519Key {
+    /// The clamped scalar from the seed's hash.
+    scalar: [u8; 32],
+    /// The second half of that hash, which seeds the deterministic nonce.
+    prefix: [u8; 32],
+    /// `scalar * B`, compressed. Derived once, here.
+    public: [u8; 32],
+}
+
+impl Drop for Ed25519Key {
+    fn drop(&mut self) {
+        self.scalar.zeroize();
+        self.prefix.zeroize();
+        // `public` is public, and is left alone.
+    }
+}
+
+impl Ed25519Key {
+    /// Expand a 32-byte seed and derive its public key.
+    pub fn from_seed(seed: &[u8]) -> Result<Self> {
+        ensure!(seed.len() == 32, InvalidLength, "ed25519 seed");
+        let (scalar, prefix) = expand_seed(seed);
+        let public = mul_basepoint(&scalar).compress();
+        Ok(Self {
+            scalar,
+            prefix,
+            public,
+        })
+    }
+
+    /// The public key, already derived.
+    pub fn public_key(&self) -> &[u8; 32] {
+        &self.public
+    }
+
+    /// Sign `message`, performing one basepoint multiplication rather than two.
+    pub fn sign(&self, message: &[u8], signature: &mut [u8]) -> Result<()> {
+        ensure!(
+            signature.len() == 64,
+            InvalidLength,
+            "ed25519 signature buffer"
+        );
+
+        // r = H(prefix || M), deterministic -- Ed25519 needs no RNG at signing
+        // time, which removes an entire class of nonce-reuse failures.
+        let mut r = hash_to_scalar(&[&self.prefix, message]);
+        let big_r = mul_basepoint(&r).compress();
+
+        let k = hash_to_scalar(&[&big_r, &self.public, message]);
+        let s = scalar::mul_add(&k, &self.scalar, &r);
+
+        signature[..32].copy_from_slice(&big_r);
+        signature[32..].copy_from_slice(&s);
+        r.zeroize();
+        Ok(())
+    }
+}
+
 impl SignatureScheme for Ed25519 {
     const PRIVATE_KEY_LEN: usize = 32;
     const PUBLIC_KEY_LEN: usize = 32;
@@ -252,7 +326,7 @@ impl SignatureScheme for Ed25519 {
         ensure!(private_key.len() == 32, InvalidLength, "ed25519 seed");
         ensure!(out.len() == 32, InvalidLength, "ed25519 public key buffer");
         let (mut a, mut prefix) = expand_seed(private_key);
-        out.copy_from_slice(&basepoint().mul_scalar(&a).compress());
+        out.copy_from_slice(&mul_basepoint(&a).compress());
         a.zeroize();
         prefix.zeroize();
         Ok(())
@@ -266,24 +340,10 @@ impl SignatureScheme for Ed25519 {
             "ed25519 signature buffer"
         );
 
-        let (mut a, mut prefix) = expand_seed(private_key);
-        let pk = mul_basepoint(&a).compress();
-
-        // r = H(prefix || M), deterministic — Ed25519 needs no RNG at signing
-        // time, which removes an entire class of nonce-reuse failures.
-        let mut r = hash_to_scalar(&[&prefix, message]);
-        let big_r = mul_basepoint(&r).compress();
-
-        let k = hash_to_scalar(&[&big_r, &pk, message]);
-        let s = scalar::mul_add(&k, &a, &r);
-
-        signature[..32].copy_from_slice(&big_r);
-        signature[32..].copy_from_slice(&s);
-
-        a.zeroize();
-        prefix.zeroize();
-        r.zeroize();
-        Ok(())
+        // One shot: expand, derive the public key, sign, discard. A caller
+        // signing more than once should hold an `Ed25519Key` instead and pay
+        // the derivation once.
+        Ed25519Key::from_seed(private_key)?.sign(message, signature)
     }
 
     fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
@@ -546,6 +606,39 @@ mod tests {
             carry = t >> 8;
         }
         assert!(Ed25519::verify(&pk, b"msg", &sig).is_err());
+    }
+
+    /// The cached key and the seed-only call must produce the same signature.
+    ///
+    /// They share a code path now, which is the point -- but that is the sort
+    /// of thing a later refactor separates again, and the two would then differ
+    /// only for callers who use one and verify with the other. RFC 8032's
+    /// vectors exercise the trait method alone and would not notice.
+    #[test]
+    fn the_cached_key_signs_identically_to_the_seed() {
+        let mut checked = 0;
+        for seed in [[0x11u8; 32], [0x9du8; 32], [0xffu8; 32]] {
+            for message in [&b""[..], &b"x"[..], &b"a longer message to sign"[..]] {
+                let mut from_seed = [0u8; 64];
+                Ed25519::sign(&seed, message, &mut from_seed).unwrap();
+
+                let key = Ed25519Key::from_seed(&seed).unwrap();
+                let mut from_key = [0u8; 64];
+                key.sign(message, &mut from_key).unwrap();
+
+                assert_eq!(from_seed, from_key, "the two signing paths diverged");
+
+                // And the cached public key is the one the trait derives.
+                let mut derived = [0u8; 32];
+                Ed25519::public_key(&seed, &mut derived).unwrap();
+                assert_eq!(&derived, key.public_key());
+
+                // Both verify, so neither is consistently wrong.
+                Ed25519::verify(&derived, message, &from_key).unwrap();
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 9, "the comparison did not run");
     }
 
     #[test]

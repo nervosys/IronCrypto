@@ -49,7 +49,7 @@ pub mod p521;
 pub mod scalar;
 pub mod x25519;
 
-pub use ed25519::Ed25519;
+pub use ed25519::{Ed25519, Ed25519Key};
 pub use p256::{EcdhP256, EcdsaP256Sha256};
 pub use p384::{EcdhP384, EcdsaP384Sha384};
 pub use x25519::X25519;

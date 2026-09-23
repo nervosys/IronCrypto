@@ -531,7 +531,8 @@ parity rather than as whichever run flattered it:
 | SHA3-256 | ~1.3x slower |
 | SHA-512 | ~1.75x slower |
 | ECDSA P-256 verify | ~1.3x slower |
-| Ed25519 sign / verify | ~3.4x / ~4.3x slower |
+| Ed25519 sign, cached key | ~1.95x slower |
+| Ed25519 verify | ~5x slower |
 | AES-256 blocks, portable | ~5800x slower |
 
 The bulk symmetric work — the part a TLS connection or a file encryption
@@ -539,12 +540,15 @@ actually spends its time in — is at or ahead of the fastest Rust
 implementations. What remains behind is public-key operations, where the gap is
 algorithmic rather than in the field arithmetic (X25519 is within 9%, so the
 arithmetic underneath is competitive; Ed25519 signing does two basepoint
-multiplications where dalek does one, because the signing interface takes only
-the seed and so must re-derive the public key on every call), and the software
-AES fallback.
+multiplication per signature more than dalek did, because the seed-only
+interface must re-derive the public key every call), and the software AES
+fallback.
 
-Ed25519 uses a precomputed basepoint table; the remaining gap is that second
-multiplication and, for verification, the one against the public key, which no
+Ed25519 uses a precomputed basepoint table, and `Ed25519Key` derives the public
+key once so signing performs one basepoint multiplication rather than two --
+44.7us from a seed against 23.5us from a held key, which is what dalek's
+`SigningKey` has always done and what makes the comparison like-for-like.
+Verification's gap is its multiplication against the public key, which no
 basepoint table can help. ECDSA now has one too, which is why signing moved from
 1.9x behind to 2.0x ahead: a diagnostic showed one scalar multiplication cost
 146.8us against 159.5us for a whole signature, so the ladder was essentially
