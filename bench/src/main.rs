@@ -347,6 +347,47 @@ Edwards point primitives (lower is better)");
         });
         verdict("double-scalar, sparse (doublings only)", s0, s1, false);
 
+        // One scalar at a time, to separate the two tables. [k]A reads an
+        // eight-entry table built on the stack for this call; [s]B reads a
+        // sixty-four entry static one. If the additions are memory-bound
+        // rather than arithmetic-bound, these differ.
+        let zero = [0u8; 32];
+        let d_zero = DScalar::from_bytes_mod_order(zero);
+        let ka = per_op("iron-crypto [k]A only", 2000, 5, || {
+            std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
+                std::hint::black_box(&ours),
+                &kb,
+                &zero,
+            ));
+        });
+        let kb_ = per_op("iron-crypto [s]B only", 2000, 5, || {
+            std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
+                std::hint::black_box(&ours),
+                &zero,
+                &kb,
+            ));
+        });
+        let da = per_op("dalek [k]A only", 2000, 5, || {
+            std::hint::black_box(
+                curve25519_dalek::edwards::EdwardsPoint::vartime_double_scalar_mul_basepoint(
+                    &k,
+                    std::hint::black_box(&theirs),
+                    &d_zero,
+                ),
+            );
+        });
+        let db = per_op("dalek [s]B only", 2000, 5, || {
+            std::hint::black_box(
+                curve25519_dalek::edwards::EdwardsPoint::vartime_double_scalar_mul_basepoint(
+                    &d_zero,
+                    std::hint::black_box(&theirs),
+                    &k,
+                ),
+            );
+        });
+        verdict("[k]A only", ka, da, false);
+        verdict("[s]B only", kb_, db, false);
+
         let b0 = per_op("iron-crypto [s]B (const time)", 5000, 5, || {
             std::hint::black_box(ic_ec::ed25519::mul_basepoint_for_bench(std::hint::black_box(
                 &kb,

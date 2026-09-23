@@ -538,14 +538,14 @@ builds were going.
 | ECDSA P-256, verify | **~1.4x faster** |
 | X25519 agreement | **~1.3x faster** |
 | AES-256 blocks, AES-NI | **~1.25x faster** |
-| Ed25519, sign | **~1.1x faster** |
+| Ed25519, sign | **~1.15x faster** |
 | SHA3-256 | **~1.05x faster** |
 | AES-256 blocks, portable | level |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
 | SHA-512 | ~1.1x slower |
-| Ed25519, verify | ~1.25x slower |
+| Ed25519, verify | ~1.3x slower |
 
 The portable AES row is against RustCrypto's *software* AES, which is fixsliced
 and is the like-for-like comparison; against AES-NI it is ~133x, which measures
@@ -585,14 +585,22 @@ and decompression 1.37x faster. It was doing more work with it, in three places:
 Together those took signing from 1.6x behind dalek to ahead of it, and the
 double-scalar multiplication from 2715 field multiplications to about 2300.
 
-**Verification is the row still behind.** What is left is per-operation
-overhead rather than operation count: the counts now match dalek's, and the gap
-is the additions, subtractions and struct moves around the multiplications. An
-AVX2 field backend was built far enough to measure -- a four-wide multiply is
-real, 24.35ns against 43.83ns for four scalar ones -- and not kept, because 77%
-of a doubling is its multiplications and the other 23% becomes lane shuffles
-rather than disappearing, and it would cost `ic-ec` its `forbid(unsafe_code)`.
-`crates/ic-ec/src/field.rs` records the numbers.
+**Verification is the row still behind, and it is behind evenly.** Timing a
+scalar with a single bit set against a dense one separates the doublings from
+the additions, and doing each scalar alone separates the two tables. Every
+piece lands in the same narrow band: the chain of doublings is 1.10x behind,
+the additions against the eight-entry table 1.16x, the additions against the
+basepoint table 1.11x. There is no one slow step to find -- the operation
+counts match dalek's, the coordinate systems match, and each individual
+multiplication is a little slower, which across some 2300 of them comes to
+1.25x on the multiplication and 1.3x on the verification around it.
+
+An AVX2 field backend was built far enough to measure -- a four-wide multiply
+is real, 24.35ns against 43.83ns for four scalar ones -- and not kept, because
+77% of a doubling is its multiplications and the other 23% becomes lane
+shuffles rather than disappearing, and it would cost `ic-ec` its
+`forbid(unsafe_code)`. `crates/ic-ec/src/field.rs` records that and the four
+other things tried against this gap that made it worse.
 
 `Ed25519VerifyKey` holds a decompressed public key, the way `Ed25519Key` holds
 a derived one for signing. Recovering the point is a field exponentiation, and
