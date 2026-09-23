@@ -25,6 +25,7 @@
 //! is not an independent reimplementation to be trusted on its own; it is an
 //! optimization held to the output of something already known to be correct.
 
+pub mod bitslice;
 pub mod portable;
 
 // Only where something expands them: the real backend on aarch64, and the
@@ -226,8 +227,25 @@ impl Keys {
                     InvalidLength,
                     "aes batch must be block-aligned"
                 );
-                for block in data.chunks_exact_mut(BLOCK_LEN) {
-                    portable::encrypt_block(s, block)?;
+                // Four blocks at a time through the bitsliced path, which pays
+                // one S-box for sixty-four bytes rather than one per byte.
+                // Transposing the round keys costs about as much as a group, so
+                // it is only worth it once there is at least one full group;
+                // below that, and for whatever is left over at the end, the
+                // byte-at-a-time path runs.
+                if data.len() >= bitslice::GROUP {
+                    let keys = bitslice::RoundKeys::new(s);
+                    let mut groups = data.chunks_exact_mut(bitslice::GROUP);
+                    for group in &mut groups {
+                        bitslice::encrypt_group(&keys, group);
+                    }
+                    for block in groups.into_remainder().chunks_exact_mut(BLOCK_LEN) {
+                        portable::encrypt_block(s, block)?;
+                    }
+                } else {
+                    for block in data.chunks_exact_mut(BLOCK_LEN) {
+                        portable::encrypt_block(s, block)?;
+                    }
                 }
                 Ok(())
             }
@@ -480,6 +498,48 @@ mod tests {
     /// The batch path must produce the same bytes as repeated single-block
     /// calls, at every length including the ones that straddle the eight-block
     /// boundary.
+    /// The portable batch path against single blocks, at every length around a
+    /// group boundary.
+    ///
+    /// `batch_matches_single_block` below uses `new`, which on a machine with
+    /// AES-NI selects the hardware backend -- so on this machine it never
+    /// reaches the bitsliced path at all. This one forces the portable backend,
+    /// so the chunking into four-block groups, and the one to three blocks left
+    /// over at the end, are exercised wherever the tests run.
+    ///
+    /// Zero through twelve blocks: below a group, exactly a group, a group plus
+    /// a remainder of each size, and several groups.
+    #[test]
+    fn portable_batch_matches_single_blocks_at_every_length() {
+        for key_len in [16usize, 24, 32] {
+            let key: Vec<u8> = (0..key_len).map(|i| (i * 13 + 1) as u8).collect();
+
+            macro_rules! compare {
+                ($ty:ty) => {{
+                    let c = <$ty>::new_portable(&key).unwrap();
+                    for blocks in 0..13usize {
+                        let data: Vec<u8> =
+                            (0..blocks * BLOCK_LEN).map(|i| (i * 7 + 3) as u8).collect();
+
+                        let mut batched = data.clone();
+                        c.encrypt_blocks(&mut batched).unwrap();
+
+                        let mut singly = data.clone();
+                        for block in singly.chunks_exact_mut(BLOCK_LEN) {
+                            c.encrypt_block(block).unwrap();
+                        }
+                        assert_eq!(batched, singly, "key_len {}, {} blocks", key_len, blocks);
+                    }
+                }};
+            }
+            match key_len {
+                16 => compare!(Aes128),
+                24 => compare!(Aes192),
+                _ => compare!(Aes256),
+            }
+        }
+    }
+
     #[test]
     fn batch_matches_single_block() {
         let c = Aes256::new(&[0x2bu8; 32]).unwrap();
