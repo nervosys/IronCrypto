@@ -526,94 +526,75 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 ### How that compares
 
 Measured by `bench/` against RustCrypto and dalek, on the same machine and the
-same buffers. Each figure is the median of five runs, because the machine is
-shared: a single pair of runs had RustCrypto's own SHA-512 moving 700 to 1087
-MiB/s with nothing changed in either implementation, which is larger than most
-of the differences below.
+same buffers, best of nine runs. Best rather than median because the machine is
+shared and interference only ever makes a result slower: the same binary timed
+at 22.0, 23.0 and 27.2 microseconds across three consecutive runs while other
+builds were going.
 
 | operation | against the fastest Rust implementation |
 |---|---|
-| ECDSA P-256, sign | **~1.9x faster** |
-| ECDSA P-256, verify | **~1.5x faster** |
+| ECDSA P-256, sign | **~2.0x faster** |
 | AES-256-GCM | **~1.4x faster** |
-| AES-256 blocks, AES-NI | **~1.3x faster** |
+| ECDSA P-256, verify | **~1.4x faster** |
 | X25519 agreement | **~1.3x faster** |
+| AES-256 blocks, AES-NI | **~1.25x faster** |
+| Ed25519, sign | **~1.1x faster** |
 | SHA3-256 | **~1.05x faster** |
 | AES-256 blocks, portable | level |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | SHA-512 | level |
 | HMAC-SHA256 | level |
-| Ed25519, sign | ~1.6x slower |
-| Ed25519, verify | ~1.6x slower |
+| Ed25519, verify | ~1.25x slower |
 
 The portable AES row is against RustCrypto's *software* AES, which is fixsliced
-and is the like-for-like comparison. Measuring it against AES-NI instead gives
-~133x, which measures the instruction set rather than the implementation.
+and is the like-for-like comparison; against AES-NI it is ~133x, which measures
+the instruction set rather than the implementation. SHA-512 sits within a few
+percent either side of parity depending on the run, which is reported as level
+rather than as whichever run flattered it.
 
 **Finding where the time went mattered more than optimising.** Every figure that
-moved did so because a measurement contradicted the obvious explanation.
-SHA3-256 was assumed to need a faster permutation; timed on its own the
-permutation was already ahead, and the cost was in `absorb`, walking the input a
-byte at a time. SHA-512 was assumed to need a vectorised schedule; 62% of its
-compression turned out to be the per-block `zeroize` of that schedule, whose
-volatile writes cannot be merged into a `memset`. Verification was assumed to
-need faster field arithmetic; what it needed was to stop running two chains of
-doublings where one would do. In each case the guess would have been effort
-spent on the smaller half.
+moved did so because a measurement contradicted the obvious explanation, and in
+several cases the obvious explanation was tested and disproved first.
 
-**The portable AES is bitsliced.** It holds the state transposed -- eight `u64`
-planes, plane `i` bit `j` being bit `i` of byte `j` -- so a field multiplication
-is sixty-four `AND`s and a reduction on whole words, each carrying four blocks.
-That is what took it from 1.6 MiB/s to ~63, and from 27x behind RustCrypto's
-fixsliced AES to level with it. CTR, GCM and GCM-SIV take the same path, since
-all three generate their keystream through the batch interface.
+SHA3-256 was assumed to need a faster permutation; timed alone the permutation
+was already ahead, and the cost was in `absorb`, walking the input a byte at a
+time. SHA-512 was assumed to need a vectorised schedule, and vectorising the
+schedule made it *slower* -- AVX2 has no 64-bit rotate; what pays is
+interleaving it into the rounds, which are a latency chain with idle issue
+slots. The portable AES was assumed to need a better S-box, and it needed
+bitslicing. Ed25519 was assumed to need faster field arithmetic, and our field
+arithmetic was never the problem: point addition is 1.11x faster than dalek's
+and decompression 1.37x faster. It was doing more work with it, in three places:
 
-Encryption only: the inverse S-box and inverse MixColumns are a separate piece
-of work, and the modes that move volume only run forwards. Decryption stays on
-the byte-at-a-time path, which is correct and slow.
+- **Scalar reduction was long division.** `reduce_wide` walked 512 bits,
+  shifting a nine-limb accumulator and conditionally subtracting `L` at each
+  one -- some fifteen thousand operations, three of them per signature. `L` is
+  `2^252 + c` with `c` only 125 bits, so a limb above `2^252` folds down
+  multiplied by `c`'s six digits instead.
+- **Additions took their right-hand side in the wrong form.** Every table here
+  holds points only in order to add them, so they now store `(Y+X, Y-X, Z,
+  2d·T)`: four multiplications instead of nine, three when `Z` is one.
+- **Doublings computed a coordinate nothing read.** A doubling reads `X`, `Y`
+  and `Z` and never `T`, so on the way to another doubling the fourth
+  multiplication producing `T` was wasted.
 
-Nothing in it is a transcribed circuit. The squaring matrix was produced by
-squaring each basis element with the byte-at-a-time multiply; the reduction
-follows `x^8 = x^4 + x^3 + x + 1`; ShiftRows and MixColumns were derived from
-the byte-at-a-time versions. The multiplication is checked against that version
-over all 65536 input pairs -- every pair it can be given, not a sample -- and
-the assembled cipher against it block for block.
+Together those took signing from 1.6x behind dalek to ahead of it, and the
+double-scalar multiplication from 2715 field multiplications to about 2300.
 
-**What is left is Ed25519 and SHA-512.** Signing and verification are both about
-1.6x behind dalek, down from 1.9x and 2.6x. Verification now adds its two
-scalars in one interleaved pass sharing a single chain of doublings, and indexes
-its tables directly rather than scanning them with conditional moves, since a
-signature, a public key and a message are all public. What remains is the
-constant-time basepoint table that signing still needs, which stores four field
-elements per entry where three would do.
-
-SHA-512 has no hardware instruction on x86 the way SHA-256 does, and computing
-its message schedule with AVX2 as a pass of its own does not pay -- 107.6ns
-against the scalar schedule's 104.2ns, because AVX2 has no 64-bit rotate. What
-pays is that the eighty rounds are a latency chain which cannot fill a wide
-core's issue slots, while the schedule does not depend on them and is more than
-half the block. Interleaved into the rounds, four words every five, it runs in
-the slots the chain leaves empty: 184 to 117 ns/block, and level with
-RustCrypto's own AVX2 backend.
-
-**Ed25519 is the one still behind, and for a specific reason.** A doubling is
-160 multiply instructions against 775 moves: five 128-bit accumulators and two
-five-limb operands do not fit in sixteen registers, so the schoolbook spills.
-That is the shape rather than the instruction selection -- `-C
-target-cpu=native` turns the multiplies into `mulx` and drops the moves to 475,
-and buys 2% end to end, while dalek gains 16% from the same flag because it has
-an AVX2 field backend that engages there.
-
-Building one was measured rather than assumed. A four-wide AVX2 multiply is
-real -- 24.35ns against 43.83ns for four scalar ones, verified lane for lane --
-but the primitive is not the point layer. 77% of a doubling is its four
-multiplications and four squarings; the rest is additions across coordinates,
-which in a four-lane layout become lane shuffles rather than disappearing. Even
-an optimistic shuffle cost leaves verification around 24us against dalek's
-19.8: it narrows the gap and does not close it, and it would cost `ic-ec` its
-`forbid(unsafe_code)`, which no other crate here has.
+**Verification is the row still behind.** What is left is per-operation
+overhead rather than operation count: the counts now match dalek's, and the gap
+is the additions, subtractions and struct moves around the multiplications. An
+AVX2 field backend was built far enough to measure -- a four-wide multiply is
+real, 24.35ns against 43.83ns for four scalar ones -- and not kept, because 77%
+of a doubling is its multiplications and the other 23% becomes lane shuffles
+rather than disappearing, and it would cost `ic-ec` its `forbid(unsafe_code)`.
 `crates/ic-ec/src/field.rs` records the numbers.
+
+`Ed25519VerifyKey` holds a decompressed public key, the way `Ed25519Key` holds
+a derived one for signing. Recovering the point is a field exponentiation, and
+a caller verifying more than one signature against a key should not pay it
+twice; `Ed25519::verify` still takes bytes and builds one per call.
 
 ### Where the acceleration comes from
 
