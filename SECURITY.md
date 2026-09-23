@@ -49,11 +49,11 @@ Claims in this project are meant to be checkable rather than taken on trust.
 | Question | Where it is answered |
 |---|---|
 | What is verified, and against what oracle? | `docs/FIPS.md` |
-| What does a standard require, and does this meet it? | `icrypto ontology requirements` |
-| Which weakness classes and practices does this address? | `icrypto ontology controls` |
-| Why is an algorithm not recommended? | `icrypto ontology show <id>` |
+| What does a standard require, and does this meet it? | `ic ontology requirements` |
+| Which weakness classes and practices does this address? | `ic ontology controls` |
+| Why is an algorithm not recommended? | `ic ontology show <id>` |
 | Does it interoperate? | Nothing establishes this yet. See `testvectors/README.md` |
-| What is in the build? | `icrypto sbom` — CycloneDX, deterministic, regenerate and diff it |
+| What is in the build? | `ic sbom` — CycloneDX, deterministic, regenerate and diff it |
 
 The compliance views are coupled to the code rather than filed beside it: a
 control claiming to be met names a file and a symbol, and the tests fail if

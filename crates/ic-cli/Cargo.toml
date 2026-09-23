@@ -1,6 +1,6 @@
 [package]
 name = "ic-cli"
-description = "icrypto: command-line and MCP-server front end for IronCrypto"
+description = "ic: command-line and MCP-server front end for IronCrypto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ categories.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "icrypto"
+name = "ic"
 path = "src/main.rs"
 
 [dependencies]

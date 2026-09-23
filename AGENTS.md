@@ -7,7 +7,7 @@ Instructions for coding agents. Humans may also find them useful.
 Do not select a primitive from memory. Ask the library:
 
 ```console
-$ icrypto recommend <intent> [--fips] [--post-quantum] [--aes-hardware] --json
+$ ic recommend <intent> [--fips] [--post-quantum] [--aes-hardware] --json
 ```
 
 Intents: `encrypt-message`, `hash-data`, `authenticate-message`, `derive-key`,
@@ -28,7 +28,7 @@ If `status` is `impossible`, nothing in the registry meets those constraints.
 ## Before writing a call, read the entry
 
 ```console
-$ icrypto ontology show <algorithm> --json
+$ ic ontology show <algorithm> --json
 ```
 
 `parameters` gives exact byte bounds. `constraints` gives the rules, each with a

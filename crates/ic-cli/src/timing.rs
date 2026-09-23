@@ -171,7 +171,7 @@ impl Target {
     ///
     /// An RSA signature is a few milliseconds, so the default hundred thousand
     /// would take hours and nobody would run it. Capping here rather than
-    /// asking the caller to know means `icrypto timing` with no arguments does
+    /// asking the caller to know means `ic timing` with no arguments does
     /// something sensible for every target, and the report carries the sample
     /// count so a reader can see which ones had less to work with.
     ///

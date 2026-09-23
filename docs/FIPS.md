@@ -14,7 +14,7 @@ rather than a rewrite.
 The runtime says this too:
 
 ```console
-$ icrypto capabilities --json | jq -r '.validationStatement'
+$ ic capabilities --json | jq -r '.validationStatement'
 IronCrypto implements the FIPS 140-3 operational discipline (approved-mode
 policy, pre-operational and conditional self-tests, a latching error state, and
 service indicators). It has NOT been submitted to or validated by the CMVP, and
@@ -77,7 +77,7 @@ a mode), `NotApproved`.
 individually addressable:
 
 ```console
-$ icrypto selftest
+$ ic selftest
   PASS sha2-224
   PASS sha2-256
   ...
@@ -214,7 +214,7 @@ If you have a genuine FIPS obligation:
   the second satisfies an auditor. Where a certificate is the actual
   requirement, use a validated module.
 - Where you need RSA encryption, this module has nothing to offer, and
-  `icrypto recommend` will say so rather than substituting a smaller curve.
+  `ic recommend` will say so rather than substituting a smaller curve.
 - Use the approved-mode policy engine and the ontology to keep your own code
   honest regardless of which module does the arithmetic. The registry is useful
   even when the implementation behind it is somebody else's.

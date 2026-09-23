@@ -17,7 +17,7 @@
                                     │
                             iron-crypto   (facade + prelude)
                                     │
-                                 ic-cli      (icrypto: CLI + MCP server)
+                                 ic-cli      (ic: CLI + MCP server)
 ```
 
 No crate depends on anything outside this graph. There are no build scripts and
@@ -122,7 +122,7 @@ honest "not available here" instead of a substitution.
 ### One implementation behind two front ends
 
 `ic-cli/src/ops.rs` holds every operation. The CLI and the MCP server are thin
-shells over it, so `icrypto ontology show sha2-256 --json` and the MCP
+shells over it, so `ic ontology show sha2-256 --json` and the MCP
 `ontology_show` tool return byte-identical data. A human debugging an agent's
 behaviour can reproduce it from a shell.
 

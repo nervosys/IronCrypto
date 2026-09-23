@@ -1,6 +1,6 @@
 //! The operations shared by the CLI and the MCP server.
 //!
-//! Both front ends call into this module, so `icrypto ontology show sha2-256`
+//! Both front ends call into this module, so `ic ontology show sha2-256`
 //! and the MCP `ontology_show` tool return the same data from the same code.
 //! That is deliberate: a human debugging an agent's behaviour should be able to
 //! reproduce it from a shell.

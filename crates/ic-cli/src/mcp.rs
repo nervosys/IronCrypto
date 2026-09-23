@@ -4,12 +4,12 @@
 //! JSON-RPC 2.0 on stdin/stdout and exposes the ontology, the selector, the
 //! self-tests, and a few primitive operations as MCP tools.
 //!
-//! Run it with `icrypto mcp`, or wire it into a client config:
+//! Run it with `ic mcp`, or wire it into a client config:
 //!
 //! ```jsonc
 //! {
 //!   "mcpServers": {
-//!     "iron-crypto": { "command": "icrypto", "args": ["mcp"] }
+//!     "iron-crypto": { "command": "ic", "args": ["mcp"] }
 //!   }
 //! }
 //! ```
@@ -1436,7 +1436,7 @@ mod tests {
             assert_eq!(
                 from_cli,
                 from_mcp,
-                "`icrypto {}` and the {tool} tool returned different data",
+                "`ic {}` and the {tool} tool returned different data",
                 argv.join(" ")
             );
         }

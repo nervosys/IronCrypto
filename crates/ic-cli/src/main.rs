@@ -1,7 +1,7 @@
-//! `icrypto` — the command-line and MCP front end for IronCrypto.
+//! `ic` — the command-line and MCP front end for IronCrypto.
 //!
 //! Every subcommand takes `--json`, because the same tool serves a human
-//! reading a terminal and an agent parsing output. `icrypto mcp` turns the
+//! reading a terminal and an agent parsing output. `ic mcp` turns the
 //! binary into a Model Context Protocol server.
 
 #![forbid(unsafe_code)]
@@ -16,10 +16,10 @@ use std::io::Read;
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-icrypto — agentic-first cryptography
+ic — agentic-first cryptography
 
 USAGE:
-    icrypto <COMMAND> [OPTIONS]
+    ic <COMMAND> [OPTIONS]
 
 DISCOVERY
     recommend <intent>          Choose an algorithm for a task
@@ -68,7 +68,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(message) => {
-            eprintln!("icrypto: {message}");
+            eprintln!("ic: {message}");
             ExitCode::FAILURE
         }
     }
@@ -143,7 +143,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
     }
     if has_flag(args, "--version") || args[0] == "version" {
         return Ok(format!(
-            "icrypto {} (ontology {}, backend {})",
+            "ic {} (ontology {}, backend {})",
             iron_crypto::VERSION,
             ic_ontology::ONTOLOGY_VERSION,
             ic_ontology::runtime::backend().id()
@@ -252,9 +252,8 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     .get(2)
                     .copied()
                     .ok_or("ontology show needs an algorithm")?;
-                let e = ic_ontology::get(name).ok_or_else(|| {
-                    format!("unknown algorithm '{name}'; try `icrypto ontology list`")
-                })?;
+                let e = ic_ontology::get(name)
+                    .ok_or_else(|| format!("unknown algorithm '{name}'; try `ic ontology list`"))?;
                 Ok(if want_json {
                     ops::entry_detail_json(e).to_string()
                 } else {
@@ -496,7 +495,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
         "key" => {
             let sub = pos.get(1).copied().unwrap_or("");
             if sub != "inspect" {
-                return Err("usage: icrypto key inspect".to_string());
+                return Err("usage: ic key inspect".to_string());
             }
             let data = read_stdin()?;
             let json = ops::key_json(&data)?;
@@ -526,7 +525,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                 }
                 if let Some(id) = json.get("ontologyId").and_then(|v| v.as_str()) {
                     out.push_str(&format!("  ontology:   {id}\n"));
-                    out.push_str(&format!("  explain:    icrypto ontology show {id}\n"));
+                    out.push_str(&format!("  explain:    ic ontology show {id}\n"));
                 }
                 out.trim_end().to_string()
             })
@@ -869,7 +868,7 @@ mod tests {
     fn help_and_version_are_available() {
         assert!(run(&[]).unwrap().contains("USAGE"));
         assert!(run(&["--help"]).unwrap().contains("USAGE"));
-        assert!(run(&["version"]).unwrap().contains("icrypto"));
+        assert!(run(&["version"]).unwrap().contains("ic"));
         assert!(run(&["--version"]).unwrap().contains("ontology"));
     }
 

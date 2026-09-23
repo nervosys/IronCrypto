@@ -180,7 +180,7 @@ fn write_string(s: &str, out: &mut String) {
 /// Recursive descent uses stack in proportion to nesting, and a stack overflow
 /// in Rust is an abort rather than an error: nothing unwinds and no caller can
 /// recover. Before this limit existed, two kilobytes of `[[[[...]]]]` ended the
-/// process -- which matters because `icrypto mcp` parses JSON-RPC from whatever
+/// process -- which matters because `ic mcp` parses JSON-RPC from whatever
 /// is on the other end of its stdin.
 ///
 /// 64 is chosen against measurement rather than taste. The deepest document this
@@ -515,7 +515,7 @@ mod tests {
     ///
     /// Before the limit existed, `"[" * 1000` overflowed the stack, and a stack
     /// overflow in Rust aborts: nothing unwinds and no caller can recover. This
-    /// is the case that motivated it, and `icrypto mcp` is why it matters --
+    /// is the case that motivated it, and `ic mcp` is why it matters --
     /// that server parses JSON-RPC from whatever is on the other end of its
     /// stdin.
     #[test]

@@ -13,7 +13,7 @@ adapter is the one exception and necessarily so; see
 [Supply chain](#supply-chain).
 
 ```console
-$ icrypto recommend encrypt-message --fips
+$ ic recommend encrypt-message --fips
 use: aes-256-gcm
   AES-256-GCM is the approved authenticated cipher and retains 128-bit strength
   against a quantum adversary.
@@ -47,7 +47,7 @@ to ship something broken.
 IronCrypto puts the rules in the same place as the code, as **data**:
 
 ```console
-$ icrypto ontology show aes-256-gcm --json | jq '.constraints[0]'
+$ ic ontology show aes-256-gcm --json | jq '.constraints[0]'
 {
   "consequence": "Reuse leaks the authentication subkey, allowing forgery of arbitrary messages, and XORs the two plaintexts together.",
   "id": "unique-nonce-per-key",
@@ -66,7 +66,7 @@ Never substitute something the caller did not ask for. That has two halves, and
 the first is refusing to trade a stated requirement for availability:
 
 ```console
-$ icrypto recommend sign-data --fips
+$ ic recommend sign-data --fips
 use: ecdsa-p256-sha256
   ECDSA P-256 is the approved signature scheme. This implementation derives its
   nonce per RFC 6979, so the usual ECDSA nonce-reuse failure cannot occur.
@@ -135,7 +135,7 @@ iron-crypto = { path = "../IronCrypto/crates/iron-crypto" }
 ```
 
 ```console
-$ cargo install --path crates/ic-cli   # the `icrypto` CLI and MCP server
+$ cargo install --path crates/ic-cli   # the `ic` CLI and MCP server
 ```
 
 ## Use
@@ -159,12 +159,12 @@ cipher.open_detached(&nonce, b"context", &mut buf, &tag)?;
 
 ## Connect an agent
 
-`icrypto mcp` is a Model Context Protocol server on stdio:
+`ic mcp` is a Model Context Protocol server on stdio:
 
 ```jsonc
 {
   "mcpServers": {
-    "iron-crypto": { "command": "icrypto", "args": ["mcp"] }
+    "iron-crypto": { "command": "ic", "args": ["mcp"] }
   }
 }
 ```
@@ -257,7 +257,7 @@ certificate names.
 
 One consequence worth stating plainly: **a modulus below 2048 bits is refused**,
 so a chain with a 1024-bit key fails here and would pass against some other
-providers. That isn't an oversight. `icrypto ontology show rsa-pkcs1-sha256`
+providers. That isn't an oversight. `ic ontology show rsa-pkcs1-sha256`
 marks `rsa-modulus-at-least-2048-bits` as `critical`, `ic-rsa` enforces it, and
 a test pins the behaviour so it stays a decision on record rather than becoming
 a mysterious handshake failure someone later "fixes".
@@ -326,8 +326,8 @@ The ontology registers algorithms this library does **not** provide, marked
 ### Timing
 
 ```sh
-icrypto timing                      # all targets
-icrypto timing ct-verify --iterations 200000
+ic timing                      # all targets
+ic timing ct-verify --iterations 200000
 ```
 
 A dudect-style leakage detector: two input classes interleaved at random, then
@@ -346,7 +346,7 @@ proof of constant time, and the output says so rather than printing a tick.
 ### Supply chain
 
 ```sh
-icrypto sbom > bom.json      # CycloneDX 1.5
+ic sbom > bom.json      # CycloneDX 1.5
 ```
 
 Deliberately deterministic: no timestamp, no random serial number, so two runs
@@ -366,10 +366,10 @@ records as an open gap rather than papering over.
 The same machinery, applied to the frameworks people are audited against:
 
 ```sh
-icrypto ontology controls --framework cwe      # weakness classes
-icrypto ontology controls --framework attack   # MITRE ATT&CK techniques
-icrypto ontology controls --framework cmmc     # CMMC 2.0 practices
-icrypto ontology control SC.L2-3.13.11
+ic ontology controls --framework cwe      # weakness classes
+ic ontology controls --framework attack   # MITRE ATT&CK techniques
+ic ontology controls --framework cmmc     # CMMC 2.0 practices
+ic ontology control SC.L2-3.13.11
 ```
 
 Agents get the same through the `crypto_controls` MCP tool.
@@ -426,10 +426,10 @@ The registry says what algorithms exist. `ic_ontology::standards` says what
 *documents* define them and what those documents require:
 
 ```sh
-icrypto ontology standards                    # every document, with status
-icrypto ontology standard "FIPS 203"          # one document and its obligations
-icrypto ontology requirements --state unmet   # the conformance view
-icrypto ontology requirements --algorithm ml-kem-768
+ic ontology standards                    # every document, with status
+ic ontology standard "FIPS 203"          # one document and its obligations
+ic ontology requirements --state unmet   # the conformance view
+ic ontology requirements --algorithm ml-kem-768
 ```
 
 Agents get the same through the `crypto_standard` and `crypto_requirements`
@@ -451,7 +451,7 @@ claims otherwise — see `has("fips-validated")`, which returns `false`.
   only so that a request for them resolves to a refusal with a reason.
 
 ```console
-$ icrypto capabilities
+$ ic capabilities
   [x] no-std
   [x] zero-dependencies
   [x] constant-time-symmetric
@@ -490,7 +490,7 @@ converting ACVP output.
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
 is implemented (approved-mode policy, pre-operational self-tests, 60 algorithm
 known-answer tests, a latching error state, service indicators) and what
-validation would still require. `icrypto capabilities` reports
+validation would still require. `ic capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.
 
 **Throughput depends on the CPU, and the library tells you which case you are
@@ -568,7 +568,7 @@ correct way to get the property. Bitslicing would keep it and close most of the
 gap. Until that work is done, treat the portable AES path as correct and
 suitable for low volumes rather than as a general-purpose cipher, and prefer
 ChaCha20-Poly1305 where there is no AES hardware — which is what
-`icrypto recommend --no-aes-hardware` already says.
+`ic recommend --no-aes-hardware` already says.
 
 SHA-512 has no hardware instruction on x86 the way SHA-256 does, so it runs the
 portable path. Two source-level optimisations were tried and reverted -- a

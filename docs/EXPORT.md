@@ -40,7 +40,7 @@ implements comes from a published standard — FIPS 197, 180-4, 202, 198-1,
 8017, 8032, 8439, 8452, 9106, and for the TLS and QUIC adapter RFC 5288, 5869,
 7905, 8446 and 9001. There is no proprietary primitive and nothing unpublished.
 The list in `README.md` under *What's implemented* is the inventory, and
-`icrypto ontology export json` produces it mechanically.
+`ic ontology export json` produces it mechanically.
 
 If that reading is right, **§742.15(b)(2) does not apply** and no notification
 is required. Two reasons that does not settle it:

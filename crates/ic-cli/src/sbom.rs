@@ -118,7 +118,7 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         name: "ic-cli",
-        description: "The icrypto command line tool and its MCP server.",
+        description: "The ic command line tool and its MCP server.",
     },
     Component {
         name: "ic-rustls",

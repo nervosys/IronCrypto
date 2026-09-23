@@ -27,7 +27,7 @@ only the enums.
 ## An entry
 
 ```console
-$ icrypto ontology show aes-256-gcm
+$ ic ontology show aes-256-gcm
 AES-256-GCM (aes-256-gcm)
 The default choice for authenticated encryption under a FIPS requirement.
 
@@ -124,11 +124,11 @@ answer.
 ## Exports
 
 ```console
-$ icrypto ontology export json       # for tool calls, CI, jq
-$ icrypto ontology export jsonld     # for a knowledge graph
-$ icrypto ontology export turtle     # for SPARQL or an OWL reasoner
-$ icrypto ontology export schema     # JSON Schema for the json export
-$ icrypto ontology export markdown   # for humans
+$ ic ontology export json       # for tool calls, CI, jq
+$ ic ontology export jsonld     # for a knowledge graph
+$ ic ontology export turtle     # for SPARQL or an OWL reasoner
+$ ic ontology export schema     # JSON Schema for the json export
+$ ic ontology export markdown   # for humans
 ```
 
 The Turtle export is a real RDF graph: classes are `rdfs:Class` with
