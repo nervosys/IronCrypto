@@ -3,6 +3,37 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## 0.1.3
+
+Metadata and documentation. No code path changed; the one addition is a
+registry entry for an algorithm this library does not implement.
+
+### Fixed
+
+- **`ic-mldsa`'s crate description said "incomplete, no signature scheme yet".**
+  It has had `sign`, `verify`, the prehash variants and a deterministic variant
+  for some time, and passes 55 of NIST's ACVP vectors. The description was
+  written before any of that and never updated, so crates.io was telling people
+  the crate was a stub.
+- **`ic-mlkem`'s said "experimental, not vector-tested".** It passes 50 ACVP
+  cases. Same cause.
+- **`SECURITY.md` still called ML-KEM-768, ML-DSA-65 and AES-GCM-SIV
+  experimental** and said no ACVP or RFC vector was wired in. All three have
+  been vector-tested since before 0.1.1; the ontology and the README were
+  updated at the time and this file was not.
+
+A crate description is fixed to the version that carried it, so the wrong text
+stays visible on 0.1.2 and earlier. This release is what replaces it.
+
+### Added
+
+- An ontology entry for **SLH-DSA (FIPS 205)**, with status `planned` and no
+  code behind it. This library implements ML-DSA-65 and not SLH-DSA, and
+  without an entry a request for it resolved to nothing at all rather than to
+  an absence — `ic ontology show slh-dsa` now explains what it is, why someone
+  would want it over ML-DSA, and that it is not here. `recommend` still returns
+  ML-DSA-65, since a planned entry is not selectable.
+
 ## 0.1.2
 
 Performance, and one addition to the public API. No algorithm changed, no

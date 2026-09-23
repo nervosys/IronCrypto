@@ -1,4 +1,4 @@
-# IronCrypto
+![IronCrypto — decentralized, secure, forged](media/images/ironcrypto_banner.jpg)
 
 **Agentic-first cryptography in pure Rust, with a machine-readable ontology.**
 
@@ -298,7 +298,7 @@ leaving the stronger claim to stand for all of them.
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV |
-| Post-quantum | ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204), both ACVP-checked |
+| Post-quantum | ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204), both ACVP-checked. SLH-DSA (FIPS 205) is **not** implemented; `ic ontology show slh-dsa` says so and why |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |

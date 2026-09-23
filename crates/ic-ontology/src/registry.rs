@@ -2446,6 +2446,39 @@ pub static REGISTRY: &[Entry] = &[
                 in the signing path. Signatures are fixed-width r || s, not DER.",
     },
     Entry {
+        id: "slh-dsa",
+        name: "SLH-DSA",
+        aliases: &["sphincs+", "sphincs"],
+        summary: "Post-quantum signatures from hashes alone. Standardised, not implemented here.",
+        class: Class::Signature,
+        family: "SLH-DSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        // The parameter sets range from 128 to 256 bits; the floor is quoted,
+        // since nothing here picks a set.
+        strength: Strength { classical: 128, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Planned,
+        standards: &["FIPS 205"],
+        params: &NO_PARAMS,
+        constraints: &[],
+        edges: &[
+            Edge { relation: Relation::PairsWith, target: "ml-dsa-65" },
+            Edge { relation: Relation::BuiltOn, target: "shake256" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "",
+        example: "",
+        notes: "Listed so that asking for it resolves to an absence rather than to nothing \
+                at all. FIPS 205 is approved and this library does not implement it; the \
+                post-quantum signature here is ML-DSA-65. The two rest on different \
+                assumptions on purpose — SLH-DSA needs only that its hash is sound, where \
+                ML-DSA needs a lattice problem to stay hard — which is the reason to want it \
+                and the reason it is worth saying it is missing. Signatures run to kilobytes \
+                and signing is slow; that is the price of the weaker assumption, not a \
+                defect. A deployment that cannot accept a lattice assumption needs a \
+                validated module, not this one.",
+    },
+    Entry {
         id: "ml-dsa-65",
         name: "ML-DSA-65",
         aliases: &["dilithium3", "dilithium"],

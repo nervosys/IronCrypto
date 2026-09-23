@@ -729,6 +729,18 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &FIPS204_REQS,
     },
     Standard {
+        id: "FIPS 205",
+        title: "Stateless Hash-Based Digital Signature Standard",
+        body: Body::Nist,
+        scope: Scope::Algorithm,
+        year: 2024,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://doi.org/10.6028/NIST.FIPS.205",
+        summary: "SLH-DSA, the standardized form of SPHINCS+. Not implemented here.",
+        requirements: &[],
+    },
+    Standard {
         id: "SP 800-38A",
         title: "Recommendation for Block Cipher Modes of Operation: Methods and Techniques",
         body: Body::Nist,

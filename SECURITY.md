@@ -25,12 +25,26 @@ is a prerequisite for pursuing validation and is not validation. Do not use it
 where a contract requires validated cryptography; CMMC `SC.L2-3.13.11` is
 recorded as unmet for exactly this reason.
 
-**Three algorithms are `experimental`**: ML-KEM-768, ML-DSA-65, and
-AES-GCM-SIV. Every component of each is checked against an independent oracle,
-and the assembled scheme is checked against nothing but itself, because no ACVP
-or RFC vector is wired in. They are excluded from the approved mode and from
-`recommend`, and each carries a `not-interoperability-tested` constraint at
-`Critical` severity. Do not use them to talk to another implementation.
+**The post-quantum schemes are vector-tested.** This section used to say that
+ML-KEM-768, ML-DSA-65 and AES-GCM-SIV were experimental and checked against
+nothing but themselves. That stopped being true when the vectors went in, and
+the wording outlived it:
+
+| | checked against |
+|---|---|
+| ML-KEM-768 | 25 key generation and 25 encapsulation cases, NIST ACVP FIPS 203 |
+| ML-DSA-65 | 25 key generation and 30 signature cases, NIST ACVP FIPS 204 |
+| AES-GCM-SIV | 50 cases, RFC 8452 appendix C |
+
+Every case in each parameter set, not a selection, and the ML-DSA signature
+cases cover both the deterministic and the hedged path. `testvectors/` records
+the provenance down to the upstream commit. All three are `available` in the
+ontology and usable in the approved mode; `ic ontology show <id>` is the
+current answer and this file is not.
+
+What remains unverified is interoperability in the wider sense: matching NIST's
+vectors shows the algorithms are right, not that a handshake with some other
+implementation completes.
 
 **There is no transitive dependency surface.** IronCrypto has zero third-party
 dependencies, enforced in CI by a check over `cargo tree`. No advisory against
@@ -52,7 +66,8 @@ Claims in this project are meant to be checkable rather than taken on trust.
 | What does a standard require, and does this meet it? | `ic ontology requirements` |
 | Which weakness classes and practices does this address? | `ic ontology controls` |
 | Why is an algorithm not recommended? | `ic ontology show <id>` |
-| Does it interoperate? | Nothing establishes this yet. See `testvectors/README.md` |
+| Does it match the standard's vectors? | Yes, where vectors exist; see `testvectors/README.md` |
+| Does it interoperate with another implementation? | Untested. Vectors are not a handshake |
 | What is in the build? | `ic sbom` — CycloneDX, deterministic, regenerate and diff it |
 
 The compliance views are coupled to the code rather than filed beside it: a
