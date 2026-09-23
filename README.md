@@ -543,15 +543,18 @@ builds were going.
 | AES-256 blocks, portable | level |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
-| SHA-512 | level |
 | HMAC-SHA256 | level |
+| SHA-512 | ~1.1x slower |
 | Ed25519, verify | ~1.25x slower |
 
 The portable AES row is against RustCrypto's *software* AES, which is fixsliced
 and is the like-for-like comparison; against AES-NI it is ~133x, which measures
-the instruction set rather than the implementation. SHA-512 sits within a few
-percent either side of parity depending on the run, which is reported as level
-rather than as whichever run flattered it.
+the instruction set rather than the implementation.
+
+SHA-512 was reported as level here for a while, on medians that straddled
+parity. Best-of-nine is the better estimator on a shared machine and it puts
+the row at 1.07 to 1.09x behind across repeated measurements, so that is what
+it now says.
 
 **Finding where the time went mattered more than optimising.** Every figure that
 moved did so because a measurement contradicted the obvious explanation, and in
