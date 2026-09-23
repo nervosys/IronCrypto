@@ -174,6 +174,31 @@ pub fn table() -> &'static Table {
     TABLE.get_or_init(Table::build)
 }
 
+/// Odd multiples of the basepoint, `1B, 3B, 5B .. 127B`.
+///
+/// The variable-time companion to [`table`]. Verification may index a table
+/// directly -- it holds nothing secret -- so this one is a plain array read
+/// rather than a conditional-move scan, and the window is width 8 instead of
+/// the signed radix 16 above. Sixty-four points, about ten kilobytes, built
+/// once on first use.
+///
+/// Signing must not call this. See
+/// [`double_scalar_mul_vartime`][super::double_scalar_mul_vartime].
+#[cfg(feature = "std")]
+pub(super) fn odd_multiples() -> &'static [Point; 64] {
+    use std::sync::OnceLock;
+    static ODD: OnceLock<[Point; 64]> = OnceLock::new();
+    ODD.get_or_init(|| {
+        let b = basepoint();
+        let twice = b.double();
+        let mut out = [b; 64];
+        for i in 1..64 {
+            out[i] = out[i - 1].add(&twice);
+        }
+        out
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

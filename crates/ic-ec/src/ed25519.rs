@@ -307,6 +307,70 @@ fn mul_basepoint(scalar: &[u8; 32]) -> Point {
     }
 }
 
+/// `[k]A + [s]B`, in one pass, variable time in both scalars.
+///
+/// Verification needs two scalar multiplications and then compares the
+/// results. Done separately that is two independent runs of doublings -- and
+/// the doublings are the whole cost, some two hundred and fifty-five of them
+/// against forty-odd additions. Run together they are shared: one chain of
+/// doublings, with each scalar contributing an addition at the positions where
+/// its own recoding is non-zero.
+///
+/// The basepoint half also stops paying for constant time here. `mul_basepoint`
+/// selects a table entry by reading all eight and moving conditionally, because
+/// a signing scalar is secret. Nothing in a verification is: the signature, the
+/// public key and the message are all in the clear, so the table is indexed
+/// directly and the window widened to eight, which is a table built once and
+/// about a third as many additions.
+///
+/// Both properties are why this is not the function signing calls.
+#[cfg(feature = "std")]
+fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
+    // 1A, 3A, 5A .. 15A, built for this call.
+    let twice = a.double();
+    let mut odd_a = [*a; 8];
+    for i in 1..8 {
+        odd_a[i] = odd_a[i - 1].add(&twice);
+    }
+    let odd_b = basepoint_table::odd_multiples();
+
+    let naf_a = wnaf(k, 5);
+    let naf_b = wnaf(s, 8);
+
+    // Start at the highest position either recoding reaches, so the leading
+    // doublings of the identity are skipped.
+    let mut i = 257;
+    while i > 0 && naf_a[i] == 0 && naf_b[i] == 0 {
+        i -= 1;
+    }
+
+    let mut acc = Point::IDENTITY;
+    loop {
+        acc = acc.double();
+        if naf_a[i] != 0 {
+            let e = &odd_a[(naf_a[i].unsigned_abs() as usize) / 2];
+            acc = if naf_a[i] > 0 {
+                acc.add(e)
+            } else {
+                acc.add(&e.negate())
+            };
+        }
+        if naf_b[i] != 0 {
+            let e = &odd_b[(naf_b[i].unsigned_abs() as usize) / 2];
+            acc = if naf_b[i] > 0 {
+                acc.add(e)
+            } else {
+                acc.add(&e.negate())
+            };
+        }
+        if i == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    acc
+}
+
 fn basepoint() -> Point {
     // The encoding is a compile-time constant and is known to be valid, so the
     // decompression cannot fail.
@@ -343,6 +407,24 @@ fn expand_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
 /// Variable time by construction: the loop length and the digit pattern depend
 /// on the scalar. See [`Point::mul_scalar_vartime`] for when that is allowed.
 fn wnaf5(scalar: &[u8; 32]) -> [i8; 258] {
+    wnaf(scalar, 5)
+}
+
+/// Width-`w` non-adjacent form of a 256-bit scalar.
+///
+/// Each non-zero digit is odd and lies in `[-(2^(w-1) - 1), 2^(w-1) - 1]`, and
+/// no two non-zero digits are within `w` places of each other, which puts the
+/// density near `1/(w+1)`. A wider window means fewer additions and a bigger
+/// table: width 5 for an arbitrary point, whose table has to be built on the
+/// spot, and width 8 for the basepoint, whose table is built once.
+///
+/// `w` must be at most 8, so that every digit fits an `i8`.
+fn wnaf(scalar: &[u8; 32], w: u32) -> [i8; 258] {
+    debug_assert!((2..=8).contains(&w), "window width out of range");
+    let half = 1i64 << (w - 1);
+    let full = 1i64 << w;
+    let mask = (full - 1) as u64;
+
     let mut naf = [0i8; 258];
     // Five limbs for a four-limb scalar. A negative digit adds to `k`, and for
     // a scalar near 2^256 that carries out of the top: on four limbs it wraps
@@ -360,9 +442,9 @@ fn wnaf5(scalar: &[u8; 32]) -> [i8; 258] {
     let mut i = 0;
     while k.iter().any(|&x| x != 0) {
         if k[0] & 1 == 1 {
-            let mut d = (k[0] & 0x1f) as i64;
-            if d >= 16 {
-                d -= 32;
+            let mut d = (k[0] & mask) as i64;
+            if d >= half {
+                d -= full;
             }
             naf[i] = d as i8;
             if d > 0 {
@@ -559,11 +641,19 @@ impl SignatureScheme for Ed25519 {
 
         let k = hash_to_scalar(&[&big_r, &pk_bytes, message]);
 
-        // Check [S]B == R + [k]A.
-        let lhs = mul_basepoint(&s);
+        // The check is [S]B == R + [k]A, rearranged to [S]B + [k](-A) == R so
+        // that both multiplications are one interleaved pass sharing a single
+        // chain of doublings. Negating A is two field negations; running the
+        // two scalars separately would be a second two hundred and fifty-five
+        // doublings.
+        //
         // Everything here is public -- the signature, the key, the message --
-        // so the constant-time ladder protects nothing and costs work.
-        let rhs = r_point.add(&a_point.mul_scalar_vartime(&k));
+        // so neither multiplication has to be constant time, and neither is.
+        #[cfg(feature = "std")]
+        let lhs = double_scalar_mul_vartime(&a_point.negate(), &k, &s);
+        #[cfg(not(feature = "std"))]
+        let lhs = mul_basepoint(&s).add(&a_point.negate().mul_scalar_vartime(&k));
+        let rhs = r_point;
 
         // Compared projectively rather than by compressing both sides, which
         // would be two field inversions to answer a question four
