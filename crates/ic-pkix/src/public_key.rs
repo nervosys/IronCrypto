@@ -56,7 +56,10 @@ pub enum PublicKeyInfo<'a> {
     /// Reported rather than refused, so a caller can say *which* algorithm it
     /// found. Nothing here will operate on it.
     Unsupported {
-        /// The algorithm OID's content bytes.
+        /// The algorithm OID's content bytes -- or, for an elliptic-curve key
+        /// on a curve this build does not implement, the named curve's. Every
+        /// EC key shares the algorithm OID `id-ecPublicKey`, so the curve is the
+        /// part that says what is missing.
         oid: &'a [u8],
     },
 }
@@ -99,11 +102,14 @@ impl<'a> PublicKeyInfo<'a> {
             let curve = alg.oid()?;
             alg.finish()?;
             let algorithm = oid::curve_from_oid(curve);
-            ensure!(
-                algorithm != KeyAlgorithm::Unknown,
-                Unsupported,
-                "unsupported named curve"
-            );
+            if algorithm == KeyAlgorithm::Unknown {
+                // A curve this build does not implement is reported, like any
+                // other unimplemented algorithm, rather than refused. The
+                // curve's OID is what identifies what is missing -- the
+                // algorithm, id-ecPublicKey, is shared by every curve -- so
+                // that is the one returned.
+                return Ok(PublicKeyInfo::Unsupported { oid: curve });
+            }
             ensure!(!key_bits.is_empty(), MalformedEncoding, "empty ec point");
             // Only the uncompressed form is accepted on input. Compressed
             // points need a square root in the field, which belongs in the
@@ -492,6 +498,86 @@ mod tests {
             exponent: SMALL_E,
         };
         let mut out = [0u8; 8];
+        assert!(key.to_der(&mut out).is_err());
+    }
+
+    // Keys produced by OpenSSL 3.5.7, an implementation independent of this
+    // one, so that parsing them and writing them back tests against someone
+    // else's encoder rather than against this crate's own output:
+    //
+    //   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:<curve>     //       -pkeyopt ec_param_enc:named_curve -outform DER      # bare SEC1
+    //   openssl pkcs8 -topk8 -nocrypt -inform DER -outform DER  # PKCS#8
+    //   openssl pkey -inform DER -pubout -outform DER           # SPKI
+    //
+    // P-521 is the useful curve for the writer as well as the parser: its
+    // structures are large enough that every one of them needs long-form DER
+    // lengths (30 81 9b, 03 81 86, 04 81 d6), which P-256 keys barely touch.
+    // secp256k1 is a real curve this build does not implement.
+    const OPENSSL_P521_SPKI: &str = concat!(
+        "30819b301006072a8648ce3d020106052b81040023038186000401d5a6010c58",
+        "847c997e57aa3e006dc546ddfd953492fd28ec42c66499f223c4c27544b4f749",
+        "ba345a45d0ea3f86e5756886ec4775aa7bf505495da5b71cfe9bf1fe0178fe7a",
+        "00a59e3965a5af25d7c3117750e3b969f26d5987d7879977ea16bc083f277458",
+        "5c4f48a5567da7f399d873d21bfe5e8fc0f464db21ce39b8269ef39e1e9f",
+    );
+    const OPENSSL_SECP256K1_SPKI: &str = concat!(
+        "3056301006072a8648ce3d020106052b8104000a03420004b3220f31f4811413",
+        "0af06f8b7c2aad8bde7161e73da1f4af752778a51b8ae87293c7d0fbfc1ba665",
+        "d567a7766861011baa8924b6cd172bdc21a4fb6eef6a8300",
+    );
+
+    fn unhex(s: &str) -> std::vec::Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// `secp256k1`, 1.3.132.0.10.
+    const SECP256K1_OID: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x0a];
+
+    /// A P-521 public key parses, and writes back byte for byte.
+    ///
+    /// P-521 used to be refused as an unsupported curve, though `ic-ec`
+    /// implements it. Byte-exact agreement with OpenSSL's output is the check
+    /// that the long-form lengths come out right, which is the part of the
+    /// writer P-256 and P-384 keys exercise least.
+    #[test]
+    fn an_openssl_p521_key_parses_and_writes_back_identically() {
+        let der = unhex(OPENSSL_P521_SPKI);
+        let key = PublicKeyInfo::from_der(&der).unwrap();
+        let PublicKeyInfo::Ec { algorithm, point } = key else {
+            panic!("expected an EC key, got {key:?}");
+        };
+        assert_eq!(algorithm, KeyAlgorithm::EcP521);
+        assert_eq!(point.len(), 133);
+        assert_eq!(point[0], 0x04);
+
+        let mut out = [0u8; 256];
+        let n = key.to_der(&mut out).unwrap();
+        assert_eq!(&out[..n], &der[..], "re-encoding differs from OpenSSL's");
+    }
+
+    /// A key on a curve this build does not implement is reported, with the
+    /// curve's OID, rather than refused.
+    ///
+    /// That is what `Unsupported` promises, and it used to hold for every
+    /// unknown algorithm except an EC key on an unknown curve, which was an
+    /// error -- so a caller could not say which curve it had been handed.
+    #[test]
+    fn a_key_on_an_unimplemented_curve_is_reported_with_its_curve() {
+        let der = unhex(OPENSSL_SECP256K1_SPKI);
+        assert_eq!(
+            PublicKeyInfo::from_der(&der).unwrap(),
+            PublicKeyInfo::Unsupported { oid: SECP256K1_OID }
+        );
+    }
+
+    /// And it is still not something the writer will emit.
+    #[test]
+    fn a_reported_curve_is_not_written_back() {
+        let key = PublicKeyInfo::Unsupported { oid: SECP256K1_OID };
+        let mut out = [0u8; 128];
         assert!(key.to_der(&mut out).is_err());
     }
 }

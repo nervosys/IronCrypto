@@ -634,6 +634,7 @@ fn ontology_entry(algorithm: ic_pkix::KeyAlgorithm) -> Option<&'static str> {
     match algorithm {
         ic_pkix::KeyAlgorithm::EcP256 => Some("ecdsa-p256-sha256"),
         ic_pkix::KeyAlgorithm::EcP384 => Some("ecdsa-p384-sha384"),
+        ic_pkix::KeyAlgorithm::EcP521 => Some("ecdsa-p521-sha512"),
         ic_pkix::KeyAlgorithm::Ed25519 => Some("ed25519"),
         ic_pkix::KeyAlgorithm::X25519 => Some("x25519"),
         ic_pkix::KeyAlgorithm::Rsa | ic_pkix::KeyAlgorithm::Unknown => None,

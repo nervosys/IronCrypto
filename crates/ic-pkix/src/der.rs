@@ -250,7 +250,47 @@ impl<'a> Reader<'a> {
 ///
 /// Writing in reverse is what makes a single pass possible: the content of a
 /// `SEQUENCE` is emitted before its header, so by the time the header is
-/// written the length is already known.
+/// written the length is already known. No scratch buffer and no allocation,
+/// which is the point.
+///
+/// # Fields go in last first
+///
+/// Every `push_*` *prepends*. So a structure's fields are pushed in reverse:
+/// the last field first, the first field last, and the wrapper around them
+/// after both. This is the one thing a caller has to get right, and getting it
+/// wrong is quiet -- fields pushed in their natural order still produce valid
+/// DER, just with the fields reversed, so it parses and means something else.
+///
+/// Encoding `SEQUENCE { INTEGER 1, NULL }`:
+///
+/// ```
+/// use ic_pkix::der::{Writer, SEQUENCE};
+///
+/// let mut buf = [0u8; 16];
+/// let mut w = Writer::new(&mut buf);
+/// let start = w.len();
+/// w.push_null().unwrap();          // the last field, first
+/// w.push_unsigned_u64(1).unwrap(); // then the first field
+/// w.push_wrapper(SEQUENCE, start).unwrap();
+/// let n = w.finish();
+/// assert_eq!(&buf[..n], &[0x30, 0x05, 0x02, 0x01, 0x01, 0x05, 0x00]);
+///
+/// // Pushed in their natural order, the same calls encode NULL then INTEGER:
+/// // still well-formed DER, and a different structure.
+/// let mut buf = [0u8; 16];
+/// let mut w = Writer::new(&mut buf);
+/// let start = w.len();
+/// w.push_unsigned_u64(1).unwrap();
+/// w.push_null().unwrap();
+/// w.push_wrapper(SEQUENCE, start).unwrap();
+/// let n = w.finish();
+/// assert_eq!(&buf[..n], &[0x30, 0x05, 0x05, 0x00, 0x02, 0x01, 0x01]);
+/// ```
+///
+/// [`finish`](Writer::finish) moves the result to the front of the buffer, so
+/// once it returns nothing about the direction is visible. The key and
+/// signature types in this crate are written this way and checked byte for
+/// byte against OpenSSL's encodings.
 pub struct Writer<'a> {
     buf: &'a mut [u8],
     pos: usize,

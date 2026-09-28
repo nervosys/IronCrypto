@@ -73,7 +73,9 @@ pub enum PrivateKeyInfo<'a> {
     X25519(&'a [u8]),
     /// A key whose algorithm this build does not implement.
     Unsupported {
-        /// The algorithm OID's content bytes.
+        /// The algorithm OID's content bytes -- or, for an elliptic-curve key
+        /// on a curve this build does not implement, the named curve's. See
+        /// [`crate::PublicKeyInfo::Unsupported`].
         oid: &'a [u8],
     },
 }
@@ -129,11 +131,10 @@ impl<'a> PrivateKeyInfo<'a> {
             let curve = alg.oid()?;
             alg.finish()?;
             let algorithm = oid::curve_from_oid(curve);
-            ensure!(
-                algorithm != KeyAlgorithm::Unknown,
-                Unsupported,
-                "unsupported named curve"
-            );
+            if algorithm == KeyAlgorithm::Unknown {
+                // Reported, not refused; see `PublicKeyInfo::Unsupported`.
+                return Ok(PrivateKeyInfo::Unsupported { oid: curve });
+            }
             return parse_ec_private_key(inner, Some(algorithm));
         }
 
@@ -316,17 +317,16 @@ pub fn parse_ec_private_key(
         ensure!(
             expected.is_none(),
             MalformedEncoding,
-            "ec private key repeats its curve inside a pkcs#8 container, where              rfc 5915 omits it"
+            "ec private key repeats its curve inside a pkcs#8 container, where rfc 5915 omits it"
         );
         let mut params = seq.expect_nested(der::context(0))?;
         let curve = params.oid()?;
         params.finish()?;
         let named = oid::curve_from_oid(curve);
-        ensure!(
-            named != KeyAlgorithm::Unknown,
-            Unsupported,
-            "unsupported named curve"
-        );
+        if named == KeyAlgorithm::Unknown {
+            // Reported, not refused; see `PublicKeyInfo::Unsupported`.
+            return Ok(PrivateKeyInfo::Unsupported { oid: curve });
+        }
         algorithm = named;
     }
     ensure!(
@@ -657,5 +657,114 @@ mod tests {
         let seed = [0x9du8; 32];
         let mut out = [0u8; 8];
         assert!(PrivateKeyInfo::Ed25519(&seed).to_der(&mut out).is_err());
+    }
+
+    // Keys produced by OpenSSL 3.5.7, an implementation independent of this
+    // one, so that parsing them and writing them back tests against someone
+    // else's encoder rather than against this crate's own output:
+    //
+    //   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:<curve>     //       -pkeyopt ec_param_enc:named_curve -outform DER      # bare SEC1
+    //   openssl pkcs8 -topk8 -nocrypt -inform DER -outform DER  # PKCS#8
+    //   openssl pkey -inform DER -pubout -outform DER           # SPKI
+    //
+    // P-521 is the useful curve for the writer as well as the parser: its
+    // structures are large enough that every one of them needs long-form DER
+    // lengths (30 81 9b, 03 81 86, 04 81 d6), which P-256 keys barely touch.
+    // secp256k1 is a real curve this build does not implement.
+    const OPENSSL_P521_PKCS8: &str = concat!(
+        "3081ee020100301006072a8648ce3d020106052b810400230481d63081d30201",
+        "01044201561e70ddafc182c8543600963cd72f2f99905eaf3e004bbcce708b39",
+        "b6b38ed346c8416f34e26d9fbbfe8a19a6031b6158ac620e26df07ee2b5f2a2b",
+        "b56eecbb67a18189038186000401d5a6010c58847c997e57aa3e006dc546ddfd",
+        "953492fd28ec42c66499f223c4c27544b4f749ba345a45d0ea3f86e5756886ec",
+        "4775aa7bf505495da5b71cfe9bf1fe0178fe7a00a59e3965a5af25d7c3117750",
+        "e3b969f26d5987d7879977ea16bc083f2774585c4f48a5567da7f399d873d21b",
+        "fe5e8fc0f464db21ce39b8269ef39e1e9f",
+    );
+    const OPENSSL_P521_SEC1: &str = concat!(
+        "3081dc020101044201561e70ddafc182c8543600963cd72f2f99905eaf3e004b",
+        "bcce708b39b6b38ed346c8416f34e26d9fbbfe8a19a6031b6158ac620e26df07",
+        "ee2b5f2a2bb56eecbb67a00706052b81040023a18189038186000401d5a6010c",
+        "58847c997e57aa3e006dc546ddfd953492fd28ec42c66499f223c4c27544b4f7",
+        "49ba345a45d0ea3f86e5756886ec4775aa7bf505495da5b71cfe9bf1fe0178fe",
+        "7a00a59e3965a5af25d7c3117750e3b969f26d5987d7879977ea16bc083f2774",
+        "585c4f48a5567da7f399d873d21bfe5e8fc0f464db21ce39b8269ef39e1e9f",
+    );
+    const OPENSSL_SECP256K1_PKCS8: &str = concat!(
+        "308184020100301006072a8648ce3d020106052b8104000a046d306b02010104",
+        "2078f8ec5a553f99122757b815556294c979b5e478fe6e565313ea8d35f7d241",
+        "84a14403420004b3220f31f48114130af06f8b7c2aad8bde7161e73da1f4af75",
+        "2778a51b8ae87293c7d0fbfc1ba665d567a7766861011baa8924b6cd172bdc21",
+        "a4fb6eef6a8300",
+    );
+    const OPENSSL_SECP256K1_SEC1: &str = concat!(
+        "3074020101042078f8ec5a553f99122757b815556294c979b5e478fe6e565313",
+        "ea8d35f7d24184a00706052b8104000aa14403420004b3220f31f48114130af0",
+        "6f8b7c2aad8bde7161e73da1f4af752778a51b8ae87293c7d0fbfc1ba665d567",
+        "a7766861011baa8924b6cd172bdc21a4fb6eef6a8300",
+    );
+
+    fn unhex(s: &str) -> std::vec::Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// `secp256k1`, 1.3.132.0.10.
+    const SECP256K1_OID: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x0a];
+
+    /// A P-521 PKCS#8 key parses, and writes back byte for byte.
+    #[test]
+    fn an_openssl_p521_pkcs8_key_parses_and_writes_back_identically() {
+        let der = unhex(OPENSSL_P521_PKCS8);
+        let key = PrivateKeyInfo::from_der(&der).unwrap();
+        let PrivateKeyInfo::Ec {
+            algorithm,
+            private_key,
+            public_key,
+        } = key
+        else {
+            panic!("expected an EC key, got {key:?}");
+        };
+        assert_eq!(algorithm, KeyAlgorithm::EcP521);
+        assert_eq!(private_key.len(), 66);
+        assert_eq!(public_key.map(<[u8]>::len), Some(133));
+
+        let mut out = [0u8; 512];
+        let n = key.to_der(&mut out).unwrap();
+        assert_eq!(&out[..n], &der[..], "re-encoding differs from OpenSSL's");
+    }
+
+    /// The bare SEC1 form, which names its curve inside itself, parses to the
+    /// same key as the PKCS#8 container around it.
+    #[test]
+    fn an_openssl_p521_bare_key_names_its_own_curve() {
+        let bare = unhex(OPENSSL_P521_SEC1);
+        let wrapped = unhex(OPENSSL_P521_PKCS8);
+        let parsed = parse_ec_private_key(&bare, None).unwrap();
+        // Checked directly, not only against the wrapped form. With P-521
+        // unrecognised both would come back as the same `Unsupported`, and an
+        // equality check alone would pass on exactly the bug this is for.
+        assert_eq!(parsed.algorithm(), KeyAlgorithm::EcP521);
+        assert_eq!(parsed, PrivateKeyInfo::from_der(&wrapped).unwrap());
+    }
+
+    /// Both private formats report an unimplemented curve rather than refuse
+    /// it. The bare form reaches the curve by a different path -- from inside
+    /// the key rather than from the container around it -- and both used to
+    /// be errors.
+    #[test]
+    fn both_private_formats_report_an_unimplemented_curve() {
+        let wrapped = unhex(OPENSSL_SECP256K1_PKCS8);
+        assert_eq!(
+            PrivateKeyInfo::from_der(&wrapped).unwrap(),
+            PrivateKeyInfo::Unsupported { oid: SECP256K1_OID }
+        );
+        let bare = unhex(OPENSSL_SECP256K1_SEC1);
+        assert_eq!(
+            parse_ec_private_key(&bare, None).unwrap(),
+            PrivateKeyInfo::Unsupported { oid: SECP256K1_OID }
+        );
     }
 }

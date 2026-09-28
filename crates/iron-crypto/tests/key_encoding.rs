@@ -100,6 +100,123 @@ fn p384_keys_survive_pkcs8_and_spki() {
     ec::p384::EcdsaP384Sha384::verify(point, b"message", &signature).unwrap();
 }
 
+/// A P-521 key survives the trip through PKCS#8 and still signs.
+///
+/// P-521 was missing from the encoding layer entirely: `ic-ec` implements it,
+/// and `ic-pkix` refused its keys as an unsupported curve. The scalar's top
+/// byte is cleared because the curve's order begins `0x01`, so a scalar of
+/// all nines would not be a valid key.
+#[test]
+fn p521_keys_survive_pkcs8_and_spki() {
+    let mut private = [9u8; 66];
+    private[0] = 0;
+    let mut public = [0u8; 133];
+    ec::p521::EcdsaP521Sha512::public_key(&private, &mut public).unwrap();
+
+    let mut pkcs8 = [0u8; 512];
+    let n = PrivateKeyInfo::Ec {
+        algorithm: pkix::KeyAlgorithm::EcP521,
+        private_key: &private,
+        public_key: Some(&public),
+    }
+    .to_der(&mut pkcs8)
+    .unwrap();
+
+    let PrivateKeyInfo::Ec {
+        private_key,
+        public_key: Some(point),
+        algorithm,
+    } = PrivateKeyInfo::from_der(&pkcs8[..n]).unwrap()
+    else {
+        panic!("expected an elliptic-curve key");
+    };
+    assert_eq!(algorithm, pkix::KeyAlgorithm::EcP521);
+
+    let mut signature = [0u8; ec::p521::EcdsaP521Sha512::SIGNATURE_LEN];
+    ec::p521::EcdsaP521Sha512::sign(private_key, b"message", &mut signature).unwrap();
+    ec::p521::EcdsaP521Sha512::verify(point, b"message", &signature).unwrap();
+}
+
+// A P-521 key pair produced by OpenSSL 3.5.7, as PKCS#8 and as SPKI:
+//
+//   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-521 //       -pkeyopt ec_param_enc:named_curve -outform DER
+//   openssl pkcs8 -topk8 -nocrypt -inform DER -outform DER
+//   openssl pkey -inform DER -pubout -outform DER
+const OPENSSL_P521_PKCS8: &str = concat!(
+    "3081ee020100301006072a8648ce3d020106052b810400230481d63081d30201",
+    "01044201561e70ddafc182c8543600963cd72f2f99905eaf3e004bbcce708b39",
+    "b6b38ed346c8416f34e26d9fbbfe8a19a6031b6158ac620e26df07ee2b5f2a2b",
+    "b56eecbb67a18189038186000401d5a6010c58847c997e57aa3e006dc546ddfd",
+    "953492fd28ec42c66499f223c4c27544b4f749ba345a45d0ea3f86e5756886ec",
+    "4775aa7bf505495da5b71cfe9bf1fe0178fe7a00a59e3965a5af25d7c3117750",
+    "e3b969f26d5987d7879977ea16bc083f2774585c4f48a5567da7f399d873d21b",
+    "fe5e8fc0f464db21ce39b8269ef39e1e9f",
+);
+const OPENSSL_P521_SPKI: &str = concat!(
+    "30819b301006072a8648ce3d020106052b81040023038186000401d5a6010c58",
+    "847c997e57aa3e006dc546ddfd953492fd28ec42c66499f223c4c27544b4f749",
+    "ba345a45d0ea3f86e5756886ec4775aa7bf505495da5b71cfe9bf1fe0178fe7a",
+    "00a59e3965a5af25d7c3117750e3b969f26d5987d7879977ea16bc083f277458",
+    "5c4f48a5567da7f399d873d21bfe5e8fc0f464db21ce39b8269ef39e1e9f",
+);
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// Another implementation's P-521 key, parsed here, is the key it claims to be.
+///
+/// The test above only ever parses what this library wrote, so an encoder and
+/// parser that agreed on a mistake would pass it. This takes OpenSSL's bytes
+/// instead: `ic-ec` must derive OpenSSL's public point from OpenSSL's private
+/// scalar -- the one fact that shows both the scalar and the point were read
+/// out of the right bytes -- and a signature made with the parsed scalar must
+/// verify under the point parsed from OpenSSL's separate SPKI file.
+#[test]
+fn an_openssl_p521_key_is_the_key_it_claims_to_be() {
+    let pkcs8 = unhex(OPENSSL_P521_PKCS8);
+    let spki = unhex(OPENSSL_P521_SPKI);
+
+    let PrivateKeyInfo::Ec {
+        algorithm,
+        private_key,
+        public_key: Some(embedded_point),
+    } = PrivateKeyInfo::from_der(&pkcs8).unwrap()
+    else {
+        panic!("expected a P-521 key carrying its public point");
+    };
+    assert_eq!(algorithm, pkix::KeyAlgorithm::EcP521);
+
+    let PublicKeyInfo::Ec {
+        algorithm,
+        point: spki_point,
+    } = PublicKeyInfo::from_der(&spki).unwrap()
+    else {
+        panic!("expected a P-521 public key");
+    };
+    assert_eq!(algorithm, pkix::KeyAlgorithm::EcP521);
+
+    let mut derived = [0u8; 133];
+    ec::p521::EcdsaP521Sha512::public_key(private_key, &mut derived).unwrap();
+    assert_eq!(
+        &derived[..],
+        embedded_point,
+        "ic-ec disagrees with OpenSSL's point"
+    );
+    assert_eq!(
+        &derived[..],
+        spki_point,
+        "PKCS#8 and SPKI name different points"
+    );
+
+    let mut signature = [0u8; ec::p521::EcdsaP521Sha512::SIGNATURE_LEN];
+    ec::p521::EcdsaP521Sha512::sign(private_key, b"interop", &mut signature).unwrap();
+    ec::p521::EcdsaP521Sha512::verify(spki_point, b"interop", &signature).unwrap();
+}
+
 #[test]
 fn ed25519_keys_survive_pkcs8_and_spki() {
     let seed = [0x3fu8; 32];

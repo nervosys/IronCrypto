@@ -24,6 +24,9 @@ pub const P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 /// `secp384r1` (P-384), 1.3.132.0.34.
 pub const P384: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
 
+/// `secp521r1` (P-521), 1.3.132.0.35.
+pub const P521: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x23];
+
 /// `id-Ed25519`, 1.3.101.112 (RFC 8410).
 pub const ED25519: &[u8] = &[0x2b, 0x65, 0x70];
 
@@ -44,6 +47,8 @@ pub enum KeyAlgorithm {
     EcP256,
     /// ECDSA or ECDH over P-384.
     EcP384,
+    /// ECDSA or ECDH over P-521.
+    EcP521,
     /// Ed25519 signatures.
     Ed25519,
     /// X25519 key agreement.
@@ -62,6 +67,7 @@ impl KeyAlgorithm {
             Self::Rsa => "rsa",
             Self::EcP256 => "p256",
             Self::EcP384 => "p384",
+            Self::EcP521 => "p521",
             Self::Ed25519 => "ed25519",
             Self::X25519 => "x25519",
             Self::Unknown => "unknown",
@@ -73,6 +79,9 @@ impl KeyAlgorithm {
         match self {
             Self::EcP256 => Some(65),
             Self::EcP384 => Some(97),
+            // 521 bits round up to 66 bytes per coordinate, so the
+            // uncompressed point is 1 + 2 * 66.
+            Self::EcP521 => Some(133),
             Self::Ed25519 | Self::X25519 => Some(32),
             Self::Rsa | Self::Unknown => None,
         }
@@ -83,6 +92,7 @@ impl KeyAlgorithm {
         match self {
             Self::EcP256 => Some(32),
             Self::EcP384 => Some(48),
+            Self::EcP521 => Some(66),
             Self::Ed25519 | Self::X25519 => Some(32),
             Self::Rsa | Self::Unknown => None,
         }
@@ -95,6 +105,8 @@ pub(crate) fn curve_from_oid(oid: &[u8]) -> KeyAlgorithm {
         KeyAlgorithm::EcP256
     } else if oid == P384 {
         KeyAlgorithm::EcP384
+    } else if oid == P521 {
+        KeyAlgorithm::EcP521
     } else {
         KeyAlgorithm::Unknown
     }
@@ -105,6 +117,7 @@ pub(crate) fn curve_oid(alg: KeyAlgorithm) -> Option<&'static [u8]> {
     match alg {
         KeyAlgorithm::EcP256 => Some(P256),
         KeyAlgorithm::EcP384 => Some(P384),
+        KeyAlgorithm::EcP521 => Some(P521),
         _ => None,
     }
 }
@@ -163,6 +176,7 @@ mod tests {
             (EC_PUBLIC_KEY, &[1, 2, 840, 10045, 2, 1], "id-ecPublicKey"),
             (P256, &[1, 2, 840, 10045, 3, 1, 7], "prime256v1"),
             (P384, &[1, 3, 132, 0, 34], "secp384r1"),
+            (P521, &[1, 3, 132, 0, 35], "secp521r1"),
             (ED25519, &[1, 3, 101, 112], "id-Ed25519"),
             (X25519, &[1, 3, 101, 110], "id-X25519"),
         ];
@@ -179,6 +193,7 @@ mod tests {
             EC_PUBLIC_KEY,
             P256,
             P384,
+            P521,
             ED25519,
             X25519,
         ];
