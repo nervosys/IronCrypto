@@ -207,7 +207,6 @@ macro_rules! generator_table_for {
             fn mul_generator(
                 scalar: &<Self as $crate::nist::point::Curve>::Scalar,
             ) -> $crate::nist::point::Point<Self> {
-                use $crate::nist::point::Curve as _;
                 $crate::nist::point::Point::<Self>::generator().mul_scalar(scalar)
             }
         }

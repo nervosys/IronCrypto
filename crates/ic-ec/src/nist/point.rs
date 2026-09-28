@@ -225,6 +225,7 @@ impl<C: Curve> Point<C> {
     /// On a short Weierstrass curve `-(x, y, z)` is `(x, -y, z)`, so this is
     /// one field negation and a conditional move. Used by the signed-digit
     /// generator table, which stores only positive multiples.
+    #[cfg(feature = "std")]
     pub(crate) fn conditional_negate(&mut self, choice: Choice) {
         let ny = self.y.neg();
         <C::Field as Field>::cmov(&mut self.y, &ny, choice);

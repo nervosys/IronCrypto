@@ -57,6 +57,22 @@ jobs:
       - run: cargo test -p ic-cipher --features aarch64-crypto
       - run: cargo test -p iron-crypto --features aarch64-crypto
 
+  x86-32:
+    name: 32-bit x86 (native)
+    # Windows runs 32-bit binaries natively, so this executes rather than
+    # merely compiles. It is the one configuration where the CPU has AES-NI
+    # and PCLMULQDQ but the carry-less GHASH does not exist, and the ontology
+    # once reported it as hardware-accelerated: `recommend` chose AES-GCM at
+    # about 11 MiB/s over ChaCha20-Poly1305 at 450. iron-crypto's
+    # backend_report test separates that case only when it runs here.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-pc-windows-msvc
+      - run: cargo test --workspace --target i686-pc-windows-msvc
+
   no-std:
     name: no_std (${{ matrix.target }})
     runs-on: ubuntu-latest

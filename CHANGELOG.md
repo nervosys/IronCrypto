@@ -23,6 +23,24 @@ means the next release is 0.2.0, not 0.1.4.
   shares, and which would say nothing about what is missing. As before, the
   writer will not emit one.
 
+- **`recommend` chose AES-GCM on 32-bit x86, where it is about forty times
+  slower than ChaCha20-Poly1305.** The ontology reported
+  `hardware-accelerated` whenever the CPU had AES-NI and `PCLMULQDQ`, but the
+  carry-less GHASH exists only on x86-64 with `std`; everywhere else AES-GCM
+  runs on the portable GHASH. Measured on one machine, a 32-bit build ran
+  AES-256-GCM at 10.7 MiB/s against 450 MiB/s for the ChaCha20-Poly1305 it
+  had rejected. The report and the dispatch now use one predicate,
+  `ic_core::cpu::has_ghash_clmul`, so they cannot disagree. The same fix
+  covers a `no_std` x86-64 build with `+aes,+pclmulqdq`. x86-64 with `std` is
+  unaffected.
+- **CI had been failing on every push since before 0.1.2**, so none of its
+  checks were gating anything. The four `no_std` builds failed on an unused
+  import inside `ic-ec`'s generator-table macro, which only CI's
+  `-D warnings` turns into an error. The zero-dependency job never ran its
+  check at all: the scripts in `scripts/` were committed without the
+  executable bit. Both are fixed, and every job passes locally under CI's
+  flags.
+
 ### Breaking
 
 - `ic_pkix::KeyAlgorithm` gains a variant, `EcP521`. The enum is not
@@ -86,6 +104,11 @@ means the next release is 0.2.0, not 0.1.4.
   missing forward never shows up in the test suite -- only for a caller who
   depends on that crate directly, who would silently lose SHA-NI, AVX2 and
   AES-NI.
+- `iron-crypto` checks the ontology's backend report against what AES-GCM
+  actually runs. `ic-ontology` cannot see `ic-cipher`, and its own test
+  compared the report with the formula it was computed from, so it passed on
+  32-bit x86. The new test fails there against the old predicate and passes
+  against the new one. CI gains a native 32-bit x86 job so it runs there.
 
 ## 0.1.3
 

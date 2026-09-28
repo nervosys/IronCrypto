@@ -12,6 +12,7 @@ use crate::scalar;
 use ic_core::ct::Choice;
 
 // The precomputed basepoint table. See the module for why it is `std` only.
+#[cfg(feature = "std")]
 mod basepoint_table;
 use ic_core::traits::{Algorithm, Digest, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result, Zeroize};
@@ -68,6 +69,7 @@ pub struct Point {
 /// doublings cheaper: a doubling reads only `X`, `Y` and `Z`, so on the way to
 /// another doubling the `T` those four multiplications would produce is never
 /// read, and three of them suffice instead of four.
+#[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub(crate) struct Completed {
     x: Fe,
@@ -79,6 +81,7 @@ pub(crate) struct Completed {
 /// `(X : Y : Z)`, standing for `(X/Z, Y/Z)`. No `T`.
 ///
 /// What a doubling needs and all it needs.
+#[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub(crate) struct Projective {
     x: Fe,
@@ -93,6 +96,7 @@ pub(crate) struct Projective {
 /// stores them instead of `(X, Y, Z, T)`. That turns an addition from nine
 /// multiplications into four: the two sums and differences are already formed,
 /// and `2d·T` has already been scaled.
+#[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub(crate) struct Niels {
     ypx: Fe,
@@ -106,6 +110,7 @@ pub(crate) struct Niels {
 /// [`Niels`] without the `Z`, which removes the one multiplication that used
 /// it. Worth the field inversion it costs to build, for a table entry that
 /// will be added sixty-four times per signature and never changes.
+#[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub(crate) struct AffineNiels {
     ypx: Fe,
@@ -113,6 +118,7 @@ pub(crate) struct AffineNiels {
     t2d: Fe,
 }
 
+#[cfg(feature = "std")]
 impl AffineNiels {
     /// The neutral element: `x = 0`, `y = 1`.
     pub(crate) const IDENTITY: AffineNiels = AffineNiels {
@@ -139,6 +145,7 @@ impl AffineNiels {
     }
 }
 
+#[cfg(feature = "std")]
 impl Completed {
     /// Drop to `(X : Y : Z)`, which is three multiplications.
     fn to_projective(self) -> Projective {
@@ -163,6 +170,7 @@ impl Completed {
     }
 }
 
+#[cfg(feature = "std")]
 impl Projective {
     /// Recover extended coordinates from projective ones.
     ///
@@ -302,6 +310,7 @@ impl Point {
     }
 
     /// Drop `T`, which a doubling does not read.
+    #[cfg(feature = "std")]
     fn to_projective(self) -> Projective {
         Projective {
             x: self.x,
@@ -311,6 +320,7 @@ impl Point {
     }
 
     /// Rearrange for repeated addition. See [`Niels`].
+    #[cfg(feature = "std")]
     fn to_niels(self) -> Niels {
         Niels {
             ypx: self.y.add(&self.x),
@@ -326,6 +336,7 @@ impl Point {
     /// rather than nine because `other` arrives with its sums, differences and
     /// `2d·T` already formed, and because the result is left completed rather
     /// than converted back.
+    #[cfg(feature = "std")]
     fn add_niels(&self, other: &Niels) -> Completed {
         let pp = self.y.add(&self.x).mul(&other.ypx);
         let mm = self.y.sub(&self.x).mul(&other.ymx);
@@ -345,6 +356,7 @@ impl Point {
     /// Negating a Niels point swaps its sums and differences and negates
     /// `2d·T`, which is cheaper than negating the point it came from and
     /// rebuilding it.
+    #[cfg(feature = "std")]
     fn sub_niels(&self, other: &Niels) -> Completed {
         let pp = self.y.add(&self.x).mul(&other.ymx);
         let mm = self.y.sub(&self.x).mul(&other.ypx);
@@ -364,6 +376,7 @@ impl Point {
     ///
     /// Costs a field inversion, which is why it is done when a table is built
     /// and never on a hot path.
+    #[cfg(feature = "std")]
     pub(crate) fn to_affine_niels(self) -> AffineNiels {
         let z_inv = self.z.invert();
         let x = self.x.mul(&z_inv);
@@ -379,6 +392,7 @@ impl Point {
     ///
     /// One fewer than [`Point::add_niels`]: `other` has `Z = 1`, so the
     /// product of the two `Z`s is just this one's, doubled.
+    #[cfg(feature = "std")]
     pub(crate) fn add_affine_niels(&self, other: &AffineNiels) -> Completed {
         let pp = self.y.add(&self.x).mul(&other.ypx);
         let mm = self.y.sub(&self.x).mul(&other.ymx);
@@ -400,6 +414,7 @@ impl Point {
     /// copy of the table entry avoids copying it at all -- an entry is three
     /// field elements, and the variable-time path has no reason to touch it
     /// with conditional moves.
+    #[cfg(feature = "std")]
     pub(crate) fn sub_affine_niels(&self, other: &AffineNiels) -> Completed {
         let pp = self.y.add(&self.x).mul(&other.ymx);
         let mm = self.y.sub(&self.x).mul(&other.ypx);

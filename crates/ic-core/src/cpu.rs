@@ -47,9 +47,9 @@ pub fn has_aes() -> bool {
 
 /// Whether carry-less multiplication (`PCLMULQDQ`) is available.
 ///
-/// This is what GHASH needs; AES-GCM is only fast when *both* this and
-/// [`has_aes`] are true, because the portable GHASH costs far more per block
-/// than the portable AES does.
+/// The instruction GHASH needs, but not a sufficient condition for GHASH to use
+/// it: whether it will is [`has_ghash_clmul`], which is what to ask before
+/// concluding that AES-GCM is fast.
 #[inline]
 #[must_use]
 pub fn has_pclmulqdq() -> bool {
@@ -69,6 +69,32 @@ pub fn has_pclmulqdq() -> bool {
         any(target_arch = "x86", target_arch = "x86_64"),
         any(feature = "std", target_feature = "pclmulqdq")
     )))]
+    {
+        false
+    }
+}
+
+/// Whether GHASH will run on the carry-less multiply in this build.
+///
+/// Not the same question as [`has_pclmulqdq`]. The instruction is necessary but
+/// the backend also needs `ssse3` for its byte-reversal shuffle, and it exists
+/// only on x86-64 with `std`. A 32-bit x86 build on a CPU that has every one of
+/// those instructions still runs the portable GHASH.
+///
+/// This is the predicate `ic_cipher::gcm` dispatches on and the one the
+/// ontology reports from, so the two cannot disagree. They did: the report
+/// used to ask only whether the CPU had the instruction, and told agents on
+/// 32-bit x86 that AES-GCM was fast when it ran at a fortieth of the speed of
+/// ChaCha20-Poly1305.
+#[inline]
+#[must_use]
+pub fn has_ghash_clmul() -> bool {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        std::arch::is_x86_feature_detected!("pclmulqdq")
+            && std::arch::is_x86_feature_detected!("ssse3")
+    }
+    #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
     {
         false
     }

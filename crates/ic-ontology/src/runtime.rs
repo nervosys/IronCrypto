@@ -44,9 +44,11 @@ impl Backend {
 /// without, and an agent sizing a workload needs the answer for the machine it
 /// is actually on.
 pub fn backend() -> Backend {
-    // AES-GCM is only fast when *both* are present: without the carry-less
-    // multiply, GHASH dominates and the AES speedup is invisible.
-    if ic_core::cpu::has_aes() && ic_core::cpu::has_pclmulqdq() {
+    // AES-GCM is only fast when *both* are in use: without the carry-less
+    // multiply, GHASH dominates and the AES speedup is invisible. Ask whether
+    // the GHASH backend runs, not whether the CPU has the instruction -- a
+    // 32-bit x86 build has the instruction and no backend for it.
+    if ic_core::cpu::has_aes() && ic_core::cpu::has_ghash_clmul() {
         Backend::HardwareAccelerated
     } else {
         Backend::PortableConstantTime
@@ -93,9 +95,10 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         Capability {
             id: "hardware-acceleration",
             present: backend().fast_bulk_symmetric(),
-            note: "x86-64 AES-NI and PCLMULQDQ, selected at runtime and validated against the \
-                   portable backend. Absent on other targets, where AES falls back to the \
-                   constant-time portable path at single-digit MB/s.",
+            note: "x86-64 AES-NI and a PCLMULQDQ GHASH, selected at runtime and validated \
+                   against the portable backend. Absent on other targets, including 32-bit \
+                   x86 and ARM where AES itself may run in hardware: GHASH is portable \
+                   there, and AES-GCM runs far slower than ChaCha20-Poly1305.",
         },
         Capability {
             id: "fips-validated",
@@ -153,11 +156,14 @@ pub fn has(id: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The backend reported must match what the cipher crate actually selects.
-    /// A disagreement would make the ontology lie about the binary it ships in.
+    /// The report is consistent with the predicates it is built from.
+    ///
+    /// This cannot show that it matches what the cipher crate selects, since
+    /// this crate cannot see `ic-cipher`; `iron-crypto`'s `backend_report`
+    /// test does that, and caught a 32-bit x86 build that this one passed.
     #[test]
     fn backend_matches_the_cpu() {
-        let accelerated = ic_core::cpu::has_aes() && ic_core::cpu::has_pclmulqdq();
+        let accelerated = ic_core::cpu::has_aes() && ic_core::cpu::has_ghash_clmul();
         assert_eq!(
             backend(),
             if accelerated {

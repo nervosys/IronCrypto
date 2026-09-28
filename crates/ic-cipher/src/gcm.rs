@@ -44,18 +44,12 @@ impl GcmLimits {
 /// Whether GHASH can use the carry-less multiply on this CPU.
 ///
 /// Needs `ssse3` for the byte-reversal shuffle as well as `pclmulqdq` for the
-/// multiply itself.
+/// multiply itself. Detection lives in `ic-core`, like AES-NI's, so the
+/// ontology reports the same answer this dispatches on.
 #[inline]
 #[must_use]
 pub fn ghash_accelerated() -> bool {
-    #[cfg(all(target_arch = "x86_64", feature = "std"))]
-    {
-        ic_core::cpu::has_pclmulqdq() && std::arch::is_x86_feature_detected!("ssse3")
-    }
-    #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
-    {
-        false
-    }
+    ic_core::cpu::has_ghash_clmul()
 }
 
 /// Multiply `x` by `h` in GF(2^128) using the GCM bit ordering, in place.
