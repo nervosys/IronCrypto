@@ -113,7 +113,7 @@ to one that still does not.
 
 ```toml
 [dependencies]
-iron-crypto = "0.1"
+iron-crypto = "0.2"
 ```
 
 All eighteen crates are on crates.io. `iron-crypto` is the facade and
@@ -122,9 +122,9 @@ graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.1"   # AES, ChaCha20, the AEADs
-ic-hash = "0.1"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.1"       # the NIST curves, X25519, Ed25519
+ic-cipher = "0.2"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2"       # the NIST curves, X25519, Ed25519
 ```
 
 ```console

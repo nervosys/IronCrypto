@@ -3,11 +3,12 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.0
 
 Contains breaking changes to `ic-pkix` and `ic-ec`, and removes a handful of
 public items elsewhere; see below. Under Cargo's rules for `0.x` versions that
-means the next release is 0.2.0, not 0.1.4.
+makes this 0.2.0 rather than 0.1.4: a `0.1` requirement will not pick it up
+until the dependent says so.
 
 ### Fixed
 
