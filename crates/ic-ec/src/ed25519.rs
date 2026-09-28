@@ -469,7 +469,14 @@ impl Point {
     /// The saving is real but bounded: the doublings dominate and they cannot
     /// be avoided here. The basepoint half of verification is the one that got
     /// a table.
-    pub fn mul_scalar_vartime(&self, scalar: &[u8; 32]) -> Point {
+    ///
+    /// Crate-private, and compiled only where it is used. It was public, which
+    /// put a variable-time multiplication on a type that can carry a secret
+    /// in reach of every caller. Under `std`, verification uses the interleaved
+    /// [`double_scalar_mul_vartime`] instead; this serves the `no_std` fallback
+    /// and the test that holds it to the constant-time ladder.
+    #[cfg(any(not(feature = "std"), test))]
+    pub(crate) fn mul_scalar_vartime(&self, scalar: &[u8; 32]) -> Point {
         // 1P, 3P, 5P .. 15P.
         let twice = self.double();
         let mut odd = [*self; 8];
@@ -610,7 +617,7 @@ fn mul_basepoint(scalar: &[u8; 32]) -> Point {
 /// and comparing whole signatures cannot separate "our field arithmetic is
 /// slower" from "our scalar multiplication does more work". This is how that
 /// question gets answered rather than guessed at.
-#[cfg(feature = "std")]
+#[cfg(feature = "bench-internals")]
 #[doc(hidden)]
 pub fn double_scalar_mul_vartime_for_bench(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
     double_scalar_mul_vartime(a, k, s)
@@ -682,6 +689,7 @@ fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
 
 /// [`mul_basepoint`], reachable from the benchmark. See
 /// [`double_scalar_mul_vartime_for_bench`].
+#[cfg(feature = "bench-internals")]
 #[doc(hidden)]
 pub fn mul_basepoint_for_bench(scalar: &[u8; 32]) -> Point {
     mul_basepoint(scalar)
@@ -722,6 +730,7 @@ fn expand_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
 ///
 /// Variable time by construction: the loop length and the digit pattern depend
 /// on the scalar. See [`Point::mul_scalar_vartime`] for when that is allowed.
+#[cfg(any(not(feature = "std"), test))]
 fn wnaf5(scalar: &[u8; 32]) -> [i8; 258] {
     wnaf(scalar, 5)
 }

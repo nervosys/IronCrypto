@@ -5,8 +5,9 @@ all of them.
 
 ## Unreleased
 
-Contains a breaking change to `ic-pkix`; see below. Under Cargo's rules for
-`0.x` versions that means the next release is 0.2.0, not 0.1.4.
+Contains breaking changes to `ic-pkix` and `ic-ec`, and removes a handful of
+public items elsewhere; see below. Under Cargo's rules for `0.x` versions that
+means the next release is 0.2.0, not 0.1.4.
 
 ### Fixed
 
@@ -33,8 +34,33 @@ Contains a breaking change to `ic-pkix`; see below. Under Cargo's rules for
   `Ok(Unsupported { .. })` for an unknown curve where they returned `Err`. A
   caller that relied on the error to reject such keys still rejects them if it
   handles `Unsupported`, which it already had to for unknown algorithms.
+- **`ic-ec`'s internals are no longer public.** The `field`, `scalar` and
+  `nist` modules were `pub` because the crate's own benchmarks reached into
+  them, which made every limb layout and helper part of the semver contract.
+  The supported API -- `Ed25519`, `X25519`, `P256`, `P384`, `P521` and their
+  key types -- is unchanged. Going with them: `EcdsaCurve::SIGNATURE_ID`, which
+  duplicated `Algorithm::ID` and was never read, and the `generator_table_for!`
+  macro, which was `#[macro_export]`ed to the crate root and expanded to paths
+  that are now private. `ed25519::Point::mul_scalar_vartime` is crate-private.
+- The `*_for_bench` functions in `ic-ec` sit behind a new `bench-internals`
+  feature, which `bench/` turns on. Nothing under that feature is covered by
+  semver.
+- `ic_mlkem::sample::matrix_xof` and `ic_mldsa::sample::{matrix_xof,
+  bounded_xof}` were `#[doc(hidden)] pub` -- hidden, but still public API --
+  and nothing outside their own tests called them. They are now test-only.
 
 ### Documentation
+
+- **The post-quantum crates' front pages on docs.rs still called them
+  unverified.** 0.1.3 corrected their crates.io descriptions and `SECURITY.md`,
+  but `ic-mldsa`, `ic-mlkem` and `ic-cipher`'s AES-GCM-SIV module docs, the
+  `iron-crypto` front page, `ic-vectors`, and the SBOM `ic sbom` emits all
+  still said "experimental" or "no signature scheme yet". All now state what
+  the ontology records: 50 ACVP cases for ML-KEM-768, 55 for ML-DSA-65, all 50
+  RFC 8452 cases for AES-GCM-SIV.
+- The facade says that ARM gets hardware AES but not hardware GHASH, so
+  AES-GCM there is limited by a portable GHASH and `recommend` prefers
+  ChaCha20-Poly1305.
 
 - `der::Writer` now says, with a doctest, that fields are pushed last first.
   Pushing them in their natural order produces valid DER with the fields
@@ -51,6 +77,15 @@ Contains a breaking change to `ic-pkix`; see below. Under Cargo's rules for
   `iron-crypto` confirms that `ic-ec` derives OpenSSL's public point from
   OpenSSL's private scalar, and that a signature made with the parsed key
   verifies under OpenSSL's separate public-key file.
+- Two guards in `ic-cli`, so the drift above cannot recur silently. One holds
+  every crate description, every module doc and every SBOM entry to the
+  ontology: a crate with no `experimental` entry may not describe itself as
+  untested. Run against 0.1.3's docs it reports fourteen claims in eight
+  files. The other checks that each crate's `std` feature turns on `std` in
+  every dependency that has one. A workspace build unifies features, so a
+  missing forward never shows up in the test suite -- only for a caller who
+  depends on that crate directly, who would silently lose SHA-NI, AVX2 and
+  AES-NI.
 
 ## 0.1.3
 

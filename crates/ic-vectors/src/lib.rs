@@ -1,14 +1,15 @@
 //! Loading test vectors that are not in the repository.
 //!
-//! Two algorithms here are registered `experimental` rather than `available`
-//! for one reason: nobody has checked them against values produced by something
-//! other than themselves. ML-KEM-768 and AES-GCM-SIV have every component
-//! verified against an independent oracle and their assembly verified against
-//! nothing, because no ACVP or RFC vector is wired in.
+//! An algorithm is registered `experimental` rather than `available` when it is
+//! implemented and nothing has checked it against values produced by something
+//! other than itself. That is not a code problem. It is a *files* problem, and
+//! this crate exists so that closing it needs no code at all: drop a vector
+//! file in the right place and the tests start checking against it.
 //!
-//! That gap is not a code problem. It is a *files* problem, and this crate
-//! exists so that closing it needs no code at all: drop a vector file in the
-//! right place and the tests start checking against it. Without one they skip,
+//! It has worked for every algorithm that needed it. ML-KEM-768 and ML-DSA-65
+//! were closed by NIST's ACVP files and AES-GCM-SIV by RFC 8452 appendix C, and
+//! nothing in the registry is `experimental` now. What remains is the
+//! mechanism, for whatever is added next. Without one they skip,
 //! loudly enough to be visible and quietly enough not to fail a build that was
 //! never promised the file.
 //!
@@ -111,11 +112,11 @@ impl VectorFile {
         // values went on to validate an implementation, with the report
         // printing "unrecorded" where the citation belongs.
         //
-        // The point of this crate is that ML-KEM-768 and AES-GCM-SIV stop being
+        // The point of this crate is that an algorithm stops being
         // `experimental` when someone drops a file in here. `experimental`
-        // means nothing has checked them against values produced by something
-        // other than themselves, and a file of unknown origin does not close
-        // that -- it hides it. A missing citation belongs with the other ways a
+        // means nothing has checked it against values produced by something
+        // other than itself, and a file of unknown origin does not close that
+        // -- it hides it. A missing citation belongs with the other ways a
         // present file can be malformed, all of which already panic.
         let algorithm = parsed
             .get("algorithm")
@@ -257,10 +258,10 @@ mod tests {
     ///
     /// `source` used to fall back to the string "unrecorded", so a file with no
     /// provenance loaded and its values went on to validate an implementation.
-    /// That matters here more than it would elsewhere: this crate is how
-    /// ML-KEM-768 and AES-GCM-SIV are meant to stop being `experimental`, and
-    /// `experimental` means exactly that nothing has checked them against
-    /// values produced by something other than themselves. A file of unknown
+    /// That matters here more than it would elsewhere: this crate is how an
+    /// algorithm stops being `experimental` -- as ML-KEM-768, ML-DSA-65 and
+    /// AES-GCM-SIV did -- and `experimental` means exactly that nothing has
+    /// checked it against values produced by something other than itself. A file of unknown
     /// origin does not close that gap, it conceals it.
     ///
     /// Absent stays `None`: skipping loudly is the documented behaviour and is

@@ -32,9 +32,11 @@
 //!
 //! # What the tests check
 //!
-//! No ACVP vector is wired in, so nothing here has been confirmed to agree with
-//! another implementation. What is checked is everything that can be checked
-//! without one:
+//! The samplers are exercised end to end by the ACVP vectors in [`crate::sign`]:
+//! key generation runs `ExpandA` and `ExpandS`, and signing runs `ExpandMask`
+//! and `SampleInBall`, so all 55 cases pass through here. What the tests below
+//! add is a check on each sampler by itself, so a failure points at one rather
+//! than at the whole scheme:
 //!
 //! - Each sampler is rebuilt in the tests from the specification's pseudocode
 //!   over the same SHAKE stream, and required to agree. SHAKE itself is
@@ -50,7 +52,9 @@
 use crate::encode::{bit_unpack, packed_len, z_bits};
 use crate::poly::{Poly, N, Q};
 use ic_core::traits::Xof;
-use ic_hash::{Shake128, Shake256, XofReader};
+#[cfg(test)]
+use ic_hash::XofReader;
+use ic_hash::{Shake128, Shake256};
 
 /// Bytes squeezed per rejection round. One SHAKE-128 rate.
 const SQUEEZE_CHUNK: usize = 168;
@@ -229,8 +233,8 @@ pub fn expand_mask_poly(rho: &[u8; 64], index: u16, gamma1: i32) -> Poly {
 }
 
 /// A reader over the stream [`rej_ntt_poly`] uses, so tests can replay it.
-#[doc(hidden)]
-pub fn matrix_xof(rho: &[u8; 32], s: u8, r: u8) -> XofReader {
+#[cfg(test)]
+fn matrix_xof(rho: &[u8; 32], s: u8, r: u8) -> XofReader {
     let mut x = Shake128::default();
     <Shake128 as Xof>::update(&mut x, rho);
     <Shake128 as Xof>::update(&mut x, &[s, r]);
@@ -238,8 +242,8 @@ pub fn matrix_xof(rho: &[u8; 32], s: u8, r: u8) -> XofReader {
 }
 
 /// A reader over the stream [`rej_bounded_poly`] uses, so tests can replay it.
-#[doc(hidden)]
-pub fn bounded_xof(rho: &[u8; 64], nonce: u16) -> XofReader {
+#[cfg(test)]
+fn bounded_xof(rho: &[u8; 64], nonce: u16) -> XofReader {
     let mut x = Shake256::default();
     <Shake256 as Xof>::update(&mut x, rho);
     <Shake256 as Xof>::update(&mut x, &nonce.to_le_bytes());

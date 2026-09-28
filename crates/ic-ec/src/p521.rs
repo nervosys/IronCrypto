@@ -4,7 +4,7 @@
 //! width is not a multiple of 64 bits: `p = 2^521 - 1`, which needs nine limbs
 //! of which the top carries nine significant bits. That awkwardness is confined
 //! to this module's constants and to the byte conversion in
-//! [`crate::nist::arith`]; the group law and the schemes are the same generic
+//! `crate::nist::arith`; the group law and the schemes are the same generic
 //! code P-256 and P-384 use.
 //!
 //! Paired with SHA-512. The hash is 512 bits and the group order is 521, so
@@ -15,7 +15,7 @@
 //! # A Mersenne prime has conveniences
 //!
 //! `p = 2^521 - 1` means `(p + 1) / 4 = 2^519` exactly, so a square root is 519
-//! squarings with no multiplications at all. [`P521::sqrt`] says so directly
+//! squarings with no multiplications at all. `P521::sqrt` says so directly
 //! rather than running the generic square-and-multiply over an exponent that
 //! happens to be a power of two.
 
@@ -68,7 +68,7 @@ pub struct P521;
 
 // Its own generator table, with its own storage; see the macro, which
 // emits the table under `std` and the ladder without it.
-crate::generator_table_for!(P521);
+crate::nist::gentable::generator_table_for!(P521);
 
 impl Curve for P521 {
     type Field = Fp;
@@ -163,7 +163,6 @@ impl Curve for P521 {
 impl ecdsa::EcdsaCurve for P521 {
     type Digest = ic_hash::Sha512;
     type Hmac = ic_mac::HmacSha512;
-    const SIGNATURE_ID: &'static str = "ecdsa-p521-sha512";
 }
 
 /// ECDSA over P-521 with SHA-512.
@@ -200,7 +199,14 @@ impl EcdsaP521Sha512 {
         ecdsa::public_key_compressed::<P521>(private_key, out)
     }
 
-    /// Rewrite a signature to its low-`s` form. See [`ecdsa::normalize_s`].
+    /// Rewrite a signature to its low-`s` form, if it is not already.
+    ///
+    /// ECDSA is malleable: `(r, s)` and `(r, n - s)` are both valid for the
+    /// same message, so a signature is not a unique identifier unless one form
+    /// is chosen. FIPS 186-5 and RFC 6979 accept both, and this library signs
+    /// and verifies per the standard, so normalization is offered rather than
+    /// imposed -- apply it when a signature doubles as a database key or a
+    /// transaction id.
     pub fn normalize_s(signature: &mut [u8]) -> Result<()> {
         ecdsa::normalize_s::<P521>(signature)
     }

@@ -90,11 +90,11 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         name: "ic-mlkem",
-        description: "ML-KEM-768. Experimental: no interoperability vector is wired in.",
+        description: "ML-KEM-768 (FIPS 203), checked against 50 NIST ACVP cases.",
     },
     Component {
         name: "ic-mldsa",
-        description: "ML-DSA-65. Experimental: no interoperability vector is wired in.",
+        description: "ML-DSA-65 (FIPS 204), checked against 55 NIST ACVP cases.",
     },
     Component {
         name: "ic-json",
@@ -619,5 +619,202 @@ mod tests {
         assert_eq!(parsed.get("specVersion").unwrap().as_str(), Some("1.5"));
         assert_eq!(parsed.get("version").unwrap().as_f64(), Some(1.0));
         assert!(parsed.get("components").unwrap().as_array().is_some());
+    }
+
+    /// Phrases that state an algorithm's status, as opposed to explaining what
+    /// a status means. `ic-vectors` describes what `experimental` is, and must
+    /// be able to; what must not happen is a crate announcing itself untested.
+    ///
+    /// Matched against text with its whitespace collapsed, so a phrase that a
+    /// line wrap splits is still one phrase. The stems are short on purpose:
+    /// "no acvp" catches "no ACVP vector" and "no ACVP or RFC vector" alike,
+    /// and an earlier version that spelled out the whole sentence missed both.
+    const STATUS_CLAIMS: &[&str] = &[
+        "**experimental",
+        "not vector-tested",
+        "not interoperability-tested",
+        "no acvp",
+        "no interoperability vector",
+        "no signature scheme yet",
+        "no signature scheme here yet",
+    ];
+
+    fn claims_in(text: &str) -> Vec<&'static str> {
+        let lower = text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        STATUS_CLAIMS
+            .iter()
+            .copied()
+            .filter(|c| lower.contains(c))
+            .collect()
+    }
+
+    /// Crates that have at least one `experimental` ontology entry, keyed by
+    /// the crate named at the head of each entry's `rust_path`.
+    fn crates_with_experimental_entries() -> std::collections::BTreeSet<String> {
+        ic_ontology::all()
+            .iter()
+            .filter(|e| e.status == ic_ontology::ImplStatus::Experimental)
+            .filter_map(|e| e.rust_path.split("::").next())
+            .filter(|c| !c.is_empty())
+            .map(|c| c.replace('_', "-"))
+            .collect()
+    }
+
+    /// No crate's own documentation calls it unverified when the ontology says
+    /// otherwise.
+    ///
+    /// Algorithm status used to live as prose in a dozen places with the
+    /// ontology as the only real record, and they drifted. When ML-KEM-768 and
+    /// ML-DSA-65 passed NIST's ACVP vectors the registry was updated, and for
+    /// two releases afterwards their crate descriptions on crates.io, their
+    /// front pages on docs.rs, the facade's front page and the SBOM this
+    /// command emits all still said "experimental" or "no signature scheme
+    /// yet". Fixing the two descriptions a user reported left the rest.
+    ///
+    /// This holds every one of those to the ontology. A crate with an
+    /// `experimental` entry may say so; one without may not.
+    #[test]
+    fn no_crate_documents_a_status_the_ontology_contradicts() {
+        let root = workspace_root();
+        let experimental = crates_with_experimental_entries();
+        let mut problems = Vec::new();
+        let (mut crates, mut doc_lines) = (0usize, 0usize);
+
+        for name in manifest_members() {
+            let dir = root.join("crates").join(&name);
+            if experimental.contains(&name) {
+                continue;
+            }
+            crates += 1;
+
+            let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+            if let Some(line) = manifest.lines().find(|l| l.starts_with("description")) {
+                for c in claims_in(line) {
+                    problems.push(format!("{name}/Cargo.toml description says {c:?}"));
+                }
+            }
+
+            // Every `//!` line under src: the crate's front page and each
+            // module's, all of which docs.rs renders.
+            let mut stack = vec![dir.join("src")];
+            while let Some(d) = stack.pop() {
+                for entry in std::fs::read_dir(&d).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|x| x == "rs") {
+                        // A file's module docs as one run of text, so that a
+                        // claim a line wrap splits is still seen whole.
+                        let text = std::fs::read_to_string(&path).unwrap();
+                        let docs: Vec<&str> = text
+                            .lines()
+                            .filter_map(|l| l.trim_start().strip_prefix("//!"))
+                            .collect();
+                        doc_lines += docs.len();
+                        for c in claims_in(&docs.join(" ")) {
+                            let rel = path.strip_prefix(&root).unwrap().display();
+                            problems.push(format!("{rel} says {c:?}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        for component in COMPONENTS {
+            if experimental.contains(component.name) {
+                continue;
+            }
+            for c in claims_in(component.description) {
+                problems.push(format!("SBOM entry {} says {c:?}", component.name));
+            }
+        }
+
+        // Both loops pass trivially over nothing, which would make this look
+        // like a guard while guarding nothing.
+        assert!(crates >= 10, "only {crates} crates checked");
+        assert!(doc_lines >= 1000, "only {doc_lines} module-doc lines read");
+        assert!(
+            problems.is_empty(),
+            "documentation contradicts the ontology:\n  {}",
+            problems.join("\n  ")
+        );
+    }
+
+    /// Every crate turns on `std` in each dependency that has one.
+    ///
+    /// The workspace declares its internal dependencies with
+    /// `default-features = false`, so a crate's `std` feature is the only
+    /// thing that turns `std` on beneath it. Leave one out and a caller who
+    /// depends on that crate directly -- not through `iron-crypto`, which
+    /// forwards everything -- silently loses whatever the dependency does only
+    /// under `std`: runtime CPU detection, so SHA-NI, AVX2 and AES-NI. Nothing
+    /// else notices. A workspace build unifies features across every crate, so
+    /// the test suite runs with `std` on everywhere regardless.
+    #[test]
+    fn every_std_feature_reaches_every_dependency_that_has_one() {
+        let root = workspace_root();
+        let members = manifest_members();
+
+        let read = |name: &str| {
+            std::fs::read_to_string(root.join("crates").join(name).join("Cargo.toml"))
+                .unwrap_or_else(|_| panic!("{name} has no manifest"))
+        };
+
+        // The `std = [ ... ]` list, however it is laid out.
+        let std_list = |text: &str| -> Option<String> {
+            let start = text.find("\nstd = [")?;
+            let end = text[start..].find(']')? + start;
+            Some(text[start..end].to_string())
+        };
+
+        // Names under `[dependencies]` only: dev-dependencies are built with the
+        // workspace and do not reach a downstream caller.
+        let deps = |text: &str| -> Vec<String> {
+            let mut out = Vec::new();
+            let mut in_deps = false;
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_deps = line == "[dependencies]";
+                    continue;
+                }
+                if in_deps {
+                    if let Some((name, _)) = line.split_once('=') {
+                        let name = name.trim();
+                        if members.iter().any(|m| m == name) {
+                            out.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            out
+        };
+
+        let has_std: std::collections::BTreeSet<String> = members
+            .iter()
+            .filter(|m| std_list(&read(m)).is_some())
+            .cloned()
+            .collect();
+        assert!(
+            has_std.len() >= 10,
+            "only {} crates have a std feature",
+            has_std.len()
+        );
+
+        let mut problems = Vec::new();
+        for name in &has_std {
+            let text = read(name);
+            let list = std_list(&text).unwrap();
+            for dep in deps(&text) {
+                if has_std.contains(&dep) && !list.contains(&format!("\"{dep}/std\"")) {
+                    problems.push(format!("{name}'s std does not turn on {dep}/std"));
+                }
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
     }
 }

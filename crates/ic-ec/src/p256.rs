@@ -1,7 +1,7 @@
 //! NIST P-256 (secp256r1, prime256v1).
 //!
 //! The most widely deployed approved curve. The field, group law, and schemes
-//! come from [`crate::nist`]; this module supplies the constants and the
+//! come from `crate::nist`; this module supplies the constants and the
 //! public API.
 
 use crate::mont_field;
@@ -43,7 +43,7 @@ pub struct P256;
 
 // Its own generator table, with its own storage; see the macro, which
 // emits the table under `std` and the ladder without it.
-crate::generator_table_for!(P256);
+crate::nist::gentable::generator_table_for!(P256);
 
 impl Curve for P256 {
     type Field = Fp;
@@ -116,7 +116,6 @@ impl Curve for P256 {
 impl ecdsa::EcdsaCurve for P256 {
     type Digest = ic_hash::Sha256;
     type Hmac = ic_mac::HmacSha256;
-    const SIGNATURE_ID: &'static str = "ecdsa-p256-sha256";
 }
 
 /// ECDSA over P-256 with SHA-256.
@@ -153,7 +152,14 @@ impl EcdsaP256Sha256 {
         ecdsa::public_key_compressed::<P256>(private_key, out)
     }
 
-    /// Rewrite a signature to its low-`s` form. See [`ecdsa::normalize_s`].
+    /// Rewrite a signature to its low-`s` form, if it is not already.
+    ///
+    /// ECDSA is malleable: `(r, s)` and `(r, n - s)` are both valid for the
+    /// same message, so a signature is not a unique identifier unless one form
+    /// is chosen. FIPS 186-5 and RFC 6979 accept both, and this library signs
+    /// and verifies per the standard, so normalization is offered rather than
+    /// imposed -- apply it when a signature doubles as a database key or a
+    /// transaction id.
     pub fn normalize_s(signature: &mut [u8]) -> Result<()> {
         ecdsa::normalize_s::<P256>(signature)
     }

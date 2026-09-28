@@ -1,16 +1,18 @@
-//! ML-DSA-65 (FIPS 204 algorithms 1 through 8) — **experimental**.
+//! ML-DSA-65 (FIPS 204 algorithms 1 through 8), checked against NIST's ACVP
+//! vectors.
 //!
-//! # Read this before using it
+//! # How it is verified
 //!
-//! No ACVP vector is wired in, so **nothing here has been confirmed to produce
-//! the same bytes as any other ML-DSA implementation**. Every layer beneath it
-//! is independently checked — the NTT against schoolbook multiplication, the
-//! packing against a bit-at-a-time reference, the rounding against its defining
-//! equations, the samplers against the specification's pseudocode — and this
-//! module is checked only against itself, by signing and verifying.
+//! The assembled scheme produces the same bytes as NIST's ACVP vectors for
+//! ML-DSA-65: all 25 key-generation cases and all 30 signature cases, 15
+//! deterministic and 15 hedged. Every layer beneath it is also independently
+//! checked — the NTT against schoolbook multiplication, the packing against a
+//! bit-at-a-time reference, the rounding against its defining equations, the
+//! samplers against the specification's pseudocode.
 //!
-//! That is a weaker argument than it sounds, and it is worth being precise
-//! about why. A sign/verify round trip is not vacuous here: signing computes
+//! Before the vectors, this module was checked only against itself, by signing
+//! and verifying. That was a weaker argument than it sounds, and it is worth
+//! keeping the reasoning for why. A sign/verify round trip is not vacuous here: signing computes
 //! `w = A*y` while verification computes `w' = A*z - c*t1*2^d` and rebuilds the
 //! high bits through the hints, so the two are different computations that must
 //! agree through the rounding machinery. What the round trip cannot catch is a
@@ -18,20 +20,20 @@
 //! separator, the order of `s` and `r` in `ExpandA`. Those produce a scheme
 //! that is internally perfect and interoperates with nobody.
 //!
-//! So this is registered `experimental` in the ontology, alongside ML-KEM-768
-//! and for the same reason, carrying a `not-interoperability-tested` constraint
-//! at `Critical` severity. It is excluded from the approved-mode policy and
-//! from `recommend`. Being discoverable and being recommended are different
-//! things, and the registry is where that difference gets stated rather than
-//! left to whoever reads the source. `testvectors/README.md` says what file
-//! would promote it.
+//! That is the case the ACVP vectors close, and why the module was registered
+//! `experimental` until they arrived. They were produced by another
+//! implementation, so a consistent misread anywhere in the stack fails them.
+//! It is now `available` in the ontology, usable in the approved mode, and
+//! offered by `recommend` for post-quantum signatures -- alongside a constraint
+//! to sign in a hybrid with a classical scheme, which is about the youth of
+//! lattice cryptanalysis rather than about this code.
 //!
 //! # What is deliberately not here
 //!
 //! Only ML-DSA-65. The other two parameter sets are a table change away, but
-//! shipping three unverified variants is worse than shipping one: it triples
-//! what a future vector has to confirm while adding nothing that can be checked
-//! today.
+//! each would ship unchecked until its own ACVP cases were wired in, beside one
+//! that is checked. That is a decision about surface area, and the ontology
+//! records it as one.
 //!
 //! The hedged variant takes its 32 bytes of randomness as an argument rather
 //! than reaching for a DRBG, so the deterministic variant is the same code path

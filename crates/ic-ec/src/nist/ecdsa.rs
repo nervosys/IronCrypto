@@ -32,9 +32,6 @@ pub trait EcdsaCurve: Curve + crate::nist::gentable::HasGeneratorTable {
     type Digest: Digest;
     /// HMAC over the same digest, for RFC 6979.
     type Hmac: Mac;
-
-    /// The ontology identifier of this signature scheme.
-    const SIGNATURE_ID: &'static str;
 }
 
 /// Widest scalar this module handles, for stack buffers.

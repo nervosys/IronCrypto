@@ -1,19 +1,23 @@
-//! ML-KEM-768 (FIPS 203) — **experimental, not interoperability-tested**.
+//! ML-KEM-768 (FIPS 203), checked against NIST's ACVP vectors.
 //!
-//! # Read this first
+//! # How it is verified
 //!
 //! Everything below assembles components that each have an independent oracle:
 //! the ring arithmetic against schoolbook multiplication, the packing against a
 //! bit buffer, the samplers against the specification's pseudocode, SHAKE and
-//! SHA-3 against published FIPS 202 vectors. The assembly itself has none. No
-//! ACVP vector is wired in, and a KEM whose matrix indices are transposed, or
-//! whose hash inputs are ordered differently, still encapsulates and
-//! decapsulates against itself perfectly.
+//! SHA-3 against published FIPS 202 vectors.
 //!
-//! So this is registered as `Experimental` in the ontology, excluded from the
-//! FIPS approved mode, and absent from `recommend()`. Do not use it to talk to
-//! another implementation. Wire in an ACVP vector first; the components are in
-//! place, so that is a short job for whoever has one.
+//! Those checks could not reach the assembly. A KEM whose matrix indices are
+//! transposed, or whose hash inputs are ordered differently, still encapsulates
+//! and decapsulates against itself perfectly -- and interoperates with nobody.
+//! What closes that is the ACVP vectors: all 25 key-generation and all 25
+//! encapsulation cases for ML-KEM-768, produced by another implementation, so
+//! a convention misread anywhere in the stack fails them.
+//!
+//! It is registered `available` in the ontology and usable in the FIPS
+//! approved mode, and `recommend` offers it for post-quantum key agreement --
+//! with a constraint to deploy it in a hybrid, since lattice cryptanalysis is
+//! young, not because of any doubt about this implementation.
 //!
 //! What *can* be said without a vector is that the key and ciphertext sizes
 //! come out at exactly the widths FIPS 203 specifies — 1184, 2400, 1088 and 32

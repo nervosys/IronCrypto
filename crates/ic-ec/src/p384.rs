@@ -2,7 +2,7 @@
 //!
 //! The curve a CNSA-aligned profile requires, and the one TLS reaches for when
 //! 128-bit security is not considered enough. The field, group law, and schemes
-//! come from [`crate::nist`]; this module supplies the constants and the public
+//! come from `crate::nist`; this module supplies the constants and the public
 //! API.
 //!
 //! Paired with SHA-384 throughout, which is the matching security level and
@@ -52,7 +52,7 @@ pub struct P384;
 
 // Its own generator table, with its own storage; see the macro, which
 // emits the table under `std` and the ladder without it.
-crate::generator_table_for!(P384);
+crate::nist::gentable::generator_table_for!(P384);
 
 impl Curve for P384 {
     type Field = Fp;
@@ -128,7 +128,6 @@ impl Curve for P384 {
 impl ecdsa::EcdsaCurve for P384 {
     type Digest = ic_hash::Sha384;
     type Hmac = ic_mac::HmacSha384;
-    const SIGNATURE_ID: &'static str = "ecdsa-p384-sha384";
 }
 
 /// ECDSA over P-384 with SHA-384.
@@ -165,7 +164,14 @@ impl EcdsaP384Sha384 {
         ecdsa::public_key_compressed::<P384>(private_key, out)
     }
 
-    /// Rewrite a signature to its low-`s` form. See [`ecdsa::normalize_s`].
+    /// Rewrite a signature to its low-`s` form, if it is not already.
+    ///
+    /// ECDSA is malleable: `(r, s)` and `(r, n - s)` are both valid for the
+    /// same message, so a signature is not a unique identifier unless one form
+    /// is chosen. FIPS 186-5 and RFC 6979 accept both, and this library signs
+    /// and verifies per the standard, so normalization is offered rather than
+    /// imposed -- apply it when a signature doubles as a database key or a
+    /// transaction id.
     pub fn normalize_s(signature: &mut [u8]) -> Result<()> {
         ecdsa::normalize_s::<P384>(signature)
     }

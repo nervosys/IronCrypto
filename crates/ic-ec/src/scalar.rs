@@ -191,6 +191,7 @@ pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
 }
 
 /// Reduce a 256-bit little-endian integer modulo `L`.
+#[cfg(test)]
 pub fn reduce(input: &[u8; 32]) -> [u8; 32] {
     let mut wide = [0u8; 64];
     wide[..32].copy_from_slice(input);

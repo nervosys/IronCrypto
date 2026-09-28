@@ -1,4 +1,5 @@
-//! ML-KEM (FIPS 203) — **experimental, not interoperability-tested**.
+//! ML-KEM-768 (FIPS 203) post-quantum key encapsulation, checked against
+//! NIST's ACVP vectors.
 //!
 //! Read [`VERIFICATION`] before using any of this.
 
@@ -16,4 +17,5 @@ pub use kem::MlKem768;
 
 /// What has and has not been checked.
 pub const VERIFICATION: &str = "components verified against independent oracles; \
-                                full-scheme interoperability unverified";
+                                the assembled scheme against 50 NIST ACVP cases \
+                                (25 key generation, 25 encapsulation)";

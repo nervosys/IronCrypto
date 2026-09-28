@@ -52,14 +52,17 @@
 //! * **An RSA private key is about five kilobytes**, because every integer
 //!   inside is a fixed-capacity 4096-bit buffer. That is what keeps the crate
 //!   allocation free; box it on a small stack.
-//! * **ML-KEM is experimental, not available.** It is implemented and its
-//!   components are each checked against an independent oracle, but no ACVP
-//!   vector is wired in, so nothing confirms it interoperates. It is excluded
-//!   from the approved mode and from [`recommend`]. ML-DSA is not implemented
-//!   at all.
-//! * **No ARM crypto extensions.** Registered as planned. x86-64 gets AES-NI
-//!   and PCLMULQDQ, selected at run time; everywhere else runs the portable
-//!   constant-time code.
+//! * **Post-quantum means ML-KEM-768 and ML-DSA-65, and no other parameter
+//!   sets.** Both are checked against NIST's ACVP vectors -- 50 cases for
+//!   ML-KEM, 55 for ML-DSA -- and both are available in the approved mode and
+//!   through [`recommend`], with a constraint to deploy them in a hybrid.
+//!   SLH-DSA is not implemented; the ontology lists it as `planned` so that a
+//!   request for it resolves to an absence rather than to nothing.
+//! * **ARM gets hardware AES but not hardware GHASH.** x86-64 gets AES-NI and
+//!   PCLMULQDQ, selected at run time. On AArch64 the ARMv8 AES instructions are
+//!   used behind the `aarch64-crypto` feature, but there is no `PMULL` path, so
+//!   AES-GCM there is limited by a portable GHASH and [`recommend`] prefers
+//!   ChaCha20-Poly1305. Everywhere else runs the portable constant-time code.
 //!
 //! Each of those is queryable at runtime through
 //! [`ic_ontology::runtime::capabilities`], so an agent can discover them

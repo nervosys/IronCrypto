@@ -39,6 +39,7 @@ impl Fe {
     pub const ONE: Fe = Fe([1, 0, 0, 0, 0]);
 
     /// A small integer as a field element.
+    #[cfg(test)]
     pub const fn from_u64(v: u64) -> Fe {
         Fe([v & MASK, v >> 51, 0, 0, 0])
     }
@@ -286,7 +287,7 @@ impl Fe {
     }
 
     /// Encode as 32 little-endian bytes, fully reduced modulo p.
-    pub fn to_bytes(&self) -> [u8; 32] {
+    pub fn to_bytes(self) -> [u8; 32] {
         // Three passes leave every limb strictly below 2^51: each pass can
         // push at most a 19 back into limb 0, so the residue shrinks each time.
         let mut t = self.weak_reduce().weak_reduce().weak_reduce().0;

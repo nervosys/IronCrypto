@@ -6,7 +6,7 @@
 //! * [`Ed25519`] — RFC 8032 signatures.
 //!
 //! Both are built on a shared constant-time field implementation
-//! ([`field::Fe`]) with 51-bit limbs.
+//! (`field::Fe`) with 51-bit limbs.
 //!
 //! ```
 //! use ic_ec::X25519;
@@ -41,13 +41,13 @@
 #![warn(clippy::all)]
 
 pub mod ed25519;
-pub mod field;
+mod field;
 
-pub mod nist;
+mod nist;
 pub mod p256;
 pub mod p384;
 pub mod p521;
-pub mod scalar;
+mod scalar;
 pub mod x25519;
 
 pub use ed25519::{Ed25519, Ed25519Key, Ed25519VerifyKey};

@@ -104,11 +104,11 @@ registered, so adding an algorithm without a self-test fails CI.
 Every row below names where the values came from. That is a rule the code
 enforces rather than a convention: a file loaded through `ic-vectors` must
 carry a `source`, and one that does not is refused rather than loaded with its
-provenance recorded as unknown. `crates/ic-vectors` is how the two
-`experimental` algorithms are meant to become verified, and `experimental`
-means precisely that nothing has checked them against values produced by
-something other than themselves -- so a file of unknown origin would conceal
-that gap rather than close it.
+provenance recorded as unknown. `crates/ic-vectors` is how an
+`experimental` algorithm becomes verified -- it is how ML-KEM-768, ML-DSA-65
+and AES-GCM-SIV did -- and `experimental` means precisely that nothing has
+checked it against values produced by something other than itself, so a file
+of unknown origin would conceal that gap rather than close it.
 
 
 | algorithm family | vectors |

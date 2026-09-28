@@ -14,6 +14,10 @@ publish.workspace = true
 [features]
 default = ["std"]
 std = ["ic-core/std", "ic-hash/std", "ic-mac/std"]
+# Internals that `bench/` needs to time in isolation. The benchmark lives
+# outside the workspace, so it cannot reach private items; this is how it gets
+# them without their being public API for everyone else. Not covered by semver.
+bench-internals = ["std"]
 
 [dependencies]
 ic-core = { workspace = true }

@@ -189,7 +189,6 @@ pub trait HasGeneratorTable: Curve + Sized + 'static {
 }
 
 /// Implement [`HasGeneratorTable`] for a curve, with its own storage.
-#[macro_export]
 macro_rules! generator_table_for {
     ($curve:ty) => {
         impl $crate::nist::gentable::HasGeneratorTable for $curve {
@@ -214,3 +213,5 @@ macro_rules! generator_table_for {
         }
     };
 }
+
+pub(crate) use generator_table_for;

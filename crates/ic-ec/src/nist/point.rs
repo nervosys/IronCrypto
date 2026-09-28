@@ -430,7 +430,7 @@ fn wnaf_shr1(k: &mut [u64; WNAF_LIMBS]) {
 
 impl<C: Curve> Point<C> {
     /// Convert to affine coordinates, or `None` for the identity.
-    pub fn to_affine(&self) -> Option<AffinePoint<C>> {
+    pub fn to_affine(self) -> Option<AffinePoint<C>> {
         if bool::from(self.is_identity()) {
             return None;
         }

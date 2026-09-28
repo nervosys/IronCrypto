@@ -28,7 +28,9 @@
 
 use crate::poly::{Poly, N, Q};
 use ic_core::traits::Xof;
-use ic_hash::{Shake128, Shake256, XofReader};
+#[cfg(test)]
+use ic_hash::XofReader;
+use ic_hash::{Shake128, Shake256};
 
 /// Bytes squeezed per rejection-sampling round.
 ///
@@ -126,10 +128,11 @@ pub fn sample_noise(eta: usize, seed: &[u8; 32], nonce: u8) -> Poly {
     out
 }
 
-/// A reader over the same stream `sample_ntt` uses, exposed for tests that need
-/// to replay it.
-#[doc(hidden)]
-pub fn matrix_xof(seed: &[u8; 32], i: u8, j: u8) -> XofReader {
+/// A reader over the same stream `sample_ntt` uses, for tests that need to
+/// replay it. Test-only: it was public, hidden from the docs, which made it API
+/// that nothing outside this file ever called.
+#[cfg(test)]
+fn matrix_xof(seed: &[u8; 32], i: u8, j: u8) -> XofReader {
     let mut x = Shake128::default();
     <Shake128 as Xof>::update(&mut x, seed);
     <Shake128 as Xof>::update(&mut x, &[i, j]);

@@ -18,11 +18,13 @@
 //!   is the property the scheme actually relies on. It is also what would break
 //!   first if either function were subtly wrong.
 //!
-//! So unlike the samplers and the encodings, nothing here is `experimental` for
-//! want of a file. A vector could only confirm what the equations already fix.
-//! What a vector *would* still catch is a misreading of the convention shared
-//! with the rest of the scheme — which representative `mod±` picks, say — so
-//! this is verified, not infallible.
+//! So the samplers and the encodings were `experimental` for want of a file
+//! until NIST's ACVP vectors arrived, and nothing here ever was: a vector could
+//! only confirm what the equations already fix. What a vector *does* add is a
+//! check on the convention shared with the rest of the scheme — which
+//! representative `mod±` picks, say — which the equations cannot settle on
+//! their own. Signing runs every function here, so the ACVP signature cases
+//! cover that too.
 //!
 //! # Timing
 //!

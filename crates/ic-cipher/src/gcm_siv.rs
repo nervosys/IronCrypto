@@ -17,12 +17,13 @@
 //! distributed system without a shared counter, a device that might be restored
 //! from a snapshot, a protocol where the peer picks the nonce.
 //!
-//! # Verification status — read this before using it
+//! # Verification status
 //!
-//! **This implementation is not interoperability-tested.** It is registered in
-//! the ontology as [`Experimental`][ic_ontology_status], not `Available`, and
-//! it is excluded from the FIPS approved mode. AES-GCM-SIV is an IETF RFC
-//! rather than a NIST standard, so it is not FIPS-approved in any case.
+//! Both key sizes agree with all 50 cases of RFC 8452 appendix C -- C.1, C.2 and
+//! C.3 -- and are registered [`Available`][ic_ontology_status] in the ontology.
+//! AES-GCM-SIV is an IETF RFC rather than a NIST standard, so it is excluded
+//! from the FIPS approved mode on that ground alone; nothing about this
+//! implementation is the reason.
 //!
 //! What *is* verified:
 //!
