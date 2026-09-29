@@ -5,7 +5,34 @@ all of them.
 
 ## Unreleased
 
+### Fixed
+
+- **Deriving a NIST-curve public key skipped the generator table.** ECDSA and
+  ECDH public-key derivation on P-256, P-384 and P-521 multiplied the
+  generator with `mul_scalar` directly, not through `mul_generator`, the
+  funnel whose documentation said every generator multiplication went through
+  it. The answers were right, so no test noticed. With `std`, a P-256 public
+  key took 185 µs where signing, which does use the table, took 54 µs. It now
+  takes 38 µs, and P-384 and P-521 are faster by the same factor, about 4.6
+  to 4.9x.
+
 ### Changed
+
+- **ECDH on the NIST curves is 2.2 to 2.5 times faster**, with or without
+  `std`. Multiplying an arbitrary point used a double-and-add-always ladder,
+  one addition per bit. It now walks the scalar four bits at a time against
+  `1..=8` times the point, built per call and selected with conditional
+  moves: the same signed radix-16 recoding and constant-time lookup as the
+  generator table, which it now shares. It is still constant time, and it
+  needs no storage beyond eight points on the stack. Measured with `std`,
+  medians of interleaved runs: P-256 216 to 88 µs, P-384 787 to 363 µs,
+  P-521 1909 to 872 µs.
+- **ECDSA on `no_std` is about twice as fast.** Without the table, the
+  generator is multiplied the windowed way above, so signing and key
+  generation get that speed-up. Verification was running the generator half
+  through the constant-time ladder although every input to it is public. It
+  now computes both halves over one shared chain of doublings in variable
+  time, 2.4x faster on every curve: P-256 261 to 110 µs.
 
 - **Ed25519 on `no_std` is two to three times faster.** Embedded builds had
   none of the work that made the `std` path fast, because that work was tied
@@ -26,7 +53,19 @@ all of them.
 
 ### Tests
 
-- The new paths are compiled into the ordinary test suite, which runs with
+- On all three NIST curves, the windowed multiplication is held to the old
+  ladder, kept as a test-only reference. The checks run on the generator,
+  another point and the identity, with `n - 1` (whose top nibble exercises the
+  extra carry digit) and runs of 7, 8 and 9. The shared-doubling verification
+  is held to two separate ladders and to the `std` path. Dropping the carry
+  digit, dropping the sign, or crossing the two tables each fails them. The
+  new builds reproduce the old builds' public keys, RFC 6979 signatures and
+  ECDH shared secrets byte for byte, with and without `std`.
+- `iron-crypto` checks that no code outside the funnels multiplies a base
+  point directly. Whitespace is removed before matching, since the offending
+  calls were split across lines. The test fails against the old
+  `ecdsa.rs`.
+- The new Ed25519 paths are compiled into the ordinary test suite, which runs with
   `std` and so would otherwise never execute them: the windowed multiplication
   against the ladder on scalars chosen for the recoding's carries, and the
   table-free verification against both the tabled one and two independent

@@ -67,7 +67,7 @@ mont_field!(
 pub struct P521;
 
 // Its own generator table, with its own storage; see the macro, which
-// emits the table under `std` and the ladder without it.
+// emits the table under `std` and the windowed multiplication without it.
 crate::nist::gentable::generator_table_for!(P521);
 
 impl Curve for P521 {

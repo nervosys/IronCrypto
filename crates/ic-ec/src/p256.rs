@@ -42,7 +42,7 @@ mont_field!(
 pub struct P256;
 
 // Its own generator table, with its own storage; see the macro, which
-// emits the table under `std` and the ladder without it.
+// emits the table under `std` and the windowed multiplication without it.
 crate::nist::gentable::generator_table_for!(P256);
 
 impl Curve for P256 {
@@ -395,7 +395,7 @@ mod tests {
         assert!(bool::from(p.add(&p).ct_eq(&p.double())));
     }
 
-    /// The variable-time path must agree with the constant-time ladder.
+    /// The variable-time path must agree with the constant-time one.
     ///
     /// The RFC 6979 vectors reach it with a couple of scalars, which says
     /// little about a recoding whose digit pattern differs for every scalar.

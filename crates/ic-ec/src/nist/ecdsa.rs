@@ -187,8 +187,7 @@ pub fn public_key<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) -> Result<(
         "ecdsa public key buffer"
     );
     let d = load_private_key::<C>(private_key)?;
-    let q = Point::<C>::generator()
-        .mul_scalar(&d)
+    let q = Point::<C>::mul_generator(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
     // See the note in `ecdh::public_key`: the length check above and the
@@ -209,8 +208,7 @@ pub fn public_key_compressed<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) 
         "ecdsa compressed key buffer"
     );
     let d = load_private_key::<C>(private_key)?;
-    let q = Point::<C>::generator()
-        .mul_scalar(&d)
+    let q = Point::<C>::mul_generator(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
     ensure!(

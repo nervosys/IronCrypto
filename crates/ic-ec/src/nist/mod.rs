@@ -24,8 +24,9 @@
 //! # Why the group law is shaped the way it is
 //!
 //! These curves have no Montgomery ladder to fall back on, so scalar
-//! multiplication is a double-and-add-always loop over a group law that has
-//! been made total: [`point::Point::add`] computes both the addition and the
+//! multiplication is a fixed-window loop -- four doublings and an addition per
+//! digit, the same for every scalar -- over a group law that has been made
+//! total: [`point::Point::add`] computes both the addition and the
 //! doubling and selects between them without branching. That costs roughly a
 //! third more field multiplications than a formula with exceptional cases, and
 //! buys an implementation where no input — including the identity and a point

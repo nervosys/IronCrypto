@@ -2,10 +2,13 @@
 //!
 //! # Why
 //!
-//! [`Point::mul_scalar`][super::point::Point::mul_scalar] is a
-//! double-and-add-always ladder: every bit doubles and adds, and a conditional
-//! move decides whether the addition counts. That is the right algorithm for an
-//! arbitrary point and it is what ECDH needs.
+//! [`Point::mul_scalar`][super::point::Point::mul_scalar] handles an arbitrary
+//! point: it builds `1..=8` times the point per call and walks the scalar four
+//! bits at a time, which is what ECDH needs. Every digit still costs four
+//! doublings, and for an arbitrary point nothing can remove them.
+//!
+//! The measurements below date from when `mul_scalar` was a
+//! double-and-add-always ladder, one addition per bit.
 //!
 //! ECDSA signing does not need it. `R = k*G` multiplies the generator, which is
 //! the same point in every signature, so its multiples can be computed once.
@@ -32,33 +35,31 @@
 //!
 //! Behind `std`, built once into a `OnceLock`. P-256's table is about 25 KiB
 //! and P-521's about 114 KiB, which is a reasonable trade on a host and a bad
-//! one on a microcontroller; `no_std` keeps the ladder, which needs no storage.
+//! one on a microcontroller. `no_std` multiplies the generator with
+//! [`Point::mul_scalar`], which uses this module's [`Window`] and
+//! [`signed_digits`] against the point it is given, one window built per call:
+//! the same four bits per addition, without the storage.
 
-#[cfg(feature = "std")]
 use ic_core::ct::Choice;
 
 #[cfg(feature = "std")]
 use super::arith::Field;
 use super::point::Curve;
-#[cfg(feature = "std")]
 use super::point::Point;
 
-#[cfg(feature = "std")]
 /// Digits for the widest curve here: P-521 has a 66-byte scalar, so 132
 /// nibbles, plus one for the carry out of the top. See `signed_digits`.
 const MAX_DIGITS: usize = 133;
 
-#[cfg(feature = "std")]
 /// Entries per table: the multiples `1..=8`.
 const ENTRIES: usize = 8;
 
-#[cfg(feature = "std")]
-/// `1..=8` times some fixed multiple of the generator.
-struct Window<C: Curve>([Point<C>; ENTRIES]);
+/// `1..=8` times some fixed point: a multiple of the generator in the table,
+/// or the point being multiplied in [`Point::mul_scalar`].
+pub(super) struct Window<C: Curve>([Point<C>; ENTRIES]);
 
-#[cfg(feature = "std")]
 impl<C: Curve> Window<C> {
-    fn new(base: &Point<C>) -> Self {
+    pub(super) fn new(base: &Point<C>) -> Self {
         let mut entries = [Point::identity(); ENTRIES];
         entries[0] = *base;
         for i in 1..ENTRIES {
@@ -68,7 +69,7 @@ impl<C: Curve> Window<C> {
     }
 
     /// `digit * base` for `digit` in `[-8, 8]`, without indexing by it.
-    fn select(&self, digit: i8) -> Point<C> {
+    pub(super) fn select(&self, digit: i8) -> Point<C> {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
 
@@ -155,8 +156,7 @@ impl<C: Curve> Table<C> {
 ///
 /// That is exactly how this failed first: the Ed25519 recoding was reused
 /// unchanged and every RFC 6979 vector rejected it.
-#[cfg(feature = "std")]
-fn signed_digits(bytes: &[u8]) -> [i8; MAX_DIGITS] {
+pub(super) fn signed_digits(bytes: &[u8]) -> [i8; MAX_DIGITS] {
     let mut nibbles = [0i8; MAX_DIGITS];
     let n = bytes.len() * 2;
     for (i, byte) in bytes.iter().rev().enumerate() {
@@ -176,7 +176,8 @@ fn signed_digits(bytes: &[u8]) -> [i8; MAX_DIGITS] {
 /// A curve that knows how to multiply its own generator.
 ///
 /// The trait exists on every target; only the implementation differs. Under
-/// `std` it is the table; under `no_std` it is the ladder, so callers need no
+/// `std` it is the table; under `no_std` it is [`Point::mul_scalar`] on the
+/// generator, four bits at a time with no stored window, so callers need no
 /// conditional bound and the generic code has one shape.
 ///
 /// It is separate from [`Curve`] because the table's storage is a `static`,

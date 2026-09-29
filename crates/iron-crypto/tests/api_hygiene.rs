@@ -243,3 +243,51 @@ fn secret_bearing_types_wipe_on_drop() {
         "these hold secret or key-derived state and do not wipe it on drop: {missing:?}"
     );
 }
+
+/// Every multiplication of a fixed base point goes through its funnel.
+///
+/// `mul_generator` on the NIST curves and `mul_basepoint` on Ed25519 pick the
+/// fastest path the build has: a precomputed table under `std`, the windowed
+/// method without it. Calling `mul_scalar` on the base point directly compiles,
+/// gives the right answer, and skips the table. Public-key derivation for
+/// ECDSA and ECDH on all three NIST curves did exactly that from the start,
+/// and ran four to five times slower than it needed to while every test
+/// passed -- a correct answer is all a test sees.
+///
+/// Whitespace is removed before matching, since those calls were split across
+/// lines. Test modules are skipped. The one permitted use, the `no_std`
+/// fallback that *is* the funnel's implementation, must be found, or the
+/// matcher has stopped matching and this would pass on anything.
+#[test]
+fn fixed_base_multiplication_goes_through_its_funnel() {
+    let root = workspace_root();
+    let mut files = Vec::new();
+    rust_files(&root.join("crates").join("ic-ec").join("src"), &mut files);
+    assert!(files.len() >= 10, "only {} files found", files.len());
+
+    let mut offenders = Vec::new();
+    let mut funnel_found = false;
+    for path in &files {
+        let text = std::fs::read_to_string(path).unwrap();
+        let code = text.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
+        let code = code.split("#[cfg(test)]\r\nmod tests").next().unwrap_or("");
+        let squashed: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+        for pattern in ["generator().mul_scalar(", "basepoint().mul_scalar("] {
+            let hits = squashed.matches(pattern).count();
+            let is_funnel = path.ends_with("gentable.rs") && pattern.starts_with("generator");
+            if is_funnel {
+                funnel_found |= hits == 1;
+            } else if hits > 0 {
+                offenders.push(format!("{} ({pattern})", path.display()));
+            }
+        }
+    }
+    assert!(
+        funnel_found,
+        "the no_std fallback in gentable.rs was not found"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these multiply a base point without its table: {offenders:?}"
+    );
+}

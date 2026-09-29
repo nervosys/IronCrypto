@@ -225,7 +225,6 @@ impl<C: Curve> Point<C> {
     /// On a short Weierstrass curve `-(x, y, z)` is `(x, -y, z)`, so this is
     /// one field negation and a conditional move. Used by the signed-digit
     /// generator table, which stores only positive multiples.
-    #[cfg(feature = "std")]
     pub(crate) fn conditional_negate(&mut self, choice: Choice) {
         let ny = self.y.neg();
         <C::Field as Field>::cmov(&mut self.y, &ny, choice);
@@ -248,10 +247,46 @@ impl<C: Curve> Point<C> {
 
     /// Scalar multiplication, constant-time in the scalar.
     ///
-    /// A fixed double-and-add-always ladder over the full scalar width: every
-    /// bit performs the same operations, and the conditional move decides
-    /// whether the addition counts.
+    /// Four bits at a time. The scalar becomes signed radix-16 digits in
+    /// `[-8, 8]`, `1..=8` times this point are computed once per call, and each
+    /// digit selects one of them by reading all eight with conditional moves,
+    /// then negates it or not the same way. Every scalar of a curve has the
+    /// same digit count, and every digit costs four doublings, one selection
+    /// and one addition, so the trace does not depend on the scalar.
+    ///
+    /// That is an addition per four bits where the double-and-add-always
+    /// ladder it replaced had one per bit. ECDH is one of these, so this is
+    /// most of its cost; under `no_std` it is also what multiplies the
+    /// generator, since there is no stored table there. The window is eight
+    /// points on the stack, freed on return.
+    ///
+    /// Correct only because [`Self::add`] is complete: a selected entry can be
+    /// the identity, and the accumulator can equal the entry it is added to.
     pub fn mul_scalar(&self, scalar: &C::Scalar) -> Self {
+        use super::gentable::{signed_digits, Window};
+
+        let bytes = scalar.to_bytes();
+        let bytes = bytes.as_ref();
+        let digits = signed_digits(bytes);
+        // Every nibble, plus the carry digit above them.
+        let n = bytes.len() * 2 + 1;
+        let window = Window::new(self);
+
+        let mut acc = window.select(digits[n - 1]);
+        for i in (0..n - 1).rev() {
+            for _ in 0..4 {
+                acc = acc.double();
+            }
+            acc = acc.add(&window.select(digits[i]));
+        }
+        acc
+    }
+
+    /// The double-and-add-always ladder [`Self::mul_scalar`] replaced, kept as
+    /// the reference it is tested against: one bit at a time, sharing nothing
+    /// with the windowed method but the group law.
+    #[cfg(test)]
+    pub(crate) fn mul_scalar_ladder(&self, scalar: &C::Scalar) -> Self {
         let bytes = scalar.to_bytes();
         let bytes = bytes.as_ref();
         let mut acc = Self::identity();
@@ -328,16 +363,68 @@ impl<C: Curve> Point<C> {
     {
         // Both halves are public here. The generator gets its table; the
         // other point gets the non-adjacent form.
-        Self::mul_generator(a).add(&p.mul_scalar_vartime(b))
+        #[cfg(feature = "std")]
+        {
+            Self::mul_generator(a).add(&p.mul_scalar_vartime(b))
+        }
+        // No table, so the generator costs a full chain of doublings like any
+        // other point -- and the two chains can be one.
+        #[cfg(not(feature = "std"))]
+        {
+            Self::mul_double_vartime(&Self::generator(), a, p, b)
+        }
+    }
+
+    /// `a*Q + b*P` over one chain of doublings, variable time in both scalars.
+    ///
+    /// What `no_std` verification uses. Computing the two multiplications
+    /// separately runs two chains of doublings, and the doublings are most of
+    /// the cost; here each scalar contributes an addition at the positions
+    /// where its own width-5 recoding is non-zero, and they share the rest.
+    /// Under `std` the generator's table removes its doublings altogether,
+    /// which is better still, so this is not used there.
+    #[cfg(any(not(feature = "std"), test))]
+    pub(crate) fn mul_double_vartime(q: &Self, a: &C::Scalar, p: &Self, b: &C::Scalar) -> Self {
+        let odd = |base: &Self| {
+            let twice = base.double();
+            let mut odd = [*base; 8];
+            for i in 1..8 {
+                odd[i] = odd[i - 1].add(&twice);
+            }
+            odd
+        };
+        let (odd_q, odd_p) = (odd(q), odd(p));
+        let (a_bytes, b_bytes) = (a.to_bytes(), b.to_bytes());
+        let (naf_a, len_a) = wnaf5(a_bytes.as_ref());
+        let (naf_b, len_b) = wnaf5(b_bytes.as_ref());
+
+        let mut acc = Self::identity();
+        for i in (0..len_a.max(len_b)).rev() {
+            acc = acc.double();
+            for (naf, table) in [(&naf_a, &odd_q), (&naf_b, &odd_p)] {
+                let digit = naf[i];
+                if digit != 0 {
+                    let entry = &table[(digit.unsigned_abs() as usize) / 2];
+                    acc = if digit > 0 {
+                        acc.add(entry)
+                    } else {
+                        acc.add(&entry.negate())
+                    };
+                }
+            }
+        }
+        acc
     }
 
     /// `scalar * G`, through the precomputed table where there is one.
     ///
     /// Every generator multiplication goes through here rather than calling
     /// `mul_scalar` on the generator, so the two cannot drift apart and no
-    /// caller takes the slow path by accident. Only the generator half of
+    /// caller takes the slow path by accident; `iron-crypto`'s
+    /// `fixed_base_multiplication_goes_through_its_funnel` holds that, after
+    /// public-key derivation was found skipping it. Only the generator half of
     /// verification benefits; the other multiplication is against the public
-    /// key and stays on the ladder.
+    /// key and uses the non-adjacent form.
     pub fn mul_generator(scalar: &C::Scalar) -> Self
     where
         C: super::gentable::HasGeneratorTable,
@@ -531,5 +618,107 @@ impl<C: Curve> AffinePoint<C> {
             return Some(AffinePoint { x, y: chosen });
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nist::gentable::HasGeneratorTable;
+    use crate::p256::P256;
+    use crate::p384::P384;
+    use crate::p521::P521;
+
+    /// Scalars chosen for the signed radix-16 recoding rather than at random:
+    /// zero and one; `n - 1`, whose top nibble is 15 and so exercises the
+    /// extra carry digit; and whole-scalar runs of 8, which carry at every
+    /// digit, and of 7 and 9 either side of that.
+    fn scalars<C: Curve>() -> std::vec::Vec<C::Scalar> {
+        let mut out = std::vec![C::Scalar::ZERO, C::Scalar::ONE, C::Scalar::ONE.neg()];
+        for fill in [0x88u8, 0x77, 0x99, 0xff, 0x0f, 0xf0, 0x5a] {
+            let mut bytes = C::Scalar::zero_bytes();
+            for b in bytes.as_mut() {
+                *b = fill;
+            }
+            out.push(C::Scalar::from_bytes_reduced(&bytes));
+        }
+        let mut eight = C::Scalar::zero_bytes();
+        let last = eight.as_ref().len() - 1;
+        eight.as_mut()[last] = 8;
+        out.push(C::Scalar::from_bytes_reduced(&eight));
+        out
+    }
+
+    fn some_point<C: Curve>() -> Point<C> {
+        let mut bytes = C::Scalar::zero_bytes();
+        let last = bytes.as_ref().len() - 1;
+        bytes.as_mut()[last] = 7;
+        Point::<C>::generator().mul_scalar_ladder(&C::Scalar::from_bytes_reduced(&bytes))
+    }
+
+    /// The windowed multiplication against the ladder it replaced, on the
+    /// generator, another point, and the identity. The generator is also
+    /// checked against the table, which shares the recoding and the lookup
+    /// with the windowed method but not the windows.
+    fn windowed_agrees_with_the_ladder<C: Curve + HasGeneratorTable>() -> usize {
+        let mut checked = 0;
+        for point in [
+            Point::<C>::generator(),
+            some_point::<C>(),
+            Point::identity(),
+        ] {
+            for k in scalars::<C>() {
+                let windowed = point.mul_scalar(&k);
+                assert!(
+                    bool::from(windowed.ct_eq(&point.mul_scalar_ladder(&k))),
+                    "windowed and ladder differ"
+                );
+                checked += 1;
+            }
+        }
+        for k in scalars::<C>() {
+            let g = Point::<C>::generator();
+            assert!(bool::from(
+                Point::<C>::mul_generator(&k).ct_eq(&g.mul_scalar(&k))
+            ));
+        }
+        checked
+    }
+
+    /// The shared-doubling verification path against two independent ladders,
+    /// and against the `std` path of table plus non-adjacent form.
+    fn shared_doublings_agree<C: Curve + HasGeneratorTable>() -> usize {
+        let g = Point::<C>::generator();
+        let p = some_point::<C>();
+        let mut checked = 0;
+        for a in scalars::<C>() {
+            for b in [C::Scalar::ONE, C::Scalar::ONE.neg(), a.square()] {
+                let shared = Point::mul_double_vartime(&g, &a, &p, &b);
+                let ladders = g.mul_scalar_ladder(&a).add(&p.mul_scalar_ladder(&b));
+                assert!(
+                    bool::from(shared.ct_eq(&ladders)),
+                    "shared and ladders differ"
+                );
+                assert!(bool::from(shared.ct_eq(&Point::mul_double(&a, &p, &b))));
+                checked += 1;
+            }
+        }
+        checked
+    }
+
+    #[test]
+    fn the_windowed_multiplication_agrees_with_the_ladder() {
+        let checked = windowed_agrees_with_the_ladder::<P256>()
+            + windowed_agrees_with_the_ladder::<P384>()
+            + windowed_agrees_with_the_ladder::<P521>();
+        assert!(checked >= 90, "only {checked} comparisons ran");
+    }
+
+    #[test]
+    fn the_shared_doubling_verification_agrees() {
+        let checked = shared_doublings_agree::<P256>()
+            + shared_doublings_agree::<P384>()
+            + shared_doublings_agree::<P521>();
+        assert!(checked >= 90, "only {checked} comparisons ran");
     }
 }

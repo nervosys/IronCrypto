@@ -5,6 +5,7 @@
 //! KDF before use. The ontology records that as a `serious` constraint.
 
 use super::arith::Field;
+use super::gentable::HasGeneratorTable;
 use super::point::{AffinePoint, Curve, Point};
 use ic_core::{ensure, Result};
 
@@ -28,15 +29,14 @@ fn load_scalar<C: Curve>(bytes: &[u8]) -> Result<C::Scalar> {
 }
 
 /// Compute the public key, SEC1 uncompressed.
-pub fn public_key<C: Curve>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
+pub fn public_key<C: HasGeneratorTable>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
     ensure!(
         out.len() == 1 + 2 * C::FIELD_BYTES,
         InvalidLength,
         "ecdh public key buffer"
     );
     let d = load_scalar::<C>(private_key)?;
-    let q = Point::<C>::generator()
-        .mul_scalar(&d)
+    let q = Point::<C>::mul_generator(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
     // The length was checked above, so this can only fail if that check
@@ -51,15 +51,17 @@ pub fn public_key<C: Curve>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
 }
 
 /// Compute the public key, SEC1 compressed.
-pub fn public_key_compressed<C: Curve>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
+pub fn public_key_compressed<C: HasGeneratorTable>(
+    private_key: &[u8],
+    out: &mut [u8],
+) -> Result<()> {
     ensure!(
         out.len() == 1 + C::FIELD_BYTES,
         InvalidLength,
         "ecdh compressed key buffer"
     );
     let d = load_scalar::<C>(private_key)?;
-    let q = Point::<C>::generator()
-        .mul_scalar(&d)
+    let q = Point::<C>::mul_generator(&d)
         .to_affine()
         .ok_or(ic_core::err!(Internal, "public key is the identity"))?;
     ensure!(
