@@ -46,6 +46,8 @@ use ic_core::ct::Choice;
 use super::arith::Field;
 use super::point::Curve;
 use super::point::Point;
+#[cfg(feature = "std")]
+use super::point::{AffinePoint, Projective};
 
 /// Digits for the widest curve here: P-521 has a 66-byte scalar, so 132
 /// nibbles, plus one for the carry out of the top. See `signed_digits`.
@@ -83,6 +85,54 @@ impl<C: Curve> Window<C> {
     }
 }
 
+/// `1..=8` times one power of the generator, normalized to affine, for
+/// [`Table`]: an affine entry makes the accumulator's addition one
+/// multiplication cheaper. Normalizing costs an inversion per entry, once,
+/// when the table is built.
+#[cfg(feature = "std")]
+struct AffineWindow<C: Curve>([AffinePoint<C>; ENTRIES]);
+
+#[cfg(feature = "std")]
+impl<C: Curve> AffineWindow<C> {
+    /// `None` only if a multiple of `base` is the identity, which `1..=8`
+    /// times a power of a generator of prime order above 8 never is.
+    fn new(base: &Point<C>) -> Option<Self> {
+        let window = Window::new(base);
+        let mut entries = [AffinePoint {
+            x: C::Field::ZERO,
+            y: C::Field::ZERO,
+        }; ENTRIES];
+        for (out, entry) in entries.iter_mut().zip(window.0.iter()) {
+            *out = entry.to_affine()?;
+        }
+        Some(Self(entries))
+    }
+
+    /// `acc + digit * base` for `digit` in `[-8, 8]`, without indexing by it.
+    ///
+    /// A zero digit selects the identity, which has no affine form, so the
+    /// addition is made anyway -- on an arbitrary entry -- and its result
+    /// discarded by a conditional move. The work is the same for every digit.
+    fn add_to(&self, acc: &Projective<C>, digit: i8) -> Projective<C> {
+        let negative = Choice::from_u8((digit as u8) >> 7);
+        let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
+
+        let mut x = self.0[0].x;
+        let mut y = self.0[0].y;
+        for (i, entry) in self.0.iter().enumerate() {
+            let hit = Choice::from_u8(u8::from(magnitude == (i as u8 + 1)));
+            C::Field::cmov(&mut x, &entry.x, hit);
+            C::Field::cmov(&mut y, &entry.y, hit);
+        }
+        let ny = y.neg();
+        C::Field::cmov(&mut y, &ny, negative);
+
+        let mut out = acc.add_affine(&x, &y);
+        Projective::cmov(&mut out, acc, Choice::from_u8(u8::from(magnitude == 0)));
+        out
+    }
+}
+
 /// Every multiple of the generator this algorithm needs.
 ///
 /// The windows live on the heap and are pushed one at a time. An array sized
@@ -92,7 +142,7 @@ impl<C: Curve> Window<C> {
 /// sizes each curve to what it actually uses rather than to P-521.
 #[cfg(feature = "std")]
 pub struct Table<C: Curve> {
-    windows: std::vec::Vec<Window<C>>,
+    windows: std::vec::Vec<AffineWindow<C>>,
 }
 
 #[cfg(feature = "std")]
@@ -111,7 +161,10 @@ impl<C: Curve> Table<C> {
                     base = base.double();
                 }
             }
-            windows.push(Window::new(&base));
+            match AffineWindow::new(&base) {
+                Some(window) => windows.push(window),
+                None => unreachable!("a multiple of the generator below its order is the identity"),
+            }
         }
         Self { windows }
     }
@@ -124,17 +177,18 @@ impl<C: Curve> Table<C> {
         let n = bytes.as_ref().len() * 2 + 1;
         debug_assert!(n.div_ceil(2) <= self.windows.len());
 
-        let mut acc = Point::identity();
+        // Accumulated projectively; see `Projective` for why.
+        let mut acc = Projective::identity();
         for i in (1..n).step_by(2) {
-            acc = acc.add(&self.windows[i / 2].select(digits[i]));
+            acc = self.windows[i / 2].add_to(&acc, digits[i]);
         }
         for _ in 0..4 {
             acc = acc.double();
         }
         for i in (0..n).step_by(2) {
-            acc = acc.add(&self.windows[i / 2].select(digits[i]));
+            acc = self.windows[i / 2].add_to(&acc, digits[i]);
         }
-        acc
+        acc.to_jacobian()
     }
 }
 

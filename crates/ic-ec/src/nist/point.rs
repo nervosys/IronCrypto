@@ -218,8 +218,6 @@ impl<C: Curve> Point<C> {
         result
     }
 
-    /// Constant-time conditional move.
-    #[inline]
     /// Negate in place when `choice` is set.
     ///
     /// On a short Weierstrass curve `-(x, y, z)` is `(x, -y, z)`, so this is
@@ -230,6 +228,8 @@ impl<C: Curve> Point<C> {
         <C::Field as Field>::cmov(&mut self.y, &ny, choice);
     }
 
+    /// Constant-time conditional move.
+    #[inline]
     pub(crate) fn cmov(a: &mut Self, b: &Self, choice: Choice) {
         C::Field::cmov(&mut a.x, &b.x, choice);
         C::Field::cmov(&mut a.y, &b.y, choice);
@@ -621,6 +621,177 @@ impl<C: Curve> AffinePoint<C> {
     }
 }
 
+/// The generator table's accumulator, in homogeneous projective coordinates.
+///
+/// `(X : Y : Z)` is the affine point `(X/Z, Y/Z)`, and the identity is
+/// `(0 : 1 : 0)`. The addition is Renes, Costello and Batina's complete formula
+/// for prime-order curves with `a = -3` ("Complete addition formulas for prime
+/// order elliptic curves", EUROCRYPT 2016), algorithm 4 with the second input's
+/// `Z` fixed at one; the doubling is their algorithm 6.
+///
+/// # Why only here
+///
+/// [`Point`]'s Jacobian addition is not complete, so [`Point::add`] computes an
+/// addition *and* a doubling and selects: 420 ns on P-256, against about 300
+/// for these formulas. But its doubling is the cheaper one, 153 ns against
+/// about 270. Moving every point to these formulas made the generator faster
+/// and variable-base multiplication, four doublings per addition, slower -- 71
+/// to 90 microseconds for ECDH. Measured, not guessed: see
+/// `where_the_time_goes` in `p256.rs`.
+///
+/// So each is used where it wins. The generator table does 65 additions and
+/// four doublings for P-256, and its entries are stored affine, so this adds
+/// them with `Z2 = 1` and saves a multiplication more. Everything else stays
+/// Jacobian.
+///
+/// Behind `std`, as the table is.
+#[cfg(feature = "std")]
+pub(super) struct Projective<C: Curve> {
+    x: C::Field,
+    y: C::Field,
+    z: C::Field,
+}
+
+#[cfg(feature = "std")]
+impl<C: Curve> Clone for Projective<C> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+#[cfg(feature = "std")]
+impl<C: Curve> Copy for Projective<C> {}
+
+#[cfg(feature = "std")]
+impl<C: Curve> Projective<C> {
+    /// The point at infinity, `(0 : 1 : 0)`.
+    pub(super) fn identity() -> Self {
+        Projective {
+            x: C::Field::ZERO,
+            y: C::Field::ONE,
+            z: C::Field::ZERO,
+        }
+    }
+
+    /// Doubling: algorithm 6, complete. The step numbers are the paper's.
+    pub(super) fn double(&self) -> Self {
+        let b = C::B;
+        let (x, y, z) = (self.x, self.y, self.z);
+        let t0 = x.square(); // 1
+        let t1 = y.square(); // 2
+        let t2 = z.square(); // 3
+        let t3 = x.mul(&y); // 4
+        let t3 = t3.add(&t3); // 5
+        let z3 = x.mul(&z); // 6
+        let z3 = z3.add(&z3); // 7
+        let y3 = b.mul(&t2); // 8
+        let y3 = y3.sub(&z3); // 9
+        let x3 = y3.add(&y3); // 10
+        let y3 = x3.add(&y3); // 11
+        let x3 = t1.sub(&y3); // 12
+        let y3 = t1.add(&y3); // 13
+        let y3 = x3.mul(&y3); // 14
+        let x3 = x3.mul(&t3); // 15
+        let t3 = t2.add(&t2); // 16
+        let t2 = t2.add(&t3); // 17
+        let z3 = b.mul(&z3); // 18
+        let z3 = z3.sub(&t2); // 19
+        let z3 = z3.sub(&t0); // 20
+        let t3 = z3.add(&z3); // 21
+        let z3 = z3.add(&t3); // 22
+        let t3 = t0.add(&t0); // 23
+        let t0 = t3.add(&t0); // 24
+        let t0 = t0.sub(&t2); // 25
+        let t0 = t0.mul(&z3); // 26
+        let y3 = y3.add(&t0); // 27
+        let t0 = y.mul(&z); // 28
+        let t0 = t0.add(&t0); // 29
+        let z3 = t0.mul(&z3); // 30
+        let x3 = x3.sub(&z3); // 31
+        let z3 = t0.mul(&t1); // 32
+        let z3 = z3.add(&z3); // 33
+        let z3 = z3.add(&z3); // 34
+        Projective {
+            x: x3,
+            y: y3,
+            z: z3,
+        }
+    }
+
+    /// `self + (x2, y2)`, for an affine point that is not the identity.
+    ///
+    /// Algorithm 4 with `Z2 = 1`, which the step numbers follow. Three steps
+    /// change: step 3's `Z1*Z2` is `Z1`; steps 9-13, `(Y1+Z1)(Y2+Z2) - Y1*Y2 -
+    /// Z1*Z2`, are `Y2*Z1 + Y1`; steps 14-18 likewise are `X2*Z1 + X1`. That is
+    /// one multiplication fewer than algorithm 4, and still complete in `self`:
+    /// the identity, `(x2, y2)` itself and its negation all add correctly. The
+    /// caller handles an identity *second* operand, which has no affine form.
+    pub(super) fn add_affine(&self, x2: &C::Field, y2: &C::Field) -> Self {
+        let b = C::B;
+        let (x1, y1, z1) = (self.x, self.y, self.z);
+        let t0 = x1.mul(x2); // 1
+        let t1 = y1.mul(y2); // 2
+        let t2 = z1; // 3
+        let t3 = x1.add(&y1); // 4
+        let t4 = x2.add(y2); // 5
+        let t3 = t3.mul(&t4); // 6
+        let t4 = t0.add(&t1); // 7
+        let t3 = t3.sub(&t4); // 8
+        let t4 = y2.mul(&z1).add(&y1); // 9-13
+        let y3 = x2.mul(&z1).add(&x1); // 14-18
+        let z3 = b.mul(&t2); // 19
+        let x3 = y3.sub(&z3); // 20
+        let z3 = x3.add(&x3); // 21
+        let x3 = x3.add(&z3); // 22
+        let z3 = t1.sub(&x3); // 23
+        let x3 = t1.add(&x3); // 24
+        let y3 = b.mul(&y3); // 25
+        let t1 = t2.add(&t2); // 26
+        let t2 = t1.add(&t2); // 27
+        let y3 = y3.sub(&t2); // 28
+        let y3 = y3.sub(&t0); // 29
+        let t1 = y3.add(&y3); // 30
+        let y3 = t1.add(&y3); // 31
+        let t1 = t0.add(&t0); // 32
+        let t0 = t1.add(&t0); // 33
+        let t0 = t0.sub(&t2); // 34
+        let t1 = t4.mul(&y3); // 35
+        let t2 = t0.mul(&y3); // 36
+        let y3 = x3.mul(&z3); // 37
+        let y3 = y3.add(&t2); // 38
+        let x3 = t3.mul(&x3); // 39
+        let x3 = x3.sub(&t1); // 40
+        let z3 = t4.mul(&z3); // 41
+        let t1 = t3.mul(&t0); // 42
+        let z3 = z3.add(&t1); // 43
+        Projective {
+            x: x3,
+            y: y3,
+            z: z3,
+        }
+    }
+
+    /// Constant-time conditional move.
+    #[inline]
+    pub(super) fn cmov(a: &mut Self, b: &Self, choice: Choice) {
+        C::Field::cmov(&mut a.x, &b.x, choice);
+        C::Field::cmov(&mut a.y, &b.y, choice);
+        C::Field::cmov(&mut a.z, &b.z, choice);
+    }
+
+    /// The same point in Jacobian coordinates: `(X*Z : Y*Z^2 : Z)`, since
+    /// `X*Z / Z^2 = X/Z` and `Y*Z^2 / Z^3 = Y/Z`. The identity maps to
+    /// [`Point::identity`] by a conditional move, not a branch.
+    pub(super) fn to_jacobian(self) -> Point<C> {
+        let mut out = Point {
+            x: self.x.mul(&self.z),
+            y: self.y.mul(&self.z.square()),
+            z: self.z,
+        };
+        Point::cmov(&mut out, &Point::identity(), self.z.is_zero());
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,6 +875,156 @@ mod tests {
             }
         }
         checked
+    }
+
+    /// Affine point arithmetic from the textbook formulas, with the identity
+    /// as `None`. It shares nothing with the complete projective formulas it
+    /// checks: slopes, a field inversion per operation, and each exceptional
+    /// case written out as its own branch.
+    fn affine_add<C: Curve>(
+        p: Option<(C::Field, C::Field)>,
+        q: Option<(C::Field, C::Field)>,
+    ) -> Option<(C::Field, C::Field)> {
+        let (Some((x1, y1)), Some((x2, y2))) = (p, q) else {
+            return p.or(q);
+        };
+        let lambda = if bool::from(x1.ct_eq(&x2)) {
+            if !bool::from(y1.ct_eq(&y2)) || bool::from(y1.is_zero()) {
+                return None; // P + (-P)
+            }
+            // Doubling: (3x^2 - 3) / 2y, since a = -3.
+            x1.square()
+                .sub(&C::Field::ONE)
+                .triple()
+                .mul(&y1.double().invert())
+        } else {
+            y2.sub(&y1).mul(&x2.sub(&x1).invert())
+        };
+        let x3 = lambda.square().sub(&x1).sub(&x2);
+        let y3 = lambda.mul(&x1.sub(&x3)).sub(&y1);
+        Some((x3, y3))
+    }
+
+    fn affine_of<C: Curve>(p: &Point<C>) -> Option<(C::Field, C::Field)> {
+        p.to_affine().map(|a| (a.x, a.y))
+    }
+
+    /// The complete formulas against the affine reference, on every case a
+    /// complete formula exists to handle: distinct points, a point plus
+    /// itself through `add` and through `double`, a point plus its negative,
+    /// and the identity on either side and on both.
+    fn the_group_law_agrees_with_affine<C: Curve>() -> usize {
+        let g = Point::<C>::generator();
+        let o = Point::<C>::identity();
+        // P_1 .. P_12, built by the reference alone.
+        let mut multiples = std::vec::Vec::new();
+        let mut acc = None;
+        for _ in 0..12 {
+            acc = affine_add::<C>(acc, affine_of(&g));
+            let (x, y) = acc.unwrap();
+            multiples.push(Point::<C>::from_affine(&AffinePoint { x, y }));
+        }
+        let mut checked = 0;
+        for p in &multiples {
+            let ap = affine_of(p);
+            let ok =
+                |got: &Point<C>, want: Option<(C::Field, C::Field)>| match (affine_of(got), want) {
+                    (None, None) => true,
+                    (Some((a, b)), Some((c, d))) => bool::from(a.ct_eq(&c).and(b.ct_eq(&d))),
+                    _ => false,
+                };
+            assert!(ok(&p.add(p), affine_add::<C>(ap, ap)), "P + P");
+            assert!(ok(&p.double(), affine_add::<C>(ap, ap)), "2P");
+            assert!(ok(&p.add(&p.neg()), None), "P + (-P)");
+            assert!(ok(&p.add(&o), ap), "P + O");
+            assert!(ok(&o.add(p), ap), "O + P");
+            for q in &multiples {
+                assert!(ok(&p.add(q), affine_add::<C>(ap, affine_of(q))), "P + Q");
+                // An addition fed a non-normalised input, as a loop feeds it.
+                let q2 = q.double().add(&q.neg());
+                assert!(
+                    ok(&p.add(&q2), affine_add::<C>(ap, affine_of(q))),
+                    "P + (2Q - Q)"
+                );
+            }
+            checked += 1;
+        }
+        assert!(
+            ok_identity::<C>(&o.add(&o)) && ok_identity::<C>(&o.double()),
+            "O + O, 2O"
+        );
+        checked
+    }
+
+    fn ok_identity<C: Curve>(p: &Point<C>) -> bool {
+        bool::from(p.is_identity())
+    }
+
+    #[test]
+    fn the_complete_formulas_agree_with_affine_arithmetic() {
+        let checked = the_group_law_agrees_with_affine::<P256>()
+            + the_group_law_agrees_with_affine::<P384>()
+            + the_group_law_agrees_with_affine::<P521>();
+        assert_eq!(checked, 36);
+    }
+
+    /// The generator table's projective accumulator against the same
+    /// reference: the identity on the left, a point plus itself and plus its
+    /// negative, distinct points, accumulators that are not normalized, and
+    /// doubling -- every case its loop can reach. The identity on the right
+    /// has no affine form and is the caller's; `Table::mul` is tested against
+    /// `mul_scalar` for that, with zero digits.
+    fn the_projective_accumulator_agrees_with_affine<C: Curve>() -> usize {
+        let g = Point::<C>::generator();
+        let mut multiples = std::vec::Vec::new();
+        let mut acc = None;
+        for _ in 0..12 {
+            acc = affine_add::<C>(acc, affine_of(&g));
+            multiples.push(acc.unwrap());
+        }
+        let o = Projective::<C>::identity();
+        let ok = |got: &Projective<C>, want: Option<(C::Field, C::Field)>| match (
+            affine_of(&got.to_jacobian()),
+            want,
+        ) {
+            (None, None) => true,
+            (Some((a, b)), Some((c, d))) => bool::from(a.ct_eq(&c).and(b.ct_eq(&d))),
+            _ => false,
+        };
+        let mut checked = 0;
+        for &(px, py) in &multiples {
+            let p = o.add_affine(&px, &py);
+            let ap = Some((px, py));
+            assert!(ok(&p, ap), "O + P");
+            // P again, with Z far from one: 2P - P.
+            let p_far = p.double().add_affine(&px, &py.neg());
+            assert!(ok(&p_far, ap), "2P - P");
+            for p in [p, p_far] {
+                assert!(
+                    ok(&p.add_affine(&px, &py), affine_add::<C>(ap, ap)),
+                    "P + P"
+                );
+                assert!(ok(&p.double(), affine_add::<C>(ap, ap)), "2P");
+                assert!(ok(&p.add_affine(&px, &py.neg()), None), "P + (-P)");
+                for &(qx, qy) in &multiples {
+                    assert!(
+                        ok(&p.add_affine(&qx, &qy), affine_add::<C>(ap, Some((qx, qy)))),
+                        "P + Q"
+                    );
+                }
+            }
+            checked += 1;
+        }
+        assert!(ok(&o, None) && ok(&o.double(), None), "O, 2O");
+        checked
+    }
+
+    #[test]
+    fn the_projective_accumulator_agrees_with_affine_arithmetic() {
+        let checked = the_projective_accumulator_agrees_with_affine::<P256>()
+            + the_projective_accumulator_agrees_with_affine::<P384>()
+            + the_projective_accumulator_agrees_with_affine::<P521>();
+        assert_eq!(checked, 36);
     }
 
     #[test]

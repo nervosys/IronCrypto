@@ -3,6 +3,27 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Performance
+
+- **NIST generator multiplication about 35-50% faster, and ECDSA signing
+  about 15-30%**, on P-256 in paired A/B runs (34 to 17-23 microseconds for
+  `k*G`). The generator table now accumulates in homogeneous projective
+  coordinates with Renes, Costello and Batina's complete addition, adding
+  affine table entries, where the Jacobian addition it replaces had to
+  compute an addition and a doubling and select between them. Only there:
+  moving every point to those formulas was tried and measured, and made
+  variable-base multiplication, and so ECDH, slower (71 to 90 microseconds),
+  because their doubling costs more. Results are unchanged; every existing
+  vector still passes.
+
+### Tests
+
+- The complete group law, Jacobian and projective, is checked on all three
+  curves against a textbook affine reference, including equal, opposite and
+  identity operands.
+
 ## 0.2.4
 
 X.509 certificate issuance, and interoperability tests against OpenSSL.

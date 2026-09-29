@@ -527,10 +527,10 @@ builds were going.
 
 | operation | against the fastest Rust implementation |
 |---|---|
+| P-256 public key | **~3.2x faster** |
+| ECDSA P-256, sign | **~2.6x faster** |
 | AES-256-GCM | **~2.5x faster** |
-| P-256 public key | **~2.2x faster** |
-| ECDSA P-256, sign | **~2.0x faster** |
-| ECDSA P-256, verify | **~1.4x faster** |
+| ECDSA P-256, verify | **~1.5x faster** |
 | X25519 agreement | **~1.3x faster** |
 | AES-256 blocks, AES-NI | **~1.25x faster** |
 | Ed25519, sign | **~1.17x faster** |
@@ -554,6 +554,15 @@ uses, which is why it now lands either side of parity rather than ahead.
 Public-key derivation had been skipping the generator table altogether, a
 multiplication of the generator by the ladder while signing used the table;
 nothing compared it against anything, which is why these two rows exist now.
+
+Signing and public-key derivation moved from ~2.0x and ~2.2x after the
+generator table's accumulator changed, after 0.2.4, from Jacobian coordinates to
+homogeneous projective ones with Renes, Costello and Batina's complete
+addition. Jacobian addition is not complete, so it had been computing an
+addition and a doubling and selecting one, and the table does 65 additions to
+four doublings. Moving *every* point to the complete formulas was tried first
+and measured slower overall, since their doubling costs more and ECDH is four
+doublings per addition; so the table uses them and nothing else does.
 
 AES-256-GCM was 1.4x ahead until GHASH, measured on its own, turned out to be
 three quarters of the time: it reduced every product and passed each one back

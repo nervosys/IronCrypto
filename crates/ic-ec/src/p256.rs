@@ -285,6 +285,73 @@ mod tests {
     use super::*;
     use ic_core::codec::{hex, unhex};
 
+    /// Where P-256's time goes, piece by piece. A measurement, not a check:
+    /// run with `cargo test --release -p ic-ec -- --ignored --nocapture
+    /// where_the_time_goes`.
+    #[test]
+    #[ignore = "timing; run manually with --release"]
+    fn where_the_time_goes() {
+        use crate::nist::arith::Field;
+        use std::hint::black_box;
+        use std::time::Instant;
+        fn ns(label: &str, iters: u32, mut f: impl FnMut()) {
+            let mut best = f64::INFINITY;
+            for _ in 0..7 {
+                let t = Instant::now();
+                for _ in 0..iters {
+                    f();
+                }
+                best = best.min(t.elapsed().as_secs_f64() * 1e9 / iters as f64);
+            }
+            std::println!("{label:32} {best:10.1} ns");
+        }
+        let a = Fp::to_mont([7, 11, 13, 17]);
+        let b = Fp::to_mont([19, 23, 29, 31]);
+        ns("fp mul", 2_000_000, || {
+            black_box(black_box(a).mul(&black_box(b)));
+        });
+        ns("fp square", 2_000_000, || {
+            black_box(black_box(a).square());
+        });
+        ns("fp add", 2_000_000, || {
+            black_box(black_box(a).add(&black_box(b)));
+        });
+        ns("fp sub", 2_000_000, || {
+            black_box(black_box(a).sub(&black_box(b)));
+        });
+        ns("fp invert", 2_000, || {
+            black_box(black_box(a).invert());
+        });
+        let g = Point::generator();
+        let p = g.double();
+        ns("point double", 200_000, || {
+            black_box(black_box(p).double());
+        });
+        ns("point add (complete)", 200_000, || {
+            black_box(black_box(p).add(&black_box(g)));
+        });
+        let k = Fn::to_mont([0x1234_5678, 0x9abc_def0, 0x1357_9bdf, 0x2468_ace0]);
+        ns("scalar invert", 2_000, || {
+            black_box(black_box(k).invert());
+        });
+        ns("mul_generator (table)", 2_000, || {
+            black_box(Point::mul_generator(&black_box(k)));
+        });
+        ns("mul_scalar (windowed)", 500, || {
+            black_box(black_box(p).mul_scalar(&black_box(k)));
+        });
+        ns("mul_scalar_vartime", 500, || {
+            black_box(black_box(p).mul_scalar_vartime(&black_box(k)));
+        });
+        ns("to_affine", 2_000, || {
+            black_box(black_box(p).to_affine());
+        });
+        let mut sig = [0u8; 64];
+        ns("ecdsa sign", 500, || {
+            EcdsaP256Sha256::sign(&[0x5a; 32], b"message", &mut sig).unwrap();
+        });
+    }
+
     fn scalar(v: u64) -> Fn {
         Fn::to_mont([v, 0, 0, 0])
     }
