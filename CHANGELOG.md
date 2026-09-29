@@ -5,6 +5,21 @@ all of them.
 
 ## Unreleased
 
+### Fixed
+
+- **RSA-4096 key generation panicked, every time.** So did
+  `RsaPrivateKey::from_primes` with 2048-bit primes, which is how
+  `ic-rustls` loads an RSA-4096 key whose PKCS#8 carries its primes: "index
+  out of bounds: the len is 64 but the index is 64". Computing
+  `d = (1 + m*k) / e` needs a word more than the modulus, and at 4096 bits
+  the modulus fills every word a `Uint` has. The multiply dropped its top
+  carry, and the addition and division then indexed past the end. A fix that
+  only bounded those loops would have derived a wrong `d` without a panic;
+  the intermediate now has its own buffer one limb wider, and the result must
+  divide exactly and fit. 2048 and 3072 were unaffected. Under
+  `panic = "abort"` the panic takes the process down. Reported from
+  HyperMachine, which found it by generating a 4096-bit key.
+
 ### Security
 
 - **NIST-curve field subtraction branched on a secret on Cortex-M0.** Adding

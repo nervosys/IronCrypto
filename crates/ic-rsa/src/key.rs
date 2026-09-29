@@ -730,11 +730,45 @@ fn modinv_even_modulus(a: &Uint, m: &Uint, limbs: usize) -> Option<Uint> {
     // k = a - t, so that (1 + m*k) is divisible by a.
     let k = a_small - t;
 
-    // d = (1 + m*k) / a
-    let mut product = mul_small(m, k, limbs);
-    product.add_assign(&Uint::one(), limbs + 1);
-    div_small(&mut product, a_small, limbs + 1)?;
-    Some(product)
+    // d = (1 + m*k) / a, computed one limb wider than any modulus.
+    //
+    // `m * k` needs `limbs + 1` words, and a 4096-bit modulus fills all of
+    // `MAX_LIMBS`, so the intermediate does not fit in a `Uint`. It used to be
+    // computed in one anyway: the multiply dropped its final carry at full
+    // width and the addition and division then indexed past the end, so
+    // `generate(4096)` panicked -- and a fix that only bounded those loops
+    // would have returned a wrong `d` instead. The quotient itself always fits:
+    // `k < a` makes `d < m`.
+    let mut wide = [0u64; crate::uint::MAX_LIMBS + 1];
+    let mut carry = 0u128;
+    for (w, &limb) in wide[..limbs].iter_mut().zip(&m.0[..limbs]) {
+        let s = (limb as u128) * (k as u128) + carry;
+        *w = s as u64;
+        carry = s >> 64;
+    }
+    wide[limbs] = carry as u64;
+    // + 1, carried through every word: no early exit on a secret.
+    let mut carry = 1u128;
+    for w in wide[..=limbs].iter_mut() {
+        let s = (*w as u128) + carry;
+        *w = s as u64;
+        carry = s >> 64;
+    }
+    let mut rem = 0u128;
+    for w in wide[..=limbs].iter_mut().rev() {
+        let cur = (rem << 64) | (*w as u128);
+        *w = (cur / a_small as u128) as u64;
+        rem = cur % a_small as u128;
+    }
+    let exact = rem == 0 && wide[limbs] == 0;
+    let mut d = Uint::ZERO;
+    d.0[..limbs].copy_from_slice(&wide[..limbs]);
+    wide.zeroize();
+    if !exact {
+        d.0.zeroize();
+        return None;
+    }
+    Some(d)
 }
 
 /// Assemble the CRT parameters, or decline them.
@@ -784,39 +818,96 @@ fn small_modinv(a: u64, m: u64) -> Option<u64> {
     Some(old_s.rem_euclid(m as i128) as u64)
 }
 
-/// `a * b` for a small `b`.
-fn mul_small(a: &Uint, b: u64, limbs: usize) -> Uint {
-    let mut out = Uint::ZERO;
-    let mut carry = 0u128;
-    for i in 0..limbs {
-        let sum = (a.0[i] as u128) * (b as u128) + carry;
-        out.0[i] = sum as u64;
-        carry = sum >> 64;
-    }
-    if limbs < crate::uint::MAX_LIMBS {
-        out.0[limbs] = carry as u64;
-    }
-    out
-}
-
-/// Divide in place by a small integer, returning `None` if it does not divide
-/// exactly.
-fn div_small(a: &mut Uint, b: u64, limbs: usize) -> Option<()> {
-    let mut rem = 0u128;
-    for i in (0..limbs).rev() {
-        let cur = (rem << 64) | (a.0[i] as u128);
-        a.0[i] = (cur / b as u128) as u64;
-        rem = cur % b as u128;
-    }
-    if rem != 0 {
-        return None;
-    }
-    Some(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `e * d = 1 + m * k` for some `k < e`, checked in arithmetic one limb
+    /// wider than `m` and independent of how `d` was computed.
+    fn is_inverse_mod(e: u64, d: &Uint, m: &Uint, limbs: usize) -> bool {
+        let wide_mul = |x: &Uint, y: u64| {
+            let mut out = [0u64; crate::uint::MAX_LIMBS + 1];
+            let mut carry = 0u128;
+            for (o, &limb) in out[..limbs].iter_mut().zip(&x.0[..limbs]) {
+                let s = (limb as u128) * (y as u128) + carry;
+                *o = s as u64;
+                carry = s >> 64;
+            }
+            out[limbs] = carry as u64;
+            out
+        };
+        let ed = wide_mul(d, e);
+        (0..e).any(|k| {
+            let mut mk = wide_mul(m, k);
+            let mut c = 1u128;
+            for w in mk[..=limbs].iter_mut() {
+                let s = (*w as u128) + c;
+                *w = s as u64;
+                c = s >> 64;
+            }
+            mk == ed
+        })
+    }
+
+    /// `d = e^-1 mod m` at every width a key can have, including the full
+    /// 64 limbs of a 4096-bit modulus.
+    ///
+    /// At 64 limbs the intermediate `1 + m * k` needs a 65th limb. It did not
+    /// have one: `generate(4096)` and `from_primes` with 2048-bit primes both
+    /// panicked indexing limb 64, and the multiply before them dropped its top
+    /// carry without a word, so bounding the loop alone would have produced a
+    /// wrong `d` rather than a panic. Reported from HyperMachine, which found
+    /// it by generating a 4096-bit key.
+    #[test]
+    fn the_even_modulus_inverse_is_right_at_full_width() {
+        let e = 65537u64;
+        let mut checked = 0;
+        for limbs in [16usize, 32, 48, 64] {
+            for seed in [0x9e37_79b9_7f4a_7c15u64, 0x2545_f491_4f6c_dd1d] {
+                let mut m = Uint::ZERO;
+                let mut x = seed;
+                for w in m.0[..limbs].iter_mut() {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    *w = x;
+                }
+                m.0[0] &= !1; // even, as phi and p - 1 are
+                m.0[limbs - 1] |= 1 << 63; // full width
+                if m.rem_u64(e) == 0 {
+                    continue;
+                }
+                let d = modinv_even_modulus(&Uint::from_u64(e), &m, limbs)
+                    .expect("coprime, so invertible");
+                assert!(d.0[limbs..].iter().all(|&w| w == 0), "d wider than m");
+                assert!(
+                    is_inverse_mod(e, &d, &m, limbs),
+                    "{limbs} limbs: e*d != 1 mod m"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 6, "only {checked} widths checked");
+    }
+
+    /// A 4096-bit key, generated and used: HyperMachine's reproduction.
+    ///
+    /// Release builds only, because generating two 2048-bit primes in a debug
+    /// build takes long enough to make the ordinary test run a chore. CI runs
+    /// the whole suite a second time with `--release`, so this runs there on
+    /// every push.
+    #[test]
+    #[cfg_attr(debug_assertions, ignore = "slow in debug; runs under --release")]
+    fn a_4096_bit_key_generates_signs_and_verifies() {
+        let mut rng = ic_drbg::Rng::from_entropy(&[0x96u8; 32], b"rsa-4096").unwrap();
+        let key = generate(4096, &mut rng).unwrap();
+        assert_eq!(key.public_key().bits(), 4096);
+        let mut sig = [0u8; 512];
+        crate::pss::PssSha256::sign(&key, b"4096", &mut rng, &mut sig).unwrap();
+        crate::pss::PssSha256::verify(key.public_key(), b"4096", &sig).unwrap();
+        sig[100] ^= 1;
+        assert!(crate::pss::PssSha256::verify(key.public_key(), b"4096", &sig).is_err());
+    }
 
     /// The pairwise consistency test must reject a key whose halves disagree.
     ///
@@ -859,18 +950,6 @@ mod tests {
             Some(small_modinv(65537 % 11, 11).unwrap())
         );
         assert_eq!(small_modinv(2, 4), None, "not coprime");
-    }
-
-    #[test]
-    fn small_multiply_and_divide_round_trip() {
-        let a = Uint::from_u64(123_456_789);
-        let mut p = mul_small(&a, 65537, 4);
-        assert_eq!(p.0[0], 123_456_789u64 * 65537);
-        div_small(&mut p, 65537, 4).unwrap();
-        assert_eq!(p.0[0], 123_456_789);
-
-        let mut q = Uint::from_u64(10);
-        assert!(div_small(&mut q, 3, 4).is_none(), "inexact division");
     }
 
     #[test]
