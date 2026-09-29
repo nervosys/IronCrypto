@@ -298,7 +298,7 @@ leaving the stronger claim to stand for all of them.
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV |
-| Post-quantum | ML-KEM-512, ML-KEM-768 and ML-KEM-1024 (FIPS 203), ML-DSA-65 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205) is **not** implemented; `ic ontology show slh-dsa` says so and why |
+| Post-quantum | ML-KEM-512, -768 and -1024 (FIPS 203), ML-DSA-44, -65 and -87 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205) is **not** implemented; `ic ontology show slh-dsa` says so and why |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
@@ -324,8 +324,6 @@ The ontology registers algorithms this library does **not** provide, marked
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
   `SubjectPublicKeyInfo` from any X.509 parser to `ic_pkix::PublicKeyInfo`.
-- **ML-DSA-44 and ML-DSA-87** — only ML-DSA-65 is implemented. All three ML-KEM
-  parameter sets are.
 ### Timing
 
 ```sh

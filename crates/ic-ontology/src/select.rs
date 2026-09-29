@@ -572,7 +572,33 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                         }),
                     ],
                 ),
-                _ => fallback(base),
+                // A post-quantum policy leaves neither classical scheme, and
+                // there are three ML-DSA parameter sets to choose between.
+                (None, None) => match available("ml-dsa-65") {
+                    Some(m) => (
+                        m,
+                        "ML-DSA-65 is FIPS 204's middle parameter set, security category 3. Sign \
+                         with a classical scheme alongside it and require both signatures to \
+                         check.",
+                        available("ml-dsa-87"),
+                        [
+                            Some(Rejected {
+                                id: "ml-dsa-44",
+                                reason: "Implemented and ACVP-checked, with the smallest keys and \
+                                         signatures, but at category 2 it has the thinnest \
+                                         margin against lattice cryptanalysis, which is young. \
+                                         Choose it deliberately where size dominates.",
+                            }),
+                            Some(Rejected {
+                                id: "ml-dsa-87",
+                                reason: "Category 5, for a policy that requires it, with \
+                                         signatures about two fifths larger than ML-DSA-65's.",
+                            }),
+                            None,
+                        ],
+                    ),
+                    None => fallback(base),
+                },
             }
         }
         Intent::GenerateRandom => match available("hmac-drbg-sha2-256") {

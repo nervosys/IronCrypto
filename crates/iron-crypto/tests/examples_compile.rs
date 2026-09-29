@@ -154,6 +154,54 @@ fn run_aes_256_kwp() -> Result<()> {
     Ok(())
 }
 
+/// `ml-dsa-44`.
+const ML_DSA_44: &str = "let mut pk = [0u8; ic_mldsa::sign44::PUBLIC_KEY_LEN];
+let mut sk = [0u8; ic_mldsa::sign44::SECRET_KEY_LEN];
+// every call below returns a value you must check
+assert!(ic_mldsa::sign44::keygen(&seed, &mut pk, &mut sk));
+let mut sig = [0u8; ic_mldsa::sign44::SIGNATURE_LEN];
+assert!(ic_mldsa::sign44::sign(&sk, msg, ctx, &rnd, &mut sig));
+assert!(ic_mldsa::sign44::verify(&pk, msg, ctx, &sig));";
+
+fn run_ml_dsa_44() -> Result<()> {
+    let seed = [0x61u8; 32];
+    let msg: &[u8] = b"message";
+    let ctx: &[u8] = b"";
+    let rnd = [0u8; 32];
+
+    let mut pk = [0u8; mldsa::sign44::PUBLIC_KEY_LEN];
+    let mut sk = [0u8; mldsa::sign44::SECRET_KEY_LEN];
+    assert!(mldsa::sign44::keygen(&seed, &mut pk, &mut sk));
+    let mut sig = [0u8; mldsa::sign44::SIGNATURE_LEN];
+    assert!(mldsa::sign44::sign(&sk, msg, ctx, &rnd, &mut sig));
+    assert!(mldsa::sign44::verify(&pk, msg, ctx, &sig));
+    Ok(())
+}
+
+/// `ml-dsa-87`.
+const ML_DSA_87: &str = "let mut pk = [0u8; ic_mldsa::sign87::PUBLIC_KEY_LEN];
+let mut sk = [0u8; ic_mldsa::sign87::SECRET_KEY_LEN];
+// every call below returns a value you must check
+assert!(ic_mldsa::sign87::keygen(&seed, &mut pk, &mut sk));
+let mut sig = [0u8; ic_mldsa::sign87::SIGNATURE_LEN];
+assert!(ic_mldsa::sign87::sign(&sk, msg, ctx, &rnd, &mut sig));
+assert!(ic_mldsa::sign87::verify(&pk, msg, ctx, &sig));";
+
+fn run_ml_dsa_87() -> Result<()> {
+    let seed = [0x61u8; 32];
+    let msg: &[u8] = b"message";
+    let ctx: &[u8] = b"";
+    let rnd = [0u8; 32];
+
+    let mut pk = [0u8; mldsa::sign87::PUBLIC_KEY_LEN];
+    let mut sk = [0u8; mldsa::sign87::SECRET_KEY_LEN];
+    assert!(mldsa::sign87::keygen(&seed, &mut pk, &mut sk));
+    let mut sig = [0u8; mldsa::sign87::SIGNATURE_LEN];
+    assert!(mldsa::sign87::sign(&sk, msg, ctx, &rnd, &mut sig));
+    assert!(mldsa::sign87::verify(&pk, msg, ctx, &sig));
+    Ok(())
+}
+
 /// `ml-dsa-65`.
 ///
 /// Added after this entry's example was found discarding all three of its
@@ -202,6 +250,8 @@ fn the_compiled_examples_match_the_registry() {
         ("hkdf-sha2-256", HKDF_SHA256),
         ("aes-256-kwp", AES_256_KWP),
         ("ml-dsa-65", ML_DSA_65),
+        ("ml-dsa-44", ML_DSA_44),
+        ("ml-dsa-87", ML_DSA_87),
     ];
 
     for (id, compiled) in cases {
@@ -224,6 +274,8 @@ fn the_examples_run() {
     run_hkdf_sha256().expect("hkdf-sha2-256");
     run_aes_256_kwp().expect("aes-256-kwp");
     run_ml_dsa_65().expect("ml-dsa-65");
+    run_ml_dsa_44().expect("ml-dsa-44");
+    run_ml_dsa_87().expect("ml-dsa-87");
 }
 
 /// Every registry example must be checked somewhere in this file.

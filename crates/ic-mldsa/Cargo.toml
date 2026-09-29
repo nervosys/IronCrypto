@@ -1,6 +1,6 @@
 [package]
 name = "ic-mldsa"
-description = "ML-DSA-65 (FIPS 204) post-quantum signatures for IronCrypto, checked against NIST ACVP vectors"
+description = "ML-DSA-44, ML-DSA-65 and ML-DSA-87 (FIPS 204) post-quantum signatures for IronCrypto, each checked against NIST ACVP vectors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

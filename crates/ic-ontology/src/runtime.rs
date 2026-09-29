@@ -110,10 +110,9 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
         Capability {
             id: "post-quantum",
             present: true,
-            note: "ML-KEM-512, ML-KEM-768, ML-KEM-1024 and ML-DSA-65, each checked against NIST's \
-                   published ACVP vectors -- every case in each parameter set, not a selection. \
-                   ML-DSA-44 and ML-DSA-87 are not present. Deploy the KEM in a hybrid with X25519 \
-                   rather than alone: \
+            note: "All three parameter sets of ML-KEM and of ML-DSA, each checked against \
+                   NIST's published ACVP vectors -- every case in each parameter set, not a \
+                   selection. Deploy the KEM in a hybrid with X25519 rather than alone: \
                    lattice cryptanalysis is young, and that is a judgement about the scheme's age \
                    rather than about this implementation.",
         },

@@ -724,6 +724,93 @@ const MLDSA65_P: [Param; 4] = [
     },
 ];
 
+/// The rules every ML-DSA parameter set carries: they come from the scheme,
+/// not from any one set's parameters.
+const MLDSA_CONSTRAINTS: [Constraint; 2] = [
+        Constraint {
+            id: "deploy-post-quantum-in-a-hybrid",
+            requirement: "Sign with a classical scheme alongside this one and require both signatures to check.",
+            consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either half survives; ML-DSA alone bets everything on the newer one.",
+            severity: Severity::Serious,
+        },
+        Constraint {
+            id: "supply-randomness-or-choose-determinism",
+            requirement: "Pass 32 fresh random bytes for the hedged variant, or use the deterministic one deliberately. Do not pass a constant you believe to be random.",
+            consequence: "The hedged and deterministic variants are both sound; a third case, where a caller thinks it is hedging but is not, gives the determinism without the intent and can mask a broken entropy source elsewhere in the system.",
+            severity: Severity::Serious,
+        },
+    ];
+
+const MLDSA44_P: [Param; 4] = [
+    Param {
+        name: "verification-key",
+        unit: Unit::Bytes,
+        min: 1312,
+        max: 1312,
+        recommended: 1312,
+        note: "32 + 320 * k, with k = 4.",
+    },
+    Param {
+        name: "signing-key",
+        unit: Unit::Bytes,
+        min: 2560,
+        max: 2560,
+        recommended: 2560,
+        note: "128 + 96 * (k + l) + 416 * k, with k = 4 and l = 4; eta = 2 packs a secret coefficient in three bits.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 2420,
+        max: 2420,
+        recommended: 2420,
+        note: "32 + 576 * l + omega + k, with omega = 80.",
+    },
+    Param {
+        name: "context",
+        unit: Unit::Bytes,
+        min: 0,
+        max: 255,
+        recommended: 0,
+        note: "The context string is length-prefixed with one byte, so 255 is a hard ceiling. Signing refuses anything longer rather than truncating it.",
+    },
+];
+
+const MLDSA87_P: [Param; 4] = [
+    Param {
+        name: "verification-key",
+        unit: Unit::Bytes,
+        min: 2592,
+        max: 2592,
+        recommended: 2592,
+        note: "32 + 320 * k, with k = 8.",
+    },
+    Param {
+        name: "signing-key",
+        unit: Unit::Bytes,
+        min: 4896,
+        max: 4896,
+        recommended: 4896,
+        note: "128 + 96 * (k + l) + 416 * k, with k = 8 and l = 7; eta = 2 packs a secret coefficient in three bits.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 4627,
+        max: 4627,
+        recommended: 4627,
+        note: "64 + 640 * l + omega + k, with omega = 75.",
+    },
+    Param {
+        name: "context",
+        unit: Unit::Bytes,
+        min: 0,
+        max: 255,
+        recommended: 0,
+        note: "The context string is length-prefixed with one byte, so 255 is a hard ceiling. Signing refuses anything longer rather than truncating it.",
+    },
+];
+
 const MLKEM768_P: [Param; 4] = [
     Param {
         name: "encapsulation-key",
@@ -2621,20 +2708,7 @@ pub static REGISTRY: &[Entry] = &[
         status: ImplStatus::Available,
         standards: &["FIPS 204"],
         params: &MLDSA65_P,
-        constraints: &[
-            Constraint {
-                id: "deploy-post-quantum-in-a-hybrid",
-                requirement: "Sign with a classical scheme alongside this one and require both signatures to check.",
-                consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either half survives; ML-DSA alone bets everything on the newer one.",
-                severity: Severity::Serious,
-            },
-            Constraint {
-                id: "supply-randomness-or-choose-determinism",
-                requirement: "Pass 32 fresh random bytes for the hedged variant, or use the deterministic one deliberately. Do not pass a constant you believe to be random.",
-                consequence: "The hedged and deterministic variants are both sound; a third case, where a caller thinks it is hedging but is not, gives the determinism without the intent and can mask a broken entropy source elsewhere in the system.",
-                severity: Severity::Serious,
-            },
-        ],
+        constraints: &MLDSA_CONSTRAINTS,
         edges: &[
             Edge { relation: Relation::Supersedes, target: "ecdsa-p256-sha256" },
             Edge { relation: Relation::PairsWith, target: "ecdsa-p256-sha256" },
@@ -2649,7 +2723,65 @@ assert!(ic_mldsa::sign::keygen(&seed, &mut pk, &mut sk));
 let mut sig = [0u8; ic_mldsa::sign::SIGNATURE_LEN];
 assert!(ic_mldsa::sign::sign(&sk, msg, ctx, &rnd, &mut sig));
 assert!(ic_mldsa::sign::verify(&pk, msg, ctx, &sig));",
-        notes: "Checked against NIST's published ACVP vectors: 25 key generation cases and 30 signature generation cases for ML-DSA-65, every case in the parameter set rather than a selection. The signing cases cover both paths — 15 deterministic and 15 hedged, the hedged ones using the randomness the vector specifies rather than zeros — so the two differ in the file as they do in the code. Only the 65 parameter set exists; the other two are a decision about surface area rather than about confidence. Verification refuses non-canonical hint blocks, so one signature has one encoding.",
+        notes: "Checked against NIST's published ACVP vectors: 25 key generation cases and 30 signature generation cases for ML-DSA-65, every case in the parameter set rather than a selection. The signing cases cover both paths — 15 deterministic and 15 hedged, the hedged ones using the randomness the vector specifies rather than zeros — so the two differ in the file as they do in the code. ML-DSA-44 and ML-DSA-87 share this code and are checked against their own vectors. Verification refuses non-canonical hint blocks, so one signature has one encoding.",
+    },
+    Entry {
+        id: "ml-dsa-44",
+        name: "ML-DSA-44",
+        aliases: &["dilithium2"],
+        summary: "Post-quantum signatures, FIPS 204 security category 2.",
+        class: Class::Signature,
+        family: "ML-DSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength { classical: 128, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 204"],
+        params: &MLDSA44_P,
+        constraints: &MLDSA_CONSTRAINTS,
+        edges: &[
+            Edge { relation: Relation::PairsWith, target: "ecdsa-p256-sha256" },
+            Edge { relation: Relation::BuiltOn, target: "shake256" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ic_mldsa::sign44",
+        example: "let mut pk = [0u8; ic_mldsa::sign44::PUBLIC_KEY_LEN];
+let mut sk = [0u8; ic_mldsa::sign44::SECRET_KEY_LEN];
+// every call below returns a value you must check
+assert!(ic_mldsa::sign44::keygen(&seed, &mut pk, &mut sk));
+let mut sig = [0u8; ic_mldsa::sign44::SIGNATURE_LEN];
+assert!(ic_mldsa::sign44::sign(&sk, msg, ctx, &rnd, &mut sig));
+assert!(ic_mldsa::sign44::verify(&pk, msg, ctx, &sig));",
+        notes: "The ML-DSA-65 scheme at FIPS 204's ML-DSA-44 parameters, sharing its code: the scheme is written once and instantiated per parameter set. Checked against NIST's ACVP vectors for this set on its own account -- all 25 key-generation cases and all 30 external, pure signature cases, 15 deterministic and 15 hedged -- since the parameters are exactly what differs. The smallest keys and signatures, at category 2. `recommend` offers ML-DSA-65, the middle set; choose this one deliberately.",
+    },
+    Entry {
+        id: "ml-dsa-87",
+        name: "ML-DSA-87",
+        aliases: &["dilithium5"],
+        summary: "Post-quantum signatures, FIPS 204 security category 5.",
+        class: Class::Signature,
+        family: "ML-DSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
+        strength: Strength { classical: 256, quantum: 256 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 204"],
+        params: &MLDSA87_P,
+        constraints: &MLDSA_CONSTRAINTS,
+        edges: &[
+            Edge { relation: Relation::PairsWith, target: "ecdsa-p256-sha256" },
+            Edge { relation: Relation::BuiltOn, target: "shake256" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ic_mldsa::sign87",
+        example: "let mut pk = [0u8; ic_mldsa::sign87::PUBLIC_KEY_LEN];
+let mut sk = [0u8; ic_mldsa::sign87::SECRET_KEY_LEN];
+// every call below returns a value you must check
+assert!(ic_mldsa::sign87::keygen(&seed, &mut pk, &mut sk));
+let mut sig = [0u8; ic_mldsa::sign87::SIGNATURE_LEN];
+assert!(ic_mldsa::sign87::sign(&sk, msg, ctx, &rnd, &mut sig));
+assert!(ic_mldsa::sign87::verify(&pk, msg, ctx, &sig));",
+        notes: "The ML-DSA-65 scheme at FIPS 204's ML-DSA-87 parameters, sharing its code: the scheme is written once and instantiated per parameter set. Checked against NIST's ACVP vectors for this set on its own account -- all 25 key-generation cases and all 30 external, pure signature cases, 15 deterministic and 15 hedged -- since the parameters are exactly what differs. The largest, at category 5, for a policy that asks for it. `recommend` offers ML-DSA-65, the middle set; choose this one deliberately.",
     },
     Entry {
         id: "rsa-pkcs1-sha256",

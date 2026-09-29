@@ -94,7 +94,7 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         name: "ic-mldsa",
-        description: "ML-DSA-65 (FIPS 204), checked against 55 NIST ACVP cases.",
+        description: "ML-DSA-44, -65 and -87 (FIPS 204), each checked against 55 NIST ACVP cases.",
     },
     Component {
         name: "ic-json",

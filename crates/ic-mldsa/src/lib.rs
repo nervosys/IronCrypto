@@ -1,8 +1,11 @@
-//! ML-DSA-65 (FIPS 204) post-quantum signatures, checked against NIST's ACVP
-//! vectors.
+//! ML-DSA-44, ML-DSA-65 and ML-DSA-87 (FIPS 204) post-quantum signatures, each
+//! checked against NIST's ACVP vectors.
 //!
-//! [`sign`] is the scheme: key generation, signing and verification, the
+//! [`sign`] is ML-DSA-65: key generation, signing and verification, the
 //! pre-hash variants, and a deterministic variant alongside the hedged one.
+//! [`sign44`] and [`sign87`] are the same scheme at the other two parameter
+//! sets, with the same functions, and each is checked against its own ACVP
+//! cases: 25 key generation and 30 signatures apiece.
 //! Beneath it sit `Z_q[X]/(X^256 + 1)` with `q = 8380417`, the number-theoretic
 //! transform over it, the rejection-bound check the signing loop turns on, the
 //! rounding and hint machinery of FIPS 204 algorithms 35 through 40, and the
@@ -44,4 +47,7 @@ pub mod encode;
 pub mod poly;
 pub mod rounding;
 pub mod sample;
+mod scheme;
 pub mod sign;
+pub mod sign44;
+pub mod sign87;

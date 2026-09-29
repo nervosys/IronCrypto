@@ -549,6 +549,8 @@ static COVERED_ELSEWHERE: &[(&str, &str)] = &[
     // The verifier was fuzzed as it was written; see the module doc there for
     // the same three properties this file argues.
     ("ml-dsa-65", "ic-mldsa/tests/robustness.rs"),
+    ("ml-dsa-44", "ic-mldsa/tests/robustness.rs"),
+    ("ml-dsa-87", "ic-mldsa/tests/robustness.rs"),
     // The RSA signature schemes share one public key shape and one parser, and
     // `rsa_verification_is_total_and_sound` hammers it through both paddings
     // at all three digest sizes.

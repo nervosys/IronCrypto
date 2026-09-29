@@ -315,6 +315,84 @@ fn ml_dsa_siggen_vectors_from_file() {
     }
 }
 
+/// ACVP key generation and signature generation for ML-DSA-44 and ML-DSA-87.
+///
+/// The ML-DSA-65 checks above, for the parameter sets that share its code
+/// through `ic_mldsa`'s `scheme`: each is registered `available` only on its
+/// own vectors, since its parameters are what differs.
+macro_rules! ml_dsa_acvp {
+    ($keygen:ident, $siggen:ident, $module:ident, $file:literal) => {
+        #[test]
+        fn $keygen() {
+            let Some(file) = VectorFile::load_or_report(concat!($file, "-keygen")) else {
+                return;
+            };
+            assert_eq!(file.cases.len(), 25, "every ACVP key-generation case");
+            for (index, case) in file.cases.iter().enumerate() {
+                let seed = hex_field(case, "seed");
+                let mut pk = [0u8; mldsa::$module::PUBLIC_KEY_LEN];
+                let mut sk = [0u8; mldsa::$module::SECRET_KEY_LEN];
+                assert!(
+                    mldsa::$module::keygen(seed[..].try_into().unwrap(), &mut pk, &mut sk),
+                    "case {index}: the generated key failed its consistency test"
+                );
+                assert_eq!(hex(&pk), hex(&hex_field(case, "pk")), "pk, case {index}");
+                assert_eq!(hex(&sk), hex(&hex_field(case, "sk")), "sk, case {index}");
+            }
+        }
+
+        #[test]
+        fn $siggen() {
+            let Some(file) = VectorFile::load_or_report(concat!($file, "-siggen")) else {
+                return;
+            };
+            assert_eq!(
+                file.cases.len(),
+                30,
+                "every external, pure ACVP signature case"
+            );
+            let hedged = file
+                .cases
+                .iter()
+                .filter(|c| optional_hex_field(c, "rnd").is_some())
+                .count();
+            assert_eq!(hedged, 15, "15 hedged and 15 deterministic");
+            for (index, case) in file.cases.iter().enumerate() {
+                let sk = hex_field(case, "sk");
+                let sk: &[u8; mldsa::$module::SECRET_KEY_LEN] = sk[..]
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("case {index}: sk is the wrong length"));
+                let message = hex_field(case, "message");
+                let ctx = optional_hex_field(case, "context").unwrap_or_default();
+                let rnd = optional_hex_field(case, "rnd").unwrap_or_else(|| vec![0u8; 32]);
+                let mut sig = [0u8; mldsa::$module::SIGNATURE_LEN];
+                assert!(
+                    mldsa::$module::sign(sk, &message, &ctx, rnd[..].try_into().unwrap(), &mut sig),
+                    "case {index}: signing failed"
+                );
+                assert_eq!(
+                    hex(&sig),
+                    hex(&hex_field(case, "signature")),
+                    "signature, case {index}"
+                );
+            }
+        }
+    };
+}
+
+ml_dsa_acvp!(
+    ml_dsa_44_keygen_vectors_from_file,
+    ml_dsa_44_siggen_vectors_from_file,
+    sign44,
+    "ml-dsa-44"
+);
+ml_dsa_acvp!(
+    ml_dsa_87_keygen_vectors_from_file,
+    ml_dsa_87_siggen_vectors_from_file,
+    sign87,
+    "ml-dsa-87"
+);
+
 /// The harness's own contract: an absent file must skip, not fail.
 ///
 /// Without this, a typo in a filename would look exactly like a passing test,

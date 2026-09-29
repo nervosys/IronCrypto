@@ -20,6 +20,19 @@ all of them.
   ML-KEM-1024 as the alternative and a stated reason for passing over 512.
   Requested by HyperMachine, which offers all three and could not migrate one
   without the others.
+- **ML-DSA-44 and ML-DSA-87**, as `ic_mldsa::sign44` and `ic_mldsa::sign87`,
+  with the same functions as `ic_mldsa::sign` (ML-DSA-65). Each is checked
+  against every NIST ACVP key-generation case and every external, pure
+  signature case for its set -- 25 and 30, the signatures 15 deterministic and
+  15 hedged -- from the same pinned commit. The scheme is ML-DSA-65's code
+  with its parameters lifted into a macro; what does not depend on the set,
+  the message framing and `PreHash`, is shared, so all three modules take the
+  same `PreHash` type. ML-DSA-65 is byte for byte what it was. Each new set
+  has an ontology entry, a FIPS self-test (`TEST_COUNT` is 68), a compiled
+  example, and the full hostile-input suite, which now runs unchanged against
+  every set. `recommend --post-quantum` still offers ML-DSA-65 for
+  signatures, with ML-DSA-87 as the alternative. Also requested by
+  HyperMachine.
 
 ### Fixed
 
