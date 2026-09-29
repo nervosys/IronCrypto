@@ -115,5 +115,6 @@ Reversing steps 1 and 3 cannot be corrected afterwards.
   announcement should imply otherwise.
 - **The self-hosted CI runner.** GitHub advises against self-hosted runners on
   public repositories, because a fork's pull request would then execute on your
-  hardware. If this repository ever becomes public, `self-hosted.yml` has to be
-  reconsidered in the same change. See `docs/CI.md`.
+  hardware. The repository became public on 2026-09-16 and this was not
+  reconsidered until 2026-09-28; `docs/CI.md` records what changed and the
+  repository setting that now holds the line.

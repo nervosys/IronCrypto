@@ -2,26 +2,33 @@ name: self-hosted
 
 # The same gate, on a runner this project provides.
 #
-# `ci.yml` uses GitHub-hosted runners and is correct, but it does not run: every
-# job on this repository is rejected before it starts with "the job was not
-# started because recent account payments have failed or your spending limit
-# needs to be increased". That is an account-level block and nothing in a
-# repository can lift it.
-#
-# A self-hosted runner consumes no GitHub minutes, so this workflow works
-# whatever the billing state, and both can run once billing is restored --
-# `ci.yml` for the three-OS matrix and the four cross-compilation targets, this
-# for a check that keeps working if billing lapses again.
+# `ci.yml` uses GitHub-hosted runners, and for a time could not run at all: an
+# account-level billing block rejected every job before it started. A
+# self-hosted runner consumes no GitHub minutes, so this workflow kept a gate
+# running through that, and is kept as the check that survives if billing
+# lapses again. `ci.yml` is the primary gate: the three-OS matrix, 32-bit x86,
+# ARM, and the four cross-compilation targets.
 #
 # It invokes scripts/check.sh rather than listing the steps. That is the whole
 # design: CI used to write each step out again, its copy of the dependency check
 # drifted onto crate names that no longer existed, and the job failed on every
 # push. A workflow that calls the script cannot disagree with the script.
 
+# Not on `pull_request`. The repository is public, so a pull request can come
+# from anyone's fork, and one that ran here would run its author's code -- build
+# scripts, tests, anything -- on the machine hosting the runner. `ci.yml` tests
+# every pull request on GitHub's machines instead. What remains can be started
+# only by someone with write access.
+#
+# Removing the trigger is not the whole defence and cannot be: a pull request
+# runs the workflow files as the pull request has them, so its author can put
+# the trigger back, or write a new workflow naming `self-hosted`. What stops
+# that is the repository setting that holds every outside contributor's
+# workflows for a maintainer's approval (`all_external_contributors`). Read the
+# workflow changes in a pull request before approving it to run.
 on:
   push:
     branches: [master]
-  pull_request:
   workflow_dispatch:
 
 concurrency:

@@ -145,12 +145,26 @@ producing a different answer from everyone else's.
 
 ### One thing to know before you register one
 
-Anyone who can push to this repository, or open a pull request that runs this
-workflow, runs code on that machine. For a private repository with a trusted set
-of collaborators that is the normal arrangement. It is the reason GitHub advises
-against self-hosted runners on *public* repositories, where a fork's pull request
-would otherwise execute on your hardware. This repository is private; if that
-ever changes, this workflow should be reconsidered at the same time.
+Anyone whose workflow reaches that machine runs code on it. GitHub advises
+against self-hosted runners on *public* repositories for that reason: a fork's
+pull request would otherwise execute on your hardware.
+
+This repository is public, since 2026-09-16. The runner was set up while it was
+private, and for twelve days afterwards `self-hosted.yml` still ran on every
+pull request, with approval required only from first-time contributors. No pull
+request was opened in that time. Two things changed on 2026-09-28:
+
+- `self-hosted.yml` no longer triggers on `pull_request`. Pull requests are
+  tested by `ci.yml`, on GitHub's runners.
+- The repository requires a maintainer's approval before workflows run for
+  *any* outside contributor (`all_external_contributors`), not only a
+  first-time one.
+
+The second is the one that holds. A pull request runs workflow files as the
+pull request has them, so removing the trigger only changes the default: its
+author can restore it or add a workflow naming `self-hosted`. Approval is where
+that gets caught, so read the `.github/` changes in a pull request before
+approving it to run. Loosening that setting reopens the machine.
 
 Prefer a machine you do not mind rebuilding, and note that the runner keeps its
 working directory between jobs, which is why the workflow points
