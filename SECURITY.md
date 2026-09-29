@@ -42,9 +42,22 @@ the provenance down to the upstream commit. All three are `available` in the
 ontology and usable in the approved mode; `ic ontology show <id>` is the
 current answer and this file is not.
 
-What remains unverified is interoperability in the wider sense: matching NIST's
-vectors shows the algorithms are right, not that a handshake with some other
-implementation completes.
+Interoperability is a separate question: matching NIST's vectors shows the
+algorithms are right, not that a handshake with some other implementation
+completes. For two parameter sets there is now evidence of that as well, from
+outside this repository. IronSocketLayer, a TLS 1.3 stack built on these
+crates, reports against OpenSSL 3.5 (nervosys/IronSocketLayer, commit
+692e800):
+
+- ML-KEM-1024 key exchange, alone and hybridised with P-384, interoperates in
+  both directions.
+- ML-DSA-87 certificate chains signed here verify under OpenSSL with
+  `-x509_strict`; handshakes using ML-DSA-87 signatures interoperate in both
+  directions; OpenSSL-generated ML-DSA-87 keys regenerate the same public key
+  here; and OpenSSL's ML-DSA-87 signatures verify here.
+
+That is reported, not reproduced in this repository's own tests, and it
+covers those two sets. The other four rest on the NIST vectors alone.
 
 **Constant time is a property of the compiled code, and on 32-bit RISC-V it
 does not hold for the curves or RSA.** The source is written without branches
