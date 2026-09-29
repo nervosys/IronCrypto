@@ -19,6 +19,7 @@ use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Sha512;
 
 /// The compressed encoding of the Ed25519 base point.
+#[cfg(test)]
 const BASEPOINT_COMPRESSED: [u8; 32] = [
     0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
     0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
@@ -69,7 +70,6 @@ pub struct Point {
 /// doublings cheaper: a doubling reads only `X`, `Y` and `Z`, so on the way to
 /// another doubling the `T` those four multiplications would produce is never
 /// read, and three of them suffice instead of four.
-#[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub(crate) struct Completed {
     x: Fe,
@@ -81,7 +81,6 @@ pub(crate) struct Completed {
 /// `(X : Y : Z)`, standing for `(X/Z, Y/Z)`. No `T`.
 ///
 /// What a doubling needs and all it needs.
-#[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub(crate) struct Projective {
     x: Fe,
@@ -96,7 +95,6 @@ pub(crate) struct Projective {
 /// stores them instead of `(X, Y, Z, T)`. That turns an addition from nine
 /// multiplications into four: the two sums and differences are already formed,
 /// and `2d·T` has already been scaled.
-#[cfg(feature = "std")]
 #[derive(Clone, Copy)]
 pub(crate) struct Niels {
     ypx: Fe,
@@ -116,6 +114,38 @@ pub(crate) struct AffineNiels {
     ypx: Fe,
     ymx: Fe,
     t2d: Fe,
+}
+
+/// The constant-time table operations the windowed multiplication needs. They
+/// mirror [`AffineNiels`]'s, for a table built per call and so never worth the
+/// inversions that would make it affine.
+#[cfg(any(not(feature = "std"), test))]
+impl Niels {
+    /// The neutral element: `Y + X = Y - X = Z = 1`, `2d·T = 0`.
+    const IDENTITY: Niels = Niels {
+        ypx: Fe::ONE,
+        ymx: Fe::ONE,
+        z: Fe::ONE,
+        t2d: Fe::ZERO,
+    };
+
+    /// Negation swaps the sums and differences and negates `2d·T`; `Z` is
+    /// unchanged.
+    fn conditional_negate(&mut self, choice: Choice) {
+        let swapped_p = self.ymx;
+        let swapped_m = self.ypx;
+        let nt = self.t2d.neg();
+        Fe::cmov(&mut self.ypx, &swapped_p, choice);
+        Fe::cmov(&mut self.ymx, &swapped_m, choice);
+        Fe::cmov(&mut self.t2d, &nt, choice);
+    }
+
+    fn cmov(&mut self, other: &Niels, choice: Choice) {
+        Fe::cmov(&mut self.ypx, &other.ypx, choice);
+        Fe::cmov(&mut self.ymx, &other.ymx, choice);
+        Fe::cmov(&mut self.z, &other.z, choice);
+        Fe::cmov(&mut self.t2d, &other.t2d, choice);
+    }
 }
 
 #[cfg(feature = "std")]
@@ -145,7 +175,6 @@ impl AffineNiels {
     }
 }
 
-#[cfg(feature = "std")]
 impl Completed {
     /// Drop to `(X : Y : Z)`, which is three multiplications.
     fn to_projective(self) -> Projective {
@@ -170,7 +199,6 @@ impl Completed {
     }
 }
 
-#[cfg(feature = "std")]
 impl Projective {
     /// Recover extended coordinates from projective ones.
     ///
@@ -310,7 +338,6 @@ impl Point {
     }
 
     /// Drop `T`, which a doubling does not read.
-    #[cfg(feature = "std")]
     fn to_projective(self) -> Projective {
         Projective {
             x: self.x,
@@ -320,7 +347,6 @@ impl Point {
     }
 
     /// Rearrange for repeated addition. See [`Niels`].
-    #[cfg(feature = "std")]
     fn to_niels(self) -> Niels {
         Niels {
             ypx: self.y.add(&self.x),
@@ -336,7 +362,6 @@ impl Point {
     /// rather than nine because `other` arrives with its sums, differences and
     /// `2d·T` already formed, and because the result is left completed rather
     /// than converted back.
-    #[cfg(feature = "std")]
     fn add_niels(&self, other: &Niels) -> Completed {
         let pp = self.y.add(&self.x).mul(&other.ypx);
         let mm = self.y.sub(&self.x).mul(&other.ymx);
@@ -356,7 +381,6 @@ impl Point {
     /// Negating a Niels point swaps its sums and differences and negates
     /// `2d·T`, which is cheaper than negating the point it came from and
     /// rebuilding it.
-    #[cfg(feature = "std")]
     fn sub_niels(&self, other: &Niels) -> Completed {
         let pp = self.y.add(&self.x).mul(&other.ymx);
         let mm = self.y.sub(&self.x).mul(&other.ypx);
@@ -462,60 +486,6 @@ impl Point {
         }
     }
 
-    /// Scalar multiplication that is **not** constant time.
-    ///
-    /// # When this is allowed
-    ///
-    /// Only on values an attacker already has. Verification is the case: the
-    /// signature, the public key and the message are all public, so there is no
-    /// secret whose timing could leak, and the constant-time ladder buys
-    /// nothing there but work. Signing must never call this -- the scalar is
-    /// derived from the seed.
-    ///
-    /// # What it does instead
-    ///
-    /// A width-5 non-adjacent form. Recoding the scalar into signed odd digits
-    /// leaves roughly one position in six non-zero, so the additions drop from
-    /// one per bit to about forty in total; the doublings remain, because an
-    /// arbitrary point has no precomputed table to take them away. Only odd
-    /// multiples are stored, eight of them, since a negative digit negates on
-    /// the way out.
-    ///
-    /// The saving is real but bounded: the doublings dominate and they cannot
-    /// be avoided here. The basepoint half of verification is the one that got
-    /// a table.
-    ///
-    /// Crate-private, and compiled only where it is used. It was public, which
-    /// put a variable-time multiplication on a type that can carry a secret
-    /// in reach of every caller. Under `std`, verification uses the interleaved
-    /// [`double_scalar_mul_vartime`] instead; this serves the `no_std` fallback
-    /// and the test that holds it to the constant-time ladder.
-    #[cfg(any(not(feature = "std"), test))]
-    pub(crate) fn mul_scalar_vartime(&self, scalar: &[u8; 32]) -> Point {
-        // 1P, 3P, 5P .. 15P.
-        let twice = self.double();
-        let mut odd = [*self; 8];
-        for i in 1..8 {
-            odd[i] = odd[i - 1].add(&twice);
-        }
-
-        let naf = wnaf5(scalar);
-        let mut acc = Point::IDENTITY;
-        for digit in naf.iter().rev() {
-            acc = acc.double();
-            if *digit != 0 {
-                // digit is odd and in [-15, 15]; |digit|/2 indexes the table.
-                let entry = &odd[(digit.unsigned_abs() as usize) / 2];
-                acc = if *digit > 0 {
-                    acc.add(entry)
-                } else {
-                    acc.add(&entry.negate())
-                };
-            }
-        }
-        acc
-    }
-
     /// Whether two points are the same, without leaving projective space.
     ///
     /// `(X : Y : Z)` stands for the affine point `(X/Z, Y/Z)`, so two are equal
@@ -605,7 +575,7 @@ fn mul_basepoint(scalar: &[u8; 32]) -> Point {
     }
     #[cfg(not(feature = "std"))]
     {
-        basepoint().mul_scalar(scalar)
+        mul_scalar_windowed(&basepoint(), scalar)
     }
 }
 
@@ -638,19 +608,146 @@ pub fn double_scalar_mul_vartime_for_bench(a: &Point, k: &[u8; 32], s: &[u8; 32]
     double_scalar_mul_vartime(a, k, s)
 }
 
-#[cfg(feature = "std")]
-fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
-    // 1A, 3A, 5A .. 15A, in Niels form, built for this call.
-    let twice = a.double();
-    let mut odd = [*a; 8];
+/// `scalar * p` in constant time, four bits at a time, for scalars below
+/// `2^255`.
+///
+/// What `no_std` signing uses in place of the precomputed table, and the same
+/// algorithm with the table built per call: the scalar becomes 64 signed
+/// radix-16 digits, `1..=8` times `p` are computed on the stack, and each digit
+/// selects one of them by reading all eight with conditional moves. That is
+/// 252 doublings and 64 additions, against 256 of each for
+/// [`Point::mul_scalar`]'s bit-at-a-time ladder, and eight entries of 160 bytes
+/// that are gone when it returns -- which is the constraint `no_std` exists
+/// for.
+///
+/// Every scalar reaching it is a clamped secret or a value reduced modulo the
+/// group order, which is what [`signed_digits`] needs. [`Point::mul_scalar`]
+/// remains the public operation and takes any 32 bytes.
+#[cfg(any(not(feature = "std"), test))]
+fn mul_scalar_windowed(p: &Point, scalar: &[u8; 32]) -> Point {
+    let mut multiples = [*p; 8];
+    for i in 1..8 {
+        multiples[i] = multiples[i - 1].add(p);
+    }
+    let table: [Niels; 8] = core::array::from_fn(|i| multiples[i].to_niels());
+
+    // `digit * p` for a digit in `[-8, 8]`, without indexing by the digit.
+    let select = |digit: i8| -> Niels {
+        let negative = Choice::from_u8((digit as u8) >> 7);
+        let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
+        let mut out = Niels::IDENTITY;
+        for (i, entry) in table.iter().enumerate() {
+            out.cmov(entry, Choice::from_u8(u8::from(magnitude == (i as u8 + 1))));
+        }
+        out.conditional_negate(negative);
+        out
+    };
+
+    let digits = signed_digits(scalar);
+    let mut acc = Point::IDENTITY.add_niels(&select(digits[63])).to_extended();
+    for i in (0..63).rev() {
+        // Times sixteen: three doublings that never need `T`, then one that
+        // does, since the addition after it reads `T`.
+        let mut q = acc.to_projective();
+        for _ in 0..3 {
+            q = q.double_projective();
+        }
+        acc = q.double().to_extended();
+        acc = acc.add_niels(&select(digits[i])).to_extended();
+    }
+    acc
+}
+
+/// `1, 3, 5 .. 15` times `p`, in Niels form.
+fn odd_multiples(p: &Point) -> [Niels; 8] {
+    let twice = p.double();
+    let mut odd = [*p; 8];
     for i in 1..8 {
         odd[i] = odd[i - 1].add(&twice);
     }
-    let odd_a: [Niels; 8] = core::array::from_fn(|i| odd[i].to_niels());
-    let odd_b = basepoint_table::odd_multiples();
+    core::array::from_fn(|i| odd[i].to_niels())
+}
 
+/// The scalar as 64 signed radix-16 digits, each in `[-8, 8]`.
+///
+/// A nibble above 8 becomes `nibble - 16` with a carry into the next digit,
+/// which is what keeps a table to the positive multiples.
+///
+/// Only the first 63 digits are recoded. The last one is left to absorb the
+/// final carry, because a carry *out* of the top would be a factor of `16^64`
+/// with nowhere to go -- silently dropping it would give the wrong point. That
+/// works because every scalar reaching here has its top byte at most 127: the
+/// clamped secret has bit 255 cleared by construction, and `r` and `s` are
+/// reduced modulo the group order and so are far smaller. The top nibble is
+/// then at most 7, one carry takes it to 8, and 8 is in range.
+///
+/// The first version of this recoded all 64 and dropped that carry. The
+/// agreement test below caught it.
+fn signed_digits(scalar: &[u8; 32]) -> [i8; 64] {
+    debug_assert!(
+        scalar[31] <= 127,
+        "the top digit can only absorb the final carry for scalars below 2^255"
+    );
+
+    let mut nibbles = [0i8; 64];
+    for (i, byte) in scalar.iter().enumerate() {
+        nibbles[i * 2] = (byte & 0x0f) as i8;
+        nibbles[i * 2 + 1] = (byte >> 4) as i8;
+    }
+
+    for i in 0..63 {
+        let carry = (nibbles[i] + 8) >> 4;
+        nibbles[i] -= carry << 4;
+        nibbles[i + 1] += carry;
+    }
+    nibbles
+}
+
+#[cfg(feature = "std")]
+fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
+    let odd_b = basepoint_table::odd_multiples();
+    shared_doublings(a, k, &wnaf(s, 8), |e, digit| {
+        let n = &odd_b[(digit.unsigned_abs() as usize) / 2];
+        if digit > 0 {
+            e.add_affine_niels(n)
+        } else {
+            e.sub_affine_niels(n)
+        }
+    })
+}
+
+/// [`double_scalar_mul_vartime`] with no stored table: the basepoint's odd
+/// multiples are built per call, the same way `A`'s are, and read at width 5.
+///
+/// What `no_std` verification uses. It keeps the part that matters -- one chain
+/// of doublings shared by both scalars, where computing `[S]B` and `[k]A`
+/// separately would run two -- and gives up only the wider window, which is
+/// the part that needs storage.
+#[cfg(any(not(feature = "std"), test))]
+fn double_scalar_mul_vartime_no_table(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
+    let odd_b = odd_multiples(&basepoint());
+    shared_doublings(a, k, &wnaf(s, 5), |e, digit| {
+        let n = &odd_b[(digit.unsigned_abs() as usize) / 2];
+        if digit > 0 {
+            e.add_niels(n)
+        } else {
+            e.sub_niels(n)
+        }
+    })
+}
+
+/// The loop both of those share: `[k]A` at width 5, plus whatever `add_b` adds
+/// at each non-zero digit of `naf_b`, over a single chain of doublings.
+#[inline(always)]
+fn shared_doublings(
+    a: &Point,
+    k: &[u8; 32],
+    naf_b: &[i8; 258],
+    add_b: impl Fn(&Point, i8) -> Completed,
+) -> Point {
+    // 1A, 3A, 5A .. 15A, in Niels form, built for this call.
+    let odd_a = odd_multiples(a);
     let naf_a = wnaf(k, 5);
-    let naf_b = wnaf(s, 8);
 
     // Start at the highest position either recoding reaches, so the leading
     // doublings of the identity are skipped.
@@ -686,13 +783,7 @@ fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
             };
         }
         if naf_b[i] != 0 {
-            let e = t.to_extended();
-            let n = &odd_b[(naf_b[i].unsigned_abs() as usize) / 2];
-            t = if naf_b[i] > 0 {
-                e.add_affine_niels(n)
-            } else {
-                e.sub_affine_niels(n)
-            };
+            t = add_b(&t.to_extended(), naf_b[i]);
         }
         if i == 0 {
             return t.to_extended();
@@ -711,10 +802,41 @@ pub fn mul_basepoint_for_bench(scalar: &[u8; 32]) -> Point {
 }
 
 fn basepoint() -> Point {
-    // The encoding is a compile-time constant and is known to be valid, so the
-    // decompression cannot fail.
-    Point::decompress(&BASEPOINT_COMPRESSED).unwrap_or(Point::IDENTITY)
+    BASEPOINT
 }
+
+/// The basepoint in extended coordinates, `Z = 1` and `T = XY`.
+///
+/// It used to be decompressed from [`BASEPOINT_COMPRESSED`] on every call,
+/// which is a field square root -- about a tenth of a signature on the `no_std`
+/// path, where nothing caches it. The limbs were computed outside this crate
+/// from `y = 4/5` and the curve equation, and
+/// `the_basepoint_constant_is_the_decompressed_encoding` holds them to what
+/// decompressing the RFC 8032 encoding gives.
+const BASEPOINT: Point = Point {
+    x: Fe([
+        1_738_742_601_995_546,
+        1_146_398_526_822_698,
+        2_070_867_633_025_821,
+        562_264_141_797_630,
+        587_772_402_128_613,
+    ]),
+    y: Fe([
+        1_801_439_850_948_184,
+        1_351_079_888_211_148,
+        450_359_962_737_049,
+        900_719_925_474_099,
+        1_801_439_850_948_198,
+    ]),
+    z: Fe::ONE,
+    t: Fe([
+        1_841_354_044_333_475,
+        16_398_895_984_059,
+        755_974_180_946_558,
+        900_171_276_175_154,
+        1_821_297_809_914_039,
+    ]),
+};
 
 /// RFC 8032 Ed25519 (PureEdDSA over Curve25519 with SHA-512).
 pub struct Ed25519;
@@ -735,19 +857,6 @@ fn expand_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
     a[31] &= 127;
     a[31] |= 64;
     (a, prefix)
-}
-
-/// Width-5 non-adjacent form of a 256-bit scalar.
-///
-/// Each non-zero digit is odd and lies in `[-15, 15]`, and no two non-zero
-/// digits are adjacent, which is what keeps the density near one in six. The
-/// array has room to run past the top of the scalar.
-///
-/// Variable time by construction: the loop length and the digit pattern depend
-/// on the scalar. See [`Point::mul_scalar_vartime`] for when that is allowed.
-#[cfg(any(not(feature = "std"), test))]
-fn wnaf5(scalar: &[u8; 32]) -> [i8; 258] {
-    wnaf(scalar, 5)
 }
 
 /// Width-`w` non-adjacent form of a 256-bit scalar.
@@ -1030,7 +1139,7 @@ impl Ed25519VerifyKey {
         #[cfg(feature = "std")]
         let lhs = double_scalar_mul_vartime(&self.neg_a, &k, &s);
         #[cfg(not(feature = "std"))]
-        let lhs = mul_basepoint(&s).add(&self.neg_a.mul_scalar_vartime(&k));
+        let lhs = double_scalar_mul_vartime_no_table(&self.neg_a, &k, &s);
 
         if lhs.eq_projective(&r_point) {
             Ok(())
@@ -1359,52 +1468,116 @@ mod tests {
         assert_eq!(checked, 9, "the comparison did not run");
     }
 
-    /// The variable-time path must agree with the constant-time one.
-    ///
-    /// RFC 8032's vectors reach it with a handful of scalars, which says little
-    /// about a recoding whose digit pattern is different for every scalar. This
-    /// drives both over scalars picked to stress the recoding: zero, one, a
-    /// value that carries at every position, alternating bits, and the top of
-    /// the range.
-    #[test]
-    fn the_vartime_multiplication_agrees_with_the_ladder() {
-        let p = basepoint();
-
+    /// Scalars that exercise the signed radix-16 recoding at its edges: digits
+    /// of exactly 8, which carry; runs of 7 and 9 either side of that; the
+    /// largest value the recoding accepts; the group order less one; and the
+    /// shape of a clamped secret.
+    fn windowed_scalars() -> std::vec::Vec<[u8; 32]> {
         let mut one = [0u8; 32];
         one[0] = 1;
-        let mut two = [0u8; 32];
-        two[0] = 2;
+        let mut eight = [0u8; 32];
+        eight[0] = 8;
         let mut top = [0xffu8; 32];
         top[31] = 0x7f;
+        let mut clamped = [0x9du8; 32];
+        clamped[0] &= 248;
+        clamped[31] &= 127;
+        clamped[31] |= 64;
+        let mut l_minus_1 = scalar::L;
+        l_minus_1[0] -= 1;
+        let mut out = std::vec![[0u8; 32], one, eight, top, clamped, l_minus_1];
+        for fill in [0x88u8, 0x77, 0x99, 0x55, 0xaa] {
+            let mut s = [fill; 32];
+            s[31] &= 0x7f;
+            out.push(s);
+        }
+        out
+    }
+
+    /// The `no_std` signing path against the bit-at-a-time ladder, on the
+    /// basepoint and on a point that is not.
+    ///
+    /// Tests run with `std`, where signing takes the precomputed table, so
+    /// without this the windowed path would be compiled into embedded builds
+    /// and executed by nothing.
+    /// Every coordinate, not just the compressed form: a wrong `T` still
+    /// compresses correctly, since compression reads only `X`, `Y` and `Z`,
+    /// and would corrupt every addition that reads it.
+    #[test]
+    fn the_basepoint_constant_is_the_decompressed_encoding() {
+        let decoded = Point::decompress(&BASEPOINT_COMPRESSED).expect("the RFC 8032 basepoint");
+        let zinv = decoded.z.invert();
+        for (name, constant, from_encoding) in [
+            ("x", BASEPOINT.x, decoded.x.mul(&zinv)),
+            ("y", BASEPOINT.y, decoded.y.mul(&zinv)),
+            ("t", BASEPOINT.t, decoded.t.mul(&zinv)),
+        ] {
+            assert_eq!(
+                constant.to_bytes(),
+                from_encoding.to_bytes(),
+                "{name} differs"
+            );
+        }
+        assert_eq!(BASEPOINT.z.to_bytes(), Fe::ONE.to_bytes());
+        assert_eq!(BASEPOINT.compress(), BASEPOINT_COMPRESSED);
+    }
+
+    #[test]
+    fn the_windowed_multiplication_agrees_with_the_ladder() {
+        let b = basepoint();
+        let mut seven = [0u8; 32];
+        seven[0] = 7;
+        let p = b.mul_scalar(&seven);
 
         let mut checked = 0;
-        for scalar in [
-            [0u8; 32],
-            one,
-            two,
-            [0xffu8; 32],
-            [0x55u8; 32],
-            [0xaau8; 32],
-            top,
-            [0x9du8; 32],
-        ] {
-            let fast = p.mul_scalar_vartime(&scalar);
-            let slow = p.mul_scalar(&scalar);
-            assert_eq!(
-                fast.compress(),
-                slow.compress(),
-                "vartime and ladder differ for {scalar:02x?}"
-            );
-            checked += 1;
+        for point in [b, p] {
+            for scalar in windowed_scalars() {
+                assert_eq!(
+                    mul_scalar_windowed(&point, &scalar).compress(),
+                    point.mul_scalar(&scalar).compress(),
+                    "windowed and ladder differ for {scalar:02x?}"
+                );
+                checked += 1;
+            }
         }
-        assert_eq!(checked, 8, "the comparison did not run");
+        assert!(checked >= 20, "only {checked} comparisons ran");
+    }
+
+    /// The `no_std` verification path against the tabled one and against two
+    /// separate ladders, which share no code with either.
+    #[test]
+    fn the_untabled_double_multiplication_agrees() {
+        let b = basepoint();
+        let mut checked = 0;
+        for (i, k) in windowed_scalars().into_iter().enumerate() {
+            let mut seed = [0u8; 32];
+            seed[0] = 3 + i as u8;
+            let a = b.mul_scalar(&seed);
+            for s in [k, [0xffu8; 32], [0x9du8; 32]] {
+                let untabled = double_scalar_mul_vartime_no_table(&a, &k, &s);
+                let tabled = double_scalar_mul_vartime(&a, &k, &s);
+                let ladders = a.mul_scalar(&k).add(&b.mul_scalar(&s));
+                assert_eq!(
+                    untabled.compress(),
+                    tabled.compress(),
+                    "k={k:02x?} s={s:02x?}"
+                );
+                assert_eq!(
+                    untabled.compress(),
+                    ladders.compress(),
+                    "k={k:02x?} s={s:02x?}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 30, "only {checked} comparisons ran");
     }
 
     /// The recoding must represent the scalar, with the digits it promises.
     #[test]
     fn the_wnaf_digits_are_odd_sparse_and_faithful() {
         for scalar in [[1u8; 32], [0x9du8; 32], [0xffu8; 32], [0x55u8; 32]] {
-            let naf = wnaf5(&scalar);
+            let naf = wnaf(&scalar, 5);
 
             let mut previous_nonzero: Option<usize> = None;
             for (i, d) in naf.iter().enumerate() {

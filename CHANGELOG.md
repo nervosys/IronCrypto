@@ -3,6 +3,43 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Changed
+
+- **Ed25519 on `no_std` is two to three times faster.** Embedded builds had
+  none of the work that made the `std` path fast, because that work was tied
+  to a 40 KB table cached in a `OnceLock`. The parts that need no storage now
+  run there too. Signing multiplies the basepoint with the table's signed
+  radix-16 method against one window of eight multiples, built on the stack
+  and discarded: 252 doublings and 64 additions, where the bit-at-a-time
+  ladder did 256 of each, still constant time. Verification computes `[S]B`
+  and `[k]A` over one shared chain of doublings, as `std` does, with the
+  basepoint's odd multiples built per call. The basepoint itself is now a
+  constant rather than decompressed, a field square root, on every call.
+  Measured on one x86-64 machine with `ic-ec` built without `std`, medians of
+  four interleaved rounds: signing 88 to 45 µs, verification 134 to 46 µs,
+  public-key derivation 87 to 43 µs. Verification without `std` now matches
+  verification with it. The `std` path is unchanged within noise; its
+  verification loop is now shared with the `no_std` one and was measured
+  before and after.
+
+### Tests
+
+- The new paths are compiled into the ordinary test suite, which runs with
+  `std` and so would otherwise never execute them: the windowed multiplication
+  against the ladder on scalars chosen for the recoding's carries, and the
+  table-free verification against both the tabled one and two independent
+  ladders. Dropping the sign, shifting the lookup by one, or swapping
+  addition for subtraction each fails them. Separately, an `ic-ec` built
+  without `std` passes the RFC 8032 self-test and produces the `std` build's
+  public keys and signatures byte for byte, over 64 keys.
+- The basepoint's constant limbs were computed outside the crate from
+  `y = 4/5` and the curve equation. A test holds every coordinate, `T`
+  included, to what decompressing the RFC 8032 encoding gives. A wrong `T`
+  compresses correctly and corrupts every addition, so compression alone would
+  not catch it; the test fails when one limb of `T` is off by one.
+
 ## 0.2.0
 
 Contains breaking changes to `ic-pkix` and `ic-ec`, and removes a handful of

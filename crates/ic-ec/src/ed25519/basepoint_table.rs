@@ -37,12 +37,16 @@
 //! Behind `std`, because it is built once into a `OnceLock` on first use rather
 //! than written into the binary. Forty kilobytes of tables is a reasonable
 //! trade on a server and a bad one on a microcontroller, and this library
-//! targets both; `no_std` keeps the bit-at-a-time path, which is correct and
-//! needs no storage at all.
+//! targets both. `no_std` uses the same signed radix-16 digits against a
+//! single window of `1..=8` times the basepoint, built on the stack per call
+//! and discarded -- `mul_scalar_windowed` in the parent module. That keeps the
+//! 64 additions and gives back the doublings, 252 of them, which is what forty
+//! kilobytes buys. It is still about twice as fast as the bit-at-a-time ladder
+//! it replaced there, and needs no storage that outlives the call.
 
 use ic_core::ct::Choice;
 
-use super::{basepoint, AffineNiels, Point};
+use super::{basepoint, signed_digits, AffineNiels, Point};
 
 /// Digits per scalar, radix 16 over 256 bits.
 const DIGITS: usize = 64;
@@ -137,41 +141,6 @@ impl Table {
         }
         acc
     }
-}
-
-/// The scalar as 64 signed radix-16 digits, each in `[-8, 8]`.
-///
-/// A nibble above 8 becomes `nibble - 16` with a carry into the next digit,
-/// which is what keeps the table to the positive multiples.
-///
-/// Only the first 63 digits are recoded. The last one is left to absorb the
-/// final carry, because a carry *out* of the top would be a factor of `16^64`
-/// with nowhere to go -- silently dropping it would give the wrong point. That
-/// works because every scalar reaching here has its top byte at most 127: the
-/// clamped secret has bit 255 cleared by construction, and `r` and `s` are
-/// reduced modulo the group order and so are far smaller. The top nibble is
-/// then at most 7, one carry takes it to 8, and 8 is in range.
-///
-/// The first version of this recoded all 64 and dropped that carry. The
-/// agreement test below caught it.
-fn signed_digits(scalar: &[u8; 32]) -> [i8; DIGITS] {
-    debug_assert!(
-        scalar[31] <= 127,
-        "the top digit can only absorb the final carry for scalars below 2^255"
-    );
-
-    let mut nibbles = [0i8; DIGITS];
-    for (i, byte) in scalar.iter().enumerate() {
-        nibbles[i * 2] = (byte & 0x0f) as i8;
-        nibbles[i * 2 + 1] = (byte >> 4) as i8;
-    }
-
-    for i in 0..DIGITS - 1 {
-        let carry = (nibbles[i] + 8) >> 4;
-        nibbles[i] -= carry << 4;
-        nibbles[i + 1] += carry;
-    }
-    nibbles
 }
 
 /// The table, built once.
