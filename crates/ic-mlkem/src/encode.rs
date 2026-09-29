@@ -24,16 +24,32 @@ use crate::poly::{Poly, N, Q};
 /// `Compress_d(x)`, FIPS 203 equation 4.7.
 ///
 /// Defined as `round((2^d / q) * x) mod 2^d`. Written with integer arithmetic
-/// so the rounding is exact and the timing does not depend on the value: a
-/// floating-point version would round differently on different targets, and a
-/// data-dependent branch would leak the coefficient.
+/// so the rounding is exact: a floating-point version would round differently
+/// on different targets.
+///
+/// # No division
+///
+/// The quotient by `q` is an estimate by multiplication, corrected once by a
+/// mask. It used to be `/ q`, and the comment here said its timing did not
+/// depend on the value. On most targets the compiler does turn division by a
+/// constant into a multiplication -- but Cortex-M0 has no instruction for the
+/// high half of a product, so there it called the library's division routine,
+/// whose time depends on the dividend: the KyberSlash channel, on the
+/// ciphertext `decapsulate` recomputes from secret data. Found reading the
+/// compiled code. The multiplication below needs only the low 32 bits.
 #[inline]
 pub fn compress(x: i16, d: u32) -> u16 {
     debug_assert!((1..=12).contains(&d));
-    // x is assumed already in [0, q).
-    let x = x as u32;
-    let shifted = (x << d) + (Q as u32) / 2;
-    ((shifted / (Q as u32)) & ((1u32 << d) - 1)) as u16
+    // x is assumed already in [0, q), so t is below 2^24.
+    let t = ((x as u32) << d) + (Q as u32) / 2;
+    // 40318 = floor(2^27 / q). (t >> 8) is below 2^16, so the product is below
+    // 2^32, and the estimate is floor(t / q) or one less -- the tests check
+    // every x and d.
+    let mut e = ((t >> 8) * 40318) >> 19;
+    let r = t - e * (Q as u32);
+    // One more if the remainder reached q.
+    e += (Q as u32 - 1).wrapping_sub(r) >> 31;
+    (e & ((1u32 << d) - 1)) as u16
 }
 
 /// `Decompress_d(y)`, FIPS 203 equation 4.8: `round((q / 2^d) * y)`.
@@ -229,7 +245,7 @@ mod tests {
     /// arithmetic so no intermediate can overflow differently.
     #[test]
     fn compression_matches_the_formula() {
-        for d in 1..=11u32 {
+        for d in 1..=12u32 {
             for x in 0..Q {
                 let got = compress(x, d);
                 let want = {

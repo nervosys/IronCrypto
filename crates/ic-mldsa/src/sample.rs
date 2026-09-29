@@ -83,7 +83,12 @@ fn coeff_from_half_byte(b: u8, eta: i32) -> Option<i32> {
     match eta {
         2 => {
             if b < 15 {
-                Some(2 - (b as i32 % 5))
+                // `b mod 5` as `b - 5 * floor(205 b / 1024)`, exact for
+                // b < 15, rather than `%`: `b` becomes a secret-key
+                // coefficient, and Cortex-M0 has no divider, so `%` there
+                // is a library call whose time depends on `b`.
+                let b = b as i32;
+                Some(2 - (b - 5 * ((205 * b) >> 10)))
             } else {
                 None
             }
@@ -253,6 +258,20 @@ fn bounded_xof(rho: &[u8; 64], nonce: u16) -> XofReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coeff_from_half_byte_is_the_specification_for_every_nibble() {
+        for b in 0..16u8 {
+            let want2 = if b < 15 {
+                Some(2 - (b as i32 % 5))
+            } else {
+                None
+            };
+            let want4 = if b < 9 { Some(4 - b as i32) } else { None };
+            assert_eq!(coeff_from_half_byte(b, 2), want2, "eta 2, b {b}");
+            assert_eq!(coeff_from_half_byte(b, 4), want4, "eta 4, b {b}");
+        }
+    }
 
     fn seed32(n: u8) -> [u8; 32] {
         let mut s = [0u8; 32];

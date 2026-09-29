@@ -123,8 +123,35 @@ Curve25519, NIST and RSA vector and the rustls suite pass through them. The
 64-bit targets are unchanged, and were measured at parity.
 
 Poly1305 and POLYVAL were checked on both 32-bit targets, and their only
-branches are on public lengths and loop indices. AES, ChaCha20, SHA-2, SHA-3,
-ML-KEM and ML-DSA were not examined at this level.
+branches are on public lengths and loop indices.
+
+AES, ChaCha20, the AEAD and key-wrap modes, SHA-2, SHA-3, BLAKE2, ML-KEM,
+ML-DSA and `ic-core`'s codecs and comparisons were examined the same way on
+2026-09-29, on 32-bit RISC-V first and then, for anything found, on all four
+targets. Every forward conditional branch was traced to its source line, and
+every division instruction or division-library call was listed, since
+division takes time that depends on its operands on most of these CPUs. What
+remained on secret data was fixed: the codecs and AES-KWP below, and three
+divisions:
+
+- **ML-DSA** divided by `2*gamma2` and reduced modulo `q` with division when
+  splitting `w - c*s2` in signing and `t` in key generation -- on every
+  target, x86-64 included -- and branched on the fold in `decompose`. Its
+  source said these functions saw only public values; `t0` is secret key and
+  `w - c*s2` depends on `s2`. Both splits now use shifts, masks and small
+  multiplications, compared with FIPS 204's algorithms over every residue.
+- **ML-DSA key generation** on Cortex-M0 reduced each secret-key coefficient
+  with `% 5`, a library call there.
+- **ML-KEM** compression divided by `q`. Most targets compile that into a
+  multiplication; Cortex-M0, which has no instruction for a product's high
+  half, called the division routine, in `decapsulate` -- the KyberSlash
+  channel. It is now a 32-bit multiplication and one masked correction.
+
+What remains is public: lengths and positions; rejection sampling from the
+public matrix seed, and the rejections of secret-coefficient sampling and of
+signing that FIPS 204 permits to be observable; verification; self-tests; the
+AES key schedule's round index; and Argon2's reference-index arithmetic, in the
+modes whose memory addressing depends on the password by design.
 
 **The hex and Base64 codecs branched on secret characters, on every target.**
 A PKCS#8 private key in PEM is Base64, and the CLI and MCP server take keys as

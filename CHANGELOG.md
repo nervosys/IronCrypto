@@ -7,6 +7,18 @@ all of them.
 
 ### Security
 
+- **ML-DSA and ML-KEM no longer divide secret-dependent values.** ML-DSA's
+  `decompose` and `power2round` divided by `2*gamma2` and reduced modulo `q`
+  by division, on signing's `w - c*s2` and key generation's `t0` -- on every
+  target, x86-64 included -- and `decompose` branched on its fold. The module
+  said those values were public; they are not. Both now use shifts, masks and
+  small multiplications (FIPS 204's reference forms), checked against
+  Algorithms 35 and 36 over every residue. ML-DSA's secret-coefficient
+  sampler and ML-KEM's compression each compiled to a division-library call
+  on Cortex-M0, which has no high-half multiply; ML-KEM's is the KyberSlash
+  channel, in `decapsulate`. Both are now multiplications. Outputs are
+  unchanged -- every ACVP vector passes -- and x86-64 timing measured at
+  parity.
 - **AES-KWP unwrap no longer branches on the unauthenticated length.** The
   length field is decrypted before anything is authenticated; its
   plausibility check short-circuited and the padding check looped from it, so
