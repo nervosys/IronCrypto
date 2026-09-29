@@ -26,7 +26,6 @@ use std::time::Instant;
 
 use aes::cipher::{BlockEncrypt, KeyInit as AesKeyInit};
 use aes_gcm::aead::AeadInPlace;
-use aes_gcm::KeyInit as _;
 use ic_core::traits::{Aead, BlockCipher, Digest, KeyAgreement, Mac, SignatureScheme};
 
 const SIZE: usize = 4 * 1024 * 1024;
