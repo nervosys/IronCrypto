@@ -524,6 +524,7 @@ builds were going.
 
 | operation | against the fastest Rust implementation |
 |---|---|
+| P-256 public key | **~2.2x faster** |
 | ECDSA P-256, sign | **~2.0x faster** |
 | AES-256-GCM | **~1.4x faster** |
 | ECDSA P-256, verify | **~1.4x faster** |
@@ -532,6 +533,7 @@ builds were going.
 | Ed25519, sign | **~1.17x faster** |
 | SHA3-256 | **~1.05x faster** |
 | AES-256 blocks, portable | level |
+| ECDH P-256 | level |
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
@@ -541,6 +543,13 @@ builds were going.
 The portable AES row is against RustCrypto's *software* AES, which is fixsliced
 and is the like-for-like comparison; against AES-NI it is ~133x, which measures
 the instruction set rather than the implementation.
+
+ECDH P-256 was 2.5x behind until 0.2.1, when arbitrary-point multiplication
+moved from a bit-at-a-time ladder to four-bit windows -- the method RustCrypto
+uses, which is why it now lands either side of parity rather than ahead.
+Public-key derivation had been skipping the generator table altogether, a
+multiplication of the generator by the ladder while signing used the table;
+nothing compared it against anything, which is why these two rows exist now.
 
 SHA-512 was reported as level here for a while, on medians that straddled
 parity. Best-of-nine is the better estimator on a shared machine and it puts

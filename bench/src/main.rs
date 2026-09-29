@@ -445,9 +445,27 @@ Edwards point primitives (lower is better)");
     let mut ecdh_pk = [0u8; 65];
     iron_crypto::ec::EcdhP256::public_key(&[0x5au8; 32], &mut ecdh_pk).unwrap();
     let mut shared_p = [0u8; 32];
-    per_op("iron-crypto ecdh p-256 (one scalar mul)", 200, 3, || {
+    let c1 = per_op("iron-crypto ecdh p-256 (one scalar mul)", 200, 3, || {
         iron_crypto::ec::EcdhP256::agree(&[0x5au8; 32], &ecdh_pk, &mut shared_p).unwrap();
     });
+    let c_sk = p256::SecretKey::from_bytes(&[0x5au8; 32].into()).unwrap();
+    let c_pk = p256::PublicKey::from_sec1_bytes(&ecdh_pk).unwrap();
+    let c2 = per_op("p256 crate ecdh", 200, 3, || {
+        let _ = p256::ecdh::diffie_hellman(c_sk.to_nonzero_scalar(), c_pk.as_affine());
+    });
+    verdict("ecdh p-256 agreement", c1, c2, false);
+
+    // Public-key derivation is one multiplication of the generator, so it
+    // should cost what the table makes it cost. It did not until 0.2.1: it
+    // bypassed the table, and nothing compared it against anything.
+    let mut k_pk = [0u8; 65];
+    let k1 = per_op("iron-crypto p-256 public key", 200, 3, || {
+        iron_crypto::ec::EcdhP256::public_key(&[0x5au8; 32], &mut k_pk).unwrap();
+    });
+    let k2 = per_op("p256 crate public key", 200, 3, || {
+        let _ = c_sk.public_key();
+    });
+    verdict("p-256 public key", k1, k2, false);
 
     let p_sk = [0x5au8; 32];
     let mut p_sig = [0u8; 64];
