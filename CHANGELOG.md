@@ -3,7 +3,11 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.4
+
+X.509 certificate issuance, and interoperability tests against OpenSSL.
+Additions only: no existing code path changed, so everything 0.2.3 produced,
+this produces.
 
 ### Added
 
