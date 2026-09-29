@@ -44,10 +44,25 @@ current answer and this file is not.
 
 Interoperability is a separate question: matching NIST's vectors shows the
 algorithms are right, not that a handshake with some other implementation
-completes. For two parameter sets there is now evidence of that as well, from
-outside this repository. IronSocketLayer, a TLS 1.3 stack built on these
-crates, reports against OpenSSL 3.5 (nervosys/IronSocketLayer, commit
-692e800):
+completes. For all six parameter sets there is now evidence of that as well,
+checked here against OpenSSL 3.5.7. `iron-crypto/tests/openssl_interop.rs` runs
+on every build from fixtures OpenSSL produced
+(`testvectors/openssl-ml-kem.json`, `testvectors/openssl-ml-dsa.json`):
+
+- Key generation from OpenSSL's seed reproduces OpenSSL's keys, both halves,
+  for every set.
+- ML-DSA signatures made deterministically here are byte for byte OpenSSL's,
+  with and without a context string, and OpenSSL's hedged signatures verify
+  here.
+- ML-KEM ciphertexts from OpenSSL decapsulate here to OpenSSL's secret.
+
+Two directions need OpenSSL at test time and were checked once by hand
+instead, on 2026-09-29: ML-KEM ciphertexts made here decapsulate in OpenSSL to
+the same secret, and hedged ML-DSA signatures made here verify in OpenSSL, for
+all six sets. `docs/FIPS.md` records how.
+
+Beyond that, IronSocketLayer, a TLS 1.3 stack built on these crates, reports
+against OpenSSL 3.5 (nervosys/IronSocketLayer, commit 692e800):
 
 - ML-KEM-1024 key exchange, alone and hybridised with P-384, interoperates in
   both directions.
@@ -56,8 +71,8 @@ crates, reports against OpenSSL 3.5 (nervosys/IronSocketLayer, commit
   directions; OpenSSL-generated ML-DSA-87 keys regenerate the same public key
   here; and OpenSSL's ML-DSA-87 signatures verify here.
 
-That is reported, not reproduced in this repository's own tests, and it
-covers those two sets. The other four rest on the NIST vectors alone.
+Those two items are reported rather than reproduced here: they involve
+certificates and handshakes, which this repository does not build.
 
 **Constant time is a property of the compiled code, and on 32-bit RISC-V it
 does not hold for the curves or RSA.** The source is written without branches

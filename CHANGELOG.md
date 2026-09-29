@@ -3,6 +3,21 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Tests
+
+- **All six ML-KEM and ML-DSA parameter sets are checked against OpenSSL
+  3.5.7**, from fixtures OpenSSL produced: keys regenerated from OpenSSL's
+  seeds match OpenSSL's, deterministic ML-DSA signatures equal OpenSSL's byte
+  for byte with and without a context string, OpenSSL's hedged signatures
+  verify, and OpenSSL's ML-KEM ciphertexts decapsulate to its secrets. The
+  NIST vectors show each set is correct; these show it reads other
+  implementations' keys, ciphertexts and signatures the same way. The reverse
+  directions -- OpenSSL decapsulating ciphertexts made here and verifying
+  hedged signatures made here -- were checked by hand for all six, since they
+  need OpenSSL at test time. `SECURITY.md` says which is which.
+
 ## 0.2.3
 
 Every parameter set of both post-quantum standards, and faster AES-GCM.

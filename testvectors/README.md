@@ -56,6 +56,7 @@ that effort in the most confusing way available.
 | `ml-kem-512-keygen.json`, `ml-kem-1024-keygen.json` | as for 768 | the same file, `ML-KEM-512` and `ML-KEM-1024` groups. **Bundled** |
 | `ml-kem-512-encap.json`, `ml-kem-1024-encap.json` | as for 768 | the same file, `ML-KEM-512` and `ML-KEM-1024` groups. **Bundled** |
 | `ml-dsa-65-keygen.json` | `seed`, `pk`, `sk` | ACVP `ML-DSA-keyGen-FIPS204`, `AFT` groups, `ML-DSA-65` only. **Bundled** |
+| `openssl-ml-kem.json`, `openssl-ml-dsa.json` | `seed` and keys; `c`, `k` (ML-KEM); `message`, `context`, `signature_deterministic`, `signature_hedged` (ML-DSA) | Produced by OpenSSL 3.5.7 for this repository, one ML-KEM case and two ML-DSA cases per parameter set; the commands are in each file's `source`. An independent implementation, not NIST vectors: they test interoperation, where the ACVP files test correctness. **Bundled** |
 | `ml-dsa-44-*.json`, `ml-dsa-87-*.json` | as for 65 | the same two files, `ML-DSA-44` and `ML-DSA-87` groups: key generation, and signatures from the external pure groups. **Bundled** |
 | `ml-dsa-65-siggen.json` | `sk`, `message`, `context`, `rnd`, `signature` | ACVP `ML-DSA-sigGen-FIPS204`. Use the deterministic groups, or supply `rnd` for hedged ones. **Bundled**: both |
 
