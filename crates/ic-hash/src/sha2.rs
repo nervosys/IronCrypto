@@ -300,10 +300,11 @@ impl Core256 {
         let zeros = (55 + 64 - (self.buffered % 64)) % 64;
         pad[1 + zeros..1 + zeros + 8].copy_from_slice(&bit_len.to_be_bytes());
         self.update_no_count(&pad[..1 + zeros + 8]);
-        let out = self.h;
-        self.buf.zeroize();
-        self.h.zeroize();
-        out
+        // `self` is dropped on return, and `Drop` wipes `h` and `buf`. They
+        // used to be wiped here as well, so every hash wiped its state twice;
+        // HMAC finishes two hashes per tag, so that was four wipes of 96 bytes
+        // where two do the same job.
+        self.h
     }
 
     /// Absorb padding without disturbing the message-length counter.

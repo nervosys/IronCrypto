@@ -24,36 +24,40 @@
 
 use core::arch::x86_64::*;
 
-/// Multiply `x` by `h` in GCM's GF(2^128), in place.
-///
-/// # Safety
-///
-/// Requires the `pclmulqdq` and `ssse3` target features. The intrinsics
-/// themselves are safe once those are enabled in scope, so only the
-/// raw-pointer loads and stores below are wrapped in an `unsafe` block.
+/// The byte-reversal shuffle, turning GCM's big-endian byte order into the
+/// little-endian order the multiplier expects, and back.
+#[inline]
 #[target_feature(enable = "pclmulqdq,ssse3")]
-pub unsafe fn mul(x: &mut [u8; 16], h: &[u8; 16]) {
-    // Byte-reversal shuffle, turning GCM's big-endian byte order into the
-    // little-endian order the multiplier expects.
-    let mask = _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+fn byte_swap() -> __m128i {
+    _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+}
 
-    // SAFETY: both operands are exactly 16 bytes and the loads are unaligned.
-    let (a, b) = unsafe {
-        (
-            _mm_shuffle_epi8(_mm_loadu_si128(x.as_ptr() as *const __m128i), mask),
-            _mm_shuffle_epi8(_mm_loadu_si128(h.as_ptr() as *const __m128i), mask),
-        )
-    };
+/// The unreduced 128x128 carry-less product, as `(lo, mid, hi)` with `mid`
+/// not yet folded in.
+///
+/// Returned unfolded so that a caller summing several products can sum these
+/// three and fold, shift and reduce once: every step after the multiplies is
+/// linear over GF(2), so reducing a sum is the sum of the reductions.
+#[inline]
+#[target_feature(enable = "pclmulqdq,ssse3")]
+fn product(a: __m128i, b: __m128i) -> (__m128i, __m128i, __m128i) {
+    (
+        _mm_clmulepi64_si128(a, b, 0x00),
+        _mm_xor_si128(
+            _mm_clmulepi64_si128(a, b, 0x10),
+            _mm_clmulepi64_si128(a, b, 0x01),
+        ),
+        _mm_clmulepi64_si128(a, b, 0x11),
+    )
+}
 
-    // Schoolbook 128x128 carry-less product into the pair (lo, hi).
-    let mut lo = _mm_clmulepi64_si128(a, b, 0x00);
-    let mut hi = _mm_clmulepi64_si128(a, b, 0x11);
-    let mid = _mm_xor_si128(
-        _mm_clmulepi64_si128(a, b, 0x10),
-        _mm_clmulepi64_si128(a, b, 0x01),
-    );
-    lo = _mm_xor_si128(lo, _mm_slli_si128(mid, 8));
-    hi = _mm_xor_si128(hi, _mm_srli_si128(mid, 8));
+/// Fold `mid` into the 256-bit product, undo the reflection's one-bit offset,
+/// and reduce modulo `x^128 + x^7 + x^2 + x + 1`.
+#[inline]
+#[target_feature(enable = "pclmulqdq,ssse3")]
+fn reduce(lo: __m128i, mid: __m128i, hi: __m128i) -> __m128i {
+    let mut lo = _mm_xor_si128(lo, _mm_slli_si128(mid, 8));
+    let mut hi = _mm_xor_si128(hi, _mm_srli_si128(mid, 8));
 
     // The reflected representation puts the product one bit low; shift the
     // whole 256-bit value left by one to line it back up.
@@ -65,8 +69,8 @@ pub unsafe fn mul(x: &mut [u8; 16], h: &[u8; 16]) {
     hi = _mm_or_si128(hi, _mm_slli_si128(carry_hi, 4));
     hi = _mm_or_si128(hi, _mm_srli_si128(carry_lo, 12));
 
-    // Reduce modulo x^128 + x^7 + x^2 + x + 1. The three shifts fold the top
-    // half down; the second group completes the reduction.
+    // The three shifts fold the top half down; the second group completes the
+    // reduction.
     let t = _mm_xor_si128(
         _mm_xor_si128(_mm_slli_epi32(lo, 31), _mm_slli_epi32(lo, 30)),
         _mm_slli_epi32(lo, 25),
@@ -79,7 +83,29 @@ pub unsafe fn mul(x: &mut [u8; 16], h: &[u8; 16]) {
         _mm_xor_si128(_mm_srli_epi32(lo, 7), spill),
     );
     lo = _mm_xor_si128(lo, fold);
-    let result = _mm_xor_si128(hi, lo);
+    _mm_xor_si128(hi, lo)
+}
+
+/// Multiply `x` by `h` in GCM's GF(2^128), in place.
+///
+/// # Safety
+///
+/// Requires the `pclmulqdq` and `ssse3` target features. The intrinsics
+/// themselves are safe once those are enabled in scope, so only the
+/// raw-pointer loads and stores below are wrapped in an `unsafe` block.
+#[target_feature(enable = "pclmulqdq,ssse3")]
+pub unsafe fn mul(x: &mut [u8; 16], h: &[u8; 16]) {
+    let mask = byte_swap();
+
+    // SAFETY: both operands are exactly 16 bytes and the loads are unaligned.
+    let (a, b) = unsafe {
+        (
+            _mm_shuffle_epi8(_mm_loadu_si128(x.as_ptr() as *const __m128i), mask),
+            _mm_shuffle_epi8(_mm_loadu_si128(h.as_ptr() as *const __m128i), mask),
+        )
+    };
+    let (lo, mid, hi) = product(a, b);
+    let result = reduce(lo, mid, hi);
 
     // SAFETY: `x` is exactly 16 bytes and the store is unaligned.
     unsafe {
@@ -87,6 +113,75 @@ pub unsafe fn mul(x: &mut [u8; 16], h: &[u8; 16]) {
             x.as_mut_ptr() as *mut __m128i,
             _mm_shuffle_epi8(result, mask),
         );
+    }
+}
+
+/// Absorb `blocks` into the GHASH accumulator `acc`, eight blocks at a time.
+///
+/// `powers[i]` is `H^(i+1)`, in GCM byte order. Each group of eight is
+/// `Y' = (Y ^ X0)*H^8 ^ X1*H^7 ^ .. ^ X7*H`: eight independent products,
+/// summed unreduced and reduced once.
+///
+/// Where the time went before: the four-block path called [`mul`] per
+/// product, and every call byte-swapped `H` again, reduced its own product,
+/// and passed the result back through memory; `mul` cannot inline into a
+/// caller built without these features. Measured on a 16 KiB buffer that was
+/// about 29 cycles a block and three quarters of AES-128-GCM. Here the powers
+/// are swapped once per call, the accumulator stays in a register for the
+/// whole buffer, and a block costs four multiplies and its share of one
+/// reduction.
+///
+/// # Safety
+///
+/// Requires the `pclmulqdq` and `ssse3` target features. `blocks.len()` must
+/// be a multiple of 128; the caller handles the tail.
+#[target_feature(enable = "pclmulqdq,ssse3")]
+pub unsafe fn absorb8(acc: &mut [u8; 16], powers: &[[u8; 16]; 8], blocks: &[u8]) {
+    debug_assert_eq!(blocks.len() % 128, 0);
+    let mask = byte_swap();
+    let mut h = [_mm_setzero_si128(); 8];
+    for (slot, p) in h.iter_mut().zip(powers) {
+        // SAFETY: each power is exactly 16 bytes and the load is unaligned.
+        *slot = _mm_shuffle_epi8(
+            unsafe { _mm_loadu_si128(p.as_ptr() as *const __m128i) },
+            mask,
+        );
+    }
+    // SAFETY: `acc` is exactly 16 bytes and the load is unaligned.
+    let mut y = _mm_shuffle_epi8(
+        unsafe { _mm_loadu_si128(acc.as_ptr() as *const __m128i) },
+        mask,
+    );
+
+    for group in blocks.chunks_exact(128) {
+        let p = group.as_ptr();
+        let (mut lo, mut mid, mut hi) = (
+            _mm_setzero_si128(),
+            _mm_setzero_si128(),
+            _mm_setzero_si128(),
+        );
+        for i in 0..8 {
+            // SAFETY: `group` is exactly 128 bytes, so block `i` is in bounds,
+            // and the load is unaligned.
+            let mut x = _mm_shuffle_epi8(
+                unsafe { _mm_loadu_si128(p.add(i * 16) as *const __m128i) },
+                mask,
+            );
+            if i == 0 {
+                x = _mm_xor_si128(x, y);
+            }
+            // The oldest block takes the highest power.
+            let (l, m, u) = product(x, h[7 - i]);
+            lo = _mm_xor_si128(lo, l);
+            mid = _mm_xor_si128(mid, m);
+            hi = _mm_xor_si128(hi, u);
+        }
+        y = reduce(lo, mid, hi);
+    }
+
+    // SAFETY: `acc` is exactly 16 bytes and the store is unaligned.
+    unsafe {
+        _mm_storeu_si128(acc.as_mut_ptr() as *mut __m128i, _mm_shuffle_epi8(y, mask));
     }
 }
 

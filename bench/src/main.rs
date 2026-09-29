@@ -219,6 +219,22 @@ fn main() {
     });
     verdict("hmac-sha256", m1, m2, true);
 
+    // Short inputs, as a TLS key schedule makes them. The bulk row above could
+    // not see that SHA-256 sent every buffered and final padding block past
+    // SHA-NI: over 4 MiB there is one such block, and over 200 bytes there are
+    // most of them.
+    let short = &data[..200];
+    let s1 = per_op("iron-crypto hmac-sha256, 200 bytes", 200_000, 5, || {
+        let _ = iron_crypto::mac::HmacSha256::mac(&key, short).unwrap();
+    });
+    let s2 = per_op("rustcrypto hmac, 200 bytes", 200_000, 5, || {
+        use hmac::Mac as _;
+        let mut m = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).unwrap();
+        m.update(short);
+        let _ = m.finalize();
+    });
+    verdict("hmac-sha256, 200 bytes", s1, s2, false);
+
     // ---------------------------------------------------------- public key ---
     println!();
     println!("Public key, per operation (lower is better)");

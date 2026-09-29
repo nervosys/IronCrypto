@@ -13,8 +13,24 @@ pub trait Zeroize {
 }
 
 impl Zeroize for [u8] {
+    /// Eight bytes per volatile store, then the tail a byte at a time.
+    ///
+    /// A volatile store of a `[u8; 8]` is exactly as non-elidable as eight
+    /// volatile byte stores, and is one store rather than eight. That matters
+    /// because wipes are on hot paths: every SHA-2 state wipes its buffered
+    /// block when dropped, and HMAC drops two per tag, so byte-at-a-time
+    /// wiping was a measurable share of a short HMAC. `[u8; 8]` has the
+    /// alignment of `u8`, so the pointer cast needs nothing a byte slice
+    /// does not already guarantee, and no temporary larger than eight bytes
+    /// is involved -- which a single store of the whole array would need.
     fn zeroize(&mut self) {
-        for byte in self.iter_mut() {
+        let mut chunks = self.chunks_exact_mut(8);
+        for chunk in &mut chunks {
+            // SAFETY: `chunk` is exactly eight valid, uniquely-borrowed bytes,
+            // and `[u8; 8]` has alignment 1.
+            unsafe { core::ptr::write_volatile(chunk.as_mut_ptr() as *mut [u8; 8], [0u8; 8]) };
+        }
+        for byte in chunks.into_remainder() {
             // SAFETY: `byte` is a valid, aligned, uniquely-borrowed `u8`.
             unsafe { core::ptr::write_volatile(byte, 0) };
         }
@@ -125,6 +141,24 @@ mod tests {
         assert_eq!(z[0], 7);
         z[0] = 9;
         assert_eq!(z.get()[0], 9);
+    }
+
+    #[test]
+    fn eight_byte_chunks_and_the_tail_are_wiped_and_nothing_else() {
+        // Two whole chunks and a three-byte tail, inside a larger array whose
+        // bytes either side must survive: a chunked wipe that overran its
+        // slice would zero them.
+        let mut buf = [0xa5u8; 32];
+        buf[5..24].zeroize();
+        assert_eq!(&buf[..5], &[0xa5; 5]);
+        assert_eq!(&buf[5..24], &[0u8; 19]);
+        assert_eq!(&buf[24..], &[0xa5; 8]);
+        for len in 0..=17 {
+            let mut v = [0xffu8; 17];
+            v[..len].zeroize();
+            assert!(v[..len].iter().all(|&b| b == 0), "length {len}");
+            assert!(v[len..].iter().all(|&b| b == 0xff), "length {len}");
+        }
     }
 
     #[test]

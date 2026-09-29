@@ -526,7 +526,7 @@ builds were going.
 |---|---|
 | P-256 public key | **~2.2x faster** |
 | ECDSA P-256, sign | **~2.0x faster** |
-| AES-256-GCM | **~1.4x faster** |
+| AES-256-GCM | **~2.0x faster** |
 | ECDSA P-256, verify | **~1.4x faster** |
 | X25519 agreement | **~1.3x faster** |
 | AES-256 blocks, AES-NI | **~1.25x faster** |
@@ -537,6 +537,7 @@ builds were going.
 | ChaCha20-Poly1305 | level |
 | SHA-256 | level |
 | HMAC-SHA256 | level |
+| HMAC-SHA256, 200 bytes | ~1.15x slower |
 | SHA-512 | ~1.1x slower |
 | Ed25519, verify | ~1.25x slower |
 
@@ -550,6 +551,18 @@ uses, which is why it now lands either side of parity rather than ahead.
 Public-key derivation had been skipping the generator table altogether, a
 multiplication of the generator by the ladder while signing used the table;
 nothing compared it against anything, which is why these two rows exist now.
+
+AES-256-GCM was 1.4x ahead until GHASH, measured on its own, turned out to be
+three quarters of the time: it reduced every product and passed each one back
+through memory. Eight products summed and reduced once took it from 2.6 to 6.6
+GiB/s, and the AEAD from 1.8 to 3.1.
+
+Short HMAC is the one row still behind that wiping explains. RustCrypto's
+`hmac` does not zeroize by default; this library wipes both SHA-256 states and
+the padded key on every tag. Over 200 bytes that is most of the remaining
+difference, and it is a price this library pays on purpose. It was 3.5x behind
+ring in an IronSocketLayer measurement until SHA-256 stopped sending buffered
+and final blocks past SHA-NI.
 
 SHA-512 was reported as level here for a while, on medians that straddled
 parity. Best-of-nine is the better estimator on a shared machine and it puts
@@ -620,7 +633,7 @@ twice; `Ed25519::verify` still takes bytes and builds one per call.
 | primitive | how it is accelerated |
 |---|---|
 | AES | AES-NI, and ARMv8 crypto extensions behind a feature |
-| GHASH | `PCLMULQDQ`, four blocks per group so the carry chain does not serialise |
+| GHASH | `PCLMULQDQ`, eight blocks per group, summed unreduced and reduced once |
 | SHA-256 | SHA-NI |
 | ChaCha20 | AVX2, eight blocks at a time |
 | Poly1305 | four blocks per group, reducing once instead of four times |

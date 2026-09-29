@@ -83,7 +83,9 @@ pub(crate) fn portable_ghash_mul(x: &mut [u8; BLOCK_LEN], h: &[u8; BLOCK_LEN]) {
 /// The GHASH universal hash over a sequence of 16-byte blocks.
 struct Ghash {
     h: [u8; BLOCK_LEN],
-    /// `H^2`, `H^3`, `H^4`, for absorbing four blocks at a time.
+    /// `H`, `H^2` .. `H^8`: index `i` holds `H^(i+1)`. The first four serve
+    /// the four-block path; the rest the eight-block `PCLMULQDQ` kernel, and
+    /// are only computed once an input long enough to use them arrives.
     ///
     /// GHASH is a serial chain by definition -- each block's product feeds the
     /// next -- and on a CPU where one multiply has several cycles of latency
@@ -98,7 +100,10 @@ struct Ghash {
     /// identity is just distributivity over XOR in GF(2^128), and every product
     /// here is separately reduced, so this reuses `mul` exactly as it is rather
     /// than introducing a second reduction to get wrong.
-    powers: [[u8; BLOCK_LEN]; 3],
+    powers: [[u8; BLOCK_LEN]; 8],
+    /// Whether `powers[4..]` has been computed.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    high_powers: bool,
     acc: [u8; BLOCK_LEN],
     /// Whether the `PCLMULQDQ` multiply is available. Decided once per value,
     /// from the CPU alone, so it is not a side channel.
@@ -113,15 +118,18 @@ impl Ghash {
     fn new(h: [u8; BLOCK_LEN]) -> Self {
         let mut me = Self {
             h,
-            powers: [[0u8; BLOCK_LEN]; 3],
+            powers: [[0u8; BLOCK_LEN]; 8],
+            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            high_powers: false,
             acc: [0u8; BLOCK_LEN],
             #[cfg(all(target_arch = "x86_64", feature = "std"))]
             accelerated: ghash_accelerated(),
         };
         // H^2, H^3, H^4, each built from the previous one by the same multiply
         // the hot path uses. Once per key, off the hot path.
-        let mut p = h;
-        for slot in 0..3 {
+        me.powers[0] = h;
+        for slot in 1..4 {
+            let mut p = me.powers[slot - 1];
             me.mul_by(&mut p, &h);
             me.powers[slot] = p;
         }
@@ -156,7 +164,12 @@ impl Ghash {
         for j in 0..BLOCK_LEN {
             terms[0][j] ^= self.acc[j];
         }
-        let multipliers = [&self.powers[2], &self.powers[1], &self.powers[0], &self.h];
+        let multipliers = [
+            &self.powers[3],
+            &self.powers[2],
+            &self.powers[1],
+            &self.powers[0],
+        ];
         for (t, m) in terms.iter_mut().zip(multipliers) {
             self.mul_by(t, m);
         }
@@ -183,7 +196,26 @@ impl Ghash {
 
     /// Absorb `data`, zero-padding the final partial block.
     fn update_padded(&mut self, mut data: &[u8]) {
-        // Whole groups of four first; the tail falls through to the serial
+        // Whole groups of eight through the `PCLMULQDQ` kernel, which reduces
+        // once per group; see `clmul::absorb8`.
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if self.accelerated && data.len() >= BLOCK_LEN * 8 {
+            if !self.high_powers {
+                for slot in 4..8 {
+                    let mut p = self.powers[slot - 1];
+                    self.mul_by(&mut p, &self.h);
+                    self.powers[slot] = p;
+                }
+                self.high_powers = true;
+            }
+            let whole = data.len() - data.len() % (BLOCK_LEN * 8);
+            // SAFETY: `accelerated` is only true when `ghash_accelerated()`
+            // confirmed both `pclmulqdq` and `ssse3`, and `whole` is a
+            // multiple of 128 bytes.
+            unsafe { crate::clmul::absorb8(&mut self.acc, &self.powers, &data[..whole]) };
+            data = &data[whole..];
+        }
+        // Then whole groups of four; the tail falls through to the serial
         // path, which also handles the final partial block.
         while data.len() >= BLOCK_LEN * 4 {
             self.absorb4(&data[..BLOCK_LEN * 4]);
@@ -208,6 +240,11 @@ impl Drop for Ghash {
     fn drop(&mut self) {
         self.h.zeroize();
         self.acc.zeroize();
+        // Powers of `H` are as key-derived as `H` itself. These were not wiped
+        // before, when there were three of them.
+        for p in self.powers.iter_mut() {
+            p.zeroize();
+        }
     }
 }
 
@@ -428,6 +465,37 @@ mod tests {
         }
         assert_eq!(checked, 18, "the comparison did not run");
 
+        // The eight-block kernel with an accumulator already carrying state,
+        // as it does after the AAD: a short prefix first, then long inputs
+        // either side of a group boundary.
+        for (prefix, len) in [(17usize, 128usize), (16, 2048), (5, 2048 + 48), (33, 1023)] {
+            let data: std::vec::Vec<u8> = (0..prefix + len)
+                .map(|i| ((i as u64).wrapping_mul(0x2545_f491_4f6c_dd1d) >> 11) as u8)
+                .collect();
+            let (head, tail) = data.split_at(prefix);
+            let mut batched = Ghash::new(h);
+            batched.update_padded(head);
+            batched.update_padded(tail);
+
+            let mut serial = Ghash::new(h);
+            for part in [head, tail] {
+                for chunk in part.chunks(BLOCK_LEN) {
+                    let mut block = [0u8; BLOCK_LEN];
+                    block[..chunk.len()].copy_from_slice(chunk);
+                    for j in 0..BLOCK_LEN {
+                        serial.acc[j] ^= block[j];
+                    }
+                    serial.mul_acc();
+                }
+            }
+            assert_eq!(batched.acc, serial.acc, "prefix {prefix}, then {len} bytes");
+
+            // Where the kernel exists it must have run, or this is the
+            // four-block path agreeing with the serial one again.
+            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            assert_eq!(batched.high_powers, batched.accelerated);
+        }
+
         // And the grouping must actually have been used, or the agreement
         // above is two serial paths agreeing with each other.
         let long = std::vec![0xa5u8; BLOCK_LEN * 4];
@@ -447,16 +515,26 @@ mod tests {
     #[test]
     fn the_precomputed_powers_are_powers_of_h() {
         let h = [0x3cu8; BLOCK_LEN];
-        let g = Ghash::new(h);
+        let mut g = Ghash::new(h);
+        // Long enough to make the eight-block path build H^5..H^8 where it
+        // runs; elsewhere only the first four exist.
+        g.update_padded(&[0u8; BLOCK_LEN * 8]);
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        let built = if g.high_powers { 8 } else { 4 };
+        #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
+        let built = 4;
+
         let mut expect = h;
-        for (i, stored) in g.powers.iter().enumerate() {
-            g.mul_by(&mut expect, &h);
-            assert_eq!(*stored, expect, "power {} is not H^{}", i, i + 2);
+        for (i, stored) in g.powers[..built].iter().enumerate() {
+            if i > 0 {
+                g.mul_by(&mut expect, &h);
+            }
+            assert_eq!(*stored, expect, "powers[{i}] is not H^{}", i + 1);
         }
         // Distinct, so a table of copies would fail rather than pass.
-        assert_ne!(g.powers[0], g.powers[1]);
-        assert_ne!(g.powers[1], g.powers[2]);
-        assert_ne!(g.powers[0], h);
+        for i in 1..built {
+            assert_ne!(g.powers[i - 1], g.powers[i]);
+        }
     }
     use ic_core::codec::{hex, unhex};
 

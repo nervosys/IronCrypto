@@ -39,6 +39,22 @@ all of them.
   of 200 bytes from 278 to 141 ns, HMAC-SHA256 of 200 bytes from 785 to
   304 ns, a 32-byte HKDF-Expand from 697 to 244 ns. Found from an
   IronSocketLayer measurement against ring. Bulk hashing is unchanged.
+- **AES-GCM is about 1.75x faster** on x86-64 with `PCLMULQDQ`: AES-128-GCM
+  over 16 KiB from 1.8 to 3.1 GiB/s, and AES-256-GCM from 1.4x to about 2.0x
+  ahead of RustCrypto. Splitting the AEAD showed GHASH was three quarters of
+  its time, at 2.6 GiB/s against 15 for raw AES-NI. The four-block path
+  called the multiply per product, and every call swapped `H` into register
+  order again, reduced its own product, and returned it through memory. A
+  new kernel takes eight blocks per group, keeps the accumulator in a
+  register for the whole buffer, and sums the eight products unreduced
+  before one reduction, which is sound because every step after the
+  multiplies is linear over GF(2). GHASH alone is now 6.6 GiB/s. `H^5` to
+  `H^8` are computed only once an input reaches eight blocks, so short
+  messages pay nothing for them.
+- `Zeroize` for byte slices writes eight bytes per volatile store instead of
+  one, and SHA-256 no longer wipes its state twice on finalisation. Short
+  HMAC-SHA256 moved from 1.3x to about 1.15x behind RustCrypto, whose `hmac`
+  does not wipe at all.
 - HMAC key setup builds one pad and wipes the block it used, 64 bytes for
   SHA-256, where it built two and wiped both at the widest digest's 144:
   123 to 92 ns. When a key longer than a block is hashed first, that hash is
@@ -52,6 +68,10 @@ all of them.
   the one expansion loop rather than copying it. Worth about 8% on that
   three-label pattern now that key setup is cheap. Additive, so `expand` and
   every existing caller are unchanged.
+
+- GHASH's powers of `H` are wiped when it is dropped. Only `H` and the
+  accumulator were before, so `H^2` to `H^4`, as key-derived as `H`, stayed
+  in memory after every AES-GCM operation.
 
 ### Documentation
 
