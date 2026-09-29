@@ -55,13 +55,14 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.1 | 2026-09-29 02:37:52 | published after the maintainer confirmed, when asked, that the notification covers this release |
 | 0.2.2 | 2026-09-29 05:23:29 | published after the maintainer confirmed, when asked, that the notification covers this release |
 | 0.2.3 | 2026-09-29 15:29:47 | published after the maintainer confirmed, when asked, that the notification covers this release, including the ML-KEM-512/1024 and ML-DSA-44/87 parameter sets it adds; `docs/EXPORT.md`'s draft lists only ML-KEM-768 and ML-DSA-65 |
+| 0.2.4 | 2026-09-29 16:42:11 | published after the maintainer confirmed, when asked, that the notification covers this release; adds X.509 certificate issuance |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
 `docs/RELEASING.md` treats each new version as an export in its own right. No
 separate notification for 0.1.1 onward is recorded. For 0.1.1 to 0.2.0,
 whether the original one was taken to cover them is not recorded either. For
-0.2.1, 0.2.2 and 0.2.3 it is: the maintainer was asked before each
+0.2.1 through 0.2.4 it is: the maintainer was asked before each
 publication whether the notification covers the release, and answered that it
 does.
 
