@@ -7,6 +7,17 @@ all of them.
 
 ### Security
 
+- **Hex and Base64 no longer branch on the characters of a secret.** PEM
+  private keys are Base64 and the CLI takes keys as hex. The decoders' source
+  was branch-free, but checking each character's validity with an early
+  return let every compiler targeted here -- x86-64, Cortex-M0 and M4, 32-bit
+  RISC-V -- compile the character-class test into short-circuit branches,
+  revealing each secret character's class; and the encoders looked characters
+  up in a table indexed by secret bits. Encoding is now arithmetic, and
+  decoding accumulates validity and rejects once at the end, leaving nothing
+  decoded behind. The compiled code was re-read on all four targets. Also
+  stricter: `=` is accepted only as trailing padding, where it was accepted
+  anywhere and decoded as zero.
 - **Curve and RSA arithmetic is constant time on 32-bit RISC-V.** It used
   `u128` sums, and on `riscv32` the compiler builds 128-bit carries from
   comparisons joined by branches -- on secret data, as `SECURITY.md` recorded:

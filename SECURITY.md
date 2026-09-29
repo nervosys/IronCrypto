@@ -126,6 +126,20 @@ Poly1305 and POLYVAL were checked on both 32-bit targets, and their only
 branches are on public lengths and loop indices. AES, ChaCha20, SHA-2, SHA-3,
 ML-KEM and ML-DSA were not examined at this level.
 
+**The hex and Base64 codecs branched on secret characters, on every target.**
+A PKCS#8 private key in PEM is Base64, and the CLI and MCP server take keys as
+hex, so these decode secrets. Their source was branch-free, but each
+character's validity was checked at once with an early return, and x86-64,
+both Cortex-M cores and 32-bit RISC-V all compiled the OR of the character
+classes feeding that check into a chain of short-circuit branches -- which
+branch left the chain was the class of the character. The encoders indexed a
+64- or 16-entry table with secret bits. Both are the channels Sieck et al.
+demonstrated against PEM key decoding ("Util::Lookup", USENIX Security 2021).
+Since 2026-09-29 the encoders compute characters arithmetically and the
+decoders accumulate validity behind a barrier and reject once, at the end; the
+compiled code on all four targets was re-read, and branches only on lengths,
+positions, and that final verdict.
+
 The functions examined: NIST field addition, subtraction, Montgomery
 multiplication and inversion; point addition and doubling on all three
 curves; the windowed scalar multiplication and its table lookup; ECDSA
