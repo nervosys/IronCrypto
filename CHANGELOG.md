@@ -3,7 +3,11 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.2
+
+A crash fix, a constant-time fix, and speed. One addition to the public
+API, `Hkdf::expand_from`; nothing removed or changed. Every key, signature,
+MAC and shared secret is what 0.2.1 produced.
 
 ### Fixed
 
