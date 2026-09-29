@@ -75,46 +75,63 @@ Those two items are reported rather than reproduced here: they involve
 certificates and handshakes, which this repository does not build.
 
 **Constant time is a property of the compiled code, and on 32-bit RISC-V it
-does not hold for the curves or RSA.** The source is written without branches
-or table indices on secrets, but a compiler can put them back: a CPU with no
-conditional-move instruction gets a branch wherever the optimiser recognises a
-choice between two values. The machine code was examined on 2026-09-29, built
-with rustc 1.98.1 as a downstream crate builds it (release, overflow checks
-off). Every conditional branch in the functions below was traced to its
-source line:
+did not hold for the curves or RSA until they moved to 32-bit words.** The
+source is written without branches or table indices on secrets, but a compiler
+can put them back: a CPU with no conditional-move instruction gets a branch
+wherever the optimiser recognises a choice between two values, and on 32-bit
+RISC-V rustc builds every 128-bit carry from 32-bit comparisons joined by
+branches. The machine code was examined on 2026-09-29, built with rustc 1.98.1
+as a downstream crate builds it (release, overflow checks off). Every
+conditional branch in the functions below was traced to its source line:
 
 | target | elliptic-curve and RSA arithmetic on secrets |
 |---|---|
 | x86-64 | no secret-dependent branches found |
 | Cortex-M4 (`thumbv7em`) | none found: conditional execution covers the selects |
 | Cortex-M0 (`thumbv6m`) | none found. In 0.2.1 and earlier, NIST field subtraction branched on its borrow: 8 branches per P-256 point addition, 6 per doubling |
-| 32-bit RISC-V (`riscv32imac`) | **NIST curves and RSA branch on secret data**: 128-bit carries are built from 32-bit comparisons joined by branches. NIST point addition has 91 on P-256 and 248 on P-521; RSA Montgomery multiplication has 6. Ed25519 and X25519 had 20 per field multiplication and 120 per point doubling until their field moved to 32-bit limbs, below; they now have none |
+| 32-bit RISC-V (`riscv32imac`) | none found, since the change below. Before it: 20 per Curve25519 field multiplication and 120 per Edwards doubling; 100 per P-256 point addition, 184 on P-384 and 248 on P-521; 6 in RSA's Montgomery multiplication |
 
-On 32-bit RISC-V, do not rely on ECDSA, ECDH or RSA private operations to be
-constant time. The fix is arithmetic on 32-bit limbs, as dalek and RustCrypto
-have for such targets.
+The change: on `riscv32` no arithmetic on a secret uses `u128`.
 
-Ed25519 and X25519 have it. On `riscv32` their field is ten limbs of 26 and 25
-bits (`crates/ic-ec/src/field32.rs`), every product `u32 * u32 -> u64` and
-every carry a shift, so no 128-bit arithmetic reaches the code generator.
-Built as above on 2026-09-29, it has no conditional branches in field
-multiplication, squaring, encoding, the Edwards point operations, the
-fixed-base and windowed multiplications or the X25519 ladder. What branches
-remain in `ic-ec`'s Curve25519 code were each traced to their source lines:
-lengths of caller buffers, decoding a public key, the variable-time
-verification path over public values, a loop index in scalar reduction, and
-X25519's check that the shared secret is not all zeros. There are no calls to
-compiler-runtime arithmetic, and `memcmp` is reached only on public data. The
-same field runs on any host under `--cfg ic_fe32`, where the RFC 7748 and 8032
-vectors pass against it, and under test it is compared with the five-limb
-field directly. The NIST curves and RSA are still to do. Poly1305 and POLYVAL were checked on both 32-bit targets, and their
-only branches are on public lengths and loop indices. AES, ChaCha20, SHA-2,
-SHA-3, ML-KEM and ML-DSA were not examined at this level.
+- **Ed25519 and X25519** use a field of ten limbs of 26 and 25 bits
+  (`crates/ic-ec/src/field32.rs`), every product `u32 * u32 -> u64` and every
+  carry a shift. Field multiplication, squaring and encoding, the Edwards point
+  operations, the fixed-base and windowed multiplications and the X25519
+  ladder have no conditional branches at all.
+- **The NIST curves** keep their `[u64; N]` Montgomery representation and run
+  its additions, subtractions and multiplication on 32-bit words with `u64`
+  accumulators (`narrow` in `crates/ic-ec/src/nist/arith.rs`). Point addition
+  and doubling on all three curves have no conditional branches.
+- **RSA** builds every loop that touches a secret from three word operations
+  (`crates/ic-rsa/src/uint.rs`) whose `riscv32` form uses 32-bit halves.
+  Montgomery multiplication, the exponentiation, the CRT reduction and
+  recombination -- including `q * h`, which is secret -- branch only on the
+  key's width, loop counters and bounds.
+
+What branches remain were each traced to a public value: lengths of caller
+buffers; decoding a public key or signature; the variable-time verification
+paths over public values; the public exponents of inversion and square roots;
+RFC 6979's rejection of a nonce candidate, which reveals how many were drawn
+and nothing of the one kept; the zero checks ECDSA and X25519 require; loop
+counters and widths. Nothing calls compiler-runtime arithmetic, and `memcmp`
+is reached only on public data.
+
+The 32-bit forms compute bit for bit what the 64-bit ones do, and are tested
+that way: under ordinary test each is compared with its 64-bit counterpart
+directly, and `--cfg ic_limb32` selects them on any host, where every
+Curve25519, NIST and RSA vector and the rustls suite pass through them. The
+64-bit targets are unchanged, and were measured at parity.
+
+Poly1305 and POLYVAL were checked on both 32-bit targets, and their only
+branches are on public lengths and loop indices. AES, ChaCha20, SHA-2, SHA-3,
+ML-KEM and ML-DSA were not examined at this level.
 
 The functions examined: NIST field addition, subtraction, Montgomery
 multiplication and inversion; point addition and doubling on all three
-curves; the windowed scalar multiplication and its table lookup; and Ed25519's
-field multiplication, point addition, doubling and windowed multiplication.
+curves; the windowed scalar multiplication and its table lookup; ECDSA
+signing and ECDH; Ed25519's field multiplication, point addition, doubling and
+windowed multiplication, signing and X25519; and RSA's Montgomery
+multiplication, exponentiation and CRT private operation.
 Loop counters with fixed trip counts, and overflow checks that never fire on
 valid values, were set aside as not secret-dependent.
 

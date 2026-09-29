@@ -462,24 +462,25 @@ const SMALL_PRIMES: [u64; 54] = [
     197, 199, 211, 223, 227, 229, 233, 239, 241, 251,
 ];
 
-/// Full-width multiplication, `a * b`, variable time.
+/// Full-width multiplication, `a * b`.
 ///
-/// Used only during key generation, on values that are secret but processed
-/// once in an offline setting. See the module note on generation timing.
+/// Variable time in the *widths* only: it branches on `a_limbs`, `b_limbs` and
+/// the capacity, which are public, and never on a value. That matters, because
+/// this is not only key generation's: the CRT path computes `q * h` with it on
+/// every private operation, and both are secret. Its products are
+/// [`crate::uint::mac`], so on 32-bit RISC-V they are the constant-time form.
 fn mul_vartime(a: &Uint, b: &Uint, a_limbs: usize, b_limbs: usize) -> Uint {
     let mut out = Uint::ZERO;
     for i in 0..a_limbs {
-        let mut carry = 0u128;
+        let mut carry = 0u64;
         for j in 0..b_limbs {
             if i + j >= crate::uint::MAX_LIMBS {
                 break;
             }
-            let sum = (out.0[i + j] as u128) + (a.0[i] as u128) * (b.0[j] as u128) + carry;
-            out.0[i + j] = sum as u64;
-            carry = sum >> 64;
+            (out.0[i + j], carry) = crate::uint::mac(out.0[i + j], a.0[i], b.0[j], carry);
         }
         if i + b_limbs < crate::uint::MAX_LIMBS {
-            out.0[i + b_limbs] = out.0[i + b_limbs].wrapping_add(carry as u64);
+            out.0[i + b_limbs] = out.0[i + b_limbs].wrapping_add(carry);
         }
     }
     out

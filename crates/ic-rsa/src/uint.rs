@@ -138,26 +138,20 @@ impl Uint {
 
     /// `self + other` over `limbs` limbs, returning the carry.
     pub fn add_assign(&mut self, other: &Uint, limbs: usize) -> u64 {
-        let mut carry = 0u128;
+        let mut carry = 0u64;
         for i in 0..limbs {
-            let sum = (self.0[i] as u128) + (other.0[i] as u128) + carry;
-            self.0[i] = sum as u64;
-            carry = sum >> 64;
+            (self.0[i], carry) = adc(self.0[i], other.0[i], carry);
         }
-        carry as u64
+        carry
     }
 
     /// `self - other` over `limbs` limbs, returning the borrow.
     pub fn sub_assign(&mut self, other: &Uint, limbs: usize) -> u64 {
-        let mut borrow = 0u128;
+        let mut borrow = 0u64;
         for i in 0..limbs {
-            let diff = (self.0[i] as u128)
-                .wrapping_sub(other.0[i] as u128)
-                .wrapping_sub(borrow);
-            self.0[i] = diff as u64;
-            borrow = (diff >> 127) & 1;
+            (self.0[i], borrow) = sbb(self.0[i], other.0[i], borrow);
         }
-        borrow as u64
+        borrow
     }
 
     /// Shift right by one bit over `limbs` limbs.
@@ -184,6 +178,86 @@ impl Uint {
             rem = ((rem << 64) | self.0[i] as u128) % (m as u128);
         }
         rem as u64
+    }
+}
+
+/// Word arithmetic: the three operations every loop in this crate that touches
+/// a secret is built from.
+///
+/// On a 64-bit CPU they are `u128` sums, as they always were. On 32-bit RISC-V
+/// that is not constant time: the CPU has no conditional move, and rustc
+/// builds a 128-bit carry from 32-bit comparisons joined by branches -- six in
+/// a Montgomery multiplication's inner loop, on the private key. There,
+/// [`narrow`] computes the same results from 32-bit halves with `u64` sums
+/// that cannot overflow, so each carry is a shift and nothing is compared.
+/// `--cfg ic_limb32` selects it anywhere, and the tests compare the two.
+#[cfg(not(any(target_arch = "riscv32", ic_limb32)))]
+pub(crate) use wide::{adc, mac, sbb};
+
+#[cfg(any(target_arch = "riscv32", ic_limb32))]
+pub(crate) use narrow::{adc, mac, sbb};
+
+/// `u128` sums, for CPUs with a 64-bit multiplier.
+#[cfg(any(test, not(any(target_arch = "riscv32", ic_limb32))))]
+pub(crate) mod wide {
+    /// `acc + a * b + carry`, as (low word, high word). Cannot overflow:
+    /// `(2^64 - 1)^2 + 2 (2^64 - 1) = 2^128 - 1`.
+    #[inline(always)]
+    pub(crate) fn mac(acc: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
+        let s = (acc as u128) + (a as u128) * (b as u128) + (carry as u128);
+        (s as u64, (s >> 64) as u64)
+    }
+
+    /// `a + b + carry`, as (sum, carry out).
+    #[inline(always)]
+    pub(crate) fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
+        let s = (a as u128) + (b as u128) + (carry as u128);
+        (s as u64, (s >> 64) as u64)
+    }
+
+    /// `a - b - borrow`, as (difference, borrow out).
+    #[inline(always)]
+    pub(crate) fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
+        let d = (a as u128)
+            .wrapping_sub(b as u128)
+            .wrapping_sub(borrow as u128);
+        (d as u64, ((d >> 127) & 1) as u64)
+    }
+}
+
+/// 32-bit halves and `u64` sums, for 32-bit RISC-V. Every product is `u32 *
+/// u32 -> u64`, which is `mul` and `mulhu`; every sum below is under `2^35`,
+/// so no `u64` addition here can carry out of its word.
+#[cfg(any(test, target_arch = "riscv32", ic_limb32))]
+pub(crate) mod narrow {
+    const M: u64 = 0xFFFF_FFFF;
+
+    /// `acc + a * b + carry`, as (low word, high word), column by column.
+    #[inline(always)]
+    pub(crate) fn mac(acc: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
+        let (a0, a1, b0, b1) = (a & M, a >> 32, b & M, b >> 32);
+        let (p00, p01, p10, p11) = (a0 * b0, a0 * b1, a1 * b0, a1 * b1);
+        let c0 = (p00 & M) + (acc & M) + (carry & M);
+        let c1 = (p00 >> 32) + (p01 & M) + (p10 & M) + (acc >> 32) + (carry >> 32) + (c0 >> 32);
+        let c2 = (p01 >> 32) + (p10 >> 32) + (p11 & M) + (c1 >> 32);
+        let c3 = (p11 >> 32) + (c2 >> 32);
+        ((c0 & M) | (c1 << 32), (c2 & M) | (c3 << 32))
+    }
+
+    /// `a + b + carry`, as (sum, carry out).
+    #[inline(always)]
+    pub(crate) fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
+        let lo = (a & M) + (b & M) + carry;
+        let hi = (a >> 32) + (b >> 32) + (lo >> 32);
+        ((lo & M) | (hi << 32), hi >> 32)
+    }
+
+    /// `a - b - borrow`, as (difference, borrow out).
+    #[inline(always)]
+    pub(crate) fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
+        let lo = (a & M).wrapping_sub(b & M).wrapping_sub(borrow);
+        let hi = (a >> 32).wrapping_sub(b >> 32).wrapping_sub(lo >> 63);
+        ((lo & M) | (hi << 32), hi >> 63)
     }
 }
 
@@ -284,28 +358,21 @@ impl Modulus {
 
         for i in 0..limbs {
             // t += a * b[i]
-            let mut carry = 0u128;
+            let mut carry = 0u64;
             for j in 0..limbs {
-                let sum = (t[j] as u128) + (a.0[j] as u128) * (b.0[i] as u128) + carry;
-                t[j] = sum as u64;
-                carry = sum >> 64;
+                (t[j], carry) = mac(t[j], a.0[j], b.0[i], carry);
             }
-            let sum = (t[limbs] as u128) + carry;
-            t[limbs] = sum as u64;
-            t[limbs + 1] = (sum >> 64) as u64;
+            (t[limbs], t[limbs + 1]) = adc(t[limbs], carry, 0);
 
             // t = (t + n * (t[0] * n0inv mod 2^64)) / 2^64
             let u = t[0].wrapping_mul(self.n0inv);
-            let sum = (t[0] as u128) + (u as u128) * (self.n.0[0] as u128);
-            let mut carry = sum >> 64;
+            let (_, mut carry) = mac(t[0], u, self.n.0[0], 0);
             for j in 1..limbs {
-                let sum = (t[j] as u128) + (u as u128) * (self.n.0[j] as u128) + carry;
-                t[j - 1] = sum as u64;
-                carry = sum >> 64;
+                (t[j - 1], carry) = mac(t[j], u, self.n.0[j], carry);
             }
-            let sum = (t[limbs] as u128) + carry;
-            t[limbs - 1] = sum as u64;
-            t[limbs] = (t[limbs + 1] as u128 + (sum >> 64)) as u64;
+            let (sum, c) = adc(t[limbs], carry, 0);
+            t[limbs - 1] = sum;
+            t[limbs] = t[limbs + 1] + c;
             t[limbs + 1] = 0;
         }
 
@@ -537,6 +604,47 @@ impl Modulus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 32-bit-half word operations against the `u128` ones, on edges and
+    /// on a counter's worth of mixed values. `--cfg ic_limb32` then runs every
+    /// RSA test through the narrow ones.
+    #[test]
+    fn narrow_words_agree_with_wide() {
+        let mut vals = std::vec![
+            0u64,
+            1,
+            2,
+            0xFFFF_FFFF,
+            0x1_0000_0000,
+            u64::MAX,
+            u64::MAX - 1
+        ];
+        let mut x = 0x0123_4567_89AB_CDEFu64;
+        for _ in 0..24 {
+            x = x.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(17) ^ 0xD1B5_4A32_D192_ED03;
+            vals.push(x);
+        }
+        let mut checked = 0;
+        for &a in &vals {
+            for &b in &vals {
+                for c in [0u64, 1] {
+                    assert_eq!(wide::adc(a, b, c), narrow::adc(a, b, c), "adc");
+                    assert_eq!(wide::sbb(a, b, c), narrow::sbb(a, b, c), "sbb");
+                }
+                for &acc in &[0u64, u64::MAX, a ^ b] {
+                    for &carry in &[0u64, u64::MAX, b] {
+                        assert_eq!(
+                            wide::mac(acc, a, b, carry),
+                            narrow::mac(acc, a, b, carry),
+                            "mac"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 31 * 31 * 9);
+    }
 
     /// A deliberately naive modular exponentiation, used as the oracle for the
     /// Montgomery implementation. Schoolbook, variable time, and obviously

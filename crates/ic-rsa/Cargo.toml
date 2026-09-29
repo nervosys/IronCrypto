@@ -15,6 +15,11 @@ publish.workspace = true
 default = ["std"]
 std = ["ic-core/std", "ic-hash/std"]
 
+# `ic_limb32` selects the 32-bit word arithmetic on any target; see
+# `src/uint.rs`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)"] }
+
 [dependencies]
 ic-core = { workspace = true }
 ic-hash = { workspace = true }

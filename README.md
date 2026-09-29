@@ -303,7 +303,7 @@ leaving the stronger claim to stand for all of them.
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
-| Backends | portable, written constant-time; on x86-64 AES-NI, `PCLMULQDQ`, SHA-NI and AVX2, each behind runtime detection. The compiled NIST-curve and RSA arithmetic is **not** constant time on 32-bit RISC-V (Ed25519 and X25519 are); [SECURITY.md](SECURITY.md) has what was checked on which target |
+| Backends | portable, written constant-time; on x86-64 AES-NI, `PCLMULQDQ`, SHA-NI and AVX2, each behind runtime detection. On 32-bit RISC-V the curve and RSA arithmetic runs on 32-bit words, because the 64-bit form compiled to branches on secrets there; [SECURITY.md](SECURITY.md) has what was checked on which target |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
 | TLS and QUIC | a rustls `CryptoProvider`: TLS 1.2, TLS 1.3 and QUIC; AES-GCM and ChaCha20-Poly1305; ECDSA, Ed25519 and RSA, verified and produced; ECDH and X25519; HKDF and the TLS 1.2 PRF |
 

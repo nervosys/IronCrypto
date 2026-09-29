@@ -43,15 +43,15 @@
 pub mod ed25519;
 // GF(2^255 - 19). Five 51-bit limbs where a 64x64 multiply is cheap; ten limbs
 // of 26 and 25 bits on 32-bit RISC-V, where 128-bit arithmetic compiles to
-// branches on secret carries. `--cfg ic_fe32` selects the second anywhere, so
+// branches on secret carries. `--cfg ic_limb32` selects the second anywhere, so
 // the Curve25519 vectors can be run against it on a host.
-#[cfg(not(any(target_arch = "riscv32", ic_fe32)))]
+#[cfg(not(any(target_arch = "riscv32", ic_limb32)))]
 mod field;
-#[cfg(any(target_arch = "riscv32", ic_fe32))]
+#[cfg(any(target_arch = "riscv32", ic_limb32))]
 #[path = "field32.rs"]
 mod field;
 // Compiled beside the five-limb field under test, to be compared with it.
-#[cfg(all(test, not(any(target_arch = "riscv32", ic_fe32))))]
+#[cfg(all(test, not(any(target_arch = "riscv32", ic_limb32))))]
 mod field32;
 
 mod nist;

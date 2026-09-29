@@ -26,36 +26,253 @@ use ic_core::ct::Choice;
 /// assumption used to live.
 pub const MAX_LIMBS: usize = 9;
 
-/// Add two multi-limb values, returning the sum and the carry out.
-#[inline]
-pub(crate) const fn adc<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
-    let mut out = [0u64; N];
-    let mut carry = 0u128;
-    let mut i = 0;
-    while i < N {
-        let sum = (a[i] as u128) + (b[i] as u128) + carry;
-        out[i] = sum as u64;
-        carry = sum >> 64;
-        i += 1;
+// # Two word sizes
+//
+// Values are always `[u64; N]`, and so are the constants. What differs by
+// target is the word the carry chains and the Montgomery multiplication run
+// on inside `adc`, `sbb` and `mont_mul`.
+//
+// On a 64-bit CPU, a `u64 * u64 -> u128` product is one or two instructions,
+// and [`wide`] uses it. On 32-bit RISC-V the same code is a constant-time
+// disaster: that CPU has no conditional move, and rustc builds a 128-bit carry
+// from 32-bit comparisons joined by *branches* -- 100 of them in a P-256 point
+// addition, 248 on P-521, on secret data. [`narrow`] runs the identical
+// algorithms on 32-bit words with `u64` accumulators, so every carry is a
+// shift of a value that cannot overflow, and nothing is compared.
+//
+// Both compute the same function: Montgomery form with `R = 2^(64 N)` is
+// Montgomery form with `R = 2^(32 * 2N)`, and `-m^-1 mod 2^32` is the low half
+// of `-m^-1 mod 2^64`. So the representation, every constant and every result
+// is bit for bit the same, and the tests below compare the two directly.
+// `narrow` is selected on `riscv32`, and anywhere under `--cfg ic_limb32`, the
+// flag that also selects the 32-bit Curve25519 field.
+
+#[cfg(not(any(target_arch = "riscv32", ic_limb32)))]
+pub(crate) use wide::{adc, mont_mul, sbb};
+
+#[cfg(any(target_arch = "riscv32", ic_limb32))]
+pub(crate) use narrow::{adc, mont_mul, sbb};
+
+/// 64-bit words, `u128` products: for CPUs with a 64-bit multiplier.
+#[cfg(any(test, not(any(target_arch = "riscv32", ic_limb32))))]
+pub(crate) mod wide {
+    use super::MAX_LIMBS;
+
+    /// Add two multi-limb values, returning the sum and the carry out.
+    #[inline]
+    pub(crate) const fn adc<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
+        let mut out = [0u64; N];
+        let mut carry = 0u128;
+        let mut i = 0;
+        while i < N {
+            let sum = (a[i] as u128) + (b[i] as u128) + carry;
+            out[i] = sum as u64;
+            carry = sum >> 64;
+            i += 1;
+        }
+        (out, carry as u64)
     }
-    (out, carry as u64)
+
+    /// Subtract two multi-limb values, returning the difference and the borrow out.
+    #[inline]
+    pub(crate) const fn sbb<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
+        let mut out = [0u64; N];
+        let mut borrow = 0u128;
+        let mut i = 0;
+        while i < N {
+            let diff = (a[i] as u128)
+                .wrapping_sub(b[i] as u128)
+                .wrapping_sub(borrow);
+            out[i] = diff as u64;
+            borrow = (diff >> 127) & 1;
+            i += 1;
+        }
+        (out, borrow as u64)
+    }
+
+    /// Montgomery multiplication (CIOS), up to its last step: returns `t - m`,
+    /// `t`, and whether the first is the answer. The caller makes that choice,
+    /// with a barrier at run time and without one in a `const`.
+    ///
+    /// `inline(always)`: as a plain `#[inline]` function, called through
+    /// the macro, it stopped being inlined into the point formulas, and P-256
+    /// point addition went from 424 to 500-650 ns while a field
+    /// multiplication timed alone did not move.
+    #[inline(always)]
+    pub(crate) const fn mont_mul<const N: usize>(
+        a: [u64; N],
+        b: [u64; N],
+        m: [u64; N],
+        neg_inv: u64,
+    ) -> ([u64; N], [u64; N], u64) {
+        // Scratch is sized for the widest supported curve rather than
+        // `N + 2`, which Rust cannot yet express generically.
+        let mut t = [0u64; MAX_LIMBS + 2];
+        let mut i = 0;
+        while i < N {
+            // t += a * b[i]
+            let mut carry = 0u128;
+            let mut j = 0;
+            while j < N {
+                let sum = (t[j] as u128) + (a[j] as u128) * (b[i] as u128) + carry;
+                t[j] = sum as u64;
+                carry = sum >> 64;
+                j += 1;
+            }
+            let sum = (t[N] as u128) + carry;
+            t[N] = sum as u64;
+            t[N + 1] = (sum >> 64) as u64;
+
+            // t = (t + m * (t[0] * neg_inv mod 2^64)) / 2^64
+            let u = t[0].wrapping_mul(neg_inv);
+            let sum = (t[0] as u128) + (u as u128) * (m[0] as u128);
+            let mut carry = sum >> 64;
+            let mut j = 1;
+            while j < N {
+                let sum = (t[j] as u128) + (u as u128) * (m[j] as u128) + carry;
+                t[j - 1] = sum as u64;
+                carry = sum >> 64;
+                j += 1;
+            }
+            let sum = (t[N] as u128) + carry;
+            t[N - 1] = sum as u64;
+            t[N] = (t[N + 1] as u128 + (sum >> 64)) as u64;
+            t[N + 1] = 0;
+            i += 1;
+        }
+
+        // A single conditional subtraction brings the result below m.
+        let mut lo = [0u64; N];
+        let mut k = 0;
+        while k < N {
+            lo[k] = t[k];
+            k += 1;
+        }
+        let (reduced, borrow) = sbb(lo, m);
+        (reduced, lo, t[N] | (1 - borrow))
+    }
 }
 
-/// Subtract two multi-limb values, returning the difference and the borrow out.
-#[inline]
-pub(crate) const fn sbb<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
-    let mut out = [0u64; N];
-    let mut borrow = 0u128;
-    let mut i = 0;
-    while i < N {
-        let diff = (a[i] as u128)
-            .wrapping_sub(b[i] as u128)
-            .wrapping_sub(borrow);
-        out[i] = diff as u64;
-        borrow = (diff >> 127) & 1;
-        i += 1;
+/// 32-bit words, `u64` accumulators: for 32-bit RISC-V. The same algorithms as
+/// [`wide`], a word at a time where it takes a limb at a time. No sum below
+/// can overflow its `u64` -- `(2^32 - 1)^2 + 2 (2^32 - 1) = 2^64 - 1` -- so each
+/// carry is a shift and no comparison is ever made.
+#[cfg(any(test, target_arch = "riscv32", ic_limb32))]
+pub(crate) mod narrow {
+    use super::MAX_LIMBS;
+
+    /// `x` as 32-bit words, least significant first.
+    ///
+    /// Every shift here is by a constant. Indexing a word as `x[k / 2] >>
+    /// (32 * (k % 2))` shifts a `u64` by a variable amount, which 32-bit
+    /// RISC-V does with a branch on whether it reaches 32 -- a branch on an
+    /// index, not a secret, but one the compiled code need not have.
+    #[inline(always)]
+    const fn words<const N: usize>(x: &[u64; N]) -> [u32; 2 * MAX_LIMBS] {
+        let mut w = [0u32; 2 * MAX_LIMBS];
+        let mut i = 0;
+        while i < N {
+            w[2 * i] = x[i] as u32;
+            w[2 * i + 1] = (x[i] >> 32) as u32;
+            i += 1;
+        }
+        w
     }
-    (out, borrow as u64)
+
+    /// Add two multi-limb values, returning the sum and the carry out.
+    #[inline]
+    pub(crate) const fn adc<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
+        let mut out = [0u64; N];
+        let mut carry = 0u64;
+        let mut i = 0;
+        while i < N {
+            let lo = (a[i] as u32 as u64) + (b[i] as u32 as u64) + carry;
+            let hi = (a[i] >> 32) + (b[i] >> 32) + (lo >> 32);
+            out[i] = (lo as u32 as u64) | (hi << 32);
+            carry = hi >> 32;
+            i += 1;
+        }
+        (out, carry)
+    }
+
+    /// Subtract two multi-limb values, returning the difference and the
+    /// borrow out.
+    #[inline]
+    pub(crate) const fn sbb<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
+        let mut out = [0u64; N];
+        let mut borrow = 0u64;
+        let mut i = 0;
+        while i < N {
+            let lo = (a[i] as u32 as u64)
+                .wrapping_sub(b[i] as u32 as u64)
+                .wrapping_sub(borrow);
+            let hi = (a[i] >> 32).wrapping_sub(b[i] >> 32).wrapping_sub(lo >> 63);
+            out[i] = (lo as u32 as u64) | (hi << 32);
+            borrow = hi >> 63;
+            i += 1;
+        }
+        (out, borrow)
+    }
+
+    /// Montgomery multiplication (CIOS) on 32-bit words; see
+    /// [`super::wide::mont_mul`] for the contract, which is the same.
+    #[inline]
+    pub(crate) const fn mont_mul<const N: usize>(
+        a: [u64; N],
+        b: [u64; N],
+        m: [u64; N],
+        neg_inv: u64,
+    ) -> ([u64; N], [u64; N], u64) {
+        let m_limbs = m;
+        // -m^-1 mod 2^32 is -m^-1 mod 2^64, reduced.
+        let neg_inv = neg_inv as u32;
+        let n = 2 * N;
+        let (a, m) = (words(&a), words(&m));
+        let b = words(&b);
+        let mut t = [0u32; 2 * MAX_LIMBS + 2];
+        let mut i = 0;
+        while i < n {
+            // t += a * b_i
+            let bi = b[i] as u64;
+            let mut carry = 0u64;
+            let mut j = 0;
+            while j < n {
+                let sum = (t[j] as u64) + (a[j] as u64) * bi + carry;
+                t[j] = sum as u32;
+                carry = sum >> 32;
+                j += 1;
+            }
+            let sum = (t[n] as u64) + carry;
+            t[n] = sum as u32;
+            t[n + 1] = (sum >> 32) as u32;
+
+            // t = (t + m * (t_0 * neg_inv mod 2^32)) / 2^32
+            let u = t[0].wrapping_mul(neg_inv) as u64;
+            let sum = (t[0] as u64) + u * (m[0] as u64);
+            let mut carry = sum >> 32;
+            let mut j = 1;
+            while j < n {
+                let sum = (t[j] as u64) + u * (m[j] as u64) + carry;
+                t[j - 1] = sum as u32;
+                carry = sum >> 32;
+                j += 1;
+            }
+            let sum = (t[n] as u64) + carry;
+            t[n - 1] = sum as u32;
+            t[n] = t[n + 1] + (sum >> 32) as u32;
+            t[n + 1] = 0;
+            i += 1;
+        }
+
+        let mut lo = [0u64; N];
+        let mut k = 0;
+        while k < N {
+            lo[k] = (t[2 * k] as u64) | ((t[2 * k + 1] as u64) << 32);
+            k += 1;
+        }
+        let (reduced, borrow) = sbb(lo, m_limbs);
+        (reduced, lo, t[n] as u64 | (1 - borrow))
+    }
 }
 
 /// Branch-free select: `a` when `mask` is all ones, `b` when it is zero.
@@ -237,61 +454,17 @@ macro_rules! mont_field {
             /// `-m^-1 mod 2^64`.
             const NEG_INV: u64 = $crate::nist::arith::compute_neg_inv($modulus[0]);
 
-            /// Montgomery multiplication (CIOS), the core of this module, up to
-            /// its last step: returns `t - m`, `t`, and whether the first is the
-            /// answer. [`Self::mont_mul_raw`] and [`Self::mont_mul_const`] make
-            /// that choice, one with a barrier and one without, so the arithmetic
-            /// exists once.
+            /// Montgomery multiplication up to its last step: `t - m`, `t`,
+            /// and whether the first is the answer. [`Self::mont_mul_raw`] and
+            /// [`Self::mont_mul_const`] make that choice, one with a barrier
+            /// and one without, so the arithmetic exists once -- per word size;
+            /// see `mont_mul`.
+            #[inline(always)]
             const fn mont_mul_parts(
                 a: [u64; $limbs],
                 b: [u64; $limbs],
             ) -> ([u64; $limbs], [u64; $limbs], u64) {
-                // Scratch is sized for the widest supported curve rather than
-                // `$limbs + 2`, which Rust cannot yet express generically.
-                let mut t = [0u64; $crate::nist::arith::MAX_LIMBS + 2];
-                let mut i = 0;
-                while i < $limbs {
-                    // t += a * b[i]
-                    let mut carry = 0u128;
-                    let mut j = 0;
-                    while j < $limbs {
-                        let sum = (t[j] as u128) + (a[j] as u128) * (b[i] as u128) + carry;
-                        t[j] = sum as u64;
-                        carry = sum >> 64;
-                        j += 1;
-                    }
-                    let sum = (t[$limbs] as u128) + carry;
-                    t[$limbs] = sum as u64;
-                    t[$limbs + 1] = (sum >> 64) as u64;
-
-                    // t = (t + m * (t[0] * NEG_INV mod 2^64)) / 2^64
-                    let u = t[0].wrapping_mul(Self::NEG_INV);
-                    let sum = (t[0] as u128) + (u as u128) * (Self::MODULUS[0] as u128);
-                    let mut carry = sum >> 64;
-                    let mut j = 1;
-                    while j < $limbs {
-                        let sum = (t[j] as u128) + (u as u128) * (Self::MODULUS[j] as u128) + carry;
-                        t[j - 1] = sum as u64;
-                        carry = sum >> 64;
-                        j += 1;
-                    }
-                    let sum = (t[$limbs] as u128) + carry;
-                    t[$limbs - 1] = sum as u64;
-                    t[$limbs] = (t[$limbs + 1] as u128 + (sum >> 64)) as u64;
-                    t[$limbs + 1] = 0;
-                    i += 1;
-                }
-
-                // A single conditional subtraction brings the result below m.
-                let mut lo = [0u64; $limbs];
-                let mut k = 0;
-                while k < $limbs {
-                    lo[k] = t[k];
-                    k += 1;
-                }
-                let (reduced, borrow) = $crate::nist::arith::sbb(lo, Self::MODULUS);
-                let need = t[$limbs] | (1 - borrow);
-                (reduced, lo, need)
+                $crate::nist::arith::mont_mul(a, b, Self::MODULUS, Self::NEG_INV)
             }
 
             /// Montgomery multiplication, constant time: the final subtraction
@@ -556,6 +729,65 @@ mod tests {
         let (diff, borrow) = sbb([0u64, 0], [1u64, 0]);
         assert_eq!(diff, [u64::MAX, u64::MAX]);
         assert_eq!(borrow, 1);
+    }
+
+    /// The 32-bit-word arithmetic against the 64-bit, on every modulus this
+    /// crate uses. They must agree bit for bit, since both are Montgomery
+    /// multiplication with the same `R`; `ic_limb32` then runs every NIST vector
+    /// through the narrow one.
+    #[test]
+    fn narrow_words_agree_with_wide() {
+        use crate::nist::point::Curve;
+        fn case<const N: usize>(m: [u64; N], seed: u64) -> usize {
+            let neg_inv = compute_neg_inv(m[0]);
+            // Operands below m from a counter through SplitMix64, plus the
+            // edges: 0, 1, m - 1, and all ones where the width allows it.
+            let mut state = seed;
+            let mut next = || {
+                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^ (z >> 31)
+            };
+            let mut ops = std::vec::Vec::new();
+            let mut one = [0u64; N];
+            one[0] = 1;
+            ops.push([0u64; N]);
+            ops.push(one);
+            ops.push(wide::sbb(m, one).0);
+            ops.push([u64::MAX; N]);
+            for _ in 0..12 {
+                let mut x = [0u64; N];
+                for limb in x.iter_mut() {
+                    *limb = next();
+                }
+                // Below m, by taking the top limb below m's.
+                x[N - 1] %= m[N - 1].max(1);
+                ops.push(x);
+            }
+            let mut checked = 0;
+            for a in &ops {
+                for b in &ops {
+                    assert_eq!(wide::adc(*a, *b), narrow::adc(*a, *b), "adc");
+                    assert_eq!(wide::sbb(*a, *b), narrow::sbb(*a, *b), "sbb");
+                    assert_eq!(
+                        wide::mont_mul(*a, *b, m, neg_inv),
+                        narrow::mont_mul(*a, *b, m, neg_inv),
+                        "mont_mul"
+                    );
+                    checked += 1;
+                }
+            }
+            checked
+        }
+        let checked = case(<crate::p256::P256 as Curve>::Field::MODULUS, 1)
+            + case(<crate::p256::P256 as Curve>::Scalar::MODULUS, 2)
+            + case(<crate::p384::P384 as Curve>::Field::MODULUS, 3)
+            + case(<crate::p384::P384 as Curve>::Scalar::MODULUS, 4)
+            + case(<crate::p521::P521 as Curve>::Field::MODULUS, 5)
+            + case(<crate::p521::P521 as Curve>::Scalar::MODULUS, 6);
+        assert_eq!(checked, 6 * 16 * 16);
     }
 
     #[test]

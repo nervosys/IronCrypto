@@ -18,7 +18,7 @@
 //! compiled code for 32-bit RISC-V is checked for branches, as `SECURITY.md`
 //! describes.
 //!
-//! It is selected on `riscv32`, and on any target with `--cfg ic_fe32`, which
+//! It is selected on `riscv32`, and on any target with `--cfg ic_limb32`, which
 //! is how the RFC 7748 and 8032 vectors are run against it on a host. Under
 //! test it is also compiled beside the five-limb field and compared with it
 //! directly.
@@ -565,8 +565,8 @@ mod tests {
 
     /// Against the five-limb field, which the RFC 7748 and 8032 vectors pass
     /// against on every 64-bit build. Only when the two are different code:
-    /// under `--cfg ic_fe32` `crate::field` is this module.
-    #[cfg(not(any(target_arch = "riscv32", ic_fe32)))]
+    /// under `--cfg ic_limb32` `crate::field` is this module.
+    #[cfg(not(any(target_arch = "riscv32", ic_limb32)))]
     #[test]
     fn agrees_with_the_five_limb_field() {
         use crate::field::Fe as Fe51;
@@ -597,7 +597,7 @@ mod tests {
     }
 
     /// The same checks as the five-limb field's own tests, so they hold of this
-    /// one under `--cfg ic_fe32`, where the comparison above is not compiled.
+    /// one under `--cfg ic_limb32`, where the comparison above is not compiled.
     #[test]
     fn p_encodes_as_zero_and_p_minus_one_does_not() {
         assert_eq!(Fe(P).to_bytes(), [0u8; 32]);

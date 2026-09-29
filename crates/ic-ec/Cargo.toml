@@ -19,10 +19,10 @@ std = ["ic-core/std", "ic-hash/std", "ic-mac/std"]
 # them without their being public API for everyone else. Not covered by semver.
 bench-internals = ["std"]
 
-# `ic_fe32` selects the 32-bit-limb Curve25519 field on any target; see
+# `ic_limb32` selects the 32-bit-limb Curve25519 field on any target; see
 # `src/field32.rs`.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_fe32)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)"] }
 
 [dependencies]
 ic-core = { workspace = true }

@@ -7,16 +7,23 @@ all of them.
 
 ### Security
 
-- **Ed25519 and X25519 are constant time on 32-bit RISC-V.** Their field
-  multiplied `u64` by `u64` into `u128`, and on `riscv32` the compiler builds
-  128-bit carries from comparisons joined by branches: 20 per field
-  multiplication and 120 per Edwards doubling, on secret data, as
-  `SECURITY.md` recorded. On `riscv32` the field is now ten limbs of 26 and 25
-  bits with `u32 * u32 -> u64` products, and the compiled Curve25519 code has
-  no branch on a secret; each remaining branch was traced to a public value.
-  Other targets keep the five-limb field. `--cfg ic_fe32` selects the new one
-  anywhere, which is how the RFC 7748 and 8032 vectors are run against it. The
-  NIST curves and RSA still branch on `riscv32`.
+- **Curve and RSA arithmetic is constant time on 32-bit RISC-V.** It used
+  `u128` sums, and on `riscv32` the compiler builds 128-bit carries from
+  comparisons joined by branches -- on secret data, as `SECURITY.md` recorded:
+  20 per Curve25519 field multiplication, 100 to 248 per NIST point addition,
+  6 in RSA's Montgomery multiplication. On `riscv32` none of it uses `u128`
+  now. Curve25519 has a field of ten 26- and 25-bit limbs; the NIST fields and
+  RSA keep their representation and run on 32-bit words with `u64` sums,
+  computing bit for bit what the 64-bit code does. Every remaining branch in
+  the compiled code was traced to a public value. `--cfg ic_limb32` selects
+  the 32-bit forms on any target, which is how every vector is run against
+  them; under test each is also compared with its 64-bit counterpart. 64-bit
+  targets are unchanged and measured at parity.
+- **RSA's CRT recombination** computed `q * h` with a function documented as
+  used only by key generation. It is on every private operation, and both
+  operands are secret. It branches only on widths, which are public; its
+  documentation now says so, and on `riscv32` its products are the 32-bit
+  form.
 
 ### Performance
 
