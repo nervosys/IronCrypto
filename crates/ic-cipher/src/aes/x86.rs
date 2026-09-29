@@ -28,7 +28,7 @@
 //! and it never touches a lookup table at all.
 
 use super::portable::{Schedule, BLOCK_LEN};
-use ic_core::{ensure, Result};
+use ic_core::{ensure, Result, Zeroize};
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::*;
@@ -204,6 +204,86 @@ pub unsafe fn encrypt_blocks(keys: &Keys, data: &mut [u8]) -> Result<()> {
         unsafe { encrypt_block(keys, block)? };
     }
     Ok(())
+}
+
+/// XOR `data` with the CTR keystream starting at `counter`, advancing the
+/// counter's last 32 bits big-endian and wrapping within them -- GCM's
+/// `inc32` -- eight blocks at a time.
+///
+/// GCM used to reach AES through `encrypt_blocks` eight blocks per call, with
+/// the counters built and the keystream XORed byte by byte around each call:
+/// 8.5 GiB/s where one call over the whole buffer runs at 15. Here the
+/// counters are written straight into the blocks, the keystream never leaves
+/// registers on the whole-block path, and there is one call per message.
+///
+/// The counter blocks are assembled with plain stores rather than a byte
+/// shuffle, so this needs nothing beyond the `aes` feature the caller already
+/// checked; building eight 16-byte blocks is noise beside eighty `AESENC`s.
+///
+/// On return `counter` is the block after the last one used.
+///
+/// # Safety
+///
+/// Requires the `aes` target feature.
+#[target_feature(enable = "aes")]
+pub unsafe fn ctr32_xor(keys: &Keys, counter: &mut [u8; BLOCK_LEN], data: &mut [u8]) {
+    let mut n = u32::from_be_bytes([counter[12], counter[13], counter[14], counter[15]]);
+    let mut blocks = [[0u8; BLOCK_LEN]; PARALLEL_BLOCKS];
+    for block in blocks.iter_mut() {
+        block[..12].copy_from_slice(&counter[..12]);
+    }
+
+    for chunk in data.chunks_mut(BLOCK_LEN * PARALLEL_BLOCKS) {
+        for (i, block) in blocks.iter_mut().enumerate() {
+            block[12..].copy_from_slice(&n.wrapping_add(i as u32).to_be_bytes());
+        }
+        let mut b = [_mm_setzero_si128(); PARALLEL_BLOCKS];
+        for (slot, block) in b.iter_mut().zip(blocks.iter()) {
+            // SAFETY: `block` is exactly 16 bytes and the load is unaligned.
+            *slot = _mm_xor_si128(
+                unsafe { _mm_loadu_si128(block.as_ptr() as *const __m128i) },
+                keys.enc[0],
+            );
+        }
+        for r in 1..keys.rounds {
+            let rk = keys.enc[r];
+            for slot in b.iter_mut() {
+                *slot = _mm_aesenc_si128(*slot, rk);
+            }
+        }
+        let last = keys.enc[keys.rounds];
+        for slot in b.iter_mut() {
+            *slot = _mm_aesenclast_si128(*slot, last);
+        }
+
+        let p = chunk.as_mut_ptr();
+        if chunk.len() == BLOCK_LEN * PARALLEL_BLOCKS {
+            for (i, ks) in b.iter().enumerate() {
+                // SAFETY: the chunk is exactly PARALLEL_BLOCKS blocks, so every
+                // offset is in bounds; loads and stores are unaligned.
+                unsafe {
+                    let d = _mm_loadu_si128(p.add(i * BLOCK_LEN) as *const __m128i);
+                    _mm_storeu_si128(p.add(i * BLOCK_LEN) as *mut __m128i, _mm_xor_si128(d, *ks));
+                }
+            }
+        } else {
+            // The final, shorter chunk: through a buffer, and only as far as
+            // the data goes. The keystream past the end is discarded.
+            let mut stream = [0u8; BLOCK_LEN * PARALLEL_BLOCKS];
+            for (i, ks) in b.iter().enumerate() {
+                // SAFETY: `stream` holds PARALLEL_BLOCKS blocks.
+                unsafe {
+                    _mm_storeu_si128(stream.as_mut_ptr().add(i * BLOCK_LEN) as *mut __m128i, *ks)
+                };
+            }
+            for (d, k) in chunk.iter_mut().zip(stream.iter()) {
+                *d ^= k;
+            }
+            stream.zeroize();
+        }
+        n = n.wrapping_add(chunk.len().div_ceil(BLOCK_LEN) as u32);
+    }
+    counter[12..].copy_from_slice(&n.to_be_bytes());
 }
 
 #[cfg(test)]

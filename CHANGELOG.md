@@ -3,6 +3,22 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Changed
+
+- **AES-GCM counter mode has an AES-NI kernel of its own**, and AES-128-GCM
+  over 16 KiB goes from 3.1 to 4.1 GiB/s; AES-256-GCM is now about 2.5 to
+  3x ahead of RustCrypto. GCM used to reach AES through `encrypt_blocks`
+  eight blocks per call, building the counters and XORing the keystream a
+  byte at a time around each call, which ran at 8.5 GiB/s where one call
+  runs at 15. `aes::x86::ctr32_xor` builds the counters in place, XORs the
+  keystream from registers, and is one call per message. It is reached
+  through a crate-private `Ctr32` trait, so no public trait changed; every
+  other backend keeps the previous loop, which the kernel is tested against
+  at every length from 0 to 300 bytes and at counters that wrap inside the
+  32-bit field partway through a group.
+
 ## 0.2.2
 
 A crash fix, a constant-time fix, and speed. One addition to the public

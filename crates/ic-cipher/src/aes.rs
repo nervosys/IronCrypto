@@ -332,6 +332,25 @@ macro_rules! aes_variant {
             }
         }
 
+        impl crate::gcm::Ctr32 for $name {
+            fn ctr32_xor(&self, counter: &mut [u8; BLOCK_LEN], data: &mut [u8]) -> Result<()> {
+                #[cfg(any(
+                    all(any(target_arch = "x86", target_arch = "x86_64"), feature = "std"),
+                    all(
+                        any(target_arch = "x86", target_arch = "x86_64"),
+                        not(feature = "std"),
+                        target_feature = "aes"
+                    )
+                ))]
+                if let Keys::Aesni(keys) = &self.0 {
+                    // SAFETY: this variant is only constructed after a feature check.
+                    unsafe { x86::ctr32_xor(keys, counter, data) };
+                    return Ok(());
+                }
+                crate::gcm::ctr32_xor_generic(self, counter, data)
+            }
+        }
+
         impl SelfTest for $name {
             fn self_test() -> Result<()> {
                 // FIPS 197 Appendix C: plaintext 00112233..ff.

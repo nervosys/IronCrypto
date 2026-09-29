@@ -248,6 +248,41 @@ impl Drop for Ghash {
     }
 }
 
+/// GCM's counter mode: XOR `data` with the keystream from `counter`,
+/// incrementing its last 32 bits big-endian (`inc32`).
+///
+/// A trait so the AES types can take their backend's own path; see
+/// `aes::x86::ctr32_xor`. The default is the portable construction, and it is
+/// what the accelerated path is tested against.
+pub(crate) trait Ctr32: BlockCipher {
+    fn ctr32_xor(&self, counter: &mut [u8; BLOCK_LEN], data: &mut [u8]) -> Result<()> {
+        ctr32_xor_generic(self, counter, data)
+    }
+}
+
+/// [`Ctr32`] through `encrypt_blocks`, eight blocks per call.
+pub(crate) fn ctr32_xor_generic<C: BlockCipher + ?Sized>(
+    cipher: &C,
+    counter: &mut [u8; BLOCK_LEN],
+    data: &mut [u8],
+) -> Result<()> {
+    const CTR_BATCH: usize = 8;
+    let mut keystream = [0u8; BLOCK_LEN * CTR_BATCH];
+    for chunk in data.chunks_mut(BLOCK_LEN * CTR_BATCH) {
+        let blocks = chunk.len().div_ceil(BLOCK_LEN);
+        for i in 0..blocks {
+            keystream[i * BLOCK_LEN..(i + 1) * BLOCK_LEN].copy_from_slice(counter);
+            increment_be32(counter);
+        }
+        cipher.encrypt_blocks(&mut keystream[..blocks * BLOCK_LEN])?;
+        for (d, k) in chunk.iter_mut().zip(keystream.iter()) {
+            *d ^= k;
+        }
+    }
+    keystream.zeroize();
+    Ok(())
+}
+
 /// Derive the initial counter block J0 from a nonce of any length.
 fn derive_j0(nonce: &[u8], h: &[u8; BLOCK_LEN]) -> [u8; BLOCK_LEN] {
     if nonce.len() == 12 {
@@ -266,7 +301,7 @@ fn derive_j0(nonce: &[u8], h: &[u8; BLOCK_LEN]) -> [u8; BLOCK_LEN] {
 }
 
 /// Shared GCM machinery over any 128-bit block cipher.
-fn gcm_core<C: BlockCipher>(
+fn gcm_core<C: Ctr32>(
     cipher: &C,
     nonce: &[u8],
     aad: &[u8],
@@ -298,24 +333,10 @@ fn gcm_core<C: BlockCipher>(
         g.update_padded(in_out);
     }
 
-    // CTR starting at inc32(J0), batched so an accelerated backend can keep its
-    // pipeline full.
-    const CTR_BATCH: usize = 8;
+    // CTR starting at inc32(J0).
     let mut counter = j0;
     increment_be32(&mut counter);
-    let mut keystream = [0u8; BLOCK_LEN * CTR_BATCH];
-    for chunk in in_out.chunks_mut(BLOCK_LEN * CTR_BATCH) {
-        let blocks = chunk.len().div_ceil(BLOCK_LEN);
-        for i in 0..blocks {
-            keystream[i * BLOCK_LEN..(i + 1) * BLOCK_LEN].copy_from_slice(&counter);
-            increment_be32(&mut counter);
-        }
-        cipher.encrypt_blocks(&mut keystream[..blocks * BLOCK_LEN])?;
-        for (d, k) in chunk.iter_mut().zip(keystream.iter()) {
-            *d ^= k;
-        }
-    }
-    keystream.zeroize();
+    cipher.ctr32_xor(&mut counter, in_out)?;
 
     if encrypting {
         g.update_padded(in_out);
@@ -418,6 +439,62 @@ aes_gcm!(Aes256Gcm, Aes256, "aes-256-gcm", "AES-256-GCM", 32);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The backend's counter mode against the generic one, on the portable
+    /// cipher.
+    ///
+    /// The specification vectors are at most four blocks, so they never reach
+    /// the kernel's whole-group path more than once, never cross the 32-bit
+    /// counter wrap, and never end a message partway through a group. This
+    /// covers every length from 0 to 300 bytes at counters that wrap inside a
+    /// group, and the counter left behind.
+    #[test]
+    fn the_backend_counter_mode_agrees_with_the_generic_one() {
+        use crate::aes::{Aes128, Aes256, Backend};
+        type CtrFn = std::boxed::Box<dyn Fn(&mut [u8; 16], &mut [u8])>;
+        let mut checked = 0;
+        for key_len in [16usize, 32] {
+            let key: std::vec::Vec<u8> = (0..key_len).map(|i| (i * 7 + 3) as u8).collect();
+            let (fast, slow): (CtrFn, CtrFn) = if key_len == 16 {
+                let f = Aes128::new(&key).unwrap();
+                let s = Aes128::new_portable(&key).unwrap();
+                if crate::aes::aesni_available() {
+                    assert_eq!(f.backend(), Backend::Aesni);
+                }
+                (
+                    std::boxed::Box::new(move |c, d| f.ctr32_xor(c, d).unwrap()),
+                    std::boxed::Box::new(move |c, d| ctr32_xor_generic(&s, c, d).unwrap()),
+                )
+            } else {
+                let f = Aes256::new(&key).unwrap();
+                let s = Aes256::new_portable(&key).unwrap();
+                (
+                    std::boxed::Box::new(move |c, d| f.ctr32_xor(c, d).unwrap()),
+                    std::boxed::Box::new(move |c, d| ctr32_xor_generic(&s, c, d).unwrap()),
+                )
+            };
+            // A counter far from the edge, and ones that wrap inside the last
+            // 32 bits partway through a group of eight.
+            for tail in [0x0000_0001u32, 0xffff_fffd, 0xffff_fff9, 0xffff_ffff] {
+                for len in 0..=300usize {
+                    let mut counter = [0x5au8; 16];
+                    counter[12..].copy_from_slice(&tail.to_be_bytes());
+                    let data: std::vec::Vec<u8> = (0..len).map(|i| (i * 13) as u8).collect();
+                    let (mut a, mut b) = (data.clone(), data.clone());
+                    let (mut ca, mut cb) = (counter, counter);
+                    fast(&mut ca, &mut a);
+                    slow(&mut cb, &mut b);
+                    assert_eq!(a, b, "key {key_len}, counter tail {tail:#x}, {len} bytes");
+                    assert_eq!(
+                        ca, cb,
+                        "final counter, key {key_len}, tail {tail:#x}, {len} bytes"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 2 * 4 * 301);
+    }
 
     /// The four-at-a-time path must agree with the one-at-a-time path.
     ///

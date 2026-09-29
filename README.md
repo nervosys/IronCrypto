@@ -524,9 +524,9 @@ builds were going.
 
 | operation | against the fastest Rust implementation |
 |---|---|
+| AES-256-GCM | **~2.5x faster** |
 | P-256 public key | **~2.2x faster** |
 | ECDSA P-256, sign | **~2.0x faster** |
-| AES-256-GCM | **~2.0x faster** |
 | ECDSA P-256, verify | **~1.4x faster** |
 | X25519 agreement | **~1.3x faster** |
 | AES-256 blocks, AES-NI | **~1.25x faster** |
@@ -555,7 +555,9 @@ nothing compared it against anything, which is why these two rows exist now.
 AES-256-GCM was 1.4x ahead until GHASH, measured on its own, turned out to be
 three quarters of the time: it reduced every product and passed each one back
 through memory. Eight products summed and reduced once took it from 2.6 to 6.6
-GiB/s, and the AEAD from 1.8 to 3.1.
+GiB/s, and the AEAD from 1.8 to 3.1. Counter mode then got a kernel of its own
+-- counters built in place, keystream XORed from registers, one call per
+message rather than one per eight blocks -- and the AEAD reached 4.1.
 
 Short HMAC is the one row still behind that wiping explains. RustCrypto's
 `hmac` does not zeroize by default; this library wipes both SHA-256 states and
