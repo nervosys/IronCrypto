@@ -3,7 +3,11 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.1
+
+Performance, and one fix that was also a performance problem. No public API
+changed, no algorithm changed, and every key, signature and shared secret is
+byte for byte what 0.2.0 produced.
 
 ### Fixed
 
