@@ -78,6 +78,14 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"
+# Kept on deliberately: an arithmetic bug in a cryptographic path should stop
+# the process, not produce a wrong key or tag that looks right. It costs a
+# branch per checked operation. On 64-bit targets those branches are never
+# taken, so they go the same way whatever the data. On 32-bit targets with no
+# carry flag the check's own flag can be built with a data-dependent branch;
+# see SECURITY.md. Only this workspace's binaries are affected: Cargo ignores
+# a dependency's profile, so a crate that depends on IronCrypto builds it with
+# its own setting, off by default in release.
 overflow-checks = true
 
 [profile.bench]
