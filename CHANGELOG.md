@@ -5,6 +5,21 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **X.509 certificate issuance**, `ic_pkix::cert`, for one profile: a CA and
+  the leaves it signs, with basic constraints, key usage, extended key usage
+  (TLS server and client), subject alternative names (DNS and IP) and key
+  identifiers, signed with ECDSA P-256 or P-384, Ed25519, or ML-DSA-44, -65 or
+  -87 (RFC 9881). Signing stays with the caller, since this crate performs no
+  cryptography: `write_tbs_certificate` gives the bytes to sign and
+  `write_certificate` wraps the signature. `write_ml_dsa_public_key` gives the
+  `SubjectPublicKeyInfo` for an ML-DSA subject. Parsing certificates remains
+  out of scope. Ed25519 and ML-DSA certificates are byte for byte those
+  OpenSSL 3.5.7 issues from the same inputs; ECDSA chains issued here pass
+  OpenSSL's `-x509_strict`. Requested by HyperMachine, to drop `rcgen` and
+  with it `ring`.
+
 ### Tests
 
 - **All six ML-KEM and ML-DSA parameter sets are checked against OpenSSL

@@ -17,12 +17,17 @@
 //! - [`ecdsa_signature`]: conversion between fixed-width `r || s` and the
 //!   `Ecdsa-Sig-Value` DER that X.509 and TLS carry.
 //! - [`pem`]: RFC 7468 textual encoding.
+//! - [`cert`]: X.509 certificate *issuance*, for one fixed profile: a CA and
+//!   the leaves it signs, under ECDSA, Ed25519 or ML-DSA. Certificates it
+//!   writes are checked byte for byte against OpenSSL's.
 //!
 //! # What it does not do
 //!
 //! - **No certificate parsing.** Reading an X.509 certificate means parsing
 //!   names, validity, extensions, and policy — a much larger surface, and one
-//!   where a partial implementation is worse than none. Hand the
+//!   where a partial implementation is worse than none. Writing one is not the
+//!   same problem: [`cert`] emits only what it chooses to, so the question is
+//!   whether that is correct rather than whether every input can be handled. Hand the
 //!   `SubjectPublicKeyInfo` bytes from an existing X.509 parser to
 //!   [`PublicKeyInfo::from_der`].
 //! - **No encrypted PKCS#8.** `EncryptedPrivateKeyInfo` needs PBES2 and a
@@ -66,6 +71,7 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod cert;
 pub mod der;
 pub mod ecdsa_signature;
 pub mod oid;

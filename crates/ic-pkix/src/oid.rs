@@ -33,6 +33,35 @@ pub const ED25519: &[u8] = &[0x2b, 0x65, 0x70];
 /// `id-X25519`, 1.3.101.110 (RFC 8410).
 pub const X25519: &[u8] = &[0x2b, 0x65, 0x6e];
 
+/// `ecdsa-with-SHA256`, 1.2.840.10045.4.3.2.
+pub const ECDSA_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+/// `ecdsa-with-SHA384`, 1.2.840.10045.4.3.3.
+pub const ECDSA_WITH_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
+/// `id-ml-dsa-44`, 2.16.840.1.101.3.4.3.17.
+pub const ML_DSA_44: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x11];
+/// `id-ml-dsa-65`, 2.16.840.1.101.3.4.3.18.
+pub const ML_DSA_65: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12];
+/// `id-ml-dsa-87`, 2.16.840.1.101.3.4.3.19.
+pub const ML_DSA_87: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13];
+/// `id-at-commonName`, 2.5.4.3.
+pub const COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
+/// `id-ce-subjectKeyIdentifier`, 2.5.29.14.
+pub const SUBJECT_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x0e];
+/// `id-ce-keyUsage`, 2.5.29.15.
+pub const KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
+/// `id-ce-subjectAltName`, 2.5.29.17.
+pub const SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1d, 0x11];
+/// `id-ce-basicConstraints`, 2.5.29.19.
+pub const BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
+/// `id-ce-authorityKeyIdentifier`, 2.5.29.35.
+pub const AUTHORITY_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1d, 0x23];
+/// `id-ce-extKeyUsage`, 2.5.29.37.
+pub const EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
+/// `id-kp-serverAuth`, 1.3.6.1.5.5.7.3.1.
+pub const SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+/// `id-kp-clientAuth`, 1.3.6.1.5.5.7.3.2.
+pub const CLIENT_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02];
+
 /// The algorithm an object identifier names, for the key formats this crate
 /// understands.
 ///
@@ -179,6 +208,56 @@ mod tests {
             (P521, &[1, 3, 132, 0, 35], "secp521r1"),
             (ED25519, &[1, 3, 101, 112], "id-Ed25519"),
             (X25519, &[1, 3, 101, 110], "id-X25519"),
+            (
+                ECDSA_WITH_SHA256,
+                &[1, 2, 840, 10045, 4, 3, 2],
+                "ecdsa-with-SHA256",
+            ),
+            (
+                ECDSA_WITH_SHA384,
+                &[1, 2, 840, 10045, 4, 3, 3],
+                "ecdsa-with-SHA384",
+            ),
+            (
+                ML_DSA_44,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 17],
+                "id-ml-dsa-44",
+            ),
+            (
+                ML_DSA_65,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 18],
+                "id-ml-dsa-65",
+            ),
+            (
+                ML_DSA_87,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 19],
+                "id-ml-dsa-87",
+            ),
+            (COMMON_NAME, &[2, 5, 4, 3], "id-at-commonName"),
+            (
+                SUBJECT_KEY_IDENTIFIER,
+                &[2, 5, 29, 14],
+                "id-ce-subjectKeyIdentifier",
+            ),
+            (KEY_USAGE, &[2, 5, 29, 15], "id-ce-keyUsage"),
+            (SUBJECT_ALT_NAME, &[2, 5, 29, 17], "id-ce-subjectAltName"),
+            (BASIC_CONSTRAINTS, &[2, 5, 29, 19], "id-ce-basicConstraints"),
+            (
+                AUTHORITY_KEY_IDENTIFIER,
+                &[2, 5, 29, 35],
+                "id-ce-authorityKeyIdentifier",
+            ),
+            (EXTENDED_KEY_USAGE, &[2, 5, 29, 37], "id-ce-extKeyUsage"),
+            (
+                SERVER_AUTH,
+                &[1, 3, 6, 1, 5, 5, 7, 3, 1],
+                "id-kp-serverAuth",
+            ),
+            (
+                CLIENT_AUTH,
+                &[1, 3, 6, 1, 5, 5, 7, 3, 2],
+                "id-kp-clientAuth",
+            ),
         ];
         for (constant, arcs, name) in cases {
             assert_eq!(*constant, &encode_oid(arcs)[..], "{name}");

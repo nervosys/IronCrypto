@@ -324,6 +324,11 @@ The ontology registers algorithms this library does **not** provide, marked
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
   `SubjectPublicKeyInfo` from any X.509 parser to `ic_pkix::PublicKeyInfo`.
+  *Issuing* certificates is in scope, for one profile -- a CA and the leaves it
+  signs, with basic constraints, key usage, extended key usage, alternative
+  names and key identifiers -- in `ic_pkix::cert`. Writing only what it chooses
+  to is a small surface, and every certificate it writes for Ed25519 and
+  ML-DSA is checked byte for byte against OpenSSL's.
 ### Timing
 
 ```sh
