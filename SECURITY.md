@@ -140,6 +140,20 @@ decoders accumulate validity behind a barrier and reject once, at the end; the
 compiled code on all four targets was re-read, and branches only on lengths,
 positions, and that final verdict.
 
+**AES key wrap with padding (KWP) branched on the unauthenticated length.**
+Unwrapping decrypts a length field before anything is authenticated. The
+check of that length short-circuited, and the padding check then looped from
+it to the end of the block, so timing revealed, for a forged ciphertext,
+whether it decrypted to a plausible length and what that length was mod 8: a
+partial decryption oracle, of the padding-oracle kind. Its comment said the
+checks were accumulated so the failure would not say which part was wrong;
+the code did not do that. Since 2026-09-29 the length is checked with 32-bit
+masks and all eight bytes of the last semiblock are read and masked, and the
+compiled check has no branches on any of the four targets. A first attempt
+compared in `i64`, and 32-bit RISC-V compiled that into a branch on the high
+words -- which is why these checks are re-read in assembly rather than
+trusted from source.
+
 The functions examined: NIST field addition, subtraction, Montgomery
 multiplication and inversion; point addition and doubling on all three
 curves; the windowed scalar multiplication and its table lookup; ECDSA

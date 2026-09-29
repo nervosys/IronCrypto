@@ -7,6 +7,14 @@ all of them.
 
 ### Security
 
+- **AES-KWP unwrap no longer branches on the unauthenticated length.** The
+  length field is decrypted before anything is authenticated; its
+  plausibility check short-circuited and the padding check looped from it, so
+  timing on a forged ciphertext revealed whether it decrypted to a plausible
+  length and that length mod 8. Both are now masks over fixed work, and the
+  compiled check has no branches on x86-64, Cortex-M0, Cortex-M4 or 32-bit
+  RISC-V. Results are unchanged: the SP 800-38F length rule and the zero
+  padding rule are the same, and every vector passes.
 - **Hex and Base64 no longer branch on the characters of a secret.** PEM
   private keys are Base64 and the CLI takes keys as hex. The decoders' source
   was branch-free, but checking each character's validity with an early

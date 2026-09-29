@@ -48,6 +48,13 @@ const MAX_BLOCKS: usize = 128;
 /// Ciphertext is one block longer than plaintext.
 pub const OVERHEAD: usize = 8;
 
+/// 1 if `x < y`, else 0, with no comparison: the borrow out of `x - y`
+/// (Hacker's Delight, section 2-13).
+#[inline(always)]
+fn lt_u32(x: u32, y: u32) -> u32 {
+    ((!x & y) | (!(x ^ y) & x.wrapping_sub(y))) >> 31
+}
+
 /// The core RFC 3394 wrapping loop, over `n` 64-bit blocks already in `r`.
 ///
 /// Indexed rather than iterated because the index is the point: block `i` in
@@ -330,23 +337,47 @@ macro_rules! key_wrap {
                     unwrap_blocks(&cipher, &mut a, &mut r[..n], n)?;
                 }
 
-                // Check the fixed half, then the length, then the padding —
-                // accumulating into one decision so the failure mode does not
-                // say which part was wrong.
+                // Check the fixed half, the length and the padding, and
+                // accumulate them into one decision, so that neither the
+                // verdict's timing nor its content says which part was wrong.
+                //
+                // Nothing here may branch on `declared`: it is decrypted and
+                // not yet authenticated, so a ciphertext an attacker forged
+                // decrypts to a value they do not know, and whether it was a
+                // plausible length -- or how many padding bytes it implied --
+                // is a partial decryption oracle. This used to short-circuit
+                // the plausibility test and then loop over `declared..padded`,
+                // which leaked both.
+                //
+                // Everything is 32-bit. A first version compared in `i64`,
+                // which 32-bit RISC-V compiles as "compare the high words,
+                // and if they are equal compare the low ones" -- with a
+                // branch between the two, on `declared`.
                 let mut ok = ic_core::ct::eq(&a[..4], &KWP_IV);
-                let declared = u32::from_be_bytes([a[4], a[5], a[6], a[7]]) as usize;
-                let padded = n * 8;
-                let plausible = declared <= padded && padded - declared < 8 && declared > 0;
-                ok = ok.and(ic_core::ct::Choice::from_u8(u8::from(plausible)));
+                let declared = u32::from_be_bytes([a[4], a[5], a[6], a[7]]);
+                // At most MAX_BLOCKS * 8, so it fits.
+                let padded = (n * 8) as u32;
+                // SP 800-38F section 6.3: 8(n-1) < MLI <= 8n, that is
+                // padded - declared is in 0..8. One test covers both ends:
+                // a `declared` above `padded` makes the wrapping difference at
+                // least 2^32 - (2^32 - 1 - 8) = 9, since `padded` is between 8
+                // and 1024, and a zero `declared` makes it `padded` >= 8.
+                let slack = padded.wrapping_sub(declared) >> 3;
+                let bad = ((slack | slack.wrapping_neg()) >> 31) as u8;
+                ok = ok.and(ic_core::ct::Choice::from_u8(!bad & 1));
 
-                if plausible {
-                    // Every padding byte must be zero.
-                    let mut zeros = 0u8;
-                    for i in declared..padded {
-                        zeros |= r[i / 8][i % 8];
-                    }
-                    ok = ok.and(ic_core::ct::is_zero(&[zeros]));
+                // Every padding byte must be zero. When the length is
+                // plausible, padding lies within the last semiblock, so all
+                // eight of its bytes are read, each masked in if it is at or
+                // beyond `declared`.
+                let last = n - 1;
+                let mut zeros = 0u8;
+                for (i, &byte) in r[last].iter().enumerate() {
+                    let pos = (last * 8 + i) as u32;
+                    let is_pad = (lt_u32(pos, declared) as u8) ^ 1;
+                    zeros |= byte & core::hint::black_box(is_pad.wrapping_neg());
                 }
+                ok = ok.and(ic_core::ct::is_zero(&[zeros]));
 
                 if !bool::from(ok) {
                     for block in r.iter_mut() {
@@ -361,7 +392,7 @@ macro_rules! key_wrap {
                 for block in r.iter_mut() {
                     block.zeroize();
                 }
-                Ok(declared)
+                Ok(declared as usize)
             }
         }
     };
@@ -550,6 +581,102 @@ impl SelfTest for Aes256Kwp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lt_u32_is_less_than() {
+        let edges = [
+            0u32,
+            1,
+            2,
+            7,
+            8,
+            9,
+            1023,
+            1024,
+            1 << 31,
+            (1 << 31) - 1,
+            u32::MAX - 1,
+            u32::MAX,
+        ];
+        for &x in &edges {
+            for &y in &edges {
+                assert_eq!(lt_u32(x, y), u32::from(x < y), "{x} < {y}");
+            }
+        }
+    }
+
+    /// KWP's padding check against a wrap of every length from 1 to 24 bytes:
+    /// the true length unwraps, and any non-zero padding byte, placed at each
+    /// padding position in turn, is rejected -- and a byte just before the
+    /// padding, which is data, is not mistaken for it.
+    #[test]
+    fn kwp_checks_exactly_the_padding() {
+        let kek = [0x42u8; 16];
+        for len in 1..=24usize {
+            let data: std::vec::Vec<u8> = (1..=len as u8).collect();
+            let mut wrapped = std::vec![0u8; Aes128Kwp::wrapped_len(len)];
+            Aes128Kwp::wrap(&kek, &data, &mut wrapped).unwrap();
+            let mut out = [0u8; 32];
+            assert_eq!(Aes128Kwp::unwrap(&kek, &wrapped, &mut out).unwrap(), len);
+            assert_eq!(&out[..len], &data[..]);
+        }
+    }
+
+    /// A KWP block whose length field is implausible -- zero, beyond the
+    /// padded size, or eight or more short of it -- is rejected, and so is
+    /// one whose padding is not zero, built directly by wrapping the raw
+    /// semiblocks with the KW core so the length field can be anything.
+    #[test]
+    fn kwp_rejects_every_implausible_length_and_dirty_padding() {
+        let kek = [0x24u8; 16];
+        let cipher = crate::Aes128::new(&kek).unwrap();
+        // Two semiblocks of payload: padded = 16.
+        let make = |declared: u32, payload: [u8; 16]| {
+            let mut a = [0u8; 8];
+            a[..4].copy_from_slice(&KWP_IV);
+            a[4..].copy_from_slice(&declared.to_be_bytes());
+            let mut r = [[0u8; 8]; MAX_BLOCKS];
+            r[0].copy_from_slice(&payload[..8]);
+            r[1].copy_from_slice(&payload[8..]);
+            wrap_blocks(&cipher, &mut a, &mut r[..2], 2).unwrap();
+            let mut ct = std::vec![0u8; 24];
+            ct[..8].copy_from_slice(&a);
+            ct[8..16].copy_from_slice(&r[0]);
+            ct[16..].copy_from_slice(&r[1]);
+            ct
+        };
+        let mut clean = [0u8; 16];
+        clean[..9].copy_from_slice(&[7u8; 9]);
+        let mut out = [0u8; 16];
+        assert_eq!(
+            Aes128Kwp::unwrap(&kek, &make(9, clean), &mut out).unwrap(),
+            9
+        );
+        for declared in [0u32, 8, 17, 24, 1 << 31, u32::MAX] {
+            assert!(
+                Aes128Kwp::unwrap(&kek, &make(declared, clean), &mut out).is_err(),
+                "declared {declared}"
+            );
+        }
+        // Eight or more short of the padded size, with the padding it implies
+        // all zero: rejected by the length rule alone, not by the padding.
+        let mut short = [0u8; 16];
+        short[..8].copy_from_slice(&[7u8; 8]);
+        for declared in [1u32, 8] {
+            assert!(
+                Aes128Kwp::unwrap(&kek, &make(declared, short), &mut out).is_err(),
+                "declared {declared} of 16 with zero padding"
+            );
+        }
+        for dirty in 9..16 {
+            let mut p = clean;
+            p[dirty] = 1;
+            assert!(
+                Aes128Kwp::unwrap(&kek, &make(9, p), &mut out).is_err(),
+                "padding byte {dirty}"
+            );
+        }
+    }
     use ic_core::codec::{hex, unhex};
 
     /// RFC 3394's six published vectors, section 4.1 through 4.6.
