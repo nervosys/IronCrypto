@@ -85,7 +85,7 @@ impl Curve for P521 {
 
     /// `b = 0x0051953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef1`
     ///     `09e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00`
-    const B: Fp = Fp::to_mont([
+    const B: Fp = Fp::to_mont_const([
         0xef45_1fd4_6b50_3f00,
         0x3573_df88_3d2c_34f1,
         0x1652_c0bd_3bb1_bf07,
@@ -97,7 +97,7 @@ impl Curve for P521 {
         0x0000_0000_0000_0051,
     ]);
 
-    const GX: Fp = Fp::to_mont([
+    const GX: Fp = Fp::to_mont_const([
         0xf97e_7e31_c2e5_bd66,
         0x3348_b3c1_856a_429b,
         0xfe1d_c127_a2ff_a8de,
@@ -109,7 +109,7 @@ impl Curve for P521 {
         0x0000_0000_0000_00c6,
     ]);
 
-    const GY: Fp = Fp::to_mont([
+    const GY: Fp = Fp::to_mont_const([
         0x88be_9476_9fd1_6650,
         0x353c_7086_a272_c240,
         0xc550_b901_3fad_0761,

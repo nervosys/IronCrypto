@@ -55,21 +55,21 @@ impl Curve for P256 {
     const ORDER_BITS: usize = 256;
 
     /// `b = 0x5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b`
-    const B: Fp = Fp::to_mont([
+    const B: Fp = Fp::to_mont_const([
         0x3bce_3c3e_27d2_604b,
         0x651d_06b0_cc53_b0f6,
         0xb3eb_bd55_7698_86bc,
         0x5ac6_35d8_aa3a_93e7,
     ]);
 
-    const GX: Fp = Fp::to_mont([
+    const GX: Fp = Fp::to_mont_const([
         0xf4a1_3945_d898_c296,
         0x7703_7d81_2deb_33a0,
         0xf8bc_e6e5_63a4_40f2,
         0x6b17_d1f2_e12c_4247,
     ]);
 
-    const GY: Fp = Fp::to_mont([
+    const GY: Fp = Fp::to_mont_const([
         0xcbb6_4068_37bf_51f5,
         0x2bce_3357_6b31_5ece,
         0x8ee7_eb4a_7c0f_9e16,

@@ -65,7 +65,7 @@ impl Curve for P384 {
 
     /// `b = 0xb3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875a`
     ///     `c656398d8a2ed19d2a85c8edd3ec2aef`
-    const B: Fp = Fp::to_mont([
+    const B: Fp = Fp::to_mont_const([
         0x2a85_c8ed_d3ec_2aef,
         0xc656_398d_8a2e_d19d,
         0x0314_088f_5013_875a,
@@ -74,7 +74,7 @@ impl Curve for P384 {
         0xb331_2fa7_e23e_e7e4,
     ]);
 
-    const GX: Fp = Fp::to_mont([
+    const GX: Fp = Fp::to_mont_const([
         0x3a54_5e38_7276_0ab7,
         0x5502_f25d_bf55_296c,
         0x59f7_41e0_8254_2a38,
@@ -83,7 +83,7 @@ impl Curve for P384 {
         0xaa87_ca22_be8b_0537,
     ]);
 
-    const GY: Fp = Fp::to_mont([
+    const GY: Fp = Fp::to_mont_const([
         0x7a43_1d7c_90ea_0e5f,
         0x0a60_b1ce_1d7e_819d,
         0xe9da_3113_b5f0_b8c0,

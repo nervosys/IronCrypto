@@ -46,6 +46,36 @@ What remains unverified is interoperability in the wider sense: matching NIST's
 vectors shows the algorithms are right, not that a handshake with some other
 implementation completes.
 
+**Constant time is a property of the compiled code, and on 32-bit RISC-V it
+does not hold for the curves or RSA.** The source is written without branches
+or table indices on secrets, but a compiler can put them back: a CPU with no
+conditional-move instruction gets a branch wherever the optimiser recognises a
+choice between two values. The machine code was examined on 2026-09-29, built
+with rustc 1.98.1 as a downstream crate builds it (release, overflow checks
+off). Every conditional branch in the functions below was traced to its
+source line:
+
+| target | elliptic-curve and RSA arithmetic on secrets |
+|---|---|
+| x86-64 | no secret-dependent branches found |
+| Cortex-M4 (`thumbv7em`) | none found: conditional execution covers the selects |
+| Cortex-M0 (`thumbv6m`) | none found. In 0.2.1 and earlier, NIST field subtraction branched on its borrow: 8 branches per P-256 point addition, 6 per doubling |
+| 32-bit RISC-V (`riscv32imac`) | **branches on secret data**: 64- and 128-bit carries are built from 32-bit comparisons joined by branches. Ed25519 and X25519 share a field with 20 per multiplication and 100 per point doubling; NIST point addition has 91 on P-256 and 248 on P-521; RSA Montgomery multiplication has 6 |
+
+On 32-bit RISC-V, do not rely on ECDSA, ECDH, Ed25519, X25519 or RSA private
+operations to be constant time. The fix is a field implementation on 32-bit
+limbs, as dalek and RustCrypto have for such targets, and it has not been
+written. Poly1305 and POLYVAL were checked on both 32-bit targets, and their
+only branches are on public lengths and loop indices. AES, ChaCha20, SHA-2,
+SHA-3, ML-KEM and ML-DSA were not examined at this level.
+
+The functions examined: NIST field addition, subtraction, Montgomery
+multiplication and inversion; point addition and doubling on all three
+curves; the windowed scalar multiplication and its table lookup; and Ed25519's
+field multiplication, point addition, doubling and windowed multiplication.
+Loop counters with fixed trip counts, and overflow checks that never fire on
+valid values, were set aside as not secret-dependent.
+
 **There is no transitive dependency surface.** IronCrypto has zero third-party
 dependencies, enforced in CI by a check over `cargo tree`. No advisory against
 another crate can apply to it. That is a narrow claim and it is worth being

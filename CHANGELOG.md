@@ -3,6 +3,40 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Security
+
+- **NIST-curve field subtraction branched on a secret on Cortex-M0.** Adding
+  the modulus back after a borrow added it as a constant, and the compiler
+  specialised the carry chain around P-256's and P-384's limbs, which are 0
+  and 2^32 - 1, into selects. Cortex-M0 has no conditional move, so each
+  select became a branch on the borrow: 8 per P-256 point addition and 6 per
+  doubling, in the arithmetic of ECDSA signing, ECDH and key generation.
+  Subtraction now adds `m & mask`, with the mask behind `black_box`. That
+  leaves nothing to specialise, and it is one addition where it was an
+  addition and a selection. Every NIST point, field and lookup function now
+  compiles for `thumbv6m` with no branch on secret data. Found by reading the
+  generated code, not by a test: the source had no branch to find.
+- Every runtime selection in the NIST field code goes through a new
+  `select_ct`, which puts the same `black_box` barrier on its mask that
+  `ic_core::ct::Choice` does. This is defence in depth: with rustc 1.98,
+  removing it brings no branch back. It costs up to 5% on x86-64. The curve
+  constants computed at compile time use `to_mont_const` and
+  `mont_mul_const`, which cannot use the barrier. The runtime versions keep
+  the original names, so a constant that reached for one would not compile.
+
+### Documentation
+
+- **On 32-bit RISC-V the curve and RSA arithmetic is not constant time**, and
+  `SECURITY.md` now says so, with a table of what was checked on which target.
+  Without a carry flag or a conditional move, the compiler builds 64- and
+  128-bit carries from 32-bit comparisons joined by branches, in the Ed25519
+  and X25519 field, the NIST fields and RSA's Montgomery multiplication. The
+  fix is a field implementation on 32-bit limbs, and it has not been written.
+  The README's "portable constant-time everywhere" was wrong for that target
+  and now says so.
+
 ## 0.2.1
 
 Performance, and one fix that was also a performance problem. No public API

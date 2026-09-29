@@ -70,6 +70,30 @@ pub(crate) const fn select<const N: usize>(mask: u64, a: [u64; N], b: [u64; N]) 
     out
 }
 
+/// [`select`] behind an optimisation barrier, for every runtime use.
+///
+/// `select` is branch-free as written, but its mask is almost always
+/// `flag.wrapping_neg()` for a flag the compiler can see is 0 or 1 -- a carry, a
+/// borrow. A compiler that knows that may recognise `b ^ (mask & (a ^ b))` as
+/// "choose `a` or `b`", and on a CPU with no conditional move, such as
+/// Cortex-M0, emit a branch on a secret. `black_box` hides the mask's range,
+/// the same barrier `ic_core::ct::Choice` puts on every value it releases.
+///
+/// Defence in depth rather than a fix, and worth being exact about: with rustc
+/// 1.98 no branch comes back on Cortex-M0 or RISC-V when the barrier is
+/// removed. The branches that were there came from field subtraction adding
+/// the modulus as a constant; see `sub`. It costs up to five percent on
+/// x86-64 and is kept because relying on the optimiser's current choices is
+/// what this workspace's constant-time policy exists to avoid.
+///
+/// `select` itself stays `const`, and barrier-free, for the curve constants
+/// computed at compile time, where nothing is secret and `black_box` is not
+/// allowed.
+#[inline]
+pub(crate) fn select_ct<const N: usize>(mask: u64, a: [u64; N], b: [u64; N]) -> [u64; N] {
+    select(core::hint::black_box(mask), a, b)
+}
+
 /// Double `x` modulo `m`, in constant time.
 #[inline]
 const fn double_mod<const N: usize>(x: [u64; N], m: [u64; N]) -> [u64; N] {
@@ -213,8 +237,15 @@ macro_rules! mont_field {
             /// `-m^-1 mod 2^64`.
             const NEG_INV: u64 = $crate::nist::arith::compute_neg_inv($modulus[0]);
 
-            /// Montgomery multiplication (CIOS), the core of this module.
-            const fn mont_mul_raw(a: [u64; $limbs], b: [u64; $limbs]) -> [u64; $limbs] {
+            /// Montgomery multiplication (CIOS), the core of this module, up to
+            /// its last step: returns `t - m`, `t`, and whether the first is the
+            /// answer. [`Self::mont_mul_raw`] and [`Self::mont_mul_const`] make
+            /// that choice, one with a barrier and one without, so the arithmetic
+            /// exists once.
+            const fn mont_mul_parts(
+                a: [u64; $limbs],
+                b: [u64; $limbs],
+            ) -> ([u64; $limbs], [u64; $limbs], u64) {
                 // Scratch is sized for the widest supported curve rather than
                 // `$limbs + 2`, which Rust cannot yet express generically.
                 let mut t = [0u64; $crate::nist::arith::MAX_LIMBS + 2];
@@ -260,16 +291,41 @@ macro_rules! mont_field {
                 }
                 let (reduced, borrow) = $crate::nist::arith::sbb(lo, Self::MODULUS);
                 let need = t[$limbs] | (1 - borrow);
+                (reduced, lo, need)
+            }
+
+            /// Montgomery multiplication, constant time: the final subtraction
+            /// is chosen through [`select_ct`]($crate::nist::arith::select_ct).
+            #[inline]
+            fn mont_mul_raw(a: [u64; $limbs], b: [u64; $limbs]) -> [u64; $limbs] {
+                let (reduced, lo, need) = Self::mont_mul_parts(a, b);
+                $crate::nist::arith::select_ct(need.wrapping_neg(), reduced, lo)
+            }
+
+            /// Montgomery multiplication for compile-time constants only.
+            ///
+            /// `const`, so it cannot use the barrier [`Self::mont_mul_raw`] does,
+            /// and must not be used on a secret. Anything that is not a
+            /// constant cannot call it by accident in a `const` item, and
+            /// anything at runtime has no reason to.
+            const fn mont_mul_const(a: [u64; $limbs], b: [u64; $limbs]) -> [u64; $limbs] {
+                let (reduced, lo, need) = Self::mont_mul_parts(a, b);
                 $crate::nist::arith::select(need.wrapping_neg(), reduced, lo)
             }
 
-            /// Convert a plain integer into Montgomery form.
-            pub const fn to_mont(limbs: [u64; $limbs]) -> Self {
+            /// Convert a plain integer into Montgomery form, in constant time.
+            pub fn to_mont(limbs: [u64; $limbs]) -> Self {
                 Self(Self::mont_mul_raw(limbs, Self::R2))
             }
 
-            /// Convert out of Montgomery form.
-            pub const fn from_mont(&self) -> [u64; $limbs] {
+            /// [`Self::to_mont`] for a curve constant, evaluated at compile
+            /// time. Not for secrets: it skips the barrier `to_mont` has.
+            pub const fn to_mont_const(limbs: [u64; $limbs]) -> Self {
+                Self(Self::mont_mul_const(limbs, Self::R2))
+            }
+
+            /// Convert out of Montgomery form, in constant time.
+            pub fn from_mont(&self) -> [u64; $limbs] {
                 let mut one = [0u64; $limbs];
                 one[0] = 1;
                 Self::mont_mul_raw(self.0, one)
@@ -307,7 +363,7 @@ macro_rules! mont_field {
             type Bytes = [u8; $bytes];
 
             const ZERO: Self = Self([0u64; $limbs]);
-            const ONE: Self = Self(Self::mont_mul_raw(
+            const ONE: Self = Self(Self::mont_mul_const(
                 {
                     let mut one = [0u64; $limbs];
                     one[0] = 1;
@@ -322,7 +378,7 @@ macro_rules! mont_field {
                 let (sum, carry) = $crate::nist::arith::adc(self.0, other.0);
                 let (reduced, borrow) = $crate::nist::arith::sbb(sum, Self::MODULUS);
                 let need = carry | (1 - borrow);
-                Self($crate::nist::arith::select(
+                Self($crate::nist::arith::select_ct(
                     need.wrapping_neg(),
                     reduced,
                     sum,
@@ -332,13 +388,20 @@ macro_rules! mont_field {
             #[inline]
             fn sub(&self, other: &Self) -> Self {
                 let (diff, borrow) = $crate::nist::arith::sbb(self.0, other.0);
-                // On borrow, add the modulus back.
-                let (fixed, _) = $crate::nist::arith::adc(diff, Self::MODULUS);
-                Self($crate::nist::arith::select(
-                    borrow.wrapping_neg(),
-                    fixed,
-                    diff,
-                ))
+                // On borrow, add the modulus back: add `m & mask`, which is `m`
+                // or zero. Adding the modulus as a constant and then selecting
+                // let the compiler specialise the carry chain around its limbs
+                // -- P-256's are 0 and 2^32 - 1 -- into selects, which
+                // Cortex-M0 compiles to branches on the borrow. Masking behind
+                // the barrier leaves it nothing to specialise, and is one
+                // addition where that was an addition and a selection.
+                let mask = core::hint::black_box(borrow.wrapping_neg());
+                let mut m = Self::MODULUS;
+                for limb in m.iter_mut() {
+                    *limb &= mask;
+                }
+                let (fixed, _) = $crate::nist::arith::adc(diff, m);
+                Self(fixed)
             }
 
             #[inline]
@@ -390,7 +453,7 @@ macro_rules! mont_field {
             fn from_bytes_reduced(bytes: &Self::Bytes) -> Self {
                 let limbs: [u64; $limbs] = $crate::nist::arith::from_be_bytes(bytes.as_ref());
                 let (reduced, borrow) = $crate::nist::arith::sbb(limbs, Self::MODULUS);
-                let limbs = $crate::nist::arith::select(borrow.wrapping_neg(), limbs, reduced);
+                let limbs = $crate::nist::arith::select_ct(borrow.wrapping_neg(), limbs, reduced);
                 Self::to_mont(limbs)
             }
 
@@ -423,7 +486,7 @@ macro_rules! mont_field {
             #[inline]
             fn cmov(a: &mut Self, b: &Self, choice: ic_core::ct::Choice) {
                 let mask = (choice.unwrap_u8() as u64).wrapping_neg();
-                a.0 = $crate::nist::arith::select(mask, b.0, a.0);
+                a.0 = $crate::nist::arith::select_ct(mask, b.0, a.0);
             }
 
             #[inline]
