@@ -3,7 +3,12 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.3
+
+Every parameter set of both post-quantum standards, and faster AES-GCM.
+Everything is added; nothing is removed or changed. Every key, signature,
+MAC, ciphertext and shared secret the previous release could produce, this
+one produces byte for byte.
 
 ### Added
 
