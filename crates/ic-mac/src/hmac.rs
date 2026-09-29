@@ -12,8 +12,8 @@ const MAX_BLOCK_LEN: usize = 144;
 /// HMAC over the digest `D`.
 ///
 /// The key is processed per FIPS 198-1: hashed if longer than the block size,
-/// zero-padded otherwise. Both padded keys are zeroized before the constructor
-/// returns.
+/// zero-padded otherwise. The padded key, and the hash of a long key, are
+/// zeroized before the constructor returns.
 #[derive(Clone)]
 pub struct Hmac<D: Digest> {
     inner: D,
@@ -48,30 +48,38 @@ impl<D: HmacDigest> Mac for Hmac<D> {
             "digest block exceeds hmac buffer"
         );
 
-        let mut padded = [0u8; MAX_BLOCK_LEN];
+        // One buffer, built as the inner pad directly -- the zero-padded key
+        // XOR 0x36 -- and turned into the outer pad in place, since
+        // `k ^ 0x5c == (k ^ 0x36) ^ (0x36 ^ 0x5c)`. The wipe is volatile and
+        // byte by byte, which is what makes it stick and also what makes it
+        // cost: it now covers the one block this digest used, not two
+        // buffers sized for the widest digest there is. For SHA-256 that is
+        // 64 bytes where it was 288, on every HMAC key setup -- and HKDF sets
+        // up a key per call.
+        let mut pad = [0x36u8; MAX_BLOCK_LEN];
+        let block = &mut pad[..D::BLOCK_LEN];
         if key.len() > D::BLOCK_LEN {
-            let hashed = D::digest(key);
-            padded[..D::OUTPUT_LEN].copy_from_slice(hashed.as_ref());
+            let mut hashed = D::digest(key);
+            for (p, k) in block.iter_mut().zip(hashed.as_ref()) {
+                *p ^= k;
+            }
+            // Key-equivalent: HMAC under the hash is HMAC under the key.
+            hashed.as_mut().zeroize();
         } else {
-            padded[..key.len()].copy_from_slice(key);
+            for (p, k) in block.iter_mut().zip(key) {
+                *p ^= k;
+            }
         }
 
         let mut inner = D::new();
+        inner.update(block);
+        for p in block.iter_mut() {
+            *p ^= 0x36 ^ 0x5c;
+        }
         let mut outer = D::new();
-        let mut pad = [0u8; MAX_BLOCK_LEN];
+        outer.update(block);
 
-        for i in 0..D::BLOCK_LEN {
-            pad[i] = padded[i] ^ 0x36;
-        }
-        inner.update(&pad[..D::BLOCK_LEN]);
-
-        for i in 0..D::BLOCK_LEN {
-            pad[i] = padded[i] ^ 0x5c;
-        }
-        outer.update(&pad[..D::BLOCK_LEN]);
-
-        pad.zeroize();
-        padded.zeroize();
+        block.zeroize();
         Ok(Self { inner, outer })
     }
 

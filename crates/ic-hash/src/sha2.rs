@@ -274,8 +274,15 @@ impl Core256 {
                 // The whole input fit in the partial block; nothing to compress.
                 return;
             }
+            // Through the dispatcher, not `compress`: that is the portable
+            // round function, and calling it here sent every block assembled
+            // in the buffer -- the tail of any message not a multiple of 64
+            // bytes, and every final padding block -- past SHA-NI. Short
+            // messages are mostly such blocks, so a 200-byte hash ran at a
+            // third of the bulk rate and HMAC, which finishes two hashes per
+            // tag, at about a quarter of what SHA-NI allows.
             let block = self.buf;
-            self.compress(&block);
+            self.compress_blocks(&block);
             self.buffered = 0;
         }
         let whole = data.len() - data.len() % 64;

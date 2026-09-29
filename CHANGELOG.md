@@ -26,6 +26,33 @@ all of them.
   `mont_mul_const`, which cannot use the barrier. The runtime versions keep
   the original names, so a constant that reached for one would not compile.
 
+### Changed
+
+- **SHA-256 on short inputs, and so HMAC and HKDF, is 2 to 3 times faster**
+  on x86-64 with SHA-NI. A block assembled in SHA-256's internal buffer --
+  the tail of any message not a multiple of 64 bytes, and every final
+  padding block -- was compressed by the portable round function, which also
+  wipes its schedule with volatile stores on every block. Only whole blocks
+  passed straight to `update` reached SHA-NI. Short messages are mostly such
+  blocks, so a 200-byte hash ran at a third of the bulk rate, and HMAC, which
+  finishes two hashes per tag, fared worse. Measured, best of nine: SHA-256
+  of 200 bytes from 278 to 141 ns, HMAC-SHA256 of 200 bytes from 785 to
+  304 ns, a 32-byte HKDF-Expand from 697 to 244 ns. Found from an
+  IronSocketLayer measurement against ring. Bulk hashing is unchanged.
+- HMAC key setup builds one pad and wipes the block it used, 64 bytes for
+  SHA-256, where it built two and wiped both at the widest digest's 144:
+  123 to 92 ns. When a key longer than a block is hashed first, that hash is
+  now wiped too; it is key-equivalent and was left on the stack.
+
+### Added
+
+- `Hkdf::expand_from`, HKDF-Expand from a MAC already keyed with the PRK, for
+  deriving several outputs from one secret -- a TLS 1.3 key, IV and finished
+  key -- without keying for each. Byte-for-byte `expand`'s output; it shares
+  the one expansion loop rather than copying it. Worth about 8% on that
+  three-label pattern now that key setup is cheap. Additive, so `expand` and
+  every existing caller are unchanged.
+
 ### Documentation
 
 - **On 32-bit RISC-V the curve and RSA arithmetic is not constant time**, and

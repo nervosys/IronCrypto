@@ -28,9 +28,42 @@ impl<M: Mac> Hkdf<M> {
     }
 
     /// HKDF-Expand: stretch a PRK to `out.len()` bytes bound to `info`.
+    ///
+    /// Keys a MAC with `prk` for every block of output. Deriving several
+    /// outputs from one PRK -- TLS 1.3 takes a key, an IV and a finished key
+    /// from each traffic secret -- is cheaper through [`Self::expand_from`],
+    /// which keys once.
     pub fn expand(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<()> {
+        ensure!(prk.len() >= M::TAG_LEN, InvalidLength, "hkdf prk too short");
+        Self::expand_with(|| M::new(prk), info, out)
+    }
+
+    /// HKDF-Expand from a MAC already keyed with the PRK.
+    ///
+    /// `keyed` is `M::new(prk)`, made once and kept. Each block of output
+    /// starts from a clone of it rather than from the key, so the key setup
+    /// -- for HMAC, two compressions of the padded key -- is paid when `keyed`
+    /// is made and not again per call or per block. The output is exactly
+    /// [`Self::expand`]'s for the same PRK.
+    ///
+    /// RFC 5869 requires the PRK to be at least `HashLen` bytes. `expand`
+    /// checks that; here the key is already inside `keyed`, so making it from
+    /// a PRK of the right length is the caller's part.
+    pub fn expand_from(keyed: &M, info: &[u8], out: &mut [u8]) -> Result<()>
+    where
+        M: Clone,
+    {
+        Self::expand_with(|| Ok(keyed.clone()), info, out)
+    }
+
+    /// The expansion loop both of those share; `keyed` supplies a MAC keyed
+    /// with the PRK for each block.
+    fn expand_with(
+        mut keyed: impl FnMut() -> Result<M>,
+        info: &[u8],
+        out: &mut [u8],
+    ) -> Result<()> {
         let n = M::TAG_LEN;
-        ensure!(prk.len() >= n, InvalidLength, "hkdf prk too short");
         // RFC 5869 caps output at 255 * HashLen because the counter is a byte.
         ensure!(
             out.len() <= 255 * n,
@@ -43,7 +76,7 @@ impl<M: Mac> Hkdf<M> {
         let mut counter: u8 = 1;
 
         for chunk in out.chunks_mut(n) {
-            let mut m = M::new(prk)?;
+            let mut m = keyed()?;
             m.update(&previous[..previous_len]);
             m.update(info);
             m.update(&[counter]);
@@ -181,6 +214,51 @@ mod tests {
         Hkdf::<HmacSha256>::derive(b"ikm", b"salt", b"context-a", &mut a).unwrap();
         Hkdf::<HmacSha256>::derive(b"ikm", b"salt", b"context-b", &mut b).unwrap();
         assert_ne!(a, b, "distinct info must yield independent keys");
+    }
+
+    /// `expand_from` against `expand`, over output lengths that end on a
+    /// block boundary, one byte either side of it, and many blocks in: the
+    /// clone per block is exactly what those exercise and a single-block
+    /// vector would not.
+    #[test]
+    fn expand_from_a_keyed_mac_matches_expand() {
+        let mut checked = 0;
+        for prk in [[0x0bu8; 32], [0xa5; 32]] {
+            let keyed = HmacSha256::new(&prk).unwrap();
+            for len in [1usize, 31, 32, 33, 64, 65, 200, 255 * 32] {
+                let mut a = std::vec![0u8; len];
+                let mut b = std::vec![0u8; len];
+                Hkdf::<HmacSha256>::expand(&prk, b"tls13 key", &mut a).unwrap();
+                Hkdf::<HmacSha256>::expand_from(&keyed, b"tls13 key", &mut b).unwrap();
+                assert_eq!(a, b, "length {len}");
+                checked += 1;
+            }
+        }
+        let prk = [0x5cu8; 64];
+        let keyed = HmacSha512::new(&prk).unwrap();
+        let (mut a, mut b) = ([0u8; 200], [0u8; 200]);
+        Hkdf::<HmacSha512>::expand(&prk, b"info", &mut a).unwrap();
+        Hkdf::<HmacSha512>::expand_from(&keyed, b"info", &mut b).unwrap();
+        assert_eq!(a, b);
+        assert!(checked >= 16);
+    }
+
+    /// The RFC 5869 case 1 output, reached through a keyed MAC.
+    #[test]
+    fn expand_from_reproduces_rfc5869_case_1() {
+        let ikm = [0x0bu8; 22];
+        let salt: std::vec::Vec<u8> = (0x00..=0x0c).collect();
+        let info: std::vec::Vec<u8> = (0xf0..=0xf9).collect();
+        let mut prk = [0u8; 32];
+        Hkdf::<HmacSha256>::extract(&salt, &ikm, &mut prk).unwrap();
+        let keyed = HmacSha256::new(&prk).unwrap();
+        let mut okm = [0u8; 42];
+        Hkdf::<HmacSha256>::expand_from(&keyed, &info, &mut okm).unwrap();
+        let mut expected = [0u8; 42];
+        Hkdf::<HmacSha256>::expand(&prk, &info, &mut expected).unwrap();
+        assert_eq!(okm, expected);
+        // The RFC's own bytes, which the `expand` test above also checks.
+        assert_eq!(&okm[..4], &[0x3c, 0xb2, 0x5f, 0x25]);
     }
 
     #[test]
