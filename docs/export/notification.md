@@ -53,14 +53,15 @@ for `ic-core`, the first crate of each release to upload:
 | 0.1.3 | 2026-09-23 17:01:29 | |
 | 0.2.0 | 2026-09-28 22:38:19 | |
 | 0.2.1 | 2026-09-29 02:37:52 | published after the maintainer confirmed, when asked, that the notification covers this release |
+| 0.2.2 | 2026-09-29 05:23:29 | published after the maintainer confirmed, when asked, that the notification covers this release |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
 `docs/RELEASING.md` treats each new version as an export in its own right. No
 separate notification for 0.1.1 onward is recorded. For 0.1.1 to 0.2.0,
 whether the original one was taken to cover them is not recorded either. For
-0.2.1 it is: the maintainer was asked before publishing whether the
-notification covers the release, and answered that it does.
+0.2.1 and 0.2.2 it is: the maintainer was asked before each publication
+whether the notification covers the release, and answered that it does.
 
 ## Determination
 
