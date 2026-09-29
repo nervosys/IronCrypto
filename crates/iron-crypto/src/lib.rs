@@ -52,10 +52,12 @@
 //! * **An RSA private key is about five kilobytes**, because every integer
 //!   inside is a fixed-capacity 4096-bit buffer. That is what keeps the crate
 //!   allocation free; box it on a small stack.
-//! * **Post-quantum means ML-KEM-768 and ML-DSA-65, and no other parameter
-//!   sets.** Both are checked against NIST's ACVP vectors -- 50 cases for
-//!   ML-KEM, 55 for ML-DSA -- and both are available in the approved mode and
-//!   through [`recommend`], with a constraint to deploy them in a hybrid.
+//! * **Post-quantum means all three ML-KEM parameter sets and ML-DSA-65.**
+//!   ML-KEM-512, -768 and -1024 are each checked against NIST's ACVP vectors,
+//!   50 cases apiece, and ML-DSA-65 against 55. All are available in the
+//!   approved mode; [`recommend`] offers ML-KEM-768 and ML-DSA-65, with a
+//!   constraint to deploy them in a hybrid. ML-DSA-44 and ML-DSA-87 are not
+//!   implemented.
 //!   SLH-DSA is not implemented; the ontology lists it as `planned` so that a
 //!   request for it resolves to an absence rather than to nothing.
 //! * **ARM gets hardware AES but not hardware GHASH.** x86-64 gets AES-NI and

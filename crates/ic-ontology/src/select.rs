@@ -489,7 +489,33 @@ fn build(intent: Intent, policy: Policy, base: Query) -> Recommendation {
                         None,
                     ],
                 ),
-                _ => fallback(base),
+                // A post-quantum policy leaves neither classical scheme, and
+                // there are three ML-KEM parameter sets to choose between.
+                (None, None) => match available("ml-kem-768") {
+                    Some(m) => (
+                        m,
+                        "ML-KEM-768 is FIPS 203's middle parameter set, security category 3, and \
+                         the one most protocols standardise on. Deploy it in a hybrid with X25519 \
+                         or a NIST curve, and derive the session key from both secrets.",
+                        available("ml-kem-1024"),
+                        [
+                            Some(Rejected {
+                                id: "ml-kem-512",
+                                reason: "Implemented and ACVP-checked, with the smallest keys and \
+                                         ciphertexts, but at category 1 it has the thinnest \
+                                         margin against lattice cryptanalysis, which is young. \
+                                         Choose it deliberately where size dominates.",
+                            }),
+                            Some(Rejected {
+                                id: "ml-kem-1024",
+                                reason: "Category 5, for a policy that requires it, at roughly \
+                                         a third more size and time than ML-KEM-768.",
+                            }),
+                            None,
+                        ],
+                    ),
+                    None => fallback(base),
+                },
             }
         }
         Intent::SignData => {
@@ -592,12 +618,17 @@ fn fallback(
     let primary = it
         .next()
         .expect("recommend() checked that a candidate exists");
-    (
-        primary,
-        "The only available algorithm matching the requested class and strength.",
-        it.next(),
-        [None, None, None],
-    )
+    let alternative = it.next();
+    // "The only" was true while every family had one member; with three
+    // ML-KEM parameter sets it would have told a caller there was no choice
+    // when there was.
+    let rationale = if alternative.is_some() {
+        "The first of several available algorithms matching the requested class and strength; \
+         no curated ranking covers this policy, so compare the alternative before choosing."
+    } else {
+        "The only available algorithm matching the requested class and strength."
+    };
+    (primary, rationale, alternative, [None, None, None])
 }
 
 #[cfg(test)]

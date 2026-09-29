@@ -1,6 +1,6 @@
 [package]
 name = "ic-mlkem"
-description = "ML-KEM-768 (FIPS 203) post-quantum key encapsulation for IronCrypto, checked against NIST ACVP vectors"
+description = "ML-KEM-512, ML-KEM-768 and ML-KEM-1024 (FIPS 203) post-quantum key encapsulation for IronCrypto, each checked against NIST ACVP vectors"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

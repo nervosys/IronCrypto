@@ -90,7 +90,7 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         name: "ic-mlkem",
-        description: "ML-KEM-768 (FIPS 203), checked against 50 NIST ACVP cases.",
+        description: "ML-KEM-512, -768 and -1024 (FIPS 203), each checked against 50 NIST ACVP cases.",
     },
     Component {
         name: "ic-mldsa",

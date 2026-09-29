@@ -92,6 +92,42 @@ fn run_ml_kem_768() -> Result<()> {
     Ok(())
 }
 
+/// `ml-kem-512`.
+const ML_KEM_512: &str = "let mut ek = [0u8; 800];
+let mut dk = [0u8; 1632];
+ic_mlkem::MlKem512::keygen(&mut rng, &mut ek, &mut dk)?;
+ic_mlkem::MlKem512::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;";
+
+fn run_ml_kem_512() -> Result<()> {
+    let mut rng = drbg::Rng::from_entropy(&[0x9au8; 32], b"examples")?;
+    let mut ct = [0u8; 768];
+    let mut secret = [0u8; 32];
+
+    let mut ek = [0u8; 800];
+    let mut dk = [0u8; 1632];
+    mlkem::MlKem512::keygen(&mut rng, &mut ek, &mut dk)?;
+    mlkem::MlKem512::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;
+    Ok(())
+}
+
+/// `ml-kem-1024`.
+const ML_KEM_1024: &str = "let mut ek = [0u8; 1568];
+let mut dk = [0u8; 3168];
+ic_mlkem::MlKem1024::keygen(&mut rng, &mut ek, &mut dk)?;
+ic_mlkem::MlKem1024::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;";
+
+fn run_ml_kem_1024() -> Result<()> {
+    let mut rng = drbg::Rng::from_entropy(&[0x9au8; 32], b"examples")?;
+    let mut ct = [0u8; 1568];
+    let mut secret = [0u8; 32];
+
+    let mut ek = [0u8; 1568];
+    let mut dk = [0u8; 3168];
+    mlkem::MlKem1024::keygen(&mut rng, &mut ek, &mut dk)?;
+    mlkem::MlKem1024::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;
+    Ok(())
+}
+
 /// `hkdf-sha2-256`.
 const HKDF_SHA256: &str = "ic_kdf::Hkdf::<ic_mac::HmacSha256>::derive(ikm, salt, info, &mut key)?;";
 
@@ -161,6 +197,8 @@ fn the_compiled_examples_match_the_registry() {
         ("aes-256-gcm", AES_256_GCM),
         ("ecdsa-p256-sha256", ECDSA_P256),
         ("ml-kem-768", ML_KEM_768),
+        ("ml-kem-512", ML_KEM_512),
+        ("ml-kem-1024", ML_KEM_1024),
         ("hkdf-sha2-256", HKDF_SHA256),
         ("aes-256-kwp", AES_256_KWP),
         ("ml-dsa-65", ML_DSA_65),
@@ -181,6 +219,8 @@ fn the_examples_run() {
     run_aes_256_gcm().expect("aes-256-gcm");
     run_ecdsa_p256().expect("ecdsa-p256-sha256");
     run_ml_kem_768().expect("ml-kem-768");
+    run_ml_kem_512().expect("ml-kem-512");
+    run_ml_kem_1024().expect("ml-kem-1024");
     run_hkdf_sha256().expect("hkdf-sha2-256");
     run_aes_256_kwp().expect("aes-256-kwp");
     run_ml_dsa_65().expect("ml-dsa-65");

@@ -759,6 +759,98 @@ const MLKEM768_P: [Param; 4] = [
     },
 ];
 
+/// The rules every ML-KEM parameter set carries: they come from the scheme,
+/// not from any one set's parameters.
+const MLKEM_CONSTRAINTS: [Constraint; 2] = [
+        Constraint {
+            id: "deploy-post-quantum-in-a-hybrid",
+            requirement: "Combine the shared secret with one from X25519 or a NIST curve, \
+                          and derive the session key from both.",
+            consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either \
+                          half survives; ML-KEM alone bets everything on the newer one.",
+            severity: Severity::Serious,
+        },
+        Constraint {
+            id: "do-not-reveal-decapsulation-failures",
+            requirement: "Return the shared secret decapsulation gives you, whatever it is, \
+                          and never signal that a ciphertext was malformed.",
+            consequence: "Implicit rejection exists so an attacker cannot tell a bad \
+                          ciphertext from a good one. Reporting the difference rebuilds the \
+                          decryption oracle the transform removes. Note the boundary: decapsulation can still return an error for a malformed *key*, and that one should be surfaced, because its answer does not depend on the ciphertext and so reveals nothing about it.",
+            severity: Severity::Critical,
+        },
+    ];
+
+const MLKEM512_P: [Param; 4] = [
+    Param {
+        name: "encapsulation-key",
+        unit: Unit::Bytes,
+        min: 800,
+        max: 800,
+        recommended: 800,
+        note: "384 * k + 32, with k = 2.",
+    },
+    Param {
+        name: "decapsulation-key",
+        unit: Unit::Bytes,
+        min: 1632,
+        max: 1632,
+        recommended: 1632,
+        note: "Carries the public key and a rejection secret as well as the private one.",
+    },
+    Param {
+        name: "ciphertext",
+        unit: Unit::Bytes,
+        min: 768,
+        max: 768,
+        recommended: 768,
+        note: "Far larger than an elliptic-curve exchange; budget for it in protocol design.",
+    },
+    Param {
+        name: "shared-secret",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "Run it through a KDF with the transcript, as with any key agreement.",
+    },
+];
+
+const MLKEM1024_P: [Param; 4] = [
+    Param {
+        name: "encapsulation-key",
+        unit: Unit::Bytes,
+        min: 1568,
+        max: 1568,
+        recommended: 1568,
+        note: "384 * k + 32, with k = 4.",
+    },
+    Param {
+        name: "decapsulation-key",
+        unit: Unit::Bytes,
+        min: 3168,
+        max: 3168,
+        recommended: 3168,
+        note: "Carries the public key and a rejection secret as well as the private one.",
+    },
+    Param {
+        name: "ciphertext",
+        unit: Unit::Bytes,
+        min: 1568,
+        max: 1568,
+        recommended: 1568,
+        note: "Far larger than an elliptic-curve exchange; budget for it in protocol design.",
+    },
+    Param {
+        name: "shared-secret",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "Run it through a KDF with the transcript, as with any key agreement.",
+    },
+];
+
 const KEYWRAP_P: [Param; 3] = [
     Param {
         name: "kek",
@@ -1842,25 +1934,7 @@ pub static REGISTRY: &[Entry] = &[
         status: ImplStatus::Available,
         standards: &["FIPS 203"],
         params: &MLKEM768_P,
-        constraints: &[
-            Constraint {
-                id: "deploy-post-quantum-in-a-hybrid",
-                requirement: "Combine the shared secret with one from X25519 or a NIST curve, \
-                              and derive the session key from both.",
-                consequence: "Lattice cryptanalysis is young. A hybrid stays secure if either \
-                              half survives; ML-KEM alone bets everything on the newer one.",
-                severity: Severity::Serious,
-            },
-            Constraint {
-                id: "do-not-reveal-decapsulation-failures",
-                requirement: "Return the shared secret decapsulation gives you, whatever it is, \
-                              and never signal that a ciphertext was malformed.",
-                consequence: "Implicit rejection exists so an attacker cannot tell a bad \
-                              ciphertext from a good one. Reporting the difference rebuilds the \
-                              decryption oracle the transform removes. Note the boundary: decapsulation can still return an error for a malformed *key*, and that one should be surfaced, because its answer does not depend on the ciphertext and so reveals nothing about it.",
-                severity: Severity::Critical,
-            },
-        ],
+        constraints: &MLKEM_CONSTRAINTS,
         edges: &[
             Edge { relation: Relation::Supersedes, target: "x25519" },
             Edge { relation: Relation::PairsWith, target: "x25519" },
@@ -1876,6 +1950,62 @@ pub static REGISTRY: &[Entry] = &[
                 at once. Deploy it in a hybrid with X25519 rather than alone: the risk that \
                 remains is in the scheme's age, not in this implementation's arithmetic, and a \
                 hybrid leaves the other half standing. Both of FIPS 203 section 7's input checks are enforced on the paths that need them: encapsulation runs the modulus check on the peer's key, and decapsulation runs the hash check on its own, so a caller gets them without having to know to ask.",
+    },
+    Entry {
+        id: "ml-kem-512",
+        name: "ML-KEM-512",
+        aliases: &["kyber512"],
+        summary: "Post-quantum key encapsulation, FIPS 203 security category 1.",
+        class: Class::Kem,
+        family: "ML-KEM",
+        purposes: &[Purpose::KeyEstablishment],
+        strength: Strength { classical: 128, quantum: 128 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 203"],
+        params: &MLKEM512_P,
+        constraints: &MLKEM_CONSTRAINTS,
+        edges: &[
+            Edge { relation: Relation::PairsWith, target: "x25519" },
+            Edge { relation: Relation::BuiltOn, target: "shake128" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ic_mlkem::MlKem512",
+        example: "let mut ek = [0u8; 800];\nlet mut dk = [0u8; 1632];\nic_mlkem::MlKem512::keygen(&mut rng, &mut ek, &mut dk)?;\nic_mlkem::MlKem512::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;",
+        notes: "The ML-KEM-768 scheme at FIPS 203's ML-KEM-512 parameters (module rank 2), \
+                sharing its code: the scheme is written once and instantiated per parameter \
+                set. Checked against NIST's ACVP vectors for this set on its own account -- \
+                all 25 key-generation and all 25 encapsulation cases -- since the parameters \
+                are exactly what differs between the sets. The smallest keys and ciphertexts, at category 1, comparable to AES-128. \
+                `recommend` offers ML-KEM-768, the middle set; choose this one deliberately.",
+    },
+    Entry {
+        id: "ml-kem-1024",
+        name: "ML-KEM-1024",
+        aliases: &["kyber1024"],
+        summary: "Post-quantum key encapsulation, FIPS 203 security category 5.",
+        class: Class::Kem,
+        family: "ML-KEM",
+        purposes: &[Purpose::KeyEstablishment],
+        strength: Strength { classical: 256, quantum: 256 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["FIPS 203"],
+        params: &MLKEM1024_P,
+        constraints: &MLKEM_CONSTRAINTS,
+        edges: &[
+            Edge { relation: Relation::PairsWith, target: "x25519" },
+            Edge { relation: Relation::BuiltOn, target: "shake128" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ic_mlkem::MlKem1024",
+        example: "let mut ek = [0u8; 1568];\nlet mut dk = [0u8; 3168];\nic_mlkem::MlKem1024::keygen(&mut rng, &mut ek, &mut dk)?;\nic_mlkem::MlKem1024::encapsulate(&mut rng, &ek, &mut ct, &mut secret)?;",
+        notes: "The ML-KEM-768 scheme at FIPS 203's ML-KEM-1024 parameters (module rank 4), \
+                sharing its code: the scheme is written once and instantiated per parameter \
+                set. Checked against NIST's ACVP vectors for this set on its own account -- \
+                all 25 key-generation and all 25 encapsulation cases -- since the parameters \
+                are exactly what differs between the sets. The largest, at category 5, comparable to AES-256, for a policy that asks for it. \
+                `recommend` offers ML-KEM-768, the middle set; choose this one deliberately.",
     },
     // -- Signatures ---------------------------------------------------------
     Entry {

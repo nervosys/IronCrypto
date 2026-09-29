@@ -176,6 +176,86 @@ fn ml_kem_encap_vectors_from_file() {
     }
 }
 
+/// ACVP key generation and encapsulation for ML-KEM-512 and ML-KEM-1024.
+///
+/// The same checks as the ML-KEM-768 tests above, for the parameter sets that
+/// share its code through `ic_mlkem::scheme`. A set is only registered
+/// `available` once its own vectors pass: sharing code with a verified set is
+/// not the same as being verified, since the five parameters are exactly what
+/// differs.
+macro_rules! ml_kem_acvp {
+    ($keygen:ident, $encap:ident, $module:ident, $ty:ident, $file:literal) => {
+        #[test]
+        fn $keygen() {
+            let Some(file) = VectorFile::load_or_report(concat!($file, "-keygen")) else {
+                return;
+            };
+            assert_eq!(file.cases.len(), 25, "every ACVP key-generation case");
+            for (index, case) in file.cases.iter().enumerate() {
+                let d = hex_field(case, "d");
+                let z = hex_field(case, "z");
+                let mut ek = [0u8; mlkem::$module::ENCAPS_KEY_LEN];
+                let mut dk = [0u8; mlkem::$module::DECAPS_KEY_LEN];
+                mlkem::$ty::keygen_deterministic(
+                    d[..].try_into().unwrap(),
+                    z[..].try_into().unwrap(),
+                    &mut ek,
+                    &mut dk,
+                );
+                assert_eq!(hex(&ek), hex(&hex_field(case, "ek")), "ek, case {index}");
+                assert_eq!(hex(&dk), hex(&hex_field(case, "dk")), "dk, case {index}");
+            }
+        }
+
+        #[test]
+        fn $encap() {
+            let Some(file) = VectorFile::load_or_report(concat!($file, "-encap")) else {
+                return;
+            };
+            assert_eq!(file.cases.len(), 25, "every ACVP encapsulation case");
+            for (index, case) in file.cases.iter().enumerate() {
+                let ek = hex_field(case, "ek");
+                let ek: &[u8; mlkem::$module::ENCAPS_KEY_LEN] = ek[..]
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("case {index}: ek is the wrong length"));
+                let mut ct = [0u8; mlkem::$module::CIPHERTEXT_LEN];
+                let mut shared = [0u8; mlkem::$module::SHARED_SECRET_LEN];
+                mlkem::$ty::encapsulate_deterministic(
+                    hex_field(case, "m")[..].try_into().unwrap(),
+                    ek,
+                    &mut ct,
+                    &mut shared,
+                );
+                assert_eq!(
+                    hex(&ct),
+                    hex(&hex_field(case, "c")),
+                    "ciphertext, case {index}"
+                );
+                assert_eq!(
+                    hex(&shared),
+                    hex(&hex_field(case, "k")),
+                    "secret, case {index}"
+                );
+            }
+        }
+    };
+}
+
+ml_kem_acvp!(
+    ml_kem_512_keygen_vectors_from_file,
+    ml_kem_512_encap_vectors_from_file,
+    kem512,
+    MlKem512,
+    "ml-kem-512"
+);
+ml_kem_acvp!(
+    ml_kem_1024_keygen_vectors_from_file,
+    ml_kem_1024_encap_vectors_from_file,
+    kem1024,
+    MlKem1024,
+    "ml-kem-1024"
+);
+
 /// ACVP ML-DSA key generation, when someone supplies it.
 ///
 /// As with ML-KEM, key generation is the right place to start: it is

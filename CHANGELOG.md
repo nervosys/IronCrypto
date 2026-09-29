@@ -5,6 +5,29 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **ML-KEM-512 and ML-KEM-1024**, as `ic_mlkem::MlKem512` and
+  `ic_mlkem::MlKem1024`, each checked against every NIST ACVP key-generation
+  and encapsulation case for its parameter set: 25 of each, from the same
+  pinned ACVP-Server commit as ML-KEM-768's. FIPS 203's three sets differ in
+  five numbers, so the scheme is now written once, as ML-KEM-768's code with
+  those five lifted out, and instantiated per set. ML-KEM-768 is byte for byte
+  what it was, and its vectors, tests and self-test pass unchanged. Each new
+  set has an ontology entry, a FIPS self-test (`TEST_COUNT` is 66, the
+  integrity tag recomputed), a compiled example and hostile-ciphertext
+  coverage. `recommend --post-quantum` still offers ML-KEM-768, now with
+  ML-KEM-1024 as the alternative and a stated reason for passing over 512.
+  Requested by HyperMachine, which offers all three and could not migrate one
+  without the others.
+
+### Fixed
+
+- `recommend` said a fallback choice was "the only available algorithm" for
+  its policy whether or not it was. That was true while every family had one
+  member; with three ML-KEM sets it would have told a caller there was no
+  choice when there was. It now says so only when it is so.
+
 ### Changed
 
 - **AES-GCM counter mode has an AES-NI kernel of its own**, and AES-128-GCM

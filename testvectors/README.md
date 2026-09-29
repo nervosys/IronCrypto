@@ -14,7 +14,7 @@ It has now closed for all of them, and nothing in the registry is
 
 | algorithm | vectors | cases |
 |---|---|---|
-| `ml-kem-768` | ACVP `ML-KEM-keyGen-FIPS203`, `ML-KEM-encapDecap-FIPS203` | 25 key generation, 25 encapsulation |
+| `ml-kem-512`, `ml-kem-768`, `ml-kem-1024` | ACVP `ML-KEM-keyGen-FIPS203`, `ML-KEM-encapDecap-FIPS203` | for each: 25 key generation, 25 encapsulation |
 | `ml-dsa-65` | ACVP `ML-DSA-keyGen-FIPS204`, `ML-DSA-sigGen-FIPS204` | 25 key generation, 15 deterministic and 15 hedged signatures |
 | `aes-128-gcm-siv`, `aes-256-gcm-siv` | RFC 8452 appendix C | all 50, across C.1, C.2 and C.3 |
 
@@ -53,6 +53,8 @@ that effort in the most confusing way available.
 | `aes-gcm-siv.json` | `key`, `nonce`, `aad`, `pt`, `ct` (ciphertext with the tag appended) | RFC 8452 Appendix C |
 | `ml-kem-768-keygen.json` | `d`, `z`, `ek`, `dk` | ACVP `ML-KEM-keyGen-FIPS203`, `AFT` groups. **Bundled** |
 | `ml-kem-768-encap.json` | `ek`, `m`, `c`, `k` | ACVP `ML-KEM-encapDecap-FIPS203`, encapsulation `AFT` groups. **Bundled** |
+| `ml-kem-512-keygen.json`, `ml-kem-1024-keygen.json` | as for 768 | the same file, `ML-KEM-512` and `ML-KEM-1024` groups. **Bundled** |
+| `ml-kem-512-encap.json`, `ml-kem-1024-encap.json` | as for 768 | the same file, `ML-KEM-512` and `ML-KEM-1024` groups. **Bundled** |
 | `ml-dsa-65-keygen.json` | `seed`, `pk`, `sk` | ACVP `ML-DSA-keyGen-FIPS204`, `AFT` groups, `ML-DSA-65` only. **Bundled** |
 | `ml-dsa-65-siggen.json` | `sk`, `message`, `context`, `rnd`, `signature` | ACVP `ML-DSA-sigGen-FIPS204`. Use the deterministic groups, or supply `rnd` for hedged ones. **Bundled**: both |
 

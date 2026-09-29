@@ -32,7 +32,7 @@ the wording outlived it:
 
 | | checked against |
 |---|---|
-| ML-KEM-768 | 25 key generation and 25 encapsulation cases, NIST ACVP FIPS 203 |
+| ML-KEM-512, -768, -1024 | for each: 25 key generation and 25 encapsulation cases, NIST ACVP FIPS 203 |
 | ML-DSA-65 | 25 key generation and 30 signature cases, NIST ACVP FIPS 204 |
 | AES-GCM-SIV | 50 cases, RFC 8452 appendix C |
 

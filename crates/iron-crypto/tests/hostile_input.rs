@@ -574,6 +574,8 @@ fn hammered_here() -> Vec<&'static str> {
         "rsa-pss-sha256",
         "x25519",
         "ml-kem-768",
+        "ml-kem-512",
+        "ml-kem-1024",
     ]);
     ids
 }
@@ -709,3 +711,49 @@ fn decapsulation_survives_hostile_ciphertexts() {
         "a non-canonical encapsulation key was accepted"
     );
 }
+
+/// The same contract for the other two ML-KEM parameter sets: hostile
+/// ciphertexts decapsulate to a pseudorandom secret and never an error, and a
+/// non-canonical encapsulation key is refused.
+macro_rules! decapsulation_survives {
+    ($test:ident, $module:ident, $ty:ident, $seed:literal) => {
+        #[test]
+        fn $test() {
+            let mut rng = Rng::new($seed);
+            let mut drbg = drbg::Rng::from_entropy(&[0x9au8; 32], b"hostile-input").unwrap();
+            let mut ek = [0u8; mlkem::$module::ENCAPS_KEY_LEN];
+            let mut dk = [0u8; mlkem::$module::DECAPS_KEY_LEN];
+            mlkem::$ty::keygen(&mut drbg, &mut ek, &mut dk).unwrap();
+
+            let mut secret = [0u8; mlkem::$module::SHARED_SECRET_LEN];
+            for _ in 0..40 {
+                let mut ct = [0u8; mlkem::$module::CIPHERTEXT_LEN];
+                rng.fill(&mut ct);
+                mlkem::$ty::decapsulate(&dk, &ct, &mut secret)
+                    .expect("decapsulation must never fail on a ciphertext");
+            }
+
+            let mut bad_ek = ek;
+            bad_ek[0] = 0xff;
+            bad_ek[1] = 0xff;
+            let mut ct = [0u8; mlkem::$module::CIPHERTEXT_LEN];
+            assert!(
+                mlkem::$ty::encapsulate(&mut drbg, &bad_ek, &mut ct, &mut secret).is_err(),
+                "a non-canonical encapsulation key was accepted"
+            );
+        }
+    };
+}
+
+decapsulation_survives!(
+    ml_kem_512_decapsulation_survives_hostile_ciphertexts,
+    kem512,
+    MlKem512,
+    0x8512
+);
+decapsulation_survives!(
+    ml_kem_1024_decapsulation_survives_hostile_ciphertexts,
+    kem1024,
+    MlKem1024,
+    0x8124
+);
