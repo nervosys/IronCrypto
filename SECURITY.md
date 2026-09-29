@@ -88,12 +88,26 @@ source line:
 | x86-64 | no secret-dependent branches found |
 | Cortex-M4 (`thumbv7em`) | none found: conditional execution covers the selects |
 | Cortex-M0 (`thumbv6m`) | none found. In 0.2.1 and earlier, NIST field subtraction branched on its borrow: 8 branches per P-256 point addition, 6 per doubling |
-| 32-bit RISC-V (`riscv32imac`) | **branches on secret data**: 64- and 128-bit carries are built from 32-bit comparisons joined by branches. Ed25519 and X25519 share a field with 20 per multiplication and 100 per point doubling; NIST point addition has 91 on P-256 and 248 on P-521; RSA Montgomery multiplication has 6 |
+| 32-bit RISC-V (`riscv32imac`) | **NIST curves and RSA branch on secret data**: 128-bit carries are built from 32-bit comparisons joined by branches. NIST point addition has 91 on P-256 and 248 on P-521; RSA Montgomery multiplication has 6. Ed25519 and X25519 had 20 per field multiplication and 120 per point doubling until their field moved to 32-bit limbs, below; they now have none |
 
-On 32-bit RISC-V, do not rely on ECDSA, ECDH, Ed25519, X25519 or RSA private
-operations to be constant time. The fix is a field implementation on 32-bit
-limbs, as dalek and RustCrypto have for such targets, and it has not been
-written. Poly1305 and POLYVAL were checked on both 32-bit targets, and their
+On 32-bit RISC-V, do not rely on ECDSA, ECDH or RSA private operations to be
+constant time. The fix is arithmetic on 32-bit limbs, as dalek and RustCrypto
+have for such targets.
+
+Ed25519 and X25519 have it. On `riscv32` their field is ten limbs of 26 and 25
+bits (`crates/ic-ec/src/field32.rs`), every product `u32 * u32 -> u64` and
+every carry a shift, so no 128-bit arithmetic reaches the code generator.
+Built as above on 2026-09-29, it has no conditional branches in field
+multiplication, squaring, encoding, the Edwards point operations, the
+fixed-base and windowed multiplications or the X25519 ladder. What branches
+remain in `ic-ec`'s Curve25519 code were each traced to their source lines:
+lengths of caller buffers, decoding a public key, the variable-time
+verification path over public values, a loop index in scalar reduction, and
+X25519's check that the shared secret is not all zeros. There are no calls to
+compiler-runtime arithmetic, and `memcmp` is reached only on public data. The
+same field runs on any host under `--cfg ic_fe32`, where the RFC 7748 and 8032
+vectors pass against it, and under test it is compared with the five-limb
+field directly. The NIST curves and RSA are still to do. Poly1305 and POLYVAL were checked on both 32-bit targets, and their
 only branches are on public lengths and loop indices. AES, ChaCha20, SHA-2,
 SHA-3, ML-KEM and ML-DSA were not examined at this level.
 

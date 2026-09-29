@@ -26,7 +26,7 @@ const BASEPOINT_COMPRESSED: [u8; 32] = [
 ];
 
 /// The curve constant `d = -121665/121666`, as 51-bit limbs.
-const D: Fe = Fe([
+const D: Fe = Fe::from_limbs51([
     929_955_233_495_203,
     466_365_720_129_213,
     1_662_059_464_998_953,
@@ -35,7 +35,7 @@ const D: Fe = Fe([
 ]);
 
 /// `2*d`, used directly by the addition formula.
-const D2: Fe = Fe([
+const D2: Fe = Fe::from_limbs51([
     1_859_910_466_990_425,
     932_731_440_258_426,
     1_072_319_116_312_658,
@@ -44,7 +44,7 @@ const D2: Fe = Fe([
 ]);
 
 /// A square root of -1 in GF(2^255-19), needed for point decompression.
-const SQRT_M1: Fe = Fe([
+const SQRT_M1: Fe = Fe::from_limbs51([
     1_718_705_420_411_056,
     234_908_883_556_509,
     2_233_514_472_574_048,
@@ -814,14 +814,14 @@ fn basepoint() -> Point {
 /// `the_basepoint_constant_is_the_decompressed_encoding` holds them to what
 /// decompressing the RFC 8032 encoding gives.
 const BASEPOINT: Point = Point {
-    x: Fe([
+    x: Fe::from_limbs51([
         1_738_742_601_995_546,
         1_146_398_526_822_698,
         2_070_867_633_025_821,
         562_264_141_797_630,
         587_772_402_128_613,
     ]),
-    y: Fe([
+    y: Fe::from_limbs51([
         1_801_439_850_948_184,
         1_351_079_888_211_148,
         450_359_962_737_049,
@@ -829,7 +829,7 @@ const BASEPOINT: Point = Point {
         1_801_439_850_948_198,
     ]),
     z: Fe::ONE,
-    t: Fe([
+    t: Fe::from_limbs51([
         1_841_354_044_333_475,
         16_398_895_984_059,
         755_974_180_946_558,

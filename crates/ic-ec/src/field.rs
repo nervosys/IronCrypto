@@ -38,6 +38,12 @@ impl Fe {
     /// The multiplicative identity.
     pub const ONE: Fe = Fe([1, 0, 0, 0, 0]);
 
+    /// A constant written as five 51-bit limbs, the form `ed25519.rs` gives
+    /// its constants in; the ten-limb field in `field32.rs` converts them.
+    pub const fn from_limbs51(l: [u64; 5]) -> Fe {
+        Fe(l)
+    }
+
     /// A small integer as a field element.
     #[cfg(test)]
     pub const fn from_u64(v: u64) -> Fe {

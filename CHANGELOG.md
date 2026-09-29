@@ -5,6 +5,19 @@ all of them.
 
 ## Unreleased
 
+### Security
+
+- **Ed25519 and X25519 are constant time on 32-bit RISC-V.** Their field
+  multiplied `u64` by `u64` into `u128`, and on `riscv32` the compiler builds
+  128-bit carries from comparisons joined by branches: 20 per field
+  multiplication and 120 per Edwards doubling, on secret data, as
+  `SECURITY.md` recorded. On `riscv32` the field is now ten limbs of 26 and 25
+  bits with `u32 * u32 -> u64` products, and the compiled Curve25519 code has
+  no branch on a secret; each remaining branch was traced to a public value.
+  Other targets keep the five-limb field. `--cfg ic_fe32` selects the new one
+  anywhere, which is how the RFC 7748 and 8032 vectors are run against it. The
+  NIST curves and RSA still branch on `riscv32`.
+
 ### Performance
 
 - **NIST generator multiplication about 35-50% faster, and ECDSA signing
