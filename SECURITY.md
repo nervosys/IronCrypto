@@ -164,7 +164,7 @@ does not establish timing for entire algorithms or replace hardware tests.
 
 The six additional core-helper probes found three more Cortex-M0 branches
 under fat LTO: `Choice::mask` branched while constructing the mask used by
-byte selection, conditional copy and swap. The unreleased fix hides its input
+byte selection, conditional copy and swap. The 0.2.7 fix hides its input
 range before negation as well as its output. All nineteen probes pass on the
 four targets; their fixed buffer sizes do not cover every caller or length.
 

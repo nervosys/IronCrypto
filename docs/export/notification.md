@@ -99,6 +99,19 @@ The first upload was `ic-core` at 2026-09-30 14:38:55 UTC; the last was
 `ic-cli` at 14:39:54 UTC. The published source commit is `0adec96`.
 All 66 published 0.1.x versions were also confirmed still yanked.
 
+## 0.2.7 notification submission
+
+On 2026-09-30 the maintainer reported "Submitted" after this agent printed
+the updated IronCrypto 0.2.7 release notice addressed to `crypt@bis.doc.gov`
+and `enc@nsa.gov`. The notice identified the GitHub repository, all eighteen
+crates.io package locations, the core mask fix and expanded compiled-code
+probes, and stated that no new algorithms or parameter sets were added.
+
+Publication proceeds on the maintainer's submission report. The actual sent
+message, completed contact fields and exact sending time have not been
+supplied here. This records the report, not an independently verified mail
+delivery or a claim that the draft's placeholders were sent unchanged.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
