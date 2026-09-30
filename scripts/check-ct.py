@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import uuid
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = (
@@ -99,6 +100,24 @@ def inspect(assembly, target):
     return failures
 
 
+def build_probe(target):
+    # A fresh explicit output forces Cargo to rebuild the harness and avoids
+    # selecting a stale assembly file left by a prior dependency version.
+    output_dir = ROOT / "target/ct-audit/probes"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / f"{target}-{uuid.uuid4().hex}.s"
+    subprocess.run([
+        "cargo", "rustc", "--manifest-path", str(ROOT / "scripts/ct-audit/Cargo.toml"),
+        "--release", "--target", target, "--target-dir", str(ROOT / "target/ct-audit"),
+        "--", f"--emit=asm={output}",
+    ], cwd=ROOT, check=True)
+    if not output.is_file():
+        raise ValueError(f"{target}: compiler did not produce the requested assembly")
+    assembly = output.read_text(encoding="utf-8")
+    output.replace(output_dir / f"{target}.s")
+    return assembly
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=TARGETS, action="append")
@@ -106,15 +125,7 @@ def main():
     subprocess.run(["rustc", "--version"], check=True)
     failures = []
     for target in args.target or TARGETS:
-        subprocess.run([
-            "cargo", "rustc", "--manifest-path", str(ROOT / "scripts/ct-audit/Cargo.toml"),
-            "--release", "--target", target, "--target-dir", str(ROOT / "target/ct-audit"),
-            "--", "--emit=asm",
-        ], cwd=ROOT, check=True)
-        files = list((ROOT / "target/ct-audit" / target / "release/deps").glob("ct_audit-*.s"))
-        if len(files) != 1:
-            raise ValueError(f"{target}: expected one assembly artifact, found {len(files)}; clean target/ct-audit")
-        found = inspect(files[0].read_text(encoding="utf-8"), target)
+        found = inspect(build_probe(target), target)
         failures.extend(f"{target}: {finding}" for finding in found)
         print(f"{target}: {len(SYMBOLS)} probes, {len(found)} forbidden instructions", flush=True)
     if failures:

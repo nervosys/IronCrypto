@@ -3,6 +3,9 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
+import subprocess
+import tempfile
 
 spec = importlib.util.spec_from_file_location("check_ct", Path(__file__).with_name("check-ct.py"))
 audit = importlib.util.module_from_spec(spec)
@@ -52,6 +55,45 @@ class InspectionTests(unittest.TestCase):
             for instruction in instructions:
                 with self.subTest(target=target, instruction=instruction):
                     self.assertFalse(audit.forbidden(instruction, target))
+
+
+class BuildTests(unittest.TestCase):
+    def test_stale_artifacts_cannot_hide_a_current_branch(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(audit, "ROOT", Path(directory)):
+            stale_dir = Path(directory) / "target/ct-audit" / audit.TARGETS[0] / "release/deps"
+            stale_dir.mkdir(parents=True)
+            (stale_dir / "ct_audit-old.s").write_text(assembly(), encoding="utf-8")
+            (stale_dir / "ct_audit-older.s").write_text(assembly(), encoding="utf-8")
+            outputs = []
+
+            def compiler(command, **kwargs):
+                output = Path(command[-1].removeprefix("--emit=asm="))
+                outputs.append(output)
+                self.assertFalse(output.exists())
+                output.write_text(assembly("jne .L1"), encoding="utf-8")
+
+            with mock.patch.object(audit.subprocess, "run", side_effect=compiler):
+                for _ in range(2):
+                    current = audit.build_probe(audit.TARGETS[0])
+                    self.assertEqual(len(audit.inspect(current, audit.TARGETS[0])), len(audit.SYMBOLS))
+            self.assertNotEqual(outputs[0], outputs[1])
+            latest = Path(directory) / "target/ct-audit/probes" / f"{audit.TARGETS[0]}.s"
+            self.assertEqual(latest.read_text(encoding="utf-8"), assembly("jne .L1"))
+
+    def test_missing_current_output_fails_even_with_a_previous_pass(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(audit, "ROOT", Path(directory)):
+            latest = Path(directory) / "target/ct-audit/probes" / f"{audit.TARGETS[0]}.s"
+            latest.parent.mkdir(parents=True)
+            latest.write_text(assembly(), encoding="utf-8")
+            with mock.patch.object(audit.subprocess, "run"):
+                with self.assertRaisesRegex(ValueError, "did not produce"):
+                    audit.build_probe(audit.TARGETS[0])
+
+    def test_compiler_failure_is_not_replaced_by_cached_output(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(audit, "ROOT", Path(directory)):
+            with mock.patch.object(audit.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "cargo")):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    audit.build_probe(audit.TARGETS[0])
 
 
 if __name__ == "__main__":

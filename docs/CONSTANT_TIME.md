@@ -9,7 +9,14 @@ library; the isolated harness depends only on this repository's crates.
 The full local gate (`scripts/check.sh`) and the `constant-time` CI job run
 the same checker. `--quick` skips these cross-target builds. Compiler upgrades
 are checked against these rules rather than a snapshot of instruction counts.
-The assembly remains in `target/ct-audit/<target>/release/deps` for review.
+The latest assembly remains in `target/ct-audit/probes/<target>.s` for review.
+Each run requests a fresh explicit compiler output, so old dependency-version
+artifacts cannot be mistaken for the current build or require a manual clean.
+Regression tests place multiple stale passing artifacts beside a current
+branching output, and require the branch to be detected. They also reject a
+missing current output despite a previous passing result, and propagate
+compiler failure. Deliberately replacing the fresh output name with the
+previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
@@ -29,7 +36,7 @@ Every expected symbol must have a complete, nonempty ELF assembly body.
 Branches, integer division/remainder instructions, and calls or tail calls
 are rejected. Rejecting calls prevents an uninlined function from passing by
 hiding its instructions outside the probe. Unsupported targets, missing
-symbols and ambiguous assembly artifacts fail rather than silently reducing
+symbols and missing requested assembly output fail rather than silently reducing
 coverage. If a compiler merges symbols, review the output and adapt the parser;
 do not remove a probe merely to make it pass.
 
