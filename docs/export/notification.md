@@ -66,6 +66,19 @@ whether the original one was taken to cover them is not recorded either. For
 publication whether the notification covers the release, and answered that it
 does.
 
+## 0.2.5 release authorization
+
+On 2026-09-29 the maintainer instructed this agent to proceed after being
+explicitly asked to confirm that the BIS/NSA notification covers 0.2.5.
+Publication proceeds on that confirmation, as for 0.2.1 through 0.2.4.
+The sent message, its recipients and sending time have not been supplied here.
+`update-0.2.5-draft.md` remains a draft, not a record of a sent message.
+
+All 66 published 0.1.x versions across the eighteen crates were confirmed
+yanked against the crates.io API on 2026-09-29, after completing the 65
+previously pending yanks. Yanking does not remove their downloadable archives
+or prevent existing lock files from using them.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not

@@ -1362,8 +1362,8 @@ pub static REGISTRY: &[Entry] = &[
         performance: Performance::Fast,
         rust_path: "ic_mac::HmacSha3_256",
         example: "use ic_core::traits::Mac;\nlet tag = ic_mac::HmacSha3_256::mac(key, msg)?;",
-        notes: "KMAC is the purpose-built Keccak MAC and is generally preferable; it is not yet \
-                implemented here.",
+        notes: "KMAC is the purpose-built Keccak MAC and is generally preferable; \
+                KMAC128 and KMAC256 are available here.",
     },
     Entry {
         id: "hmac-sha3-512",

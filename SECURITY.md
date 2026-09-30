@@ -190,11 +190,12 @@ multiplication, exponentiation and CRT private operation.
 Loop counters with fixed trip counts, and overflow checks that never fire on
 valid values, were set aside as not secret-dependent.
 
-**There is no transitive dependency surface.** IronCrypto has zero third-party
-dependencies, enforced in CI by a check over `cargo tree`. No advisory against
-another crate can apply to it. That is a narrow claim and it is worth being
-precise about its limits: it says nothing about defects in IronCrypto's own
-code.
+**The cryptographic crates have no third-party dependencies.** The rustls
+adapter depends on rustls and six crates beneath it, as detailed below.
+CI checks the compiled dependency graph with `cargo tree` and rejects additions
+outside that list. Advisories against those dependencies can apply to the
+adapter; the absence of dependencies in the cryptographic crates says nothing
+about defects in their own code.
 
 **No CVE has been issued against IronCrypto.** At this stage that reflects a
 young, privately held project rather than any assurance, and should not be read
@@ -211,7 +212,7 @@ Claims in this project are meant to be checkable rather than taken on trust.
 | Which weakness classes and practices does this address? | `ic ontology controls` |
 | Why is an algorithm not recommended? | `ic ontology show <id>` |
 | Does it match the standard's vectors? | Yes, where vectors exist; see `testvectors/README.md` |
-| Does it interoperate with another implementation? | Untested. Vectors are not a handshake |
+| Does it interoperate with another implementation? | OpenSSL fixtures cover all six ML-KEM and ML-DSA parameter sets and X.509 issuance; see `docs/FIPS.md`. Handshake results above are reported by IronSocketLayer rather than reproduced here |
 | What is in the build? | `ic sbom` — CycloneDX, deterministic, regenerate and diff it |
 
 The compliance views are coupled to the code rather than filed beside it: a

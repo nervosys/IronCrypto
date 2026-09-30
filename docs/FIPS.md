@@ -190,25 +190,23 @@ so its name cannot imply more than it delivers.
 
 In rough order of effort:
 
-1. **The remaining approved asymmetric algorithms.** ECDSA and ECDH are
-   implemented and vector-tested over both P-256 and P-384, which covers
-   CNSA-aligned profiles. P-521 is implemented too, for profiles that call
-   for it.
-2. **CAVP algorithm certificates.** Every approved algorithm must pass the ACVP
+1. **CAVP algorithm certificates.** Every approved algorithm must pass the ACVP
    test harness, including Monte Carlo and large-data tests, not just the sample
    vectors bundled here.
-3. **A real image integrity test.** A post-link step that computes an approved
+2. **A real image integrity test.** A post-link step that computes an approved
    MAC or signature over the module image and patches it in.
-4. **SP 800-90B entropy source validation.** The OS entropy source must be
+3. **SP 800-90B entropy source validation.** The OS entropy source must be
    characterized and justified, with health tests (repetition count, adaptive
    proportion) on the raw noise source.
-5. **Documentation package.** Security policy, finite state model, algorithm
+4. **Documentation package.** Security policy, finite state model, algorithm
    specification, and the vendor evidence the lab requires.
-6. **Laboratory testing and CMVP submission** against a specific binary on
+5. **Laboratory testing and CMVP submission** against a specific binary on
    specific operational environments.
 
-Items 1–4 are engineering work in this repository. Items 5–6 are not, and no
-amount of code changes them.
+ECDSA and ECDH are already implemented and vector-tested over P-256, P-384
+and P-521. Algorithm coverage does not replace any of the work above.
+These tasks require a defined module boundary, operational environments and
+validation process; passing this repository's tests does not complete them.
 
 ## Using this under a FIPS requirement today
 
