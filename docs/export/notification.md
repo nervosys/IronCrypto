@@ -84,6 +84,15 @@ yanked against the crates.io API on 2026-09-29, after completing the 65
 previously pending yanks. Yanking does not remove their downloadable archives
 or prevent existing lock files from using them.
 
+## 0.2.6 release authorization
+
+On 2026-09-30 the maintainer instructed this agent to proceed after being
+explicitly asked to confirm that the BIS/NSA notification covers the prepared
+0.2.6 release, including its constant-time fixes and timing additions.
+Publication proceeds on that confirmation. The sent message, its recipients
+and sending time have not been supplied here; this records the maintainer's
+confirmation, not evidence of a newly sent notification.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
