@@ -24,6 +24,8 @@
 
 use std::time::Instant;
 
+mod ecdh;
+
 use aes::cipher::{BlockEncrypt, KeyInit as AesKeyInit};
 use aes_gcm::aead::AeadInPlace;
 use ic_core::traits::{Aead, BlockCipher, Digest, KeyAgreement, Mac, SignatureScheme};
@@ -86,6 +88,10 @@ fn verdict(what: &str, ic: f64, other: f64, higher_is_better: bool) {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("ecdh") {
+        ecdh::run();
+        return;
+    }
     let soft = std::env::args().nth(1).as_deref() == Some("soft");
     println!();
     println!("IronCrypto vs RustCrypto/dalek — 4 MiB buffers, best of {REPEATS}");
@@ -116,7 +122,8 @@ fn main() {
     let rc_key = aes::cipher::generic_array::GenericArray::from_slice(&key);
     let rc = aes::Aes256::new(rc_key);
     let b = bulk("rustcrypto aes", SIZE, REPEATS, || {
-        for c in data.chunks_exact_mut(16) {
+        // SIZE is divisible by 16, so every chunk is a full AES block.
+        for c in data.chunks_mut(16) {
             rc.encrypt_block(aes::cipher::generic_array::GenericArray::from_mut_slice(c));
         }
     });
@@ -166,9 +173,14 @@ fn main() {
     // between them is how the GCM gap nearly got attributed to the cipher.
     println!();
     println!("ChaCha20-Poly1305, split");
-    bulk("  iron-crypto chacha20 keystream only", SIZE, REPEATS, || {
-        ic_cipher::chacha20_xor(&key, &[0u8; 12], 1, &mut data).unwrap();
-    });
+    bulk(
+        "  iron-crypto chacha20 keystream only",
+        SIZE,
+        REPEATS,
+        || {
+            ic_cipher::chacha20_xor(&key, &[0u8; 12], 1, &mut data).unwrap();
+        },
+    );
     bulk("  iron-crypto poly1305 only", SIZE, REPEATS, || {
         let _ = <ic_cipher::Poly1305 as Mac>::mac(&key, &data).unwrap();
     });
@@ -280,8 +292,10 @@ fn main() {
     // Point primitives against dalek's, directly. Everything above is a whole
     // operation, which cannot separate "our field arithmetic is slower" from
     // "our scalar multiplication does more work". These can.
-    println!("
-Edwards point primitives (lower is better)");
+    println!(
+        "
+Edwards point primitives (lower is better)"
+    );
     {
         use curve25519_dalek::edwards::CompressedEdwardsY;
         use ic_ec::ed25519::Point;
@@ -404,9 +418,9 @@ Edwards point primitives (lower is better)");
         verdict("[s]B only", kb_, db, false);
 
         let b0 = per_op("iron-crypto [s]B (const time)", 5000, 5, || {
-            std::hint::black_box(ic_ec::ed25519::mul_basepoint_for_bench(std::hint::black_box(
-                &kb,
-            )));
+            std::hint::black_box(ic_ec::ed25519::mul_basepoint_for_bench(
+                std::hint::black_box(&kb),
+            ));
         });
         let b1 = per_op("dalek [s]B (const time)", 5000, 5, || {
             std::hint::black_box(curve25519_dalek::edwards::EdwardsPoint::mul_base(
@@ -462,11 +476,13 @@ Edwards point primitives (lower is better)");
     let mut shared_p = [0u8; 32];
     let c1 = per_op("iron-crypto ecdh p-256 (one scalar mul)", 200, 3, || {
         iron_crypto::ec::EcdhP256::agree(&[0x5au8; 32], &ecdh_pk, &mut shared_p).unwrap();
+        std::hint::black_box(&shared_p);
     });
     let c_sk = p256::SecretKey::from_bytes(&[0x5au8; 32].into()).unwrap();
     let c_pk = p256::PublicKey::from_sec1_bytes(&ecdh_pk).unwrap();
     let c2 = per_op("p256 crate ecdh", 200, 3, || {
-        let _ = p256::ecdh::diffie_hellman(c_sk.to_nonzero_scalar(), c_pk.as_affine());
+        let output = p256::ecdh::diffie_hellman(c_sk.to_nonzero_scalar(), c_pk.as_affine());
+        std::hint::black_box(output.raw_secret_bytes());
     });
     verdict("ecdh p-256 agreement", c1, c2, false);
 
