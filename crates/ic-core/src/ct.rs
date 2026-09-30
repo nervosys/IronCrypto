@@ -1,10 +1,10 @@
 //! Constant-time primitives.
 //!
-//! Every routine here executes in time independent of the *values* of its
-//! secret inputs (lengths are considered public). The implementations avoid
-//! branches and table lookups on secret data, and pass results through
-//! [`core::hint::black_box`] to stop the optimizer from re-introducing a branch
-//! when it proves a value is boolean.
+//! These routines avoid branches and table lookups on secret data (lengths are
+//! considered public). Input and output barriers using [`core::hint::black_box`]
+//! prevent known optimizer transformations back into branches. Compiled-code
+//! regression probes check fixed-size cases; this is not a guarantee for every
+//! compiler, optimization profile or caller.
 
 use core::hint::black_box;
 
@@ -40,7 +40,9 @@ impl Choice {
     /// Full-width mask: `0x00` when false, `0xFF` when true.
     #[inline]
     pub fn mask(self) -> u8 {
-        black_box(self.0.wrapping_neg())
+        // An output barrier alone lets LTO branch while constructing the mask
+        // on Cortex-M0. Hide the input range before negation as well.
+        black_box(black_box(self.0).wrapping_neg())
     }
 
     /// Logical negation, branch-free.
@@ -170,6 +172,32 @@ pub fn is_zero(x: &[u8]) -> Choice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn choice_masks_preserve_nonzero_semantics_for_every_byte() {
+        for flag in 0..=u8::MAX {
+            let choice = Choice::from_u8(flag);
+            let truth = flag != 0;
+            assert_eq!(choice.mask(), if truth { u8::MAX } else { 0 });
+            assert_eq!(
+                select_u8(choice, 0xa5, 0x5a),
+                if truth { 0xa5 } else { 0x5a }
+            );
+            let mut dst = [0x5a; 4];
+            cmov(choice, &mut dst, &[0xa5; 4]);
+            assert_eq!(dst, if truth { [0xa5; 4] } else { [0x5a; 4] });
+            let (mut a, mut b) = ([0xa5; 4], [0x5a; 4]);
+            cswap(choice, &mut a, &mut b);
+            assert_eq!(
+                (a, b),
+                if truth {
+                    ([0x5a; 4], [0xa5; 4])
+                } else {
+                    ([0xa5; 4], [0x5a; 4])
+                }
+            );
+        }
+    }
 
     #[test]
     fn eq_matches_semantics() {

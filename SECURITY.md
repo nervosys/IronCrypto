@@ -157,10 +157,16 @@ The checks described above constrain their tested compiler and build settings.
 A subsequent fat-LTO probe build on Cortex-M0 found that ML-DSA's reduction
 and decomposition and ML-KEM's compression masks could still compile into
 secret-dependent branches. These operations now hide both the operand and
-mask ranges. Thirteen narrowly scoped compiled-code probes gate four targets
+mask ranges. Nineteen narrowly scoped compiled-code probes gate four targets
 in CI and the full local check; [CONSTANT_TIME.md](docs/CONSTANT_TIME.md)
 records their coverage, deliberate-breakage checks and limitations. This gate
 does not establish timing for entire algorithms or replace hardware tests.
+
+The six additional core-helper probes found three more Cortex-M0 branches
+under fat LTO: `Choice::mask` branched while constructing the mask used by
+byte selection, conditional copy and swap. The unreleased fix hides its input
+range before negation as well as its output. All nineteen probes pass on the
+four targets; their fixed buffer sizes do not cover every caller or length.
 
 The [host timing reports](docs/timing/2026-09-29-host/README.md) retain three
 developer-machine runs, including two with direct batched measurements of

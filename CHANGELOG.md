@@ -3,6 +3,20 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Security
+
+- `Choice::mask` now hides its input range before negation as well as its
+  output. Fat LTO on Cortex-M0 otherwise branches on the secret flag in byte
+  selection, conditional copy and conditional swap. Results are unchanged.
+
+### Tests
+
+- Six additional core-helper probes gate byte selection and four-byte
+  equality, zero checking, big-endian ordering, conditional copy and swap.
+  The gate now checks nineteen probes on each of four targets.
+
 ## 0.2.6
 
 ### Security

@@ -55,6 +55,36 @@ pub fn ct_select_u64(flag: u8, a: u64, b: u64) -> u64 {
 }
 
 #[no_mangle]
+pub fn ct_select_u8(flag: u8, a: u8, b: u8) -> u8 {
+    ic_core::ct::select_u8(ic_core::ct::Choice::from_u8(flag), a, b)
+}
+
+#[no_mangle]
+pub fn ct_eq_4(a: &[u8; 4], b: &[u8; 4]) -> bool {
+    ic_core::ct::verify(a, b)
+}
+
+#[no_mangle]
+pub fn ct_zero_4(a: &[u8; 4]) -> u8 {
+    ic_core::ct::is_zero(a).unwrap_u8()
+}
+
+#[no_mangle]
+pub fn ct_lt_be_4(a: &[u8; 4], b: &[u8; 4]) -> u8 {
+    ic_core::ct::lt_be(a, b).unwrap_u8()
+}
+
+#[no_mangle]
+pub fn ct_cmov_4(flag: u8, dst: &mut [u8; 4], src: &[u8; 4]) {
+    ic_core::ct::cmov(ic_core::ct::Choice::from_u8(flag), dst, src);
+}
+
+#[no_mangle]
+pub fn ct_cswap_4(flag: u8, a: &mut [u8; 4], b: &mut [u8; 4]) {
+    ic_core::ct::cswap(ic_core::ct::Choice::from_u8(flag), a, b);
+}
+
+#[no_mangle]
 pub fn ct_hex_encode(input: &[u8; 1], output: &mut [u8; 2]) {
     let _ = ic_core::codec::hex_encode(input, output);
 }

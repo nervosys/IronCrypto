@@ -25,6 +25,7 @@ SYMBOLS = (
     "ct_compress_1", "ct_compress_4", "ct_compress_5", "ct_compress_10",
     "ct_compress_11", "ct_select_u32", "ct_select_u64", "ct_hex_encode",
     "ct_base64_encode",
+    "ct_select_u8", "ct_eq_4", "ct_zero_4", "ct_lt_be_4", "ct_cmov_4", "ct_cswap_4",
 )
 
 

@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Thirteen exported probes call the actual implementations. Their public sizes
+Nineteen exported probes call the actual implementations. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -29,8 +29,9 @@ release profile; this is not the workspace binary's overflow-checked profile.
 - ML-DSA reduction modulo q, power2round, and decompose for both gamma2 values.
 - ML-KEM compression at all five widths used by its parameter sets: 1, 4, 5,
   10 and 11 bits.
-- Core 32- and 64-bit selection, one-byte hex encoding and three-byte Base64
-  encoding.
+- Core 8-, 32- and 64-bit selection; four-byte equality, zero checking,
+  big-endian ordering, conditional copy and swap; one-byte hex encoding and
+  three-byte Base64 encoding.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
 Branches, integer division/remainder instructions, and calls or tail calls
@@ -48,6 +49,7 @@ versions and CPUs can generate different code. ARM predicated instructions are
 not branches and are permitted. The checker does not establish their timing,
 track secret-dependent memory addresses, or measure instruction latency.
 Encoding probes do not automatically detect a return to lookup tables.
+The four-byte helper probes do not cover all buffer lengths or loop forms.
 
 Decoding, KWP authentication, coefficient sampling, signing rejection loops,
 curve/RSA arithmetic and other functions are outside this gate. Some of their
@@ -74,7 +76,7 @@ The gate rejected that output before the fixes were made.
 The affected operations now hide the operand's range before sign extraction
 and the mask's range afterwards with `core::hint::black_box`. An output-only
 barrier was tried and still branched while constructing the mask. The final
-thirteen probes have no forbidden instructions on any of the four targets.
+original thirteen probes have no forbidden instructions on any of the four targets.
 Numerical correctness is checked independently by the existing exhaustive
 comparisons and published vectors. This is evidence for the tested build,
 not a guarantee about future compilers or all call contexts.
@@ -84,3 +86,19 @@ keeping the output barrier. The gate failed on the ML-DSA decomposition probes
 and the ML-KEM compression probes, respectively. Both files were restored and
 all four targets passed again. Parser tests independently check conditional
 branches, division, calls, missing symbols and incomplete function bodies.
+
+## Core mask regression
+
+On 2026-09-30 six additional probes exercised core helpers. The Cortex-M0
+build branched on the flag while constructing `Choice::mask` in byte
+selection, four-byte conditional copy and four-byte conditional swap. The
+existing barrier followed negation, so it could not prevent the optimizer
+from branching before the barrier. An input barrier before negation fixes
+these tested paths; the output barrier remains.
+
+Removing the input barrier deliberately reproduced all three forbidden
+branches. Restoring it passed all nineteen probes on all four targets.
+The functional test checks masks, byte selection and four-byte copy/swap for
+all 256 flag inputs, including noncanonical nonzero values. This adds
+compiler regression coverage, not hardware timing evidence or a guarantee
+for all buffer sizes and callers.
