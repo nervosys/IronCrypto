@@ -56,13 +56,14 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.2 | 2026-09-29 05:23:29 | published after the maintainer confirmed, when asked, that the notification covers this release |
 | 0.2.3 | 2026-09-29 15:29:47 | published after the maintainer confirmed, when asked, that the notification covers this release, including the ML-KEM-512/1024 and ML-DSA-44/87 parameter sets it adds; `docs/EXPORT.md`'s draft lists only ML-KEM-768 and ML-DSA-65 |
 | 0.2.4 | 2026-09-29 16:42:11 | published after the maintainer confirmed, when asked, that the notification covers this release; adds X.509 certificate issuance |
+| 0.2.5 | 2026-09-30 02:08:53 | all eighteen crates published from `e5d759f`, after the maintainer confirmed that the notification covers this release; constant-time fixes and generator-multiplication improvements |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
 `docs/RELEASING.md` treats each new version as an export in its own right. No
 separate notification for 0.1.1 onward is recorded. For 0.1.1 to 0.2.0,
 whether the original one was taken to cover them is not recorded either. For
-0.2.1 through 0.2.4 it is: the maintainer was asked before each
+0.2.1 through 0.2.5 it is: the maintainer was asked before each
 publication whether the notification covers the release, and answered that it
 does.
 
@@ -73,6 +74,10 @@ explicitly asked to confirm that the BIS/NSA notification covers 0.2.5.
 Publication proceeds on that confirmation, as for 0.2.1 through 0.2.4.
 The sent message, its recipients and sending time have not been supplied here.
 `update-0.2.5-draft.md` remains a draft, not a record of a sent message.
+
+The crates.io API confirmed all eighteen 0.2.5 packages live and not yanked.
+The first upload was `ic-core` at 2026-09-30 02:08:53 UTC; the last was
+`ic-cli` at 02:12:32 UTC. The published source commit is `e5d759f`.
 
 All 66 published 0.1.x versions across the eighteen crates were confirmed
 yanked against the crates.io API on 2026-09-29, after completing the 65
