@@ -2,9 +2,10 @@
 
 **Agentic-first cryptography in pure Rust, with a machine-readable ontology.**
 
-Zero dependencies. No C. No build scripts. `no_std` from the ground up, verified
-against ARM Cortex-M, RISC-V, and WebAssembly. Every primitive validated against
-its published test vectors. Usable as a [rustls](https://docs.rs/rustls)
+Zero dependencies. No C. No build scripts. `no_std` from the ground up,
+cross-compiled for ARM Cortex-M, RISC-V, and WebAssembly. Implemented primitives
+are checked against published vectors or independent reconstructions; see
+[test provenance](docs/FIPS.md). Usable as a [rustls](https://docs.rs/rustls)
 provider, so it can carry TLS.
 
 *Zero dependencies* means every crate that implements an algorithm depends on
@@ -113,52 +114,69 @@ to one that still does not.
 
 ```toml
 [dependencies]
-iron-crypto = "0.2"
+iron-crypto = "0.2.7"
 ```
 
-All eighteen crates are on crates.io. `iron-crypto` is the facade and
+The current release is **0.2.7**, published for all eighteen crates on crates.io.
+It fixes compiler-generated branches in core secret-selection masks and extends
+the compiled-code checks; see [CHANGELOG.md](CHANGELOG.md).
+`iron-crypto` is the facade and
 re-exports the rest; depend on the primitives directly if you want a smaller
 graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.2"       # the NIST curves, X25519, Ed25519
+ic-cipher = "0.2.7"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2.7"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2.7"       # the NIST curves, X25519, Ed25519
 ```
 
 ```console
-$ cargo install ic-cli   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.2.7   # the `ic` CLI and MCP server
 ```
 
-Publishing this is an export: encryption source code under ECCN 5D002 requires
-notifying BIS and the NSA's ENC Encryption Request Coordinator first, under
-15 CFR 742.15(b). That notification was sent before any of this went out —
-which is the order that matters, because nothing undoes a publish.
-[docs/RELEASING.md](docs/RELEASING.md) has the procedure and
-[docs/EXPORT.md](docs/EXPORT.md) the determination behind it.
+The repository's release procedure requires recording a BIS/NSA notification
+before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
+and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
+[notification record](docs/export/notification.md) records the user's reported
+submission and the 0.2.7 publication.
 
-The repository is still private, so the `repository` link in the published
-manifests does not resolve for anyone who has not been given access.
+The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
 ## Use
 
 ```rust
 use iron_crypto::prelude::*;
 
-// Ask what to use, rather than picking a name from memory.
-let choice = recommend(Intent::EncryptMessage, Policy::FIPS_APPROVED).unwrap();
-assert_eq!(choice.primary.id, "aes-256-gcm");
-assert_eq!(choice.primary.rust_path, "ic_cipher::Aes256Gcm");
+fn main() -> Result<()> {
+    // Ask what to use, rather than picking a name from memory.
+    let choice = recommend(Intent::EncryptMessage, Policy::FIPS_APPROVED)
+        .expect("this build provides AES-256-GCM");
+    assert_eq!(choice.primary.id, "aes-256-gcm");
+    assert_eq!(choice.primary.rust_path, "ic_cipher::Aes256Gcm");
 
-// Then use it.
-let cipher = Aes256Gcm::new(&[0x2a; 32])?;
-let mut buf = *b"the payload";
-let mut tag = [0u8; 16];
-cipher.seal_detached(&nonce, b"context", &mut buf, &mut tag)?;
-cipher.open_detached(&nonce, b"context", &mut buf, &tag)?;
-# Ok::<(), ic_core::Error>(())
+    // Fresh key for this one-message example; Rng reseeds automatically.
+    let mut rng = Rng::from_os()?;
+    let mut key = Zeroizing::new([0u8; 32]);
+    rng.fill(&mut *key)?;
+    let cipher = Aes256Gcm::new(&*key)?;
+
+    // A reused key requires a persistent, strictly increasing counter.
+    let message_counter = 0u64;
+    let mut nonce = [0u8; 12];
+    nonce[4..].copy_from_slice(&message_counter.to_be_bytes());
+    let mut buf = *b"the payload";
+    let mut tag = [0u8; 16];
+    cipher.seal_detached(&nonce, b"context", &mut buf, &mut tag)?;
+    cipher.open_detached(&nonce, b"context", &mut buf, &tag)?;
+    assert_eq!(&buf, b"the payload");
+    Ok(())
+}
 ```
+
+This example uses the default `std` feature for OS seeding. For every subsequent
+encryption under the same key, increment the counter and prevent overflow or
+reset across restarts. Never reuse a `(key, nonce)` pair.
 
 ## Connect an agent
 
@@ -265,7 +283,12 @@ marks `rsa-modulus-at-least-2048-bits` as `critical`, `ic-rsa` enforces it, and
 a test pins the behaviour so it stays a decision on record rather than becoming
 a mysterious handshake failure someone later "fixes".
 
-Absent: QUIC header protection, and the mismatched ECDSA pairings — a P-256
+QUIC packet and header protection are implemented for AES-GCM and
+ChaCha20-Poly1305. Header masks are checked against RFC 9001 vectors, with a
+separate test distinguishing long and short headers. Multipath QUIC is not
+implemented.
+
+Absent: the mismatched ECDSA pairings — a P-256
 key signed with SHA-384, or the reverse. `ic-ec` has no such combination, and
 assembling one inside the adapter, out of sight of that crate's vectors, would
 be worse than declining the chain.
@@ -316,10 +339,11 @@ The ontology registers algorithms this library does **not** provide, marked
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.
 - **ARMv8 crypto extensions** — implemented, behind the off-by-default
-  `aarch64-crypto` feature, and never executed. It compiles for
+  `aarch64-crypto` feature. Local checks cross-compile it for
   `aarch64-apple-darwin` and its round structure is checked against a software
   model of the instructions — which is what caught the decryption key schedule
-  being wrong — but no machine has run it. It becomes the default once CI has.
+  being wrong. CI defines a native ARM64 job that runs the cipher and facade
+  tests with this feature; a cross-build alone does not establish execution.
 - **X.509 certificate parsing** — out of scope. Names, validity, extensions, and
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
@@ -350,6 +374,19 @@ is meaningless.
 
 A null result means *this run found no evidence on this machine*. That is not a
 proof of constant time, and the output says so rather than printing a tick.
+
+The recorded [host diagnostics](docs/timing/2026-09-29-host/README.md) ran under
+heavy CPU load. Quiet-host repetition and Cortex-M/RISC-V hardware timing
+measurements remain outstanding.
+
+### Compiled-code checks
+
+`python scripts/check-ct.py` checks nineteen fixed-size probes on x86-64 Linux,
+Cortex-M0, Cortex-M4 and RISC-V: **76 probe/target checks**. It rejects branches,
+integer division and calls in the selected core, ML-DSA and ML-KEM operations.
+The full local gate and CI run the checker. These checks cover the compiled
+probes, not whole algorithms, memory-access timing or every caller context;
+[CONSTANT_TIME.md](docs/CONSTANT_TIME.md) gives the rules and limits.
 
 ### Supply chain
 
@@ -496,7 +533,7 @@ converting ACVP output.
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 60 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 68 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `ic capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.
@@ -521,13 +558,12 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 ### How that compares
 
-Measured by `bench/` against RustCrypto and dalek, on the same machine and the
-same buffers, best of nine runs. Best rather than median because the machine is
-shared and interference only ever makes a result slower: the same binary timed
-at 22.0, 23.0 and 27.2 microseconds across three consecutive runs while other
-builds were going.
+These are historical developer-machine comparisons from `bench/` against
+RustCrypto and dalek, using the same buffers and the best of nine runs. They
+have not been rerun for 0.2.7 and are not performance guarantees. Shared-machine
+interference caused substantial variation between runs.
 
-| operation | against the fastest Rust implementation |
+| operation | historical comparison against RustCrypto/dalek |
 |---|---|
 | P-256 public key | **~3.2x faster** |
 | ECDSA P-256, sign | **~2.6x faster** |
@@ -580,10 +616,15 @@ difference, and it is a price this library pays on purpose. It was 3.5x behind
 ring in an IronSocketLayer measurement until SHA-256 stopped sending buffered
 and final blocks past SHA-NI.
 
-SHA-512 was reported as level here for a while, on medians that straddled
-parity. Best-of-nine is the better estimator on a shared machine and it puts
-the row at 1.07 to 1.09x behind across repeated measurements, so that is what
-it now says.
+Historical SHA-512 best-of-nine measurements put that row at 1.07 to 1.09x
+behind, while earlier medians straddled parity. Small differences require
+controlled, repeated comparisons that clear the observed noise.
+
+The more recent [focused ECDH diagnostics](docs/benchmarks/2026-09-30-ecdh/README.md)
+retain twenty alternating pairs per run. The ranges overlap under heavy load,
+so they support parity within the observed noise. IronCrypto also validates
+the SEC1 peer per call while RustCrypto receives a pre-parsed peer; these are
+API comparisons, not a before/after measurement of a source change.
 
 **Finding where the time went mattered more than optimising.** Every figure that
 moved did so because a measurement contradicted the obvious explanation, and in
@@ -706,6 +747,8 @@ without your having to read this paragraph.
 | [CHANGELOG.md](CHANGELOG.md) | what changed between releases |
 | [AGENTS.md](AGENTS.md) | instructions for agents working in this repo |
 | [SECURITY.md](SECURITY.md) | threat model, side-channel posture, reporting |
+| [CONSTANT_TIME.md](docs/CONSTANT_TIME.md) | compiled probes, target coverage and limits |
+| [bench/README.md](bench/README.md) | benchmark reproduction and controlled comparisons |
 | [RELEASING.md](docs/RELEASING.md) | why nothing goes public before the export notification |
 | [EXPORT.md](docs/EXPORT.md) | that notification, ready to send, and what to record |
 
@@ -714,7 +757,20 @@ without your having to read this paragraph.
 ```console
 $ cargo test --workspace
 $ cargo build -p iron-crypto --no-default-features --target thumbv7em-none-eabihf
+$ cargo clippy --workspace --all-targets
+$ bash scripts/check.sh
 ```
+
+The full gate also checks formatting, dependencies, advisory floors and
+cross-target builds. Install its targets first:
+
+```console
+$ rustup target add x86_64-unknown-linux-gnu thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf wasm32-unknown-unknown aarch64-apple-darwin
+```
+
+The compiled-code checker requires Python 3. `bash scripts/check.sh --quick`
+skips cross-target checks. Cross-compilation does not run code on an embedded
+board.
 
 ## License
 
