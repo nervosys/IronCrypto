@@ -58,6 +58,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.4 | 2026-09-29 16:42:11 | published after the maintainer confirmed, when asked, that the notification covers this release; adds X.509 certificate issuance |
 | 0.2.5 | 2026-09-30 02:08:53 | all eighteen crates published from `e5d759f`, after the maintainer confirmed that the notification covers this release; constant-time fixes and generator-multiplication improvements |
 | 0.2.6 | 2026-09-30 14:38:55 | all eighteen crates published from `0adec96`, after the maintainer confirmed that the notification covers this release; LTO mask fixes, compiled-code probes and timing additions |
+| 0.2.7 | 2026-09-30 16:44:00 | all eighteen crates published from `85183e5`, after the maintainer reported submitting the updated release notice; core mask fix and nineteen compiled-code probes |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -111,6 +112,16 @@ Publication proceeds on the maintainer's submission report. The actual sent
 message, completed contact fields and exact sending time have not been
 supplied here. This records the report, not an independently verified mail
 delivery or a claim that the draft's placeholders were sent unchanged.
+
+The crates.io API confirmed all eighteen 0.2.7 packages live and not yanked.
+The first upload was `ic-core` at 2026-09-30 16:44:00 UTC; the last was
+`ic-cli` at 16:45:11 UTC. The published source commit is `85183e5`;
+all eighteen verified packages identified that clean commit in their VCS
+metadata. All 66 published 0.1.x versions were confirmed still yanked.
+
+The maintainer subsequently created `v0.2.7` at `85183e5` and pushed master
+and the tag. The supplied terminal output reported both successful updates
+and a passing full pre-push gate, including all 76 compiled-code probe checks.
 
 ## Determination
 
