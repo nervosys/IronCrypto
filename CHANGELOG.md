@@ -14,6 +14,10 @@ all of them.
 
 ### Tests
 
+- `ic timing` now measures ML-DSA rounding and ML-KEM compression with
+  fixed versus random synthetic coefficient batches. Input preparation is
+  outside the timed region; all outputs are retained. These measurements
+  report evidence on the running host and do not gate CI.
 - Thirteen compiled-code probes reject branches, division and unresolved
   calls on x86-64, Cortex-M0, Cortex-M4 and RISC-V, in CI and the full local
   gate. Their coverage and limitations are in `docs/CONSTANT_TIME.md`.

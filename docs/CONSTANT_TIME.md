@@ -51,6 +51,12 @@ for each such case rather than a blanket branch-count allowance.
 Assembly review and statistical timing measurements remain necessary. No M0,
 M4 or RISC-V hardware timing measurements were performed for this change.
 
+Subsequent [host diagnostics](timing/2026-09-29-host/README.md) exercised the
+existing timing suite and added batched ML-DSA rounding and ML-KEM compression
+targets. Their positive controls worked and the kernel targets stayed below
+the suspicious threshold in two runs. CPU load was 79–100%, so these results
+do not close the quiet-hardware or embedded-timing gaps.
+
 ## The first regression found
 
 On 2026-09-29, rustc 1.98.1 with LTO emitted seventeen conditional branches

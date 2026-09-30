@@ -1,0 +1,17 @@
+{
+  "startedUtc": "2026-09-30T04:03:17.6653200Z",
+  "commit": "397f9f291a66091b6cce90418e0330a6080ad493",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "cpu": {
+    "Name": "AMD Ryzen 9 9900X 12-Core Processor            ",
+    "NumberOfLogicalProcessors": 24,
+    "LoadPercentage": 85
+  },
+  "profile": "workspace release, fat LTO, overflow checks enabled",
+  "command": "ic timing --iterations 100000 --json",
+  "note": "Busy host diagnostic. No embedded target measured.",
+  "finishedUtc": "2026-09-30T04:03:55.9845565Z",
+  "cpuAfter": {
+    "LoadPercentage": 100
+  }
+}

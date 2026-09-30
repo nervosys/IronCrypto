@@ -1,0 +1,19 @@
+{
+  "startedUtc": "2026-09-30T04:07:51.2721348Z",
+  "baseCommit": "397f9f291a66091b6cce90418e0330a6080ad493",
+  "timingSourceSha256": "B414AB7D94863A77DAC5D2A0C05B69731569720CBC9F2F465BBECD7CCE0883C3",
+  "executableSha256": "296C5505DAE218202BF755EB3C7A36545B128F0E22B95B2B2EF4179BF010F843",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "cpu": {
+    "Name": "AMD Ryzen 9 9900X 12-Core Processor            ",
+    "NumberOfLogicalProcessors": 24,
+    "LoadPercentage": 100
+  },
+  "profile": "workspace release, fat LTO, overflow checks enabled",
+  "command": "ic timing --iterations 100000 --json",
+  "note": "Busy host diagnostic with two added batched kernel targets. No embedded target measured.",
+  "finishedUtc": "2026-09-30T04:08:54.2550102Z",
+  "cpuAfter": {
+    "LoadPercentage": 100
+  }
+}

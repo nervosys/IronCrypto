@@ -93,6 +93,10 @@ pub enum Target {
     /// The CRT path in particular: it branches per prime, and a leak there is
     /// the classic route to factoring the modulus.
     RsaSign,
+    /// ML-DSA rounding kernels over fixed versus random synthetic coefficients.
+    MlDsaRounding,
+    /// ML-KEM compression at every scheme width, likewise.
+    MlKemCompress,
 }
 
 impl Target {
@@ -110,6 +114,8 @@ impl Target {
         Target::AesEncrypt,
         Target::EcdsaSign,
         Target::RsaSign,
+        Target::MlDsaRounding,
+        Target::MlKemCompress,
     ];
 
     /// Stable identifier, as the command line accepts it.
@@ -124,6 +130,8 @@ impl Target {
             Self::AesEncrypt => "aes-encrypt",
             Self::EcdsaSign => "ecdsa-sign",
             Self::RsaSign => "rsa-sign",
+            Self::MlDsaRounding => "mldsa-rounding",
+            Self::MlKemCompress => "mlkem-compress",
         }
     }
 
@@ -140,6 +148,9 @@ impl Target {
             }
             Self::AesEncrypt => "a fixed key, versus a random key",
             Self::EcdsaSign | Self::RsaSign => "one private key, versus a different one",
+            Self::MlDsaRounding | Self::MlKemCompress => {
+                "256 zero coefficients, versus 256 random coefficients in the scheme's residue range"
+            }
         }
     }
 
@@ -435,6 +446,56 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
             *sink = sink
                 .wrapping_add(res.is_ok() as u64)
                 .wrapping_add(block[0] as u64);
+            elapsed
+        }
+        Target::MlDsaRounding => {
+            use iron_crypto::mldsa::{poly, rounding};
+            // Public synthetic inputs, not private key material. Preparation
+            // is outside the timed region. A full polynomial amortizes the
+            // timer overhead; all six outputs per coefficient are retained.
+            let mut coefficients = [0i32; poly::N];
+            if class == 1 {
+                for coefficient in &mut coefficients {
+                    *coefficient = (rng.next() % poly::Q as u64) as i32;
+                }
+            }
+            let coefficients = std::hint::black_box(coefficients);
+            let mut output = [[0i32; 6]; poly::N];
+            let start = Instant::now();
+            for (coefficient, out) in coefficients.iter().zip(output.iter_mut()) {
+                let p = rounding::power2round(*coefficient);
+                let d32 = rounding::decompose(*coefficient, rounding::GAMMA2_32);
+                let d88 = rounding::decompose(*coefficient, rounding::GAMMA2_88);
+                *out = [p.0, p.1, d32.0, d32.1, d88.0, d88.1];
+            }
+            std::hint::black_box(&output);
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink.wrapping_add(output[0][0] as u64);
+            elapsed
+        }
+        Target::MlKemCompress => {
+            let mut coefficients = [0i16; ic_mlkem::poly::N];
+            if class == 1 {
+                for coefficient in &mut coefficients {
+                    *coefficient = (rng.next() % ic_mlkem::poly::Q as u64) as i16;
+                }
+            }
+            let coefficients = std::hint::black_box(coefficients);
+            let mut output = [[0u16; 5]; ic_mlkem::poly::N];
+            let start = Instant::now();
+            for (coefficient, out) in coefficients.iter().zip(output.iter_mut()) {
+                // Fixed public widths, all those used by the three schemes.
+                *out = [
+                    ic_mlkem::encode::compress(*coefficient, 1),
+                    ic_mlkem::encode::compress(*coefficient, 4),
+                    ic_mlkem::encode::compress(*coefficient, 5),
+                    ic_mlkem::encode::compress(*coefficient, 10),
+                    ic_mlkem::encode::compress(*coefficient, 11),
+                ];
+            }
+            std::hint::black_box(&output);
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink.wrapping_add(output[0][0] as u64);
             elapsed
         }
         Target::X25519 => {

@@ -162,6 +162,12 @@ in CI and the full local check; [CONSTANT_TIME.md](docs/CONSTANT_TIME.md)
 records their coverage, deliberate-breakage checks and limitations. This gate
 does not establish timing for entire algorithms or replace hardware tests.
 
+The [host timing reports](docs/timing/2026-09-29-host/README.md) retain three
+developer-machine runs, including two with direct batched measurements of
+ML-DSA rounding and ML-KEM compression. Positive controls detected leakage;
+the two kernel targets stayed below the suspicious threshold. The host was
+heavily loaded, so quiet reference and embedded hardware remain unmeasured.
+
 **The hex and Base64 codecs branched on secret characters, on every target.**
 A PKCS#8 private key in PEM is Base64, and the CLI and MCP server take keys as
 hex, so these decode secrets. Their source was branch-free, but each

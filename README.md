@@ -334,6 +334,8 @@ The ontology registers algorithms this library does **not** provide, marked
 ```sh
 ic timing                      # all targets
 ic timing ct-verify --iterations 200000
+ic timing mldsa-rounding --iterations 100000
+ic timing mlkem-compress --iterations 100000
 ```
 
 A dudect-style leakage detector: two input classes interleaved at random, then

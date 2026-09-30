@@ -201,6 +201,11 @@ the numerical results independently. No new vector constants were introduced.
 this gate does not prove constant time for complete algorithms or constitute
 hardware timing measurements.
 
+The subsequent [host timing reports](timing/2026-09-29-host/README.md) include
+positive controls and batched measurements of the two affected kernels. They
+are busy-host diagnostics with recorded CPU load, not quiet-hardware evidence
+or a proof that other input classes cannot leak.
+
 ## What validation would still require
 
 In rough order of effort:
