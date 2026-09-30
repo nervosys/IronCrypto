@@ -20,6 +20,7 @@
 //! rather than assuming it.
 
 use crate::poly::{Poly, N, Q};
+use core::hint::black_box;
 
 /// `Compress_d(x)`, FIPS 203 equation 4.7.
 ///
@@ -48,7 +49,10 @@ pub fn compress(x: i16, d: u32) -> u16 {
     let mut e = ((t >> 8) * 40318) >> 19;
     let r = t - e * (Q as u32);
     // One more if the remainder reached q.
-    e += (Q as u32 - 1).wrapping_sub(r) >> 31;
+    // LTO can turn this 0/1 correction into a branch on Cortex-M0. The
+    // barriers hide both the subtraction's range and the correction's range.
+    // An output-only barrier still lets LLVM branch to construct the bit.
+    e += black_box(black_box((Q as u32 - 1).wrapping_sub(r)) >> 31);
     (e & ((1u32 << d) - 1)) as u16
 }
 

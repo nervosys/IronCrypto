@@ -153,6 +153,15 @@ signing that FIPS 204 permits to be observable; verification; self-tests; the
 AES key schedule's round index; and Argon2's reference-index arithmetic, in the
 modes whose memory addressing depends on the password by design.
 
+The checks described above constrain their tested compiler and build settings.
+A subsequent fat-LTO probe build on Cortex-M0 found that ML-DSA's reduction
+and decomposition and ML-KEM's compression masks could still compile into
+secret-dependent branches. These operations now hide both the operand and
+mask ranges. Thirteen narrowly scoped compiled-code probes gate four targets
+in CI and the full local check; [CONSTANT_TIME.md](docs/CONSTANT_TIME.md)
+records their coverage, deliberate-breakage checks and limitations. This gate
+does not establish timing for entire algorithms or replace hardware tests.
+
 **The hex and Base64 codecs branched on secret characters, on every target.**
 A PKCS#8 private key in PEM is Base64, and the CLI and MCP server take keys as
 hex, so these decode secrets. Their source was branch-free, but each

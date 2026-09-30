@@ -186,6 +186,21 @@ image against a value patched in after linking, which is a property of the build
 system rather than the source. The function's documentation says so explicitly,
 so its name cannot imply more than it delivers.
 
+## Compiled-code regression gate
+
+`scripts/check-ct.py` builds thirteen fixed-parameter probes over the actual
+implementations with fat LTO on x86-64, Cortex-M0, Cortex-M4 and 32-bit RISC-V.
+The first run caught secret-dependent branches in ML-DSA's rounding masks and
+ML-KEM compression, despite their arithmetic-only source. Input and output
+barriers now prevent those transformations in the tested builds. Removing the
+input barrier from either fix makes the gate fail; restoring it passes.
+
+The existing exhaustive arithmetic comparisons and published vectors constrain
+the numerical results independently. No new vector constants were introduced.
+[CONSTANT_TIME.md](CONSTANT_TIME.md) records the precise coverage and limits;
+this gate does not prove constant time for complete algorithms or constitute
+hardware timing measurements.
+
 ## What validation would still require
 
 In rough order of effort:

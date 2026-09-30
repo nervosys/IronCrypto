@@ -51,6 +51,14 @@
 //! publishes or verification computes from public data, and may branch.
 
 use crate::poly::{Poly, N, Q};
+use core::hint::black_box;
+
+/// Hide both the input's range and the sign mask's range. A barrier only on
+/// the output still lets LLVM compute the mask with a comparison and branch.
+#[inline]
+fn sign_mask(value: i32) -> i32 {
+    black_box(black_box(value) >> 31)
+}
 
 /// Dropped bits in the public key, `d` in FIPS 204. The same for every
 /// parameter set.
@@ -74,8 +82,11 @@ pub fn reduce_q(r: i32) -> i32 {
     let hi = r >> 23;
     let lo = r & ((1 << 23) - 1);
     let r = lo + hi * ((1 << 13) - 1);
-    let r = r + ((r >> 31) & Q);
-    r - (Q & !((r - Q) >> 31))
+    // LTO recognizes the sign masks as conditional additions/subtractions and
+    // emits secret-dependent branches on Cortex-M0. Hide the mask's range,
+    // as ic_core::ct does, before LLVM can turn it back into control flow.
+    let r = r + (sign_mask(r) & Q);
+    r - (Q & !sign_mask(r - Q))
 }
 
 /// FIPS 204 Algorithm 35. Split `r` into `(r1, r0)` with `r = r1*2^d + r0`.
@@ -136,14 +147,14 @@ pub fn decompose(r: i32, gamma2: i32) -> (i32, i32) {
         GAMMA2_32 => ((a * 1025 + (1 << 21)) >> 22) & 15,
         GAMMA2_88 => {
             let r1 = (a * 11275 + (1 << 23)) >> 24;
-            r1 ^ (((43 - r1) >> 31) & r1)
+            r1 ^ (sign_mask(43 - r1) & r1)
         }
         // Not an ML-DSA parameter set; correct, but not constant time.
         _ => return decompose_generic(r, gamma2),
     };
     let r0 = r - r1 * 2 * gamma2;
     // The fold, and the centring: above (q-1)/2, subtract q.
-    (r1, r0 - (((Q - 1) / 2 - r0) >> 31 & Q))
+    (r1, r0 - (sign_mask((Q - 1) / 2 - r0) & Q))
 }
 
 /// Algorithm 36 as written, for a `gamma2` no parameter set uses. It divides,

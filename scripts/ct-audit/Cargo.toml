@@ -1,0 +1,23 @@
+[package]
+name = "ct-audit"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# An isolated build tool, not a shipped crate or a workspace dependency.
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+ic-core = { path = "../../crates/ic-core", default-features = false }
+ic-mldsa = { path = "../../crates/ic-mldsa", default-features = false }
+ic-mlkem = { path = "../../crates/ic-mlkem", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+overflow-checks = false

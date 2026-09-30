@@ -40,6 +40,7 @@ step() {
 
 step "formatting"
 cargo fmt --all --check
+cargo fmt --manifest-path scripts/ct-audit/Cargo.toml --check
 
 step "clippy"
 # -D warnings is the point. Without it clippy reports problems and exits zero,
@@ -68,6 +69,12 @@ if [ "$quick" -eq 1 ]; then
     printf '\nquick check passed (cross-compilation skipped)\n'
     exit 0
 fi
+
+step "compiled-code constant-time probes"
+# Fail if a required target is absent: a skipped probe is not verification.
+# The isolated harness uses LTO over the real library implementations.
+python scripts/test-check-ct.py
+python scripts/check-ct.py
 
 step "no_std cross-compilation"
 # The same four CI builds. `wasm32-unknown-unknown` used to be in CI's list and

@@ -3,6 +3,21 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Security
+
+- ML-DSA reduction and decomposition and ML-KEM compression now hide both
+  the input and result ranges of sign extraction. Fat LTO on Cortex-M0
+  turned their masks back into secret-dependent branches even after the
+  division fixes in 0.2.5. Numerical results are unchanged.
+
+### Tests
+
+- Thirteen compiled-code probes reject branches, division and unresolved
+  calls on x86-64, Cortex-M0, Cortex-M4 and RISC-V, in CI and the full local
+  gate. Their coverage and limitations are in `docs/CONSTANT_TIME.md`.
+
 ## 0.2.5
 
 ### Security
