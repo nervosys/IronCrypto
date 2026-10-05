@@ -166,6 +166,15 @@ eighteen packages identified that clean commit in their VCS metadata. That
 commit's message says it adds this section; it does not, because the edit
 failed, and this section was written after publication.
 
+## 0.2.10 release authorization
+
+On 2026-10-05 the maintainer was asked whether the BIS/NSA notification
+covers 0.2.10, a release that changes only ML-DSA's memory use, adds no
+algorithms or parameter sets, and publishes under the same eighteen package
+names as 0.2.9. The maintainer answered that it is covered. Publication
+proceeds on that answer. No new notice was sent or supplied here; this records
+the maintainer's answer, not a newly sent notification.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
