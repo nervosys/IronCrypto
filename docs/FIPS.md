@@ -120,7 +120,7 @@ of unknown origin would conceal that gap rather than close it.
 | AES Key Wrap with padding | RFC 5649 section 6, both published vectors, including the single-block path |
 | AES-GCM | the McGrew–Viega specification test cases |
 | CMAC | SP 800-38B examples for all three key sizes |
-| HMAC | RFC 4231; NIST HMAC-SHA3 samples |
+| HMAC | RFC 4231 (case 6, the hashed long key, for SHA-256, SHA-384 and SHA-512; the SHA-384 and SHA-512 tags also checked against Python's `hmac`); NIST HMAC-SHA3 samples |
 | HKDF | RFC 5869 test cases 1–3 |
 | ChaCha20, Poly1305, ChaCha20-Poly1305 | RFC 8439 |
 | X25519 | RFC 7748 §5.2 and §6.1 |

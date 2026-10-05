@@ -91,7 +91,7 @@ fn row(name: &str, f: &mut dyn FnMut(), per_batch: u32) {
     let bytes = measure(f);
     let us = time(f, per_batch);
     println!(
-        "{name:<28} {bytes:>8} B  {kib:>7.1} KiB  {us:>10.1} us",
+        "{name:<28} {bytes:>8} B  {kib:>7.1} KiB  {us:>10.2} us",
         kib = bytes as f64 / 1024.0
     );
 }
@@ -186,7 +186,7 @@ macro_rules! sig_rows {
 }
 
 pub fn run() {
-    // `stack [mldsa] [ec]`: groups to run, all of them by default.
+    // `stack [mldsa] [ec] [hmac]`: groups to run, all of them by default.
     let which: Vec<String> = std::env::args().skip(2).collect();
     let wants = move |group: &str| which.is_empty() || which.iter().any(|w| w == group);
     let worker = std::thread::Builder::new()
@@ -200,6 +200,48 @@ pub fn run() {
                 mldsa_rows!("ML-DSA-44", ic_mldsa::sign44);
                 mldsa_rows!("ML-DSA-65", ic_mldsa::sign);
                 mldsa_rows!("ML-DSA-87", ic_mldsa::sign87);
+            }
+            if wants("hmac") {
+                use ic_core::traits::{Kdf, Mac};
+                let msg = [0x42u8; 200];
+                let short_key = [0x0bu8; 32];
+                let long_key = [0x0bu8; 200];
+                row(
+                    "HMAC-SHA256, 200 B",
+                    &mut || {
+                        black_box(ic_mac::HmacSha256::mac(black_box(&short_key), &msg).ok());
+                    },
+                    20_000,
+                );
+                row(
+                    "HMAC-SHA384, 200 B",
+                    &mut || {
+                        black_box(ic_mac::HmacSha384::mac(black_box(&short_key), &msg).ok());
+                    },
+                    20_000,
+                );
+                row(
+                    "HMAC-SHA384, long key",
+                    &mut || {
+                        black_box(ic_mac::HmacSha384::mac(black_box(&long_key), &msg).ok());
+                    },
+                    20_000,
+                );
+                row(
+                    "HKDF-SHA384, 48 B",
+                    &mut || {
+                        let mut out = [0u8; 48];
+                        ic_kdf::hkdf::Hkdf::<ic_mac::HmacSha384>::derive(
+                            black_box(&short_key),
+                            b"salt",
+                            b"info",
+                            &mut out,
+                        )
+                        .expect("hkdf");
+                        black_box(&out);
+                    },
+                    20_000,
+                );
             }
             if wants("ec") {
                 sig_rows!("ECDSA P-256", ic_ec::p256::EcdsaP256Sha256);

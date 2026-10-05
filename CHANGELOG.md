@@ -37,6 +37,18 @@ all of them.
   rather than 36.4, and the first verification at 6.6 KiB rather than 24.9.
   Steady-state speed is unchanged within measurement noise.
 
+- **HMAC-SHA384 and HMAC-SHA512 use less stack.** Their digest states carry
+  SHA-512's 640-byte message schedule, so each HMAC is 1.7 KiB, and key setup
+  built both states as locals before moving them into the result, beside a
+  third for a long key. They are now absorbed in place, the long-key hash
+  runs out of line, and for these two digests key setup and finalization stay
+  out of line, so a caller that inlined them -- HKDF, say -- no longer
+  carries their frames at once. One HMAC-SHA384 tag on Cortex-M4 (fat LTO,
+  full call depth) now needs 7.9 KiB rather than 11.1, and HKDF-SHA384
+  11.4 KiB rather than 14.8; on x86-64 HKDF-SHA384 needs 9.3 KiB rather than
+  16.4. HMAC-SHA256 is unchanged in shape and stays inlined; timing is at
+  parity for all of them.
+
 ### Added
 
 - `ic_ec::prepare()` builds every curve table now rather than on first use,
@@ -48,6 +60,8 @@ all of them.
 - `ic-ec/tests/cold_tables.rs` runs every curve's first use in a fresh
   process under a counting allocator and fails on any allocation. It fails on
   the previous tables, three allocations, one per NIST curve.
+- RFC 4231 case 6, a key longer than the block, is now checked for
+  HMAC-SHA384 and HMAC-SHA512 as well as HMAC-SHA256.
 - `bench` measures peak stack per operation by painting it, byte-granular on
   any host, beside the time each operation takes.
 - On-demand rows of `A`, and key generation's row-at-a-time encoding, are each

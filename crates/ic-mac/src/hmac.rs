@@ -37,6 +37,103 @@ impl<D: HmacDigest> Algorithm for Hmac<D> {
     const NAME: &'static str = D::HMAC_NAME;
 }
 
+impl<D: Digest> Hmac<D> {
+    /// Absorb the inner and outer pads into the two fresh states.
+    ///
+    /// One buffer, built as the inner pad directly -- the zero-padded key
+    /// XOR 0x36 -- and turned into the outer pad in place, since
+    /// `k ^ 0x5c == (k ^ 0x36) ^ (0x36 ^ 0x5c)`. The wipe is volatile and
+    /// byte by byte, which is what makes it stick and also what makes it
+    /// cost: it covers the one block this digest used, not two buffers sized
+    /// for the widest digest there is. For SHA-256 that is 64 bytes where it
+    /// was 288, on every HMAC key setup -- and HKDF sets up a key per call.
+    ///
+    /// The states are absorbed into where they will live rather than built as
+    /// locals and moved into the result: for SHA-384 on Cortex-M4 the locals,
+    /// the result and a third state for a long key had shared one 4.4 KiB frame.
+    fn absorb_pads(&mut self, key: &[u8]) {
+        let mut pad = [0x36u8; MAX_BLOCK_LEN];
+        let block = &mut pad[..D::BLOCK_LEN];
+        if key.len() > D::BLOCK_LEN {
+            xor_hashed_key::<D>(key, block);
+        } else {
+            for (p, k) in block.iter_mut().zip(key) {
+                *p ^= k;
+            }
+        }
+
+        self.inner.update(block);
+        for p in block.iter_mut() {
+            *p ^= 0x36 ^ 0x5c;
+        }
+        self.outer.update(block);
+
+        block.zeroize();
+    }
+}
+
+// # Where the frames go
+//
+// A SHA-512 state carries its 640-byte message schedule, so SHA-384 and
+// SHA-512 states are about 860 bytes and an HMAC over either is 1.7 KiB.
+// Inlined into a caller -- HKDF, say -- key setup and finalization each
+// brought their own copies of those states into the caller's frame beside the
+// caller's: one HMAC-SHA384 tag reached 11 KiB of stack on Cortex-M4. For
+// those digests, key setup and finalization stay out of line, so their
+// frames are used one after another instead of all at once.
+//
+// Not for the small states. SHA-256 gained nothing from it on Cortex-M4, and
+// the call cost a short HMAC-SHA256 about 8% on x86-64. The test is a
+// constant for each digest, so whichever branch is not taken compiles away.
+
+/// Whether `D`'s state is large enough to keep HMAC's work out of line.
+const fn large_state<D>() -> bool {
+    core::mem::size_of::<D>() > 512
+}
+
+/// `Hmac` keyed with `key`.
+#[inline(always)]
+fn keyed<D: Digest>(key: &[u8]) -> Hmac<D> {
+    let mut mac = Hmac {
+        inner: D::new(),
+        outer: D::new(),
+    };
+    mac.absorb_pads(key);
+    mac
+}
+
+#[inline(never)]
+fn keyed_out_of_line<D: Digest>(key: &[u8]) -> Hmac<D> {
+    keyed(key)
+}
+
+/// The tag: the outer hash over the inner one.
+#[inline(always)]
+fn tag<D: Digest>(mut mac: Hmac<D>) -> D::Output {
+    let inner_digest = mac.inner.finalize();
+    mac.outer.update(inner_digest.as_ref());
+    mac.outer.finalize()
+}
+
+#[inline(never)]
+fn tag_out_of_line<D: Digest>(mac: Hmac<D>) -> D::Output {
+    tag(mac)
+}
+
+/// XOR `D(key)` into `block`, for a key longer than one block.
+///
+/// Out of line so that the third digest state it needs is on the stack only
+/// while it runs, not for the whole of key setup.
+#[inline(never)]
+fn xor_hashed_key<D: Digest>(key: &[u8], block: &mut [u8]) {
+    let mut hashed = D::digest(key);
+    for (p, k) in block.iter_mut().zip(hashed.as_ref()) {
+        *p ^= k;
+    }
+    // Key-equivalent: HMAC under the hash is HMAC under the key.
+    hashed.as_mut().zeroize();
+}
+
 impl<D: HmacDigest> Mac for Hmac<D> {
     type Tag = D::Output;
     const TAG_LEN: usize = D::OUTPUT_LEN;
@@ -47,50 +144,23 @@ impl<D: HmacDigest> Mac for Hmac<D> {
             InvalidParameter,
             "digest block exceeds hmac buffer"
         );
-
-        // One buffer, built as the inner pad directly -- the zero-padded key
-        // XOR 0x36 -- and turned into the outer pad in place, since
-        // `k ^ 0x5c == (k ^ 0x36) ^ (0x36 ^ 0x5c)`. The wipe is volatile and
-        // byte by byte, which is what makes it stick and also what makes it
-        // cost: it now covers the one block this digest used, not two
-        // buffers sized for the widest digest there is. For SHA-256 that is
-        // 64 bytes where it was 288, on every HMAC key setup -- and HKDF sets
-        // up a key per call.
-        let mut pad = [0x36u8; MAX_BLOCK_LEN];
-        let block = &mut pad[..D::BLOCK_LEN];
-        if key.len() > D::BLOCK_LEN {
-            let mut hashed = D::digest(key);
-            for (p, k) in block.iter_mut().zip(hashed.as_ref()) {
-                *p ^= k;
-            }
-            // Key-equivalent: HMAC under the hash is HMAC under the key.
-            hashed.as_mut().zeroize();
+        if large_state::<D>() {
+            Ok(keyed_out_of_line(key))
         } else {
-            for (p, k) in block.iter_mut().zip(key) {
-                *p ^= k;
-            }
+            Ok(keyed(key))
         }
-
-        let mut inner = D::new();
-        inner.update(block);
-        for p in block.iter_mut() {
-            *p ^= 0x36 ^ 0x5c;
-        }
-        let mut outer = D::new();
-        outer.update(block);
-
-        block.zeroize();
-        Ok(Self { inner, outer })
     }
 
     fn update(&mut self, data: &[u8]) {
         self.inner.update(data);
     }
 
-    fn finalize(mut self) -> Self::Tag {
-        let inner_digest = self.inner.finalize();
-        self.outer.update(inner_digest.as_ref());
-        self.outer.finalize()
+    fn finalize(self) -> Self::Tag {
+        if large_state::<D>() {
+            tag_out_of_line(self)
+        } else {
+            tag(self)
+        }
     }
 }
 
@@ -247,6 +317,24 @@ mod tests {
             .unwrap()
             .as_ref()),
             "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+    }
+
+    /// Case 6 again, for SHA-384 and SHA-512: 131 bytes is also longer than
+    /// their 128-byte block. These are the digests whose key setup runs out of
+    /// line, so this is what checks the long-key path there. RFC 4231 section
+    /// 4.7; both tags also checked against Python's `hmac` module.
+    #[test]
+    fn rfc4231_case_6_oversized_key_sha2_512_family() {
+        let key = [0xaau8; 131];
+        let msg = b"Test Using Larger Than Block-Size Key - Hash Key First";
+        assert_eq!(
+            hex(HmacSha384::mac(&key, msg).unwrap().as_ref()),
+            "4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952"
+        );
+        assert_eq!(
+            hex(HmacSha512::mac(&key, msg).unwrap().as_ref()),
+            "80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598"
         );
     }
 

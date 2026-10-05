@@ -11,6 +11,9 @@ ic-cipher = { path = "../crates/ic-cipher" }
 ic-core = { path = "../crates/ic-core", features = ["std"] }
 ic-ec = { path = "../crates/ic-ec", features = ["bench-internals"] }
 ic-mldsa = { path = "../crates/ic-mldsa" }
+ic-mac = { path = "../crates/ic-mac" }
+ic-kdf = { path = "../crates/ic-kdf" }
+ic-hash = { path = "../crates/ic-hash" }
 
 # The comparison. These are here and nowhere else: `bench` is excluded from the
 # workspace so that nothing in the library's dependency graph changes.
