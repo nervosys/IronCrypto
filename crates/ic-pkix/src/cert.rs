@@ -520,7 +520,8 @@ mod tests {
         let mut year = 1970u32;
         let mut month = 1u32;
         let mut day = 1u32;
-        let is_leap = |y: u32| (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let is_leap =
+            |y: u32| (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
         let month_len = |y: u32, m: u32| match m {
             2 if is_leap(y) => 29,
             2 => 28,

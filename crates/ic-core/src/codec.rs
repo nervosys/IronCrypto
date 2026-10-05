@@ -81,7 +81,7 @@ pub fn hex_encode(input: &[u8], out: &mut [u8]) -> Result<()> {
 /// `out` must be exactly `input.len() / 2` bytes.
 pub fn hex_decode(input: &[u8], out: &mut [u8]) -> Result<()> {
     ensure!(
-        input.len() % 2 == 0,
+        input.len().is_multiple_of(2),
         MalformedEncoding,
         "hex length must be even"
     );
@@ -171,7 +171,11 @@ pub fn base64_encode(input: &[u8], out: &mut [u8]) -> Result<()> {
 /// Strict RFC 4648: `=` is accepted only as padding, in the last one or two
 /// positions, and every other character must be in the standard alphabet.
 pub fn base64_decode(input: &[u8], out: &mut [u8]) -> Result<usize> {
-    ensure!(input.len() % 4 == 0, MalformedEncoding, "base64 length");
+    ensure!(
+        input.len().is_multiple_of(4),
+        MalformedEncoding,
+        "base64 length"
+    );
     if input.is_empty() {
         return Ok(0);
     }

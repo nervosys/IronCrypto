@@ -31,7 +31,7 @@ use ic_core::{ensure, Result};
 /// P-384.
 pub fn to_der(signature: &[u8], out: &mut [u8]) -> Result<usize> {
     ensure!(
-        !signature.is_empty() && signature.len() % 2 == 0,
+        !signature.is_empty() && signature.len().is_multiple_of(2),
         InvalidLength,
         "ecdsa signature must be an even number of bytes"
     );
@@ -52,7 +52,7 @@ pub fn to_der(signature: &[u8], out: &mut [u8]) -> Result<usize> {
 /// trailing data.
 pub fn from_der(input: &[u8], out: &mut [u8]) -> Result<()> {
     ensure!(
-        !out.is_empty() && out.len() % 2 == 0,
+        !out.is_empty() && out.len().is_multiple_of(2),
         InvalidLength,
         "ecdsa signature buffer must be an even number of bytes"
     );

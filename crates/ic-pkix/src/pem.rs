@@ -107,7 +107,7 @@ pub fn decode(label: &str, text: &[u8], out: &mut [u8]) -> Result<usize> {
             continue;
         }
         ensure!(
-            line.len() % 4 == 0,
+            line.len().is_multiple_of(4),
             MalformedEncoding,
             "pem line is not a whole number of base64 quanta"
         );

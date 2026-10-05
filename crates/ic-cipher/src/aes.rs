@@ -223,7 +223,7 @@ impl Keys {
         match self {
             Keys::Portable(s) => {
                 ensure!(
-                    data.len() % BLOCK_LEN == 0,
+                    data.len().is_multiple_of(BLOCK_LEN),
                     InvalidLength,
                     "aes batch must be block-aligned"
                 );

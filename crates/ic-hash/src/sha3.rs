@@ -181,7 +181,7 @@ impl Sponge {
         // sponge takes the rate as a parameter, so the fast path checks rather
         // than assumes. A rate that is not lane-aligned simply keeps the old
         // behaviour.
-        let lane_aligned = self.rate % 8 == 0;
+        let lane_aligned = self.rate.is_multiple_of(8);
 
         while !data.is_empty() {
             if lane_aligned && self.pos == 0 && data.len() >= self.rate {

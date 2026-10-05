@@ -156,7 +156,7 @@ pub unsafe fn decrypt_block(keys: &Keys, block: &mut [u8]) -> Result<()> {
 #[target_feature(enable = "aes")]
 pub unsafe fn encrypt_blocks(keys: &Keys, data: &mut [u8]) -> Result<()> {
     ensure!(
-        data.len() % BLOCK_LEN == 0,
+        data.len().is_multiple_of(BLOCK_LEN),
         InvalidLength,
         "aes batch must be block-aligned"
     );

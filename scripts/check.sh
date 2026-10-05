@@ -70,6 +70,24 @@ if [ "$quick" -eq 1 ]; then
     exit 0
 fi
 
+step "declared minimum Rust version"
+# Cargo.toml's rust-version is a promise to every dependent, and nothing checked
+# it: it said 1.75 while the SIMD backends needed 1.87. Build the workspace with
+# exactly that toolchain, in its own target directory so its artefacts do not
+# mix with the current compiler's.
+msrv="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+if [ -z "$msrv" ]; then
+    echo "rust-version not found in Cargo.toml" >&2
+    exit 1
+fi
+if rustup toolchain list 2>/dev/null | grep -q "^$msrv[-.]"; then
+    echo "-- $msrv"
+    CARGO_TARGET_DIR="target/msrv-$msrv" cargo "+$msrv" check --workspace --all-targets
+else
+    printf '\nrust-version %s: NOT CHECKED, toolchain not installed.\n' "$msrv"
+    printf 'install with `rustup toolchain install %s --profile minimal`\n' "$msrv"
+fi
+
 step "compiled-code constant-time probes"
 # Fail if a required target is absent: a skipped probe is not verification.
 # The isolated harness uses LTO over the real library implementations.

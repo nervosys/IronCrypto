@@ -45,7 +45,7 @@ use super::K256;
 /// whole number of 64-byte blocks.
 #[target_feature(enable = "sha,sse2,ssse3,sse4.1")]
 pub unsafe fn compress(state: &mut [u32; 8], blocks: &[u8]) {
-    debug_assert!(blocks.len() % 64 == 0);
+    debug_assert!(blocks.len().is_multiple_of(64));
 
     // The byte-swap for big-endian message words.
     let shuffle = _mm_set_epi64x(

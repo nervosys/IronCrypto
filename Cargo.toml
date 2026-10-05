@@ -31,7 +31,11 @@ exclude = ["bench"]
 [workspace.package]
 version = "0.2.10"
 edition = "2021"
-rust-version = "1.75"
+# The oldest toolchain the whole workspace is checked on: scripts/check.sh and
+# CI's msrv job both build it. 1.87 is where `core::arch` intrinsics became
+# safe to call inside `#[target_feature]` functions, which the SIMD backends
+# rely on; 1.86 fails on them, and this said 1.75 for longer than it was true.
+rust-version = "1.87"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/nervosys/IronCrypto"
 authors = ["Nervosys"]

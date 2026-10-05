@@ -79,7 +79,7 @@ pub fn cbc_encrypt<C: BlockCipher>(cipher: &C, iv: &[u8], data: &mut [u8]) -> Re
         "cbc iv must be 16 bytes"
     );
     ensure!(
-        data.len() % BLOCK_LEN == 0,
+        data.len().is_multiple_of(BLOCK_LEN),
         InvalidLength,
         "cbc input must be block-aligned"
     );
@@ -103,7 +103,7 @@ pub fn cbc_decrypt<C: BlockCipher>(cipher: &C, iv: &[u8], data: &mut [u8]) -> Re
         "cbc iv must be 16 bytes"
     );
     ensure!(
-        data.len() % BLOCK_LEN == 0,
+        data.len().is_multiple_of(BLOCK_LEN),
         InvalidLength,
         "cbc input must be block-aligned"
     );
@@ -145,7 +145,7 @@ pub fn pkcs7_pad(buf: &mut [u8], len: usize) -> Result<usize> {
 /// never reach this path at all.
 pub fn pkcs7_unpad(buf: &[u8]) -> Result<usize> {
     ensure!(
-        !buf.is_empty() && buf.len() % BLOCK_LEN == 0,
+        !buf.is_empty() && buf.len().is_multiple_of(BLOCK_LEN),
         InvalidLength,
         "pkcs7 input must be block-aligned"
     );

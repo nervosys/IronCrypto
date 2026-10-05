@@ -140,6 +140,15 @@ jobs:
           cargo install cargo-audit --locked
           cargo audit
 
+  msrv:
+    name: minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Keep in step with rust-version in Cargo.toml.
+      - uses: dtolnay/rust-toolchain@1.87
+      - run: cargo check --workspace --all-targets
+
   docs:
     name: docs
     runs-on: ubuntu-latest

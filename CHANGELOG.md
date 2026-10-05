@@ -3,6 +3,20 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Fixed
+
+- **`rust-version` is now 1.87, the oldest toolchain the workspace builds
+  on.** It said 1.75, which stopped being true when the SIMD backends began
+  calling `core::arch` intrinsics inside `#[target_feature]` functions without
+  `unsafe`; on 1.75 to 1.86 `ic-cipher` does not compile. Found by
+  IronSocketLayer's release check. The full gate and a new CI job now build the
+  workspace with exactly the declared toolchain, so the number cannot drift
+  again unnoticed. Length checks use `is_multiple_of`, which clippy asks for
+  from 1.87; each tests a public length, and the compiled-code probes are
+  unchanged.
+
 ## 0.2.10
 
 ### Performance

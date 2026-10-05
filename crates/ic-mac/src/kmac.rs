@@ -214,7 +214,7 @@ mod tests {
         let mut message = enc(rate as u64);
         message.extend_from_slice(&enc((key.len() as u64) * 8));
         message.extend_from_slice(key);
-        while message.len() % rate != 0 {
+        while !message.len().is_multiple_of(rate) {
             message.push(0);
         }
         message.extend_from_slice(data);

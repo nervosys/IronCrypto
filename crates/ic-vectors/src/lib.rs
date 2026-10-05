@@ -214,7 +214,7 @@ pub fn optional_hex_field(case: &BTreeMap<String, String>, name: &str) -> Option
 /// Decode a hex string, tolerating whitespace and either case.
 fn unhex(text: &str) -> Option<Vec<u8>> {
     let cleaned: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(cleaned.len() / 2);

@@ -139,7 +139,7 @@ pub trait BlockCipher: Algorithm {
     /// Returns [`crate::ErrorKind::InvalidLength`] if `data` is not a whole
     /// number of blocks.
     fn encrypt_blocks(&self, data: &mut [u8]) -> Result<()> {
-        if data.len() % Self::BLOCK_LEN != 0 {
+        if !data.len().is_multiple_of(Self::BLOCK_LEN) {
             return Err(crate::err!(InvalidLength, "batch must be block-aligned"));
         }
         for block in data.chunks_mut(Self::BLOCK_LEN) {

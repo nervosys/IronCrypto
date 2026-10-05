@@ -246,7 +246,7 @@ impl Core256 {
     /// backend shuffles the state into and out of its register layout once per
     /// call, so feeding it one block at a time would pay that on every block.
     fn compress_blocks(&mut self, data: &[u8]) {
-        debug_assert!(data.len() % 64 == 0);
+        debug_assert!(data.len().is_multiple_of(64));
         if data.is_empty() {
             return;
         }

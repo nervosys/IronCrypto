@@ -651,7 +651,7 @@ mod tests {
         // Absorb, padding the final block with pad10*1.
         let mut padded = input.to_vec();
         padded.push(pad);
-        while padded.len() % rate != 0 {
+        while !padded.len().is_multiple_of(rate) {
             padded.push(0);
         }
         let last = padded.len() - 1;
@@ -732,7 +732,7 @@ mod tests {
                 prefix.extend_from_slice(n);
                 prefix.extend_from_slice(&reference_left_encode((s.len() as u64) * 8));
                 prefix.extend_from_slice(s);
-                while prefix.len() % rate != 0 {
+                while !prefix.len().is_multiple_of(rate) {
                     prefix.push(0);
                 }
                 prefix.extend_from_slice(data);
