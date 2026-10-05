@@ -198,11 +198,68 @@ macro_rules! ml_dsa {
         /// Encoded signature length.
         pub const SIGNATURE_LEN: usize = C_TILDE_LEN + L * Z_LEN + OMEGA + K;
 
-        /// `ExpandA`, in the index order FIPS 204 specifies.
+        /// Where `s1`, `s2` and `t0` start in an encoded signing key.
+        const SK_S1_AT: usize = 128;
+        const SK_S2_AT: usize = SK_S1_AT + L * S_LEN;
+        const SK_T0_AT: usize = SK_S2_AT + K * S_LEN;
+        const _: () = assert!(SK_T0_AT + K * T0_LEN == SECRET_KEY_LEN);
+
+        // # Why `A` is never held
+        //
+        // `A` is `k * l` polynomials of a kilobyte each: 56 KiB for ML-DSA-87,
+        // and with the vectors around it signing peaked at 243 KiB of stack, more
+        // RAM than most Cortex-M parts have. Each entry of `A` is a pure function
+        // of `rho` and its two indices, so sampling it where it is used and then
+        // dropping it gives the same values as sampling the whole matrix first,
+        // and the ACVP vectors confirm the outputs are unchanged. `rho` is public,
+        // so regenerating an entry changes nothing the timing depends on.
+        //
+        // The cost is time. Key generation and verification use each entry
+        // once whether it is stored or not, so they lose nothing. Signing uses
+        // all of `A` once per attempt, and so samples it once per attempt
+        // instead of once per signature. `bench/src/stack.rs` measures both
+        // stack use and time.
+
+        /// `A[r][s]`, generated on demand, in the index order FIPS 204 specifies.
         ///
-        /// `A[r][s]` comes from `rho || s || r` — column byte first. See
+        /// It comes from `rho || s || r`, column byte first. See
         /// [`crate::sample::rej_ntt_poly`] for why this is called out rather than
         /// assumed.
+        fn a_entry(rho: &[u8; 32], r: usize, s: usize) -> Poly {
+            rej_ntt_poly(rho, s as u8, r as u8)
+        }
+
+        /// Row `r` of `A * v`, with `v` given in the transform domain.
+        ///
+        /// The sum is accumulated in the transform domain and inverted once, which is
+        /// both faster and the only arrangement where the Montgomery bookkeeping works
+        /// out: `pointwise` contributes `R^-1` and `inv_ntt` contributes `R`, so a
+        /// product needs no correction but a bare round trip does.
+        fn a_row_times(rho: &[u8; 32], r: usize, v_hat: &[Poly; L]) -> Poly {
+            let mut acc = Poly::ZERO;
+            for (s, v) in v_hat.iter().enumerate() {
+                acc = acc.add(&a_entry(rho, r, s).pointwise(v));
+            }
+            acc.inv_ntt();
+            acc
+        }
+
+        /// `c * v`, with both `c` and `v` already in the transform domain.
+        ///
+        /// Taking `v` pre-transformed is not a micro-optimisation. The signing loop
+        /// multiplies by `s1`, `s2` and `t0` on every attempt, and they never change,
+        /// so transforming inside would redo the same work on every rejection — and,
+        /// worse, would make it easy to pass a plain-domain polynomial by mistake and
+        /// get a result that is wrong by a Montgomery factor rather than obviously
+        /// broken.
+        fn scale(c_hat: &Poly, v_hat: &Poly) -> Poly {
+            let mut product = c_hat.pointwise(v_hat);
+            product.inv_ntt();
+            product
+        }
+
+        /// `ExpandA` in full: the reference the on-demand entries are tested against.
+        #[cfg(test)]
         fn expand_a(rho: &[u8; 32]) -> [[Poly; L]; K] {
             let mut a = [[Poly::ZERO; L]; K];
             for (r, row) in a.iter_mut().enumerate() {
@@ -213,12 +270,8 @@ macro_rules! ml_dsa {
             a
         }
 
-        /// `A * v`, with `A` already in the transform domain and `v` given in it too.
-        ///
-        /// The sum is accumulated in the transform domain and inverted once, which is
-        /// both faster and the only arrangement where the Montgomery bookkeeping works
-        /// out: `pointwise` contributes `R^-1` and `inv_ntt` contributes `R`, so a
-        /// product needs no correction but a bare round trip does.
+        /// `A * v` over a held matrix: the reference for [`a_row_times`].
+        #[cfg(test)]
         fn matrix_apply(a: &[[Poly; L]; K], v_hat: &[Poly; L]) -> [Poly; K] {
             let mut out = [Poly::ZERO; K];
             for (row, dest) in a.iter().zip(out.iter_mut()) {
@@ -232,23 +285,7 @@ macro_rules! ml_dsa {
             out
         }
 
-        /// `c * v`, with both `c` and `v` already in the transform domain.
-        ///
-        /// Taking `v` pre-transformed is not a micro-optimisation. The signing loop
-        /// runs this three times per attempt against vectors that never change, so
-        /// transforming inside would redo the same work on every rejection — and, worse,
-        /// would make it easy to pass a plain-domain vector by mistake and get a result
-        /// that is wrong by a Montgomery factor rather than obviously broken.
-        fn scale_vec<const M: usize>(c_hat: &Poly, v_hat: &[Poly; M]) -> [Poly; M] {
-            let mut out = [Poly::ZERO; M];
-            for (o, p) in out.iter_mut().zip(v_hat.iter()) {
-                let mut product = c_hat.pointwise(p);
-                product.inv_ntt();
-                *o = product;
-            }
-            out
-        }
-
+        #[cfg(test)]
         fn ntt_vec<const M: usize>(v: &[Poly; M]) -> [Poly; M] {
             let mut out = *v;
             for p in out.iter_mut() {
@@ -257,23 +294,66 @@ macro_rules! ml_dsa {
             out
         }
 
-        /// `ExpandS`: `s1` then `s2`, from one seed with a running nonce.
-        fn expand_s(rho_prime: &[u8; 64]) -> ([Poly; L], [Poly; K]) {
-            let mut s1 = [Poly::ZERO; L];
-            let mut s2 = [Poly::ZERO; K];
-            for (i, p) in s1.iter_mut().enumerate() {
-                *p = rej_bounded_poly(rho_prime, i as u16, ETA);
-            }
-            for (i, p) in s2.iter_mut().enumerate() {
-                *p = rej_bounded_poly(rho_prime, (L + i) as u16, ETA);
-            }
-            (s1, s2)
-        }
+        #[cfg(test)]
+        mod streaming {
+            use super::*;
 
-        /// `w1Encode`: the high bits, four bits per coefficient.
-        fn w1_encode(w1: &[Poly; K], out: &mut [u8]) {
-            for (p, chunk) in w1.iter().zip(out.chunks_mut(W1_LEN)) {
-                simple_bit_pack(p, w1_bits(GAMMA2), chunk);
+            /// Every row generated on demand equals that row of the held product.
+            ///
+            /// The ACVP vectors already pin the scheme's output; this says where a
+            /// break is when one appears, and checks the on-demand path for every
+            /// parameter set against the held-matrix form signing used to compute.
+            #[test]
+            fn on_demand_rows_match_the_held_matrix() {
+                let rho: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(29) ^ 0x5c);
+                let mut v = [Poly::ZERO; L];
+                for (s, p) in v.iter_mut().enumerate() {
+                    for (j, c) in p.c.iter_mut().enumerate() {
+                        *c = ((s * 7919 + j * 104_729) % 8_380_417) as i32;
+                    }
+                }
+                let v_hat = ntt_vec(&v);
+                let held = matrix_apply(&expand_a(&rho), &v_hat);
+                for (r, expected) in held.iter().enumerate() {
+                    assert_eq!(&a_row_times(&rho, r, &v_hat), expected, "row {r}");
+                }
+            }
+
+            /// `t1` from the public key must reconstruct `t` together with `t0`.
+            ///
+            /// This is the link between key generation and verification:
+            /// verification uses `t1 * 2^d` as a stand-in for `t`, and the
+            /// difference it ignores is exactly what the hints cover. `t` is
+            /// rebuilt here from the held matrix, so key generation's row-at-a-time
+            /// encoding is checked against the form it replaced, for every set.
+            #[test]
+            fn the_public_key_and_t0_reconstruct_t() {
+                let mut pk = [0u8; PUBLIC_KEY_LEN];
+                let mut sk = [0u8; SECRET_KEY_LEN];
+                assert!(keygen(&[0x3c; 32], &mut pk, &mut sk));
+                let decoded = sk_decode(&sk);
+                let mut t1 = [Poly::ZERO; K];
+                for (p, chunk) in t1.iter_mut().zip(pk[32..].chunks(T1_LEN)) {
+                    simple_bit_unpack(chunk, T1_BITS, p);
+                }
+
+                let mut rho = [0u8; 32];
+                rho.copy_from_slice(&pk[..32]);
+                assert_eq!(decoded.rho, rho, "rho is shared by both halves");
+                let mut t = matrix_apply(&expand_a(&rho), &ntt_vec(&decoded.s1));
+                for (ti, s) in t.iter_mut().zip(decoded.s2.iter()) {
+                    *ti = ti.add(s);
+                    ti.normalize();
+                }
+                for i in 0..K {
+                    for j in 0..N {
+                        assert_eq!(
+                            (t1[i].c[j] * (1 << D) + decoded.t0[i].c[j]).rem_euclid($crate::poly::Q),
+                            t[i].c[j],
+                            "t does not reconstruct at ({i},{j})"
+                        );
+                    }
+                }
             }
         }
 
@@ -310,6 +390,9 @@ macro_rules! ml_dsa {
             ok
         }
 
+        /// Kept out of line so that its frame is gone before `keygen` signs its
+        /// consistency probe, rather than sitting under the signing frame.
+        #[inline(never)]
         fn keygen_inner(xi: &[u8; SEED_LEN], pk: &mut [u8; PUBLIC_KEY_LEN], sk: &mut [u8; SECRET_KEY_LEN]) {
             // The k and l bytes are part of the hash input: two parameter sets with the
             // same seed must not share an expansion.
@@ -321,55 +404,53 @@ macro_rules! ml_dsa {
             rho.copy_from_slice(&expanded[..32]);
             rho_prime.copy_from_slice(&expanded[32..96]);
             key.copy_from_slice(&expanded[96..]);
+            expanded.zeroize();
 
-            let a = expand_a(&rho);
-            let (s1, s2) = expand_s(&rho_prime);
-
-            // t = A*s1 + s2
-            let mut t = matrix_apply(&a, &ntt_vec(&s1));
-            for (ti, s) in t.iter_mut().zip(s2.iter()) {
-                *ti = ti.add(s);
-                ti.normalize();
-            }
-
-            let mut t1 = [Poly::ZERO; K];
-            let mut t0 = [Poly::ZERO; K];
-            for i in 0..K {
-                let (hi, lo) = power2round_poly(&t[i]);
-                t1[i] = hi;
-                t0[i] = lo;
-            }
-
-            // pkEncode
+            // pkEncode and skEncode are written as each piece is produced, so no
+            // vector is held longer than the row that needs it. `tr` is the one
+            // exception to the order: it hashes the finished public key.
             pk[..32].copy_from_slice(&rho);
-            for (p, chunk) in t1.iter().zip(pk[32..].chunks_mut(T1_LEN)) {
-                simple_bit_pack(p, T1_BITS, chunk);
+            sk[..32].copy_from_slice(&rho);
+            sk[32..64].copy_from_slice(&key);
+            key.zeroize();
+
+            // ExpandS, first half: s1, kept only in the transform domain, which is
+            // the form every row of A*s1 needs.
+            let mut s1_hat = [Poly::ZERO; L];
+            for (i, (p, chunk)) in s1_hat
+                .iter_mut()
+                .zip(sk[SK_S1_AT..SK_S2_AT].chunks_mut(S_LEN))
+                .enumerate()
+            {
+                *p = rej_bounded_poly(&rho_prime, i as u16, ETA);
+                bit_pack(p, ETA, ETA_BITS, chunk);
+                p.ntt();
             }
+
+            // t = A*s1 + s2, a row at a time, each row split and encoded at once.
+            // ExpandS's second half, s2, uses nonces l..l+k in this same order.
+            for r in 0..K {
+                let mut s2 = rej_bounded_poly(&rho_prime, (L + r) as u16, ETA);
+                bit_pack(&s2, ETA, ETA_BITS, &mut sk[SK_S2_AT + r * S_LEN..][..S_LEN]);
+
+                let mut t = a_row_times(&rho, r, &s1_hat).add(&s2);
+                t.normalize();
+                let (t1, mut t0) = power2round_poly(&t);
+                simple_bit_pack(&t1, T1_BITS, &mut pk[32 + r * T1_LEN..][..T1_LEN]);
+                bit_pack(&t0, 1 << (D - 1), T0_BITS, &mut sk[SK_T0_AT + r * T0_LEN..][..T0_LEN]);
+
+                s2.zeroize();
+                t.zeroize();
+                t0.zeroize();
+            }
+            for p in s1_hat.iter_mut() {
+                p.zeroize();
+            }
+            rho_prime.zeroize();
 
             let mut tr = [0u8; 64];
             h(&[&pk[..]], &mut tr);
-
-            // skEncode
-            let mut at = 0;
-            sk[at..at + 32].copy_from_slice(&rho);
-            at += 32;
-            sk[at..at + 32].copy_from_slice(&key);
-            at += 32;
-            sk[at..at + 64].copy_from_slice(&tr);
-            at += 64;
-            for p in s1.iter() {
-                bit_pack(p, ETA, ETA_BITS, &mut sk[at..at + S_LEN]);
-                at += S_LEN;
-            }
-            for p in s2.iter() {
-                bit_pack(p, ETA, ETA_BITS, &mut sk[at..at + S_LEN]);
-                at += S_LEN;
-            }
-            for p in t0.iter() {
-                bit_pack(p, 1 << (D - 1), T0_BITS, &mut sk[at..at + T0_LEN]);
-                at += T0_LEN;
-            }
-            debug_assert_eq!(at, SECRET_KEY_LEN);
+            sk[64..128].copy_from_slice(&tr);
         }
 
         struct SigningKey {
@@ -407,8 +488,8 @@ macro_rules! ml_dsa {
             }
         }
 
-        fn sk_decode(sk: &[u8; SECRET_KEY_LEN]) -> SigningKey {
-            let mut out = SigningKey {
+        impl SigningKey {
+            const EMPTY: SigningKey = SigningKey {
                 rho: [0u8; 32],
                 key: [0u8; 32],
                 tr: [0u8; 64],
@@ -416,22 +497,32 @@ macro_rules! ml_dsa {
                 s2: [Poly::ZERO; K],
                 t0: [Poly::ZERO; K],
             };
+        }
+
+        /// `skDecode`, into storage the caller already holds.
+        ///
+        /// Not a function returning the key: at 23 KiB for ML-DSA-87, a returned
+        /// `SigningKey` was built in one place and copied to another, and both
+        /// copies sat in the signing frame at once.
+        fn sk_decode_into(sk: &[u8; SECRET_KEY_LEN], out: &mut SigningKey) {
             out.rho.copy_from_slice(&sk[..32]);
             out.key.copy_from_slice(&sk[32..64]);
             out.tr.copy_from_slice(&sk[64..128]);
-            let mut at = 128;
-            for p in out.s1.iter_mut() {
-                bit_unpack(&sk[at..at + S_LEN], ETA, ETA_BITS, p);
-                at += S_LEN;
+            for (p, chunk) in out.s1.iter_mut().zip(sk[SK_S1_AT..SK_S2_AT].chunks(S_LEN)) {
+                bit_unpack(chunk, ETA, ETA_BITS, p);
             }
-            for p in out.s2.iter_mut() {
-                bit_unpack(&sk[at..at + S_LEN], ETA, ETA_BITS, p);
-                at += S_LEN;
+            for (p, chunk) in out.s2.iter_mut().zip(sk[SK_S2_AT..SK_T0_AT].chunks(S_LEN)) {
+                bit_unpack(chunk, ETA, ETA_BITS, p);
             }
-            for p in out.t0.iter_mut() {
-                bit_unpack(&sk[at..at + T0_LEN], 1 << (D - 1), T0_BITS, p);
-                at += T0_LEN;
+            for (p, chunk) in out.t0.iter_mut().zip(sk[SK_T0_AT..].chunks(T0_LEN)) {
+                bit_unpack(chunk, 1 << (D - 1), T0_BITS, p);
             }
+        }
+
+        #[cfg(test)]
+        fn sk_decode(sk: &[u8; SECRET_KEY_LEN]) -> SigningKey {
+            let mut out = SigningKey::EMPTY;
+            sk_decode_into(sk, &mut out);
             out
         }
 
@@ -498,7 +589,12 @@ macro_rules! ml_dsa {
             if !ok {
                 return false;
             }
-            let k = sk_decode(sk);
+            // Decoded once and moved into the transform domain in place. The
+            // signing loop only ever multiplies by s1, s2 and t0, so their plain
+            // forms are not needed again, and holding one copy rather than two is
+            // 23 KiB less for ML-DSA-87. `SigningKey` wipes them on drop either way.
+            let mut k = SigningKey::EMPTY;
+            sk_decode_into(sk, &mut k);
 
             let mut mu = [0u8; 64];
             let framed = Framed::new(&k.tr, &prefix, ctx, parts);
@@ -507,76 +603,83 @@ macro_rules! ml_dsa {
             let mut rho_prime = [0u8; 64];
             h(&[&k.key, rnd, &mu], &mut rho_prime);
 
-            let a = expand_a(&k.rho);
-            let s1_hat = ntt_vec(&k.s1);
-            let s2_hat = ntt_vec(&k.s2);
-            let t0_hat = ntt_vec(&k.t0);
+            for p in k.s1.iter_mut().chain(k.s2.iter_mut()).chain(k.t0.iter_mut()) {
+                p.ntt();
+            }
+            let (s1_hat, s2_hat, t0_hat) = (&k.s1, &k.s2, &k.t0);
 
             let mut w1_packed = [0u8; K * W1_LEN];
             let mut c_tilde = [0u8; C_TILDE_LEN];
+            // w, and from the rejection check on, w - c*s2 in its place.
+            let mut w = [Poly::ZERO; K];
+            let mut hints = [[false; N]; K];
 
             let mut kappa = 0u16;
             for _ in 0..MAX_ATTEMPTS {
-                // y <- ExpandMask
-                let mut y = [Poly::ZERO; L];
-                for (i, p) in y.iter_mut().enumerate() {
-                    *p = expand_mask_poly(&rho_prime, kappa + i as u16, GAMMA1);
+                // w = A*y, a column at a time: each y[s] is drawn from ExpandMask,
+                // transformed, and multiplied into every row before the next is
+                // drawn, so neither y nor A is ever held whole. Every row's sum
+                // still runs over s in order, exactly as a row-major product does.
+                for acc in w.iter_mut() {
+                    *acc = Poly::ZERO;
                 }
-                kappa += L as u16;
-
-                // w = A*y, and its high bits.
-                let mut w = matrix_apply(&a, &ntt_vec(&y));
-                for p in w.iter_mut() {
-                    p.normalize();
-                }
-                let mut w1 = [Poly::ZERO; K];
-                let mut w0 = [Poly::ZERO; K];
-                for i in 0..K {
-                    let (hi, lo) = decompose_poly(&w[i], GAMMA2);
-                    w1[i] = hi;
-                    w0[i] = lo;
+                for s in 0..L {
+                    let mut y_hat = expand_mask_poly(&rho_prime, kappa + s as u16, GAMMA1);
+                    y_hat.ntt();
+                    for (r, acc) in w.iter_mut().enumerate() {
+                        *acc = acc.add(&a_entry(&k.rho, r, s).pointwise(&y_hat));
+                    }
+                    y_hat.zeroize();
                 }
 
-                w1_encode(&w1, &mut w1_packed);
+                // w1 = HighBits(w), encoded as it is computed.
+                for (acc, chunk) in w.iter_mut().zip(w1_packed.chunks_mut(W1_LEN)) {
+                    acc.inv_ntt();
+                    acc.normalize();
+                    let (w1, _) = decompose_poly(acc, GAMMA2);
+                    simple_bit_pack(&w1, w1_bits(GAMMA2), chunk);
+                }
+
                 h(&[&mu, &w1_packed], &mut c_tilde);
                 let mut c = sample_in_ball(&c_tilde, TAU);
                 c.ntt();
 
-                // z = y + c*s1
-                let cs1 = scale_vec(&c, &s1_hat);
-                let mut z = [Poly::ZERO; L];
+                // z = y + c*s1, checked here and discarded. A rejected z must
+                // never leave this function, and a z that is too large does not
+                // fit its encoding, so it is recomputed below once an attempt is
+                // known to succeed rather than held or written out now. Its y is
+                // regenerated from the same seed and index it was drawn from.
                 let mut too_big = false;
-                for i in 0..L {
-                    z[i] = y[i].add(&cs1[i]);
-                    z[i].reduce();
-                    if z[i].exceeds(GAMMA1 - BETA) {
+                for (i, s1) in s1_hat.iter().enumerate() {
+                    let mut y = expand_mask_poly(&rho_prime, kappa + i as u16, GAMMA1);
+                    let mut z = y.add(&scale(&c, s1));
+                    z.reduce();
+                    if z.exceeds(GAMMA1 - BETA) {
                         too_big = true;
                     }
+                    y.zeroize();
+                    z.zeroize();
                 }
 
                 // r0 = LowBits(w - c*s2)
-                let cs2 = scale_vec(&c, &s2_hat);
-                let mut r0 = [Poly::ZERO; K];
-                let mut w_minus_cs2 = [Poly::ZERO; K];
-                for i in 0..K {
-                    w_minus_cs2[i] = w[i].sub(&cs2[i]);
-                    let (_, lo) = decompose_poly(&w_minus_cs2[i], GAMMA2);
-                    r0[i] = lo;
-                    if r0[i].exceeds(GAMMA2 - BETA) {
+                for (wi, s2) in w.iter_mut().zip(s2_hat.iter()) {
+                    *wi = wi.sub(&scale(&c, s2));
+                    let (_, r0) = decompose_poly(wi, GAMMA2);
+                    if r0.exceeds(GAMMA2 - BETA) {
                         too_big = true;
                     }
                 }
                 if too_big {
+                    kappa += L as u16;
                     continue;
                 }
 
                 // h = MakeHint(-c*t0, w - c*s2 + c*t0)
-                let ct0 = scale_vec(&c, &t0_hat);
-                let mut hints = [[false; N]; K];
                 let mut weight = 0usize;
                 let mut ct0_too_big = false;
-                for ((slot, base), shift) in hints.iter_mut().zip(w_minus_cs2.iter()).zip(ct0.iter()) {
-                    let mut probe = *shift;
+                for ((slot, base), t0) in hints.iter_mut().zip(w.iter()).zip(t0_hat.iter()) {
+                    let shift = scale(&c, t0);
+                    let mut probe = shift;
                     probe.reduce();
                     if probe.exceeds(GAMMA2) {
                         ct0_too_big = true;
@@ -588,23 +691,29 @@ macro_rules! ml_dsa {
                     for (o, c) in negated.c.iter_mut().zip(shift.c.iter()) {
                         *o = -*c;
                     }
-                    let target = base.add(shift);
+                    let target = base.add(&shift);
                     let (bits, w) = make_hint_poly(&negated, &target, GAMMA2);
                     *slot = bits;
                     weight += w;
                 }
                 if ct0_too_big || weight > OMEGA {
+                    kappa += L as u16;
                     continue;
                 }
 
-                // sigEncode
+                // sigEncode, with z recomputed exactly as it was checked.
                 sig[..C_TILDE_LEN].copy_from_slice(&c_tilde);
                 let mut at = C_TILDE_LEN;
-                for p in z.iter_mut() {
-                    p.reduce();
-                    bit_pack(p, GAMMA1, z_bits(GAMMA1), &mut sig[at..at + Z_LEN]);
+                for (i, s1) in s1_hat.iter().enumerate() {
+                    let mut y = expand_mask_poly(&rho_prime, kappa + i as u16, GAMMA1);
+                    let mut z = y.add(&scale(&c, s1));
+                    z.reduce();
+                    z.reduce();
+                    bit_pack(&z, GAMMA1, z_bits(GAMMA1), &mut sig[at..at + Z_LEN]);
                     at += Z_LEN;
+                    y.zeroize();
                 }
+                kappa += L as u16;
                 if !hint_pack(&hints, OMEGA, &mut sig[at..at + OMEGA + K]) {
                     continue;
                 }
@@ -664,10 +773,6 @@ macro_rules! ml_dsa {
 
             let mut rho = [0u8; 32];
             rho.copy_from_slice(&pk[..32]);
-            let mut t1 = [Poly::ZERO; K];
-            for (p, chunk) in t1.iter_mut().zip(pk[32..].chunks(T1_LEN)) {
-                simple_bit_unpack(chunk, T1_BITS, p);
-            }
 
             // sigDecode, with every rejection the encoding allows.
             let mut c_tilde = [0u8; C_TILDE_LEN];
@@ -701,31 +806,26 @@ macro_rules! ml_dsa {
             let mut c = sample_in_ball(&c_tilde, TAU);
             c.ntt();
 
-            // w' = A*z - c*t1*2^d
-            let a = expand_a(&rho);
-            let az = matrix_apply(&a, &ntt_vec(&z));
-
-            let mut shifted = [Poly::ZERO; K];
-            for (o, p) in shifted.iter_mut().zip(t1.iter()) {
-                for (oc, pc) in o.c.iter_mut().zip(p.c.iter()) {
-                    *oc = pc << D;
-                }
+            // w' = A*z - c*t1*2^d, then w1 = UseHint(h, w'), a row at a time:
+            // row r needs only row r of A, t1[r] and h[r], so each is decoded,
+            // used and encoded before the next.
+            for p in z.iter_mut() {
+                p.ntt();
             }
-            let ct1 = scale_vec(&c, &ntt_vec(&shifted));
-
-            let mut w_approx = [Poly::ZERO; K];
-            for i in 0..K {
-                w_approx[i] = az[i].sub(&ct1[i]);
-                w_approx[i].normalize();
-            }
-
-            let mut w1 = [Poly::ZERO; K];
-            for i in 0..K {
-                w1[i] = use_hint_poly(&hints[i], &w_approx[i], GAMMA2);
-            }
-
             let mut w1_packed = [0u8; K * W1_LEN];
-            w1_encode(&w1, &mut w1_packed);
+            for (r, (hint, chunk)) in hints.iter().zip(w1_packed.chunks_mut(W1_LEN)).enumerate() {
+                let mut t1 = Poly::ZERO;
+                simple_bit_unpack(&pk[32 + r * T1_LEN..][..T1_LEN], T1_BITS, &mut t1);
+                for coeff in t1.c.iter_mut() {
+                    *coeff <<= D;
+                }
+                t1.ntt();
+                let mut w_approx = a_row_times(&rho, r, &z).sub(&scale(&c, &t1));
+                w_approx.normalize();
+                let w1 = use_hint_poly(hint, &w_approx, GAMMA2);
+                simple_bit_pack(&w1, w1_bits(GAMMA2), chunk);
+            }
+
             let mut expected = [0u8; C_TILDE_LEN];
             h(&[&mu, &w1_packed], &mut expected);
 

@@ -45,7 +45,6 @@ crate::scheme::ml_dsa!(6, 5, 4, ETA4_BITS, 49, 1 << 19, GAMMA2_32, 55, 48);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::poly::Q;
 
     fn key(seed: u8) -> ([u8; PUBLIC_KEY_LEN], [u8; SECRET_KEY_LEN]) {
         let mut xi = [0u8; 32];
@@ -445,40 +444,6 @@ mod tests {
             for &c in p.c.iter() {
                 let half = 1i32 << (D - 1);
                 assert!(c > -half && c <= half, "t0 out of range: {c}");
-            }
-        }
-    }
-
-    /// `t1` from the public key must reconstruct `t` together with `t0`.
-    ///
-    /// This is the link between key generation and verification: verification
-    /// uses `t1 * 2^d` as a stand-in for `t`, and the difference it ignores is
-    /// exactly what the hints cover.
-    #[test]
-    fn the_public_key_and_t0_reconstruct_t() {
-        let (pk, sk) = key(12);
-        let decoded = sk_decode(&sk);
-        let mut t1 = [Poly::ZERO; K];
-        for (p, chunk) in t1.iter_mut().zip(pk[32..].chunks(T1_LEN)) {
-            simple_bit_unpack(chunk, T1_BITS, p);
-        }
-
-        // Rebuild t the way keygen did, and check the split matches.
-        let mut rho = [0u8; 32];
-        rho.copy_from_slice(&pk[..32]);
-        let a = expand_a(&rho);
-        let mut t = matrix_apply(&a, &ntt_vec(&decoded.s1));
-        for (ti, s) in t.iter_mut().zip(decoded.s2.iter()) {
-            *ti = ti.add(s);
-            ti.normalize();
-        }
-        for i in 0..K {
-            for j in 0..N {
-                assert_eq!(
-                    (t1[i].c[j] * (1 << D) + decoded.t0[i].c[j]).rem_euclid(Q),
-                    t[i].c[j],
-                    "t does not reconstruct at ({i},{j})"
-                );
             }
         }
     }

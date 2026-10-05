@@ -34,3 +34,15 @@ drawing performance conclusions; overlapping measurements support parity.
 For a source change, build both revisions first and alternate their executions
 under the same conditions, minutes apart. Preserve each run's spread and treat
 effects smaller than the observed noise as unresolved.
+
+## Stack use
+
+`ic-bench stack [mldsa]` reports each operation's peak stack use and its time.
+It paints a megabyte of a 16 MiB thread's stack, runs the operation once
+through a call that cannot be inlined, and finds the deepest byte that changed;
+an empty operation measured the same way is subtracted. That is byte-granular
+on any host, where probing for the smallest thread stack that completes is
+page-granular on Linux and 64 KiB-granular on Windows. Signing and key
+generation cycle through 64 inputs, so their times average over the number of
+rejection attempts rather than reporting one message's. Compare two revisions
+the same way as any other change: build both, then alternate their runs.

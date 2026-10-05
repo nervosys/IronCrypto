@@ -3,6 +3,35 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Performance
+
+- **ML-DSA uses between a third and a tenth of the stack it did.** Signing, verification
+  and key generation no longer hold the matrix `A`: each entry is sampled from
+  `rho` where it is used, giving the same values, and keys,
+  signatures and `w1` are encoded a row at a time. Peak stack on x86-64,
+  measured by `bench`'s `stack` subcommand:
+
+  | | sign | verify | keygen |
+  |---|---|---|---|
+  | ML-DSA-44 | 104.2 to 29.2 KiB | 66.8 to 18.3 KiB | 148.1 to 33.1 KiB |
+  | ML-DSA-65 | 158.6 to 37.6 KiB | 106.4 to 19.8 KiB | 224.7 to 43.5 KiB |
+  | ML-DSA-87 | 242.6 to 47.7 KiB | 174.5 to 17.8 KiB | 345.0 to 55.0 KiB |
+
+  **Signing is slower for it.** It now samples `A` once per attempt rather
+  than once per signature, and averaged over 64 messages it takes 1.66x
+  (ML-DSA-44), 1.69x (-65) and 1.88x (-87) as long. Key generation, which
+  signs a consistency probe, takes 1.4x to 1.55x as long. Verification is
+  unchanged. Outputs are identical: every ACVP case passes.
+
+### Tests
+
+- `bench` measures peak stack per operation by painting it, byte-granular on
+  any host, beside the time each operation takes.
+- On-demand rows of `A`, and key generation's row-at-a-time encoding, are each
+  checked against the held-matrix form for all three ML-DSA parameter sets.
+
 ## 0.2.7
 
 ### Security
