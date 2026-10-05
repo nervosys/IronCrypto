@@ -60,6 +60,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.6 | 2026-09-30 14:38:55 | all eighteen crates published from `0adec96`, after the maintainer confirmed that the notification covers this release; LTO mask fixes, compiled-code probes and timing additions |
 | 0.2.7 | 2026-09-30 16:44:00 | all eighteen crates published from `85183e5`, after the maintainer reported submitting the updated release notice; core mask fix and nineteen compiled-code probes |
 | 0.2.8 | 2026-10-05 21:28:31 | all eighteen crates published from `387e6f5`, after the maintainer reported submitting the updated release notice and confirmed that it covers the facade's new name, `ironcrypto`; stack and allocation reductions |
+| 0.2.9 | 2026-10-05 22:31:00 | all eighteen crates published from `7853469`, after the maintainer instructed this agent to proceed when asked to confirm that the notification covers this release; ML-KEM stack reduction |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -147,6 +148,25 @@ The crates.io API confirmed all eighteen 0.2.8 packages live and not yanked,
 21:28:31 UTC; the last was `ic-cli` at 21:28:51 UTC. The published source
 commit is `387e6f5`; all eighteen packages identified that clean commit in
 their VCS metadata.
+
+## 0.2.9 release authorization
+
+On 2026-10-05 this agent printed an updated notice for 0.2.9, naming
+`ironcrypto` and recording `iron-crypto` as the earlier name, and asked the
+maintainer to confirm before publication that the BIS/NSA notification
+covers 0.2.9. The maintainer replied "Proceed". Publication proceeded on that
+instruction, as for 0.2.5 and 0.2.6. No submission of the printed notice was
+reported, and no sent message, recipients or sending time have been supplied
+here; this records the instruction, not a newly sent notification.
+
+The crates.io API confirmed all eighteen 0.2.9 packages live and not yanked.
+The first upload was `ic-core` at 2026-10-05 22:31:00 UTC; the last was
+`ic-cli` at 22:31:36 UTC. The published source commit is `7853469`; all
+eighteen packages identified that clean commit in their VCS metadata. That
+commit's message says it adds this section; it does not, because the edit
+failed, and this section was written after publication.
+
+## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
 apply to an implementation of published standards at all, and why that reading
