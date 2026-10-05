@@ -145,6 +145,69 @@ macro_rules! mldsa_rows {
     }};
 }
 
+/// Deterministic bytes standing in for an RNG, so runs are comparable.
+struct Counter(u8);
+
+impl ic_core::traits::RandomSource for Counter {
+    fn fill(&mut self, buf: &mut [u8]) -> ic_core::Result<()> {
+        for b in buf.iter_mut() {
+            self.0 = self.0.wrapping_mul(29).wrapping_add(7);
+            *b = self.0;
+        }
+        Ok(())
+    }
+}
+
+macro_rules! mlkem_rows {
+    ($name:literal, $m:ident, $t:ident) => {{
+        use ic_mlkem::$m::{self as m, $t as Kem};
+        let mut ek = [0u8; m::ENCAPS_KEY_LEN];
+        let mut dk = [0u8; m::DECAPS_KEY_LEN];
+        Kem::keygen_deterministic(&[1u8; 32], &[2u8; 32], &mut ek, &mut dk);
+        let mut ct = [0u8; m::CIPHERTEXT_LEN];
+        let mut ss = [0u8; m::SHARED_SECRET_LEN];
+        Kem::encapsulate_deterministic(&[3u8; 32], &ek, &mut ct, &mut ss);
+
+        // The deterministic forms do the same work as the randomised ones
+        // without an RNG in the measurement; validation and the pairwise test
+        // are measured through `keygen` and `encapsulate` below.
+        let mut n = 0u8;
+        row(
+            concat!($name, " keygen"),
+            &mut || {
+                n = n.wrapping_add(1);
+                let mut ek = [0u8; m::ENCAPS_KEY_LEN];
+                let mut dk = [0u8; m::DECAPS_KEY_LEN];
+                let mut rng = Counter(n);
+                Kem::keygen(&mut rng, &mut ek, &mut dk).expect("keygen");
+                black_box((&ek, &dk));
+            },
+            500,
+        );
+        row(
+            concat!($name, " encapsulate"),
+            &mut || {
+                n = n.wrapping_add(1);
+                let mut ct = [0u8; m::CIPHERTEXT_LEN];
+                let mut ss = [0u8; m::SHARED_SECRET_LEN];
+                let mut rng = Counter(n);
+                Kem::encapsulate(&mut rng, black_box(&ek), &mut ct, &mut ss).expect("encapsulate");
+                black_box((&ct, &ss));
+            },
+            1000,
+        );
+        row(
+            concat!($name, " decapsulate"),
+            &mut || {
+                let mut ss = [0u8; m::SHARED_SECRET_LEN];
+                Kem::decapsulate(black_box(&dk), black_box(&ct), &mut ss).expect("decapsulate");
+                black_box(&ss);
+            },
+            1000,
+        );
+    }};
+}
+
 /// Signing and verification for one curve. The first row is measured on the
 /// first use of the curve in the process, so its stack figure includes
 /// building any precomputed table; run the group on its own to see that.
@@ -186,7 +249,7 @@ macro_rules! sig_rows {
 }
 
 pub fn run() {
-    // `stack [mldsa] [ec] [hmac]`: groups to run, all of them by default.
+    // `stack [mldsa] [mlkem] [ec] [hmac]`: groups to run, all of them by default.
     let which: Vec<String> = std::env::args().skip(2).collect();
     let wants = move |group: &str| which.is_empty() || which.iter().any(|w| w == group);
     let worker = std::thread::Builder::new()
@@ -200,6 +263,11 @@ pub fn run() {
                 mldsa_rows!("ML-DSA-44", ic_mldsa::sign44);
                 mldsa_rows!("ML-DSA-65", ic_mldsa::sign);
                 mldsa_rows!("ML-DSA-87", ic_mldsa::sign87);
+            }
+            if wants("mlkem") {
+                mlkem_rows!("ML-KEM-512", kem512, MlKem512);
+                mlkem_rows!("ML-KEM-768", kem, MlKem768);
+                mlkem_rows!("ML-KEM-1024", kem1024, MlKem1024);
             }
             if wants("hmac") {
                 use ic_core::traits::{Kdf, Mac};

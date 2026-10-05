@@ -3,6 +3,39 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Performance
+
+- **ML-KEM uses between a quarter and a half of the stack it did.** Key generation,
+  encapsulation and decapsulation no longer hold the matrix `A`: each entry
+  is sampled from `rho` where it is used, giving the same values, and the
+  vectors are carried a row or an element at a time, with products
+  accumulated in place. Every operation uses each entry of `A` once, so
+  nothing is sampled twice. Full call depth on Cortex-M4 (thumbv7em, fat LTO,
+  linked), before and after:
+
+  | | keygen | encapsulate | decapsulate |
+  |---|---|---|---|
+  | ML-KEM-512 | 22.9 to 11.7 KB | 13.4 to 5.5 KB | 16.0 to 7.2 KB |
+  | ML-KEM-768 | 32.7 to 12.8 KB | 18.9 to 6.8 KB | 21.6 to 8.8 KB |
+  | ML-KEM-1024 | 44.5 to 14.2 KB | 25.4 to 7.3 KB | 28.3 to 9.8 KB |
+
+  Key generation includes its pairwise consistency test, an encapsulation
+  and a decapsulation. On x86-64, alternating old and new builds, ML-KEM-512
+  is at parity, ML-KEM-768 about 3% slower and ML-KEM-1024 about 8% faster.
+  Outputs are identical: every ACVP case and the OpenSSL fixtures pass.
+
+### Tests
+
+- K-PKE key generation, encryption and decryption are each compared with the
+  held-matrix form they replaced, for all three ML-KEM parameter sets,
+  including decryption of ciphertexts that encrypt nothing.
+- Decapsulation is checked against FIPS 203's rule for every set: `K` for a
+  valid ciphertext, and exactly `J(z || c)` for a tampered one, where the
+  tests had checked only that the secret changed.
+- `bench`'s `stack mlkem` group measures ML-KEM's peak stack and time.
+
 ## 0.2.8
 
 ### Renamed

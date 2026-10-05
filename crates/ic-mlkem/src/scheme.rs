@@ -92,189 +92,404 @@ macro_rules! ml_kem {
             [Poly::ZERO; K]
         }
 
-        /// Build the public matrix. `transposed` selects `A` or `A^T`.
+        // # Why the matrix is never held
+        //
+        // `A` is `k * k` polynomials of 512 bytes each, 8 KiB for ML-KEM-1024,
+        // and with the vectors beside it a decapsulation peaked at 27 KiB of
+        // stack. Each entry is a pure function of the public `rho` and its two
+        // indices, so it is sampled where it is used and dropped, and vectors
+        // are carried a row or an element at a time where the algorithm allows.
+        // Every K-PKE operation uses each entry of `A` exactly once, so unlike
+        // ML-DSA's signing loop nothing is sampled twice and there is nothing to
+        // trade. The held-matrix form is kept, under `cfg(test)`, as the
+        // reference the streaming one is compared against.
+
+        /// `A[i][j]`, or `A^T[i][j]` when `transposed`, sampled on demand.
         ///
         /// The index order is the classic place to go wrong: FIPS 203 defines
         /// `A[i][j] = SampleNTT(rho || j || i)`, with `j` *before* `i` in the seed. A
         /// build that swaps them produces a matrix that is the transpose of the
         /// intended one, key generation and encryption still agree with each other, and
         /// nothing else in the world can decrypt the result.
-        ///
-        /// The loops are written with explicit indices precisely because of that: the
-        /// whole correctness question here is which index goes where, and iterator form
-        /// would hide it.
-        #[allow(clippy::needless_range_loop)]
-        fn expand_matrix(rho: &[u8; 32], transposed: bool) -> [[Poly; K]; K] {
-            let mut a = [[Poly::ZERO; K]; K];
-            for i in 0..K {
-                for jj in 0..K {
-                    let (x, y) = if transposed { (jj, i) } else { (i, jj) };
-                    a[i][jj] = sample_ntt(rho, y as u8, x as u8);
-                }
-            }
-            a
+        fn matrix_entry(rho: &[u8; 32], i: usize, j: usize, transposed: bool) -> Poly {
+            let (x, y) = if transposed { (j, i) } else { (i, j) };
+            sample_ntt(rho, y as u8, x as u8)
         }
 
-        /// Multiply a matrix by a vector in the transform domain.
-        ///
-        /// Indexed rather than iterated, to keep the row/column roles visible.
-        #[allow(clippy::needless_range_loop)]
-        fn matrix_mul(a: &[[Poly; K]; K], v: &Vector) -> Vector {
-            let mut out = zero_vector();
-            for i in 0..K {
-                let mut acc = Poly::ZERO;
-                for jj in 0..K {
-                    acc = acc.add(&a[i][jj].basemul(&v[jj]));
-                }
-                acc.reduce();
-                out[i] = acc;
-            }
-            out
-        }
-
-        /// Inner product of two transform-domain vectors.
-        fn dot(a: &Vector, b: &Vector) -> Poly {
+        /// Row `i` of `A o v`, or of `A^T o v`, in the transform domain.
+        fn matrix_row(rho: &[u8; 32], i: usize, transposed: bool, v: &Vector) -> Poly {
             let mut acc = Poly::ZERO;
-            for i in 0..K {
-                acc = acc.add(&a[i].basemul(&b[i]));
+            for (jj, vj) in v.iter().enumerate() {
+                acc.basemul_add(&matrix_entry(rho, i, jj, transposed), vj);
             }
             acc.reduce();
             acc
         }
 
-        fn encode_vector(v: &Vector, out: &mut [u8]) {
-            for (i, p) in v.iter().enumerate() {
-                let mut normalized = *p;
-                normalized.normalize();
-                byte_encode(&normalized, 12, &mut out[i * 384..(i + 1) * 384]);
-            }
-        }
-
-        fn decode_vector(data: &[u8]) -> Vector {
-            let mut v = zero_vector();
-            for (i, p) in v.iter_mut().enumerate() {
-                byte_decode(&data[i * 384..(i + 1) * 384], 12, p);
-            }
-            v
+        /// `ByteEncode12` of one element, normalized first.
+        fn encode_poly(p: &Poly, out: &mut [u8]) {
+            let mut normalized = *p;
+            normalized.normalize();
+            byte_encode(&normalized, 12, out);
         }
 
         /// K-PKE key generation from a 32-byte seed.
+        ///
+        /// `s` is the only vector held, in the transform domain, because every
+        /// row of `A o s` needs all of it. Each row of `t` is computed, has its
+        /// error term added and is encoded before the next.
         fn pke_keygen(d: &[u8; 32], ek: &mut [u8], dk: &mut [u8]) {
             // FIPS 203 appends the module rank so that the three parameter sets cannot
             // produce the same expansion from the same seed.
-            let (rho, sigma) = $crate::scheme::g(&[d, &[K as u8]]);
+            let (rho, mut sigma) = $crate::scheme::g(&[d, &[K as u8]]);
 
-            let a = expand_matrix(&rho, false);
-
+            // s takes nonces 0..k and e takes k..2k, as in FIPS 203.
             let mut s = zero_vector();
-            let mut e = zero_vector();
-            let mut nonce = 0u8;
-            for p in s.iter_mut() {
-                *p = sample_noise(ETA1, &sigma, nonce);
-                nonce += 1;
-            }
-            for p in e.iter_mut() {
-                *p = sample_noise(ETA1, &sigma, nonce);
-                nonce += 1;
-            }
-            for p in s.iter_mut() {
-                p.ntt();
-            }
-            for p in e.iter_mut() {
+            for (i, p) in s.iter_mut().enumerate() {
+                *p = sample_noise(ETA1, &sigma, i as u8);
                 p.ntt();
             }
 
             // t = A o s + e, with the Montgomery factor from basemul put back.
-            let mut t = matrix_mul(&a, &s);
-            for (ti, ei) in t.iter_mut().zip(e.iter()) {
-                ti.to_mont();
-                *ti = ti.add(ei);
-                ti.reduce();
+            for i in 0..K {
+                let mut e = sample_noise(ETA1, &sigma, (K + i) as u8);
+                e.ntt();
+                let mut t = matrix_row(&rho, i, false, &s);
+                t.to_mont();
+                t.add_assign(&e);
+                t.reduce();
+                encode_poly(&t, &mut ek[i * 384..(i + 1) * 384]);
+                e.zeroize();
             }
-
-            encode_vector(&t, &mut ek[..384 * K]);
             ek[384 * K..].copy_from_slice(&rho);
-            encode_vector(&s, dk);
+
+            for (i, p) in s.iter_mut().enumerate() {
+                encode_poly(p, &mut dk[i * 384..(i + 1) * 384]);
+                p.zeroize();
+            }
+            sigma.zeroize();
         }
 
         /// K-PKE encryption. `m` is 32 bytes, `r` is the 32-byte coin.
+        ///
+        /// `y` is the only vector held. Each row of `u` is computed from `A^T`
+        /// and encoded before the next, and `t` is decoded an element at a time
+        /// as the inner product consumes it.
         fn pke_encrypt(ek: &[u8], m: &[u8; 32], r: &[u8; 32], out: &mut [u8]) {
-            let t = decode_vector(&ek[..384 * K]);
             let mut rho = [0u8; 32];
             rho.copy_from_slice(&ek[384 * K..]);
+            let du_len = encoded_len(DU);
 
-            let at = expand_matrix(&rho, true);
-
+            // y takes nonces 0..k, e1 takes k..2k and e2 takes 2k.
             let mut y = zero_vector();
-            let mut e1 = zero_vector();
-            let mut nonce = 0u8;
-            for p in y.iter_mut() {
-                *p = sample_noise(ETA1, r, nonce);
-                nonce += 1;
-            }
-            for p in e1.iter_mut() {
-                *p = sample_noise(ETA2, r, nonce);
-                nonce += 1;
-            }
-            let e2 = sample_noise(ETA2, r, nonce);
-
-            for p in y.iter_mut() {
+            for (i, p) in y.iter_mut().enumerate() {
+                *p = sample_noise(ETA1, r, i as u8);
                 p.ntt();
             }
 
             // u = InvNTT(A^T o y) + e1
-            let mut u = matrix_mul(&at, &y);
-            for (ui, ei) in u.iter_mut().zip(e1.iter()) {
-                ui.inv_ntt();
-                *ui = ui.add(ei);
-                ui.reduce();
+            for i in 0..K {
+                let mut u = matrix_row(&rho, i, true, &y);
+                u.inv_ntt();
+                u.add_assign(&sample_noise(ETA2, r, (K + i) as u8));
+                u.reduce();
+                u.normalize();
+                compress_encode(&u, DU, &mut out[i * du_len..(i + 1) * du_len]);
             }
 
             // v = InvNTT(t^T o y) + e2 + Decompress_1(m)
-            let mut v = dot(&t, &y);
+            let mut v = Poly::ZERO;
+            for (i, yi) in y.iter().enumerate() {
+                let mut t = Poly::ZERO;
+                byte_decode(&ek[i * 384..(i + 1) * 384], 12, &mut t);
+                v.basemul_add(&t, yi);
+            }
+            v.reduce();
             v.inv_ntt();
-            v = v.add(&e2);
+            v.add_assign(&sample_noise(ETA2, r, (2 * K) as u8));
             let mut mu = Poly::ZERO;
             decode_decompress(m, 1, &mut mu);
-            v = v.add(&mu);
+            v.add_assign(&mu);
             v.reduce();
+            v.normalize();
+            compress_encode(&v, DV, &mut out[K * du_len..]);
 
-            for (i, ui) in u.iter().enumerate() {
-                let mut n = *ui;
-                n.normalize();
-                compress_encode(
-                    &n,
-                    DU,
-                    &mut out[i * encoded_len(DU)..(i + 1) * encoded_len(DU)],
-                );
+            for p in y.iter_mut() {
+                p.zeroize();
             }
-            let mut vn = v;
-            vn.normalize();
-            compress_encode(&vn, DV, &mut out[K * encoded_len(DU)..]);
+            mu.zeroize();
         }
 
         /// K-PKE decryption, recovering the 32-byte message.
+        ///
+        /// `s^T o NTT(u)` is accumulated an element at a time: each `u[i]` is
+        /// decompressed and transformed, and each `s[i]` decoded, only when the
+        /// sum reaches it.
         fn pke_decrypt(dk: &[u8], ct: &[u8]) -> [u8; 32] {
-            let mut u = zero_vector();
-            for (i, p) in u.iter_mut().enumerate() {
-                decode_decompress(&ct[i * encoded_len(DU)..(i + 1) * encoded_len(DU)], DU, p);
+            let du_len = encoded_len(DU);
+            let mut w = Poly::ZERO;
+            for i in 0..K {
+                let mut u = Poly::ZERO;
+                decode_decompress(&ct[i * du_len..(i + 1) * du_len], DU, &mut u);
+                u.ntt();
+                let mut s = Poly::ZERO;
+                byte_decode(&dk[i * 384..(i + 1) * 384], 12, &mut s);
+                w.basemul_add(&s, &u);
+                s.zeroize();
             }
-            let mut v = Poly::ZERO;
-            decode_decompress(&ct[K * encoded_len(DU)..], DV, &mut v);
-
-            let s = decode_vector(dk);
-            for p in u.iter_mut() {
-                p.ntt();
-            }
-            let mut w = dot(&s, &u);
+            w.reduce();
             w.inv_ntt();
+
+            let mut v = Poly::ZERO;
+            decode_decompress(&ct[K * du_len..], DV, &mut v);
             let mut result = v.sub(&w);
             result.reduce();
             result.normalize();
 
             let mut out = [0u8; 32];
             compress_encode(&result, 1, &mut out);
+            w.zeroize();
+            result.zeroize();
             out
+        }
+
+        /// The held-matrix K-PKE these functions replaced, kept as the reference
+        /// the streaming form is tested against. Unchanged apart from its names.
+        #[cfg(test)]
+        mod held {
+            use super::*;
+
+            #[allow(clippy::needless_range_loop)]
+            fn expand_matrix(rho: &[u8; 32], transposed: bool) -> [[Poly; K]; K] {
+                let mut a = [[Poly::ZERO; K]; K];
+                for i in 0..K {
+                    for jj in 0..K {
+                        let (x, y) = if transposed { (jj, i) } else { (i, jj) };
+                        a[i][jj] = sample_ntt(rho, y as u8, x as u8);
+                    }
+                }
+                a
+            }
+
+            #[allow(clippy::needless_range_loop)]
+            fn matrix_mul(a: &[[Poly; K]; K], v: &Vector) -> Vector {
+                let mut out = zero_vector();
+                for i in 0..K {
+                    let mut acc = Poly::ZERO;
+                    for jj in 0..K {
+                        acc = acc.add(&a[i][jj].basemul(&v[jj]));
+                    }
+                    acc.reduce();
+                    out[i] = acc;
+                }
+                out
+            }
+
+            fn dot(a: &Vector, b: &Vector) -> Poly {
+                let mut acc = Poly::ZERO;
+                for i in 0..K {
+                    acc = acc.add(&a[i].basemul(&b[i]));
+                }
+                acc.reduce();
+                acc
+            }
+
+            fn encode_vector(v: &Vector, out: &mut [u8]) {
+                for (i, p) in v.iter().enumerate() {
+                    encode_poly(p, &mut out[i * 384..(i + 1) * 384]);
+                }
+            }
+
+            fn decode_vector(data: &[u8]) -> Vector {
+                let mut v = zero_vector();
+                for (i, p) in v.iter_mut().enumerate() {
+                    byte_decode(&data[i * 384..(i + 1) * 384], 12, p);
+                }
+                v
+            }
+
+            pub(super) fn pke_keygen(d: &[u8; 32], ek: &mut [u8], dk: &mut [u8]) {
+                let (rho, sigma) = $crate::scheme::g(&[d, &[K as u8]]);
+                let a = expand_matrix(&rho, false);
+                let mut s = zero_vector();
+                let mut e = zero_vector();
+                let mut nonce = 0u8;
+                for p in s.iter_mut() {
+                    *p = sample_noise(ETA1, &sigma, nonce);
+                    nonce += 1;
+                }
+                for p in e.iter_mut() {
+                    *p = sample_noise(ETA1, &sigma, nonce);
+                    nonce += 1;
+                }
+                for p in s.iter_mut() {
+                    p.ntt();
+                }
+                for p in e.iter_mut() {
+                    p.ntt();
+                }
+                let mut t = matrix_mul(&a, &s);
+                for (ti, ei) in t.iter_mut().zip(e.iter()) {
+                    ti.to_mont();
+                    *ti = ti.add(ei);
+                    ti.reduce();
+                }
+                encode_vector(&t, &mut ek[..384 * K]);
+                ek[384 * K..].copy_from_slice(&rho);
+                encode_vector(&s, dk);
+            }
+
+            pub(super) fn pke_encrypt(ek: &[u8], m: &[u8; 32], r: &[u8; 32], out: &mut [u8]) {
+                let t = decode_vector(&ek[..384 * K]);
+                let mut rho = [0u8; 32];
+                rho.copy_from_slice(&ek[384 * K..]);
+                let at = expand_matrix(&rho, true);
+                let mut y = zero_vector();
+                let mut e1 = zero_vector();
+                let mut nonce = 0u8;
+                for p in y.iter_mut() {
+                    *p = sample_noise(ETA1, r, nonce);
+                    nonce += 1;
+                }
+                for p in e1.iter_mut() {
+                    *p = sample_noise(ETA2, r, nonce);
+                    nonce += 1;
+                }
+                let e2 = sample_noise(ETA2, r, nonce);
+                for p in y.iter_mut() {
+                    p.ntt();
+                }
+                let mut u = matrix_mul(&at, &y);
+                for (ui, ei) in u.iter_mut().zip(e1.iter()) {
+                    ui.inv_ntt();
+                    *ui = ui.add(ei);
+                    ui.reduce();
+                }
+                let mut v = dot(&t, &y);
+                v.inv_ntt();
+                v = v.add(&e2);
+                let mut mu = Poly::ZERO;
+                decode_decompress(m, 1, &mut mu);
+                v = v.add(&mu);
+                v.reduce();
+                for (i, ui) in u.iter().enumerate() {
+                    let mut n = *ui;
+                    n.normalize();
+                    compress_encode(
+                        &n,
+                        DU,
+                        &mut out[i * encoded_len(DU)..(i + 1) * encoded_len(DU)],
+                    );
+                }
+                let mut vn = v;
+                vn.normalize();
+                compress_encode(&vn, DV, &mut out[K * encoded_len(DU)..]);
+            }
+
+            pub(super) fn pke_decrypt(dk: &[u8], ct: &[u8]) -> [u8; 32] {
+                let mut u = zero_vector();
+                for (i, p) in u.iter_mut().enumerate() {
+                    decode_decompress(&ct[i * encoded_len(DU)..(i + 1) * encoded_len(DU)], DU, p);
+                }
+                let mut v = Poly::ZERO;
+                decode_decompress(&ct[K * encoded_len(DU)..], DV, &mut v);
+                let s = decode_vector(dk);
+                for p in u.iter_mut() {
+                    p.ntt();
+                }
+                let mut w = dot(&s, &u);
+                w.inv_ntt();
+                let mut result = v.sub(&w);
+                result.reduce();
+                result.normalize();
+                let mut out = [0u8; 32];
+                compress_encode(&result, 1, &mut out);
+                out
+            }
+
+            /// Bytes from a seed and a counter, for inputs no vector covers.
+            fn bytes<const N: usize>(seed: u8) -> [u8; N] {
+                let mut x = seed.wrapping_mul(151).wrapping_add(17);
+                core::array::from_fn(|_| {
+                    x = x.wrapping_mul(29).wrapping_add(11);
+                    x
+                })
+            }
+
+            /// Key generation, encryption and decryption agree with the held form.
+            ///
+            /// The ACVP vectors already pin the scheme's output; this says which
+            /// K-PKE operation broke when one does, and runs every parameter set
+            /// over inputs no vector file chose, including ciphertexts that are
+            /// not encryptions of anything -- the input decapsulation's
+            /// re-encryption check exists for.
+            #[test]
+            fn streaming_matches_the_held_matrix_form() {
+                let mut checked = 0;
+                for seed in 0..12u8 {
+                    let d: [u8; 32] = bytes(seed);
+                    let mut ek = [0u8; ENCAPS_KEY_LEN];
+                    let mut dk = [0u8; 384 * K];
+                    let mut ek_held = [0u8; ENCAPS_KEY_LEN];
+                    let mut dk_held = [0u8; 384 * K];
+                    super::pke_keygen(&d, &mut ek, &mut dk);
+                    pke_keygen(&d, &mut ek_held, &mut dk_held);
+                    assert_eq!(ek, ek_held, "encapsulation key, seed {seed}");
+                    assert_eq!(dk, dk_held, "decryption key, seed {seed}");
+
+                    let m: [u8; 32] = bytes(seed.wrapping_add(100));
+                    let r: [u8; 32] = bytes(seed.wrapping_add(200));
+                    let mut ct = [0u8; CIPHERTEXT_LEN];
+                    let mut ct_held = [0u8; CIPHERTEXT_LEN];
+                    super::pke_encrypt(&ek, &m, &r, &mut ct);
+                    pke_encrypt(&ek, &m, &r, &mut ct_held);
+                    assert_eq!(ct, ct_held, "ciphertext, seed {seed}");
+
+                    assert_eq!(super::pke_decrypt(&dk, &ct), m, "round trip, seed {seed}");
+                    let garbage: [u8; CIPHERTEXT_LEN] = bytes(seed.wrapping_add(50));
+                    assert_eq!(
+                        super::pke_decrypt(&dk, &garbage),
+                        pke_decrypt(&dk, &garbage),
+                        "decryption of an arbitrary ciphertext, seed {seed}"
+                    );
+                    checked += 1;
+                }
+                assert_eq!(checked, 12, "the comparison did not run");
+            }
+
+            /// Decapsulation returns `K` for a ciphertext that re-encrypts to
+            /// itself and `J(z || c)` for every other one, as FIPS 203 algorithm 18
+            /// specifies -- checked against the rule, not only as "different".
+            ///
+            /// Decapsulation's re-encryption runs through the streaming
+            /// encryption, and its implicit rejection is the part no vector here
+            /// pins: a tampered ciphertext must select exactly the rejection key.
+            #[test]
+            fn decapsulation_selects_k_or_the_rejection_key() {
+                let mut ek = [0u8; ENCAPS_KEY_LEN];
+                let mut dk = [0u8; DECAPS_KEY_LEN];
+                $name::keygen_deterministic(&bytes(1), &bytes(2), &mut ek, &mut dk);
+                let mut ct = [0u8; CIPHERTEXT_LEN];
+                let mut sent = [0u8; SHARED_SECRET_LEN];
+                $name::encapsulate_deterministic(&bytes(3), &ek, &mut ct, &mut sent);
+
+                let mut received = [0u8; SHARED_SECRET_LEN];
+                $name::decapsulate(&dk, &ct, &mut received).unwrap();
+                assert_eq!(received, sent, "a valid ciphertext yields K");
+
+                let z = &dk[DECAPS_KEY_LEN - 32..];
+                for index in [0usize, CIPHERTEXT_LEN / 2, CIPHERTEXT_LEN - 1] {
+                    let mut bad = ct;
+                    bad[index] ^= 0x10;
+                    let mut secret = [0u8; SHARED_SECRET_LEN];
+                    $name::decapsulate(&dk, &bad, &mut secret).unwrap();
+                    assert_eq!(
+                        secret,
+                        $crate::scheme::j(&[z, &bad]),
+                        "byte {index}: a rejected ciphertext yields J(z || c)"
+                    );
+                }
+            }
         }
 
         #[doc = $display]
@@ -482,11 +697,19 @@ macro_rules! ml_kem {
             /// rejects keys whose coefficients are at or above `q`. Without this a
             /// malformed key is silently reinterpreted.
             pub fn validate_encapsulation_key(ek: &[u8; ENCAPS_KEY_LEN]) -> Result<()> {
-                let t = decode_vector(&ek[..384 * K]);
-                let mut round = [0u8; 384 * K];
-                encode_vector(&t, &mut round);
+                // An element at a time. The key is public, so stopping at the
+                // first non-canonical element would reveal nothing, but every
+                // element is checked anyway so the work does not depend on it.
+                let mut canonical = true;
+                for chunk in ek[..384 * K].chunks(384) {
+                    let mut t = Poly::ZERO;
+                    byte_decode(chunk, 12, &mut t);
+                    let mut round = [0u8; 384];
+                    encode_poly(&t, &mut round);
+                    canonical &= round[..] == chunk[..];
+                }
                 ensure!(
-                    round == ek[..384 * K],
+                    canonical,
                     MalformedEncoding,
                     "encapsulation key is not canonically encoded"
                 );

@@ -11,6 +11,7 @@ ic-cipher = { path = "../crates/ic-cipher" }
 ic-core = { path = "../crates/ic-core", features = ["std"] }
 ic-ec = { path = "../crates/ic-ec", features = ["bench-internals"] }
 ic-mldsa = { path = "../crates/ic-mldsa" }
+ic-mlkem = { path = "../crates/ic-mlkem" }
 ic-mac = { path = "../crates/ic-mac" }
 ic-kdf = { path = "../crates/ic-kdf" }
 ic-hash = { path = "../crates/ic-hash" }

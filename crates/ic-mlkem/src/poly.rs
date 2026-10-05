@@ -140,6 +140,32 @@ impl Poly {
         out
     }
 
+    /// Coefficient-wise addition, in place: [`Poly::add`] without a second
+    /// 512-byte polynomial for the result.
+    pub(crate) fn add_assign(&mut self, other: &Poly) {
+        for i in 0..N {
+            self.c[i] += other.c[i];
+        }
+    }
+
+    /// `self += a o b`: [`Poly::basemul`] accumulated in place.
+    ///
+    /// The sums are the ones `acc.add(&a.basemul(b))` forms, coefficient for
+    /// coefficient, without the two polynomials that expression holds for the
+    /// product and the sum. A matrix-vector row is `k` of these.
+    pub(crate) fn basemul_add(&mut self, a: &Poly, b: &Poly) {
+        let mut pair = [0i16; 2];
+        for i in 0..N / 4 {
+            let zeta = ZETAS[64 + i];
+            for (offset, z) in [(0, zeta), (2, -zeta)] {
+                let at = 4 * i + offset;
+                basemul_pair(&mut pair, &a.c[at..at + 2], &b.c[at..at + 2], z);
+                self.c[at] += pair[0];
+                self.c[at + 1] += pair[1];
+            }
+        }
+    }
+
     /// Coefficient-wise subtraction.
     pub fn sub(&self, other: &Poly) -> Poly {
         let mut out = Poly::ZERO;
