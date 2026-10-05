@@ -3,6 +3,41 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Performance
+
+- **ML-DSA signing needs under half the stack it did in 0.2.9.** Signing no
+  longer holds `s1`, `s2` and `t0` decoded: each row is decoded and
+  transformed from the encoded key where it is used, then wiped. Hints are
+  held as 32-byte bitmaps rather than 256-byte boolean arrays, and products
+  accumulate in place. Verification decodes hints the same way. Full call
+  depth on Cortex-M4 (thumbv7em, fat LTO, linked), before and after:
+
+  | | sign | verify |
+  |---|---|---|
+  | ML-DSA-44 | 27.1 to 13.1 KB | 16.7 to 12.0 KB |
+  | ML-DSA-65 | 34.8 to 15.2 KB | 18.2 to 13.0 KB |
+  | ML-DSA-87 | 43.8 to 17.6 KB | 20.3 to 17.5 KB |
+
+  **Signing is slower for it**, because `s1` and `s2` are decoded again on
+  every rejection attempt: on x86-64, alternating old and new builds and
+  averaging over 64 messages, ML-DSA-44 signing takes 1.075x as long, -65
+  1.073x and -87 1.058x. Key generation, which signs a consistency probe,
+  takes 1.04x to 1.06x as long; verification is about 1% faster. Outputs are
+  identical: every ACVP case and the OpenSSL fixtures pass.
+
+### Tests
+
+- ML-DSA signing and verification are compared with the forms that held the
+  key and the hints whole, kept under `cfg(test)`, for all three parameter
+  sets: byte-identical signatures, deterministic and hedged, and the same
+  verdict on valid signatures and on damage to the challenge, `z`, the hint
+  indices and the hint counts.
+- The hint bitmaps' packing and unpacking are compared with the boolean
+  forms over random patterns either side of the weight limit and over
+  arbitrary bytes.
+
 ## 0.2.9
 
 ### Performance

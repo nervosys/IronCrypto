@@ -238,6 +238,96 @@ pub fn hint_unpack(data: &[u8], omega: usize, hints: &mut [[bool; N]]) -> bool {
     data[index..omega].iter().all(|b| *b == 0)
 }
 
+/// One polynomial's hints as a bitmap, bit `j % 8` of byte `j / 8` for
+/// coefficient `j`: 32 bytes where `[bool; N]` is 256.
+///
+/// Signing holds `k` of these across a whole attempt, and verification holds
+/// them from decoding to use, so the difference is 1.75 KiB of stack for
+/// ML-DSA-87. [`hint_pack_bits`] and [`hint_unpack_bits`] are [`hint_pack`]
+/// and [`hint_unpack`] over this form, and are tested against them.
+pub(crate) type HintRow = [u8; N / 8];
+
+/// A hint row from booleans, without branching on them.
+pub(crate) fn hint_row(hints: &[bool; N]) -> HintRow {
+    let mut row = [0u8; N / 8];
+    for (j, h) in hints.iter().enumerate() {
+        row[j / 8] |= (*h as u8) << (j % 8);
+    }
+    row
+}
+
+/// The booleans of a hint row, for [`crate::rounding::use_hint_poly`].
+pub(crate) fn hint_bools(row: &HintRow) -> [bool; N] {
+    core::array::from_fn(|j| (row[j / 8] >> (j % 8)) & 1 == 1)
+}
+
+/// [`hint_pack`] over bitmaps. Same encoding, same refusal.
+#[must_use = "a false return means the hint weight exceeded omega"]
+pub(crate) fn hint_pack_bits(hints: &[HintRow], omega: usize, out: &mut [u8]) -> bool {
+    let k = hints.len();
+    assert_eq!(out.len(), omega + k, "output length");
+
+    let weight: usize = hints
+        .iter()
+        .flatten()
+        .map(|b| b.count_ones() as usize)
+        .sum();
+    if weight > omega {
+        return false;
+    }
+
+    for byte in out.iter_mut() {
+        *byte = 0;
+    }
+    let mut index = 0;
+    for (i, row) in hints.iter().enumerate() {
+        for j in 0..N {
+            if (row[j / 8] >> (j % 8)) & 1 == 1 {
+                out[index] = j as u8;
+                index += 1;
+            }
+        }
+        out[omega + i] = index as u8;
+    }
+    true
+}
+
+/// [`hint_unpack`] over bitmaps, with the same three rejections.
+#[must_use = "a false return means the encoding was rejected"]
+pub(crate) fn hint_unpack_bits(data: &[u8], omega: usize, hints: &mut [HintRow]) -> bool {
+    let k = hints.len();
+    if data.len() != omega + k {
+        return false;
+    }
+
+    for row in hints.iter_mut() {
+        *row = [0u8; N / 8];
+    }
+
+    let mut index = 0usize;
+    for (i, row) in hints.iter_mut().enumerate() {
+        let end = data[omega + i] as usize;
+        if end < index || end > omega {
+            return false;
+        }
+        let mut last: Option<u8> = None;
+        for &j in &data[index..end] {
+            // Strictly increasing: rejects repeats and reordering together.
+            if let Some(prev) = last {
+                if j <= prev {
+                    return false;
+                }
+            }
+            row[j as usize / 8] |= 1 << (j % 8);
+            last = Some(j);
+        }
+        index = end;
+    }
+
+    // Unused index bytes must be zero, or the same hint has many spellings.
+    data[index..omega].iter().all(|b| *b == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,6 +746,76 @@ mod tests {
         assert!(
             accepted > 500,
             "the generator must actually reach acceptance: {accepted} of 4000"
+        );
+    }
+
+    /// Bytes from a seed, for patterns no vector chose.
+    fn noise(seed: u32, len: usize) -> [u8; 400] {
+        let mut x = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+        let mut out = [0u8; 400];
+        for b in out.iter_mut().take(len) {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            *b = x as u8;
+        }
+        out
+    }
+
+    /// The bitmap forms agree with `hint_pack` and `hint_unpack`, which the
+    /// ACVP vectors and the canonical-encoding tests check.
+    ///
+    /// Packing is compared over sparse random hint patterns at and around the
+    /// weight limit. Unpacking is compared over every signature's hint field
+    /// those produce and over arbitrary bytes, which exercise each rejection.
+    #[test]
+    fn hint_bitmaps_agree_with_the_boolean_forms() {
+        const K: usize = 8;
+        const OMEGA: usize = 75;
+        let mut accepted = 0;
+        let mut refused = 0;
+        for seed in 0..400u32 {
+            let bytes = noise(seed, 400);
+            // A density that lands either side of OMEGA across seeds.
+            let density = 2 * (1 + (seed % 8) as u8);
+            let mut bools = [[false; N]; K];
+            let mut rows = [[0u8; N / 8]; K];
+            for (i, row) in bools.iter_mut().enumerate() {
+                for (j, h) in row.iter_mut().enumerate() {
+                    *h = bytes[(i * 37 + j) % 400] < density;
+                }
+                rows[i] = hint_row(row);
+                assert_eq!(hint_bools(&rows[i]), *row, "bitmap round trip");
+            }
+
+            let mut a = [0u8; OMEGA + K];
+            let mut b = [0u8; OMEGA + K];
+            let ok_a = hint_pack(&bools, OMEGA, &mut a);
+            let ok_b = hint_pack_bits(&rows, OMEGA, &mut b);
+            assert_eq!(ok_a, ok_b, "seed {seed}: refusal differs");
+            if ok_a {
+                assert_eq!(a, b, "seed {seed}: encoding differs");
+                accepted += 1;
+            } else {
+                refused += 1;
+            }
+
+            for data in [&a[..], &noise(seed ^ 0x5555, OMEGA + K)[..OMEGA + K]] {
+                let mut back = [[false; N]; K];
+                let mut back_rows = [[0u8; N / 8]; K];
+                let ok_a = hint_unpack(data, OMEGA, &mut back);
+                let ok_b = hint_unpack_bits(data, OMEGA, &mut back_rows);
+                assert_eq!(ok_a, ok_b, "seed {seed}: acceptance differs");
+                if ok_a {
+                    for i in 0..K {
+                        assert_eq!(hint_bools(&back_rows[i]), back[i], "seed {seed}: row {i}");
+                    }
+                }
+            }
+        }
+        assert!(
+            accepted > 50 && refused > 50,
+            "{accepted} accepted, {refused} refused"
         );
     }
 }

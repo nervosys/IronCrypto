@@ -147,6 +147,30 @@ impl Poly {
         out
     }
 
+    /// Coefficient-wise addition, in place: [`Poly::add`] without a second
+    /// kilobyte for the result.
+    pub(crate) fn add_assign(&mut self, other: &Poly) {
+        for (a, b) in self.c.iter_mut().zip(other.c.iter()) {
+            *a += b;
+        }
+    }
+
+    /// Coefficient-wise subtraction, in place.
+    pub(crate) fn sub_assign(&mut self, other: &Poly) {
+        for (a, b) in self.c.iter_mut().zip(other.c.iter()) {
+            *a -= b;
+        }
+    }
+
+    /// `self += a o b`: [`Poly::pointwise`] accumulated in place, forming the
+    /// sums `acc.add(&a.pointwise(b))` forms, without the two polynomials that
+    /// expression holds.
+    pub(crate) fn pointwise_acc(&mut self, a: &Poly, b: &Poly) {
+        for ((o, x), y) in self.c.iter_mut().zip(a.c.iter()).zip(b.c.iter()) {
+            *o += montgomery_reduce((*x as i64) * (*y as i64));
+        }
+    }
+
     /// Coefficient-wise subtraction.
     pub fn sub(&self, other: &Poly) -> Poly {
         let mut out = Poly::ZERO;

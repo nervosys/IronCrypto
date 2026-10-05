@@ -179,7 +179,7 @@ const MUST_WIPE_ON_DROP: &[&str] = &[
     "Core256",          // SHA-2 chaining state, and so HMAC's ipad/opad
     "Core512",          // likewise
     "RsaPrivateKey",    // d, the primes and the CRT parameters
-    "SigningKey",       // ML-DSA's s1, s2 and t0
+    "SigningKey",       // ML-DSA's seed and key hash; s1, s2, t0 are wiped per use
 ];
 
 /// Every type on that list must implement `Drop`.
