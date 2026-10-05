@@ -114,25 +114,24 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.2.9"
+ironcrypto = "0.2.10"
 ```
 
-The current release is **0.2.9**, published for all eighteen crates on crates.io.
-It cuts ML-KEM's stack use to between a quarter and a half, following 0.2.8's
-reductions for ML-DSA, the curve tables and HMAC-SHA384; see
-[CHANGELOG.md](CHANGELOG.md).
+The current release is **0.2.10**, published for all eighteen crates on
+crates.io. It brings ML-DSA-87 signing to 17.6 KB of stack on Cortex-M4, from
+43.8 KB, following 0.2.9's ML-KEM reduction; see [CHANGELOG.md](CHANGELOG.md).
 `ironcrypto` is the facade and re-exports the rest; depend on the primitives
 directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2.9"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.9"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.2.9"       # the NIST curves, X25519, Ed25519
+ic-cipher = "0.2.10"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2.10"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2.10"       # the NIST curves, X25519, Ed25519
 ```
 
 ```console
-$ cargo install ic-cli --version 0.2.9   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.2.10   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -143,7 +142,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.2.9 publication.
+submission and the 0.2.10 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
@@ -564,7 +563,7 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 These are historical developer-machine comparisons from `bench/` against
 RustCrypto and dalek, using the same buffers and the best of nine runs. They
-have not been rerun for 0.2.9 and are not performance guarantees. Shared-machine
+have not been rerun for 0.2.10 and are not performance guarantees. Shared-machine
 interference caused substantial variation between runs.
 
 | operation | historical comparison against RustCrypto/dalek |

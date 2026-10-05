@@ -61,6 +61,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.7 | 2026-09-30 16:44:00 | all eighteen crates published from `85183e5`, after the maintainer reported submitting the updated release notice; core mask fix and nineteen compiled-code probes |
 | 0.2.8 | 2026-10-05 21:28:31 | all eighteen crates published from `387e6f5`, after the maintainer reported submitting the updated release notice and confirmed that it covers the facade's new name, `ironcrypto`; stack and allocation reductions |
 | 0.2.9 | 2026-10-05 22:31:00 | all eighteen crates published from `7853469`, after the maintainer instructed this agent to proceed when asked to confirm that the notification covers this release; ML-KEM stack reduction |
+| 0.2.10 | 2026-10-05 22:59:11 | all eighteen crates published from `66857b2`, after the maintainer answered, when asked, that the notification covers this release; ML-DSA stack reduction |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -174,6 +175,11 @@ algorithms or parameter sets, and publishes under the same eighteen package
 names as 0.2.9. The maintainer answered that it is covered. Publication
 proceeds on that answer. No new notice was sent or supplied here; this records
 the maintainer's answer, not a newly sent notification.
+
+The crates.io API confirmed all eighteen 0.2.10 packages live and not yanked.
+The first upload was `ic-core` at 2026-10-05 22:59:11 UTC; the last was
+`ic-cli` at 22:59:30 UTC. The published source commit is `66857b2`; all
+eighteen packages identified that clean commit in their VCS metadata.
 
 ## Determination
 
