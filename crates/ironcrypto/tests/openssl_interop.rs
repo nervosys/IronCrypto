@@ -164,3 +164,127 @@ fn ml_kem_agrees_with_openssl() {
     }
     assert_eq!(seen, [1, 1, 1], "one case per set");
 }
+
+/// ML-DSA private keys in each of RFC 9881's PKCS#8 forms, as OpenSSL writes
+/// them, read by `ic_pkix::MlDsaPrivateKey` and written back byte for byte.
+///
+/// The seed and expanded key the parser finds are compared with OpenSSL's own
+/// account of them, not with the parser's, and the expanded key is regenerated
+/// from the seed by `ic_mldsa`: the check RFC 9881's `both` form calls for,
+/// done the way the parser's documentation tells a caller to.
+#[test]
+fn ml_dsa_pkcs8_agrees_with_openssl() {
+    use ironcrypto::pkix::{MlDsaParameterSet, MlDsaPrivateKey};
+
+    let Some(file) = VectorFile::load_or_report("openssl-ml-dsa-pkcs8") else {
+        return;
+    };
+    let mut checked = 0;
+    for (index, case) in file.cases.iter().enumerate() {
+        let seed = hex_field(case, "seed");
+        let expanded = hex_field(case, "expanded_key");
+        let set = match case["parameter_set"].as_str() {
+            "ML-DSA-44" => MlDsaParameterSet::MlDsa44,
+            "ML-DSA-65" => MlDsaParameterSet::MlDsa65,
+            "ML-DSA-87" => MlDsaParameterSet::MlDsa87,
+            other => panic!("case {index}: unknown parameter set {other}"),
+        };
+
+        // ic_mldsa regenerates OpenSSL's expanded key from the seed.
+        let regenerated = match set {
+            MlDsaParameterSet::MlDsa44 => {
+                let (mut pk, mut sk) = (
+                    [0u8; mldsa::sign44::PUBLIC_KEY_LEN],
+                    [0u8; mldsa::sign44::SECRET_KEY_LEN],
+                );
+                assert!(mldsa::sign44::keygen(
+                    seed[..].try_into().unwrap(),
+                    &mut pk,
+                    &mut sk
+                ));
+                sk.to_vec()
+            }
+            MlDsaParameterSet::MlDsa65 => {
+                let (mut pk, mut sk) = (
+                    [0u8; mldsa::sign::PUBLIC_KEY_LEN],
+                    [0u8; mldsa::sign::SECRET_KEY_LEN],
+                );
+                assert!(mldsa::sign::keygen(
+                    seed[..].try_into().unwrap(),
+                    &mut pk,
+                    &mut sk
+                ));
+                sk.to_vec()
+            }
+            MlDsaParameterSet::MlDsa87 => {
+                let (mut pk, mut sk) = (
+                    [0u8; mldsa::sign87::PUBLIC_KEY_LEN],
+                    [0u8; mldsa::sign87::SECRET_KEY_LEN],
+                );
+                assert!(mldsa::sign87::keygen(
+                    seed[..].try_into().unwrap(),
+                    &mut pk,
+                    &mut sk
+                ));
+                sk.to_vec()
+            }
+        };
+        assert_eq!(
+            regenerated.len(),
+            set.expanded_key_len(),
+            "case {index}: length table"
+        );
+        assert!(
+            ironcrypto::core_types::ct::verify(&regenerated, &expanded),
+            "case {index}: keygen"
+        );
+
+        for (field, want_seed, want_expanded) in [
+            ("pkcs8_seed", true, false),
+            ("pkcs8_expanded", false, true),
+            ("pkcs8_both", true, true),
+        ] {
+            let der = hex_field(case, field);
+            let key = MlDsaPrivateKey::from_der(&der)
+                .unwrap_or_else(|e| panic!("case {index} {field}: {e:?}"));
+            assert_eq!(key.parameter_set(), set, "case {index} {field}");
+            assert_eq!(
+                key.seed().map(<[u8]>::to_vec),
+                want_seed.then(|| seed.clone()),
+                "case {index} {field}: seed"
+            );
+            assert_eq!(
+                key.expanded_key().map(<[u8]>::to_vec),
+                want_expanded.then(|| expanded.clone()),
+                "case {index} {field}: expanded key"
+            );
+            let mut out = vec![0u8; der.len() + 16];
+            let n = key.to_der(&mut out).unwrap();
+            assert_eq!(
+                hex(&out[..n]),
+                hex(&der),
+                "case {index} {field}: written back"
+            );
+            assert!(
+                matches!(
+                    ironcrypto::pkix::PrivateKeyInfo::from_der(&der),
+                    Ok(ironcrypto::pkix::PrivateKeyInfo::Unsupported { .. })
+                ),
+                "case {index} {field}: the general parser still says unsupported"
+            );
+        }
+
+        // A both-form file whose halves disagree parses -- the structure is
+        // fine -- and the regeneration check is what catches it.
+        let mut der = hex_field(case, "pkcs8_both");
+        let last = der.len() - 1;
+        der[last] ^= 1;
+        let key = MlDsaPrivateKey::from_der(&der).unwrap();
+        assert!(
+            !ironcrypto::core_types::ct::verify(&regenerated, key.expanded_key().unwrap()),
+            "case {index}: a disagreeing pair must be detectable"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 6, "two seeds per parameter set");
+}

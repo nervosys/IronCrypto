@@ -7,6 +7,16 @@ all of them.
 
 ### Added
 
+- **ML-DSA private keys in PKCS#8.** `ic_pkix::MlDsaPrivateKey` reads and
+  writes RFC 9881's three forms -- the seed, the expanded key, and both -- for
+  ML-DSA-44, -65 and -87, as strictly as `PrivateKeyInfo`, and writes back
+  exactly what it read. `PrivateKeyInfo` is unchanged and still reports an
+  ML-DSA key as `Unsupported` with its OID, so code matching on it keeps
+  compiling. `ic-pkix` performs no cryptography, so whether a `both` key's
+  halves agree is checked by regenerating the key with `ic_mldsa`, as the
+  module documents. IronSocketLayer parsed these itself; it can now use this.
+  Checked against keys OpenSSL 3.5.7 wrote in each form.
+
 - **ECDSA verification over a caller-supplied digest.**
   `EcdsaP256Sha256::verify_prehash`, `EcdsaP384Sha384::verify_prehash` and
   `EcdsaP521Sha512::verify_prehash` take a digest instead of a message, for

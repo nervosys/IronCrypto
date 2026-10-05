@@ -74,11 +74,13 @@
 pub mod cert;
 pub mod der;
 pub mod ecdsa_signature;
+pub mod ml_dsa;
 pub mod oid;
 pub mod pem;
 pub mod private_key;
 pub mod public_key;
 
+pub use ml_dsa::{MlDsaParameterSet, MlDsaPrivateKey};
 pub use oid::KeyAlgorithm;
 pub use private_key::PrivateKeyInfo;
 pub use public_key::{parse_rsa_public_key, write_rsa_public_key, PublicKeyInfo};
