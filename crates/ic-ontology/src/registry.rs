@@ -1974,6 +1974,17 @@ pub static REGISTRY: &[Entry] = &[
                               database key or transaction id can be duplicated.",
                 severity: Severity::Serious,
             },
+            Constraint {
+                id: "prehash-digest-is-trusted",
+                requirement: "When verifying over a digest you computed (verify_prehash), use \
+                              a SHA-2 or SHA-3 hash at least as strong as the curve, and \
+                              bind which hash it was.",
+                consequence: "verify_prehash cannot tell which hash produced the digest; a \
+                              weaker hash lowers the signature's strength to the hash's, \
+                              and an unbound choice lets a signature over one hash be \
+                              presented as over another.",
+                severity: Severity::Serious,
+            },
         ],
         edges: &[
             Edge { relation: Relation::BuiltOn, target: "sha2-384" },
@@ -2581,6 +2592,17 @@ pub static REGISTRY: &[Entry] = &[
                               database key or transaction id can be duplicated.",
                 severity: Severity::Serious,
             },
+            Constraint {
+                id: "prehash-digest-is-trusted",
+                requirement: "When verifying over a digest you computed (verify_prehash), use \
+                              a SHA-2 or SHA-3 hash at least as strong as the curve, and \
+                              bind which hash it was.",
+                consequence: "verify_prehash cannot tell which hash produced the digest; a \
+                              weaker hash lowers the signature's strength to the hash's, \
+                              and an unbound choice lets a signature over one hash be \
+                              presented as over another.",
+                severity: Severity::Serious,
+            },
         ],
         edges: &[
             Edge { relation: Relation::BuiltOn, target: "sha2-512" },
@@ -2648,6 +2670,17 @@ pub static REGISTRY: &[Entry] = &[
                               identifier.",
                 consequence: "Both (r, s) and (r, n - s) verify, so a signature used as a \
                               database key or transaction id can be duplicated.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "prehash-digest-is-trusted",
+                requirement: "When verifying over a digest you computed (verify_prehash), use \
+                              a SHA-2 or SHA-3 hash at least as strong as the curve, and \
+                              bind which hash it was.",
+                consequence: "verify_prehash cannot tell which hash produced the digest; a \
+                              weaker hash lowers the signature's strength to the hash's, \
+                              and an unbound choice lets a signature over one hash be \
+                              presented as over another.",
                 severity: Severity::Serious,
             },
         ],

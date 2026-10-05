@@ -5,6 +5,20 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **ECDSA verification over a caller-supplied digest.**
+  `EcdsaP256Sha256::verify_prehash`, `EcdsaP384Sha384::verify_prehash` and
+  `EcdsaP521Sha512::verify_prehash` take a digest instead of a message, for
+  signatures made with a hash other than the curve's own, such as P-384 with
+  SHA-512. The digest becomes the scalar as FIPS 186-5 specifies, truncated to
+  the order's width when longer. Widths are limited to SHA-224 through SHA-512
+  (`ic_ec::PREHASH_LENS`); SHA-1's 20 bytes are refused. The ontology's ECDSA
+  entries gain a serious constraint: the caller must choose a hash at least as
+  strong as the curve and bind which one it was. Checked against RFC 6979's
+  P-256 and P-384 signatures for all four SHA-2 hashes, and P-521 signatures
+  from OpenSSL.
+
 ### Fixed
 
 - **`rust-version` is now 1.87, the oldest toolchain the workspace builds

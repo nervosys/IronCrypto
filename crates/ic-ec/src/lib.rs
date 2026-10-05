@@ -66,6 +66,9 @@ pub use p256::{EcdhP256, EcdsaP256Sha256};
 pub use p384::{EcdhP384, EcdsaP384Sha384};
 pub use x25519::X25519;
 
+/// Digest widths ECDSA's `verify_prehash` accepts.
+pub use nist::ecdsa::PREHASH_LENS;
+
 /// Build every precomputed table now, rather than on first use.
 ///
 /// Under `std`, the generator tables for P-256, P-384 and P-521 and the

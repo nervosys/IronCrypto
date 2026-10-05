@@ -262,6 +262,45 @@ pub fn sign<C: EcdsaCurve>(private_key: &[u8], message: &[u8], signature: &mut [
 
 /// Verify a fixed-width `r || s` signature.
 pub fn verify<C: EcdsaCurve>(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+    let digest = C::Digest::digest(message);
+    verify_digest::<C>(public_key, digest.as_ref(), signature)
+}
+
+/// Digest widths `verify_prehash` accepts, on every curve (for instance
+/// [`crate::p256::EcdsaP256Sha256::verify_prehash`]): those of SHA-224, SHA-256,
+/// SHA-384 and SHA-512, and of SHA-3 and SHA-512/t at the same widths.
+///
+/// SHA-1's 20 bytes are not among them. This library implements no SHA-1 and
+/// registers it as excluded, and accepting its width here would make this the
+/// one way to verify a signature over it.
+pub const PREHASH_LENS: [usize; 4] = [28, 32, 48, 64];
+
+/// Verify a fixed-width `r || s` signature over a digest the caller computed.
+///
+/// For signatures made with a hash other than the curve's own, which X.509 and
+/// other protocols allow: P-384 with SHA-512, P-256 with SHA-384. The digest is
+/// turned into the scalar `e` as FIPS 186-5 section 6.4.2 specifies, by taking
+/// its leftmost bits up to the width of the group order; for every width in
+/// [`PREHASH_LENS`] that is the leftmost bytes, which `scalar_reduce_slice`
+/// takes.
+///
+/// The digest is trusted: which hash produced it, and whether that hash is
+/// strong enough for the curve, is the caller's to establish.
+pub fn verify_prehash<C: EcdsaCurve>(
+    public_key: &[u8],
+    digest: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    ensure!(
+        PREHASH_LENS.contains(&digest.len()),
+        InvalidLength,
+        "ecdsa digest must be 28, 32, 48 or 64 bytes"
+    );
+    verify_digest::<C>(public_key, digest, signature)
+}
+
+/// The verification both entry points share, from the digest onwards.
+fn verify_digest<C: EcdsaCurve>(public_key: &[u8], digest: &[u8], signature: &[u8]) -> Result<()> {
     let n = C::SCALAR_BYTES;
     ensure!(signature.len() == 2 * n, InvalidLength, "ecdsa signature");
 
@@ -287,8 +326,7 @@ pub fn verify<C: EcdsaCurve>(public_key: &[u8], message: &[u8], signature: &[u8]
         "ecdsa r and s must be non-zero"
     );
 
-    let digest = C::Digest::digest(message);
-    let e = C::scalar_reduce_slice(digest.as_ref());
+    let e = C::scalar_reduce_slice(digest);
 
     let w = s.invert();
     let u1 = e.mul(&w);

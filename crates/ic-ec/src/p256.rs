@@ -147,6 +147,17 @@ impl SignatureScheme for EcdsaP256Sha256 {
 }
 
 impl EcdsaP256Sha256 {
+    /// Verify a signature over a digest the caller computed, for signatures
+    /// made with a hash other than SHA-256.
+    ///
+    /// `digest` must be 28, 32, 48 or 64 bytes, the widths of SHA-224 to
+    /// SHA-512; see [`crate::PREHASH_LENS`]. Which hash produced it, and whether
+    /// that hash is strong enough for this curve, is the caller's to check:
+    /// nothing here can tell.
+    pub fn verify_prehash(public_key: &[u8], digest: &[u8], signature: &[u8]) -> Result<()> {
+        ecdsa::verify_prehash::<P256>(public_key, digest, signature)
+    }
+
     /// Compute the public key in SEC1 compressed form (33 bytes).
     pub fn public_key_compressed(private_key: &[u8], out: &mut [u8]) -> Result<()> {
         ecdsa::public_key_compressed::<P256>(private_key, out)
