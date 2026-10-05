@@ -562,7 +562,12 @@ impl Point {
     }
 }
 
-/// The Ed25519 base point.
+/// Fill the basepoint tables now; see [`crate::prepare`].
+#[cfg(feature = "std")]
+pub(crate) fn prepare_tables() {
+    basepoint_table::prepare();
+}
+
 /// `scalar * B`, through the precomputed table where there is one.
 ///
 /// Every basepoint multiplication in this module goes through here rather than
@@ -571,7 +576,7 @@ impl Point {
 fn mul_basepoint(scalar: &[u8; 32]) -> Point {
     #[cfg(feature = "std")]
     {
-        basepoint_table::table().mul(scalar)
+        basepoint_table::mul(scalar)
     }
     #[cfg(not(feature = "std"))]
     {
@@ -705,9 +710,9 @@ fn signed_digits(scalar: &[u8; 32]) -> [i8; 64] {
 
 #[cfg(feature = "std")]
 fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
-    let odd_b = basepoint_table::odd_multiples();
+    basepoint_table::prepare();
     shared_doublings(a, k, &wnaf(s, 8), |e, digit| {
-        let n = &odd_b[(digit.unsigned_abs() as usize) / 2];
+        let n = basepoint_table::odd_multiple((digit.unsigned_abs() as usize) / 2);
         if digit > 0 {
             e.add_affine_niels(n)
         } else {

@@ -24,6 +24,13 @@ bench-internals = ["std"]
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)"] }
 
+[[test]]
+# Its own process, without the harness: it counts allocations, and only the
+# first use of each table is the case it is about.
+name = "cold_tables"
+harness = false
+required-features = ["std"]
+
 [dependencies]
 ic-core = { workspace = true }
 ic-hash = { workspace = true }

@@ -37,7 +37,7 @@ effects smaller than the observed noise as unresolved.
 
 ## Stack use
 
-`ic-bench stack [mldsa]` reports each operation's peak stack use and its time.
+`ic-bench stack [mldsa] [ec]` reports each operation's peak stack use and its time.
 It paints a megabyte of a 16 MiB thread's stack, runs the operation once
 through a call that cannot be inlined, and finds the deepest byte that changed;
 an empty operation measured the same way is subtracted. That is byte-granular

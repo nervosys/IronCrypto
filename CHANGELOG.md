@@ -25,8 +25,29 @@ all of them.
   signs a consistency probe, takes 1.4x to 1.55x as long. Verification is
   unchanged. Outputs are identical: every ACVP case passes.
 
+### Changed
+
+- **The curve tables no longer allocate.** Under `std`, P-256, P-384 and
+  P-521 built their generator tables into a `Vec` on first use, so the first
+  ECDSA operation of a process allocated; a caller that forbids allocation
+  after start-up met that inside its first TLS handshake. Every table now
+  lives in statics, a `OnceLock` per window, built where it is stored. That
+  also stops Ed25519 building its 30 KiB table on the caller's stack before
+  moving it in: the first Ed25519 signature now peaks at 8.1 KiB of stack
+  rather than 36.4, and the first verification at 6.6 KiB rather than 24.9.
+  Steady-state speed is unchanged within measurement noise.
+
+### Added
+
+- `ic_ec::prepare()` builds every curve table now rather than on first use,
+  for callers that want the first operation to cost what later ones do. It
+  is idempotent and does nothing under `no_std`, which has no tables.
+
 ### Tests
 
+- `ic-ec/tests/cold_tables.rs` runs every curve's first use in a fresh
+  process under a counting allocator and fails on any allocation. It fails on
+  the previous tables, three allocations, one per NIST curve.
 - `bench` measures peak stack per operation by painting it, byte-granular on
   any host, beside the time each operation takes.
 - On-demand rows of `A`, and key generation's row-at-a-time encoding, are each

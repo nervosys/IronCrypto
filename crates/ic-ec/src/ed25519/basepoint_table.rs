@@ -34,8 +34,12 @@
 //!
 //! # Where it lives
 //!
-//! Behind `std`, because it is built once into a `OnceLock` on first use rather
-//! than written into the binary. Forty kilobytes of tables is a reasonable
+//! Behind `std`, because it is built once on first use, or earlier through
+//! [`crate::prepare`], rather than written into the binary. It is held in
+//! statics, a `OnceLock` per window and per odd multiple, so building it
+//! allocates nothing and needs about one window of stack, where a single
+//! `OnceLock` around the whole table would build its 30 KiB on the caller's
+//! stack before moving it in. Forty kilobytes of tables is a reasonable
 //! trade on a server and a bad one on a microcontroller, and this library
 //! targets both. `no_std` uses the same signed radix-16 digits against a
 //! single window of `1..=8` times the basepoint, built on the stack per call
@@ -58,6 +62,7 @@ const ENTRIES: usize = 8;
 const TABLES: usize = DIGITS / 2;
 
 /// `1..=8` times some fixed multiple of the basepoint, in affine Niels form.
+#[cfg(feature = "std")]
 ///
 /// Affine because an entry is only ever added to something: storing
 /// `(y+x, y-x, 2d·x·y)` makes that addition three multiplications instead of
@@ -65,6 +70,7 @@ const TABLES: usize = DIGITS / 2;
 /// less for the conditional-move scan below to walk.
 struct Window([AffineNiels; ENTRIES]);
 
+#[cfg(feature = "std")]
 impl Window {
     /// Build the multiples of `base`.
     fn new(base: &Point) -> Self {
@@ -96,85 +102,121 @@ impl Window {
     }
 }
 
-/// Every multiple of the basepoint this algorithm needs.
-pub struct Table {
-    windows: [Window; TABLES],
-}
+#[cfg(feature = "std")]
+use std::sync::OnceLock;
 
-impl Table {
-    /// Build it. Costs about one and a half scalar multiplications, once.
-    fn build() -> Self {
-        let b = basepoint();
+#[cfg(feature = "std")]
+#[allow(clippy::declare_interior_mutable_const)]
+const NO_WINDOW: OnceLock<Window> = OnceLock::new();
+
+/// `1..=8` times `16^(2j) * B`, for each `j`.
+#[cfg(feature = "std")]
+static WINDOWS: [OnceLock<Window>; TABLES] = [NO_WINDOW; TABLES];
+
+#[cfg(feature = "std")]
+#[allow(clippy::declare_interior_mutable_const)]
+const NO_POINT: OnceLock<AffineNiels> = OnceLock::new();
+
+/// `1B, 3B, 5B .. 127B`; see [`odd_multiple`].
+#[cfg(feature = "std")]
+static ODD: [OnceLock<AffineNiels>; 64] = [NO_POINT; 64];
+
+/// Whether both tables have been filled.
+#[cfg(feature = "std")]
+static BUILT: OnceLock<()> = OnceLock::new();
+
+/// Fill both tables, in order, sharing the doublings between entries.
+///
+/// Costs about one and a half scalar multiplications for the signing table and
+/// sixty-four additions for the other, once. A second caller waits for the
+/// first rather than repeating the work.
+#[cfg(feature = "std")]
+pub fn prepare() {
+    BUILT.get_or_init(|| {
         // Start at B, and step by 16^2 between windows.
-        let mut base = b;
-        let windows = core::array::from_fn(|i| {
+        let mut base = basepoint();
+        for (i, slot) in WINDOWS.iter().enumerate() {
             if i > 0 {
                 // times 16^2 = eight doublings.
                 for _ in 0..8 {
                     base = base.double();
                 }
             }
-            Window::new(&base)
-        });
-        Self { windows }
-    }
+            slot.get_or_init(|| Window::new(&base));
+        }
 
-    /// `scalar * B`, with the scalar in little-endian canonical form.
-    pub fn mul(&self, scalar: &[u8; 32]) -> Point {
-        let digits = signed_digits(scalar);
-
-        // Odd digits first, then four doublings to scale them by 16, then the
-        // even ones. Both halves read the same tables; see the module note.
-        let mut acc = Point::IDENTITY;
-        for i in (1..DIGITS).step_by(2) {
-            acc = acc
-                .add_affine_niels(&self.windows[i / 2].select(digits[i]))
-                .to_extended();
+        let b = basepoint();
+        let twice = b.double();
+        let mut multiple = b;
+        for (i, slot) in ODD.iter().enumerate() {
+            if i > 0 {
+                multiple = multiple.add(&twice);
+            }
+            // Affine Niels, since every one of them exists only to be added:
+            // three multiplications each instead of nine.
+            slot.get_or_init(|| multiple.to_affine_niels());
         }
-        for _ in 0..4 {
-            acc = acc.double();
-        }
-        for i in (0..DIGITS).step_by(2) {
-            acc = acc
-                .add_affine_niels(&self.windows[i / 2].select(digits[i]))
-                .to_extended();
-        }
-        acc
-    }
+    });
 }
 
-/// The table, built once.
+/// Window `i`. Filled by [`prepare`]; were it somehow not, it is built here on
+/// its own, more slowly and with the same result, rather than panicking.
 #[cfg(feature = "std")]
-pub fn table() -> &'static Table {
-    use std::sync::OnceLock;
-    static TABLE: OnceLock<Table> = OnceLock::new();
-    TABLE.get_or_init(Table::build)
+fn window(i: usize) -> &'static Window {
+    WINDOWS[i].get_or_init(|| {
+        let mut base = basepoint();
+        for _ in 0..8 * i {
+            base = base.double();
+        }
+        Window::new(&base)
+    })
 }
 
-/// Odd multiples of the basepoint, `1B, 3B, 5B .. 127B`.
+/// `scalar * B`, with the scalar in little-endian canonical form.
+#[cfg(feature = "std")]
+pub fn mul(scalar: &[u8; 32]) -> Point {
+    prepare();
+    let digits = signed_digits(scalar);
+
+    // Odd digits first, then four doublings to scale them by 16, then the
+    // even ones. Both halves read the same tables; see the module note.
+    let mut acc = Point::IDENTITY;
+    for i in (1..DIGITS).step_by(2) {
+        acc = acc
+            .add_affine_niels(&window(i / 2).select(digits[i]))
+            .to_extended();
+    }
+    for _ in 0..4 {
+        acc = acc.double();
+    }
+    for i in (0..DIGITS).step_by(2) {
+        acc = acc
+            .add_affine_niels(&window(i / 2).select(digits[i]))
+            .to_extended();
+    }
+    acc
+}
+
+/// `(2i + 1) * B`, for `i` in `0..64`.
 ///
-/// The variable-time companion to [`table`]. Verification may index a table
+/// The variable-time companion to [`mul`]. Verification may index a table
 /// directly -- it holds nothing secret -- so this one is a plain array read
 /// rather than a conditional-move scan, and the window is width 8 instead of
-/// the signed radix 16 above. Sixty-four points, about ten kilobytes, built
-/// once on first use.
+/// the signed radix 16 above. Sixty-four points, about ten kilobytes, filled
+/// by [`prepare`], which the caller runs first.
 ///
 /// Signing must not call this. See
 /// [`double_scalar_mul_vartime`][super::double_scalar_mul_vartime].
 #[cfg(feature = "std")]
-pub(super) fn odd_multiples() -> &'static [AffineNiels; 64] {
-    use std::sync::OnceLock;
-    static ODD: OnceLock<[AffineNiels; 64]> = OnceLock::new();
-    ODD.get_or_init(|| {
+pub(super) fn odd_multiple(i: usize) -> &'static AffineNiels {
+    ODD[i].get_or_init(|| {
         let b = basepoint();
         let twice = b.double();
-        let mut out = [b; 64];
-        for i in 1..64 {
-            out[i] = out[i - 1].add(&twice);
+        let mut multiple = b;
+        for _ in 0..i {
+            multiple = multiple.add(&twice);
         }
-        // Affine Niels, since every one of them exists only to be added:
-        // three multiplications each instead of nine.
-        core::array::from_fn(|i| out[i].to_affine_niels())
+        multiple.to_affine_niels()
     })
 }
 
@@ -229,7 +271,7 @@ mod tests {
 
         let mut checked = 0;
         for s in &scalars {
-            let fast = table().mul(s);
+            let fast = mul(s);
             let slow = basepoint().mul_scalar(s);
             assert_eq!(
                 fast.compress(),

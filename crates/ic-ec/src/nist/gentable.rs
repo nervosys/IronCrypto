@@ -33,12 +33,23 @@
 //!
 //! # Where it lives
 //!
-//! Behind `std`, built once into a `OnceLock`. P-256's table is about 25 KiB
-//! and P-521's about 114 KiB, which is a reasonable trade on a host and a bad
-//! one on a microcontroller. `no_std` multiplies the generator with
-//! [`Point::mul_scalar`], which uses this module's [`Window`] and
+//! Behind `std`, in a `static` per curve: one `OnceLock` per window, filled in
+//! order on first use, or earlier through [`crate::prepare`]. P-256's table is
+//! about 25 KiB and P-521's about 114 KiB, which is a reasonable trade on a
+//! host and a bad one on a microcontroller. `no_std` multiplies the generator
+//! with [`Point::mul_scalar`], which uses this module's [`Window`] and
 //! [`signed_digits`] against the point it is given, one window built per call:
 //! the same four bits per addition, without the storage.
+//!
+//! The storage is static, not heap. It used to be a `Vec`, and a caller that
+//! forbids allocation after start-up -- a TLS engine running in caller-owned
+//! memory -- met that allocation in the middle of its first handshake. A
+//! single `OnceLock` holding every window would avoid the heap, but its value
+//! is built on the stack and then moved in, which is 114 KiB of stack for
+//! P-521; that overflowed once, and is why the `Vec` was there. A lock per
+//! window needs neither: each window is built where it is stored, and at most
+//! one window's worth of stack is in use at a time. `tests/cold_tables.rs`
+//! checks that a first use allocates nothing.
 
 use ic_core::ct::Choice;
 
@@ -90,7 +101,7 @@ impl<C: Curve> Window<C> {
 /// multiplication cheaper. Normalizing costs an inversion per entry, once,
 /// when the table is built.
 #[cfg(feature = "std")]
-struct AffineWindow<C: Curve>([AffinePoint<C>; ENTRIES]);
+pub struct AffineWindow<C: Curve>([AffinePoint<C>; ENTRIES]);
 
 #[cfg(feature = "std")]
 impl<C: Curve> AffineWindow<C> {
@@ -133,63 +144,78 @@ impl<C: Curve> AffineWindow<C> {
     }
 }
 
-/// Every multiple of the generator this algorithm needs.
-///
-/// The windows live on the heap and are pushed one at a time. An array sized
-/// for the widest curve would be about 116 KiB for P-521, and building it as a
-/// stack temporary before moving it into the `OnceLock` overflowed the stack --
-/// which is how this first failed, in the FIPS self-test doctests. A `Vec` also
-/// sizes each curve to what it actually uses rather than to P-521.
+/// One curve's windows: `16^(2i) * G` and its multiples `1..=8`, for each `i`.
 #[cfg(feature = "std")]
-pub struct Table<C: Curve> {
-    windows: std::vec::Vec<AffineWindow<C>>,
+pub type Windows<C> = [std::sync::OnceLock<AffineWindow<C>>];
+
+/// The window for `base`, which is always a nonzero multiple of the generator.
+#[cfg(feature = "std")]
+fn window_for<C: Curve>(base: &Point<C>) -> AffineWindow<C> {
+    match AffineWindow::new(base) {
+        Some(window) => window,
+        None => unreachable!("a multiple of the generator below its order is the identity"),
+    }
 }
 
+/// Fill every window, in order, sharing the doublings between them.
+///
+/// Costs a little over one scalar multiplication, once. `built` makes it run
+/// once: a second caller waits for the first rather than repeating the work.
 #[cfg(feature = "std")]
-impl<C: Curve> Table<C> {
-    /// Build it. Costs a little over one scalar multiplication, once.
-    pub fn build() -> Self {
-        // One window per pair of digits, and there are `2*SCALAR_BYTES + 1`
-        // digits once the carry digit is counted.
-        let used = C::SCALAR_BYTES + 1;
-        let mut windows = std::vec::Vec::with_capacity(used);
+pub fn prepare<C: Curve>(windows: &Windows<C>, built: &std::sync::OnceLock<()>) {
+    built.get_or_init(|| {
         let mut base = Point::<C>::generator();
-        for i in 0..used {
+        for (i, slot) in windows.iter().enumerate() {
             if i > 0 {
                 // times 16^2 = eight doublings.
                 for _ in 0..8 {
                     base = base.double();
                 }
             }
-            match AffineWindow::new(&base) {
-                Some(window) => windows.push(window),
-                None => unreachable!("a multiple of the generator below its order is the identity"),
+            slot.get_or_init(|| window_for(&base));
+        }
+    });
+}
+
+/// `scalar * G`.
+#[cfg(feature = "std")]
+pub fn mul<C: Curve>(
+    windows: &Windows<C>,
+    built: &std::sync::OnceLock<()>,
+    scalar: &C::Scalar,
+) -> Point<C> {
+    prepare(windows, built);
+    // Every window is filled by now. Each read still goes through
+    // `get_or_init`, building that one window by itself if it somehow were
+    // not, which is slower and gives the same answer rather than a panic.
+    let window = |i: usize| {
+        windows[i].get_or_init(|| {
+            let mut base = Point::<C>::generator();
+            for _ in 0..8 * i {
+                base = base.double();
             }
-        }
-        Self { windows }
-    }
+            window_for(&base)
+        })
+    };
 
-    /// `scalar * G`.
-    pub fn mul(&self, scalar: &C::Scalar) -> Point<C> {
-        let bytes = scalar.to_bytes();
-        let digits = signed_digits(bytes.as_ref());
-        // Every nibble, plus the carry digit above them.
-        let n = bytes.as_ref().len() * 2 + 1;
-        debug_assert!(n.div_ceil(2) <= self.windows.len());
+    let bytes = scalar.to_bytes();
+    let digits = signed_digits(bytes.as_ref());
+    // Every nibble, plus the carry digit above them.
+    let n = bytes.as_ref().len() * 2 + 1;
+    debug_assert!(n.div_ceil(2) <= windows.len());
 
-        // Accumulated projectively; see `Projective` for why.
-        let mut acc = Projective::identity();
-        for i in (1..n).step_by(2) {
-            acc = self.windows[i / 2].add_to(&acc, digits[i]);
-        }
-        for _ in 0..4 {
-            acc = acc.double();
-        }
-        for i in (0..n).step_by(2) {
-            acc = self.windows[i / 2].add_to(&acc, digits[i]);
-        }
-        acc.to_jacobian()
+    // Accumulated projectively; see `Projective` for why.
+    let mut acc = Projective::identity();
+    for i in (1..n).step_by(2) {
+        acc = window(i / 2).add_to(&acc, digits[i]);
     }
+    for _ in 0..4 {
+        acc = acc.double();
+    }
+    for i in (0..n).step_by(2) {
+        acc = window(i / 2).add_to(&acc, digits[i]);
+    }
+    acc.to_jacobian()
 }
 
 /// The scalar as signed radix-16 digits, each in `[-8, 8]`.
@@ -241,21 +267,37 @@ pub(super) fn signed_digits(bytes: &[u8]) -> [i8; MAX_DIGITS] {
 pub trait HasGeneratorTable: Curve + Sized + 'static {
     /// `scalar * G`.
     fn mul_generator(scalar: &Self::Scalar) -> super::point::Point<Self>;
+
+    /// Build the table now rather than on first use. Nothing under `no_std`.
+    fn prepare_generator_table();
 }
 
 /// Implement [`HasGeneratorTable`] for a curve, with its own storage.
 macro_rules! generator_table_for {
     ($curve:ty) => {
+        /// This curve's generator table, and whether it has been filled.
+        #[cfg(feature = "std")]
+        fn generator_table() -> (
+            &'static $crate::nist::gentable::Windows<$curve>,
+            &'static std::sync::OnceLock<()>,
+        ) {
+            const USED: usize = <$curve as $crate::nist::point::Curve>::SCALAR_BYTES + 1;
+            #[allow(clippy::declare_interior_mutable_const)]
+            const EMPTY: std::sync::OnceLock<$crate::nist::gentable::AffineWindow<$curve>> =
+                std::sync::OnceLock::new();
+            static WINDOWS: [std::sync::OnceLock<$crate::nist::gentable::AffineWindow<$curve>>;
+                USED] = [EMPTY; USED];
+            static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+            (&WINDOWS, &BUILT)
+        }
+
         impl $crate::nist::gentable::HasGeneratorTable for $curve {
             #[cfg(feature = "std")]
             fn mul_generator(
                 scalar: &<Self as $crate::nist::point::Curve>::Scalar,
             ) -> $crate::nist::point::Point<Self> {
-                static TABLE: std::sync::OnceLock<$crate::nist::gentable::Table<$curve>> =
-                    std::sync::OnceLock::new();
-                TABLE
-                    .get_or_init($crate::nist::gentable::Table::build)
-                    .mul(scalar)
+                let (windows, built) = generator_table();
+                $crate::nist::gentable::mul(windows, built, scalar)
             }
 
             #[cfg(not(feature = "std"))]
@@ -263,6 +305,14 @@ macro_rules! generator_table_for {
                 scalar: &<Self as $crate::nist::point::Curve>::Scalar,
             ) -> $crate::nist::point::Point<Self> {
                 $crate::nist::point::Point::<Self>::generator().mul_scalar(scalar)
+            }
+
+            fn prepare_generator_table() {
+                #[cfg(feature = "std")]
+                {
+                    let (windows, built) = generator_table();
+                    $crate::nist::gentable::prepare(windows, built);
+                }
             }
         }
     };

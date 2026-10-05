@@ -145,7 +145,48 @@ macro_rules! mldsa_rows {
     }};
 }
 
+/// Signing and verification for one curve. The first row is measured on the
+/// first use of the curve in the process, so its stack figure includes
+/// building any precomputed table; run the group on its own to see that.
+macro_rules! sig_rows {
+    ($name:literal, $s:ty) => {{
+        use ic_core::traits::SignatureScheme as S;
+        let mut sk = [0x11u8; 66];
+        sk[0] = 0;
+        let sk = &sk[66 - <$s as S>::PRIVATE_KEY_LEN..];
+        let mut pk = [0u8; 160];
+        let pk = &mut pk[..<$s as S>::PUBLIC_KEY_LEN];
+        let mut sig = [0u8; 160];
+        let sig = &mut sig[..<$s as S>::SIGNATURE_LEN];
+        row(
+            concat!($name, " sign, first"),
+            &mut || {
+                let mut out = [0u8; 160];
+                <$s as S>::sign(
+                    black_box(sk),
+                    b"stack",
+                    &mut out[..<$s as S>::SIGNATURE_LEN],
+                )
+                .expect("sign");
+                black_box(&out);
+            },
+            200,
+        );
+        <$s as S>::public_key(sk, pk).expect("public key");
+        <$s as S>::sign(sk, b"stack", sig).expect("sign");
+        let (pk, sig) = (&*pk, &*sig);
+        row(
+            concat!($name, " verify"),
+            &mut || {
+                <$s as S>::verify(black_box(pk), b"stack", black_box(sig)).expect("verify");
+            },
+            200,
+        );
+    }};
+}
+
 pub fn run() {
+    // `stack [mldsa] [ec]`: groups to run, all of them by default.
     let which: Vec<String> = std::env::args().skip(2).collect();
     let wants = move |group: &str| which.is_empty() || which.iter().any(|w| w == group);
     let worker = std::thread::Builder::new()
@@ -159,6 +200,12 @@ pub fn run() {
                 mldsa_rows!("ML-DSA-44", ic_mldsa::sign44);
                 mldsa_rows!("ML-DSA-65", ic_mldsa::sign);
                 mldsa_rows!("ML-DSA-87", ic_mldsa::sign87);
+            }
+            if wants("ec") {
+                sig_rows!("ECDSA P-256", ic_ec::p256::EcdsaP256Sha256);
+                sig_rows!("ECDSA P-384", ic_ec::p384::EcdsaP384Sha384);
+                sig_rows!("ECDSA P-521", ic_ec::p521::EcdsaP521Sha512);
+                sig_rows!("Ed25519", ic_ec::ed25519::Ed25519);
             }
         })
         .expect("spawn measurement thread");

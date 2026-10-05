@@ -66,6 +66,28 @@ pub use p256::{EcdhP256, EcdsaP256Sha256};
 pub use p384::{EcdhP384, EcdsaP384Sha384};
 pub use x25519::X25519;
 
+/// Build every precomputed table now, rather than on first use.
+///
+/// Under `std`, the generator tables for P-256, P-384 and P-521 and the
+/// Ed25519 basepoint tables are built the first time an operation needs them:
+/// about one scalar multiplication per curve, a few hundred microseconds in
+/// all on a host. They live in statics, so building them allocates nothing
+/// whenever it happens. What this changes is *when* the time is spent: a
+/// caller that wants its first handshake to cost what every later one does can
+/// pay it at start-up instead.
+///
+/// Safe to call more than once and from several threads: the work is done
+/// once, and a second caller waits for the first. Under `no_std` there are no
+/// tables, and this does nothing.
+pub fn prepare() {
+    use nist::gentable::HasGeneratorTable;
+    p256::P256::prepare_generator_table();
+    p384::P384::prepare_generator_table();
+    p521::P521::prepare_generator_table();
+    #[cfg(feature = "std")]
+    ed25519::prepare_tables();
+}
+
 /// Ontology identifiers for the schemes implemented here.
 pub const EC_IDS: &[&str] = &[
     "x25519",
