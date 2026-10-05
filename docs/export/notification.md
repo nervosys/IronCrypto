@@ -59,6 +59,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.5 | 2026-09-30 02:08:53 | all eighteen crates published from `e5d759f`, after the maintainer confirmed that the notification covers this release; constant-time fixes and generator-multiplication improvements |
 | 0.2.6 | 2026-09-30 14:38:55 | all eighteen crates published from `0adec96`, after the maintainer confirmed that the notification covers this release; LTO mask fixes, compiled-code probes and timing additions |
 | 0.2.7 | 2026-09-30 16:44:00 | all eighteen crates published from `85183e5`, after the maintainer reported submitting the updated release notice; core mask fix and nineteen compiled-code probes |
+| 0.2.8 | 2026-10-05 21:28:31 | all eighteen crates published from `387e6f5`, after the maintainer reported submitting the updated release notice and confirmed that it covers the facade's new name, `ironcrypto`; stack and allocation reductions |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -140,6 +141,12 @@ maintainer's report and answer, not the sent message, its completed contact
 fields or its sending time, none of which have been supplied here.
 
 `iron-crypto` stays on crates.io at 0.2.7 and receives no further releases.
+
+The crates.io API confirmed all eighteen 0.2.8 packages live and not yanked,
+`ironcrypto` among them. The first upload was `ic-core` at 2026-10-05
+21:28:31 UTC; the last was `ic-cli` at 21:28:51 UTC. The published source
+commit is `387e6f5`; all eighteen packages identified that clean commit in
+their VCS metadata.
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
 apply to an implementation of published standards at all, and why that reading

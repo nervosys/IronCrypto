@@ -114,32 +114,35 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.2.7"
+ironcrypto = "0.2.8"
 ```
 
-The current release is **0.2.7**, published for all eighteen crates on crates.io.
-It fixes compiler-generated branches in core secret-selection masks and extends
-the compiled-code checks; see [CHANGELOG.md](CHANGELOG.md).
-`ironcrypto` is the facade and
-re-exports the rest; depend on the primitives directly if you want a smaller
-graph:
+The current release is **0.2.8**, published for all eighteen crates on crates.io.
+It cuts ML-DSA's stack use by a factor of three to ten, keeps the curve tables
+off the heap, and reduces HMAC-SHA384's stack; see [CHANGELOG.md](CHANGELOG.md).
+`ironcrypto` is the facade and re-exports the rest; depend on the primitives
+directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2.7"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.7"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.2.7"       # the NIST curves, X25519, Ed25519
+ic-cipher = "0.2.8"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2.8"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2.8"       # the NIST curves, X25519, Ed25519
 ```
 
 ```console
-$ cargo install ic-cli --version 0.2.7   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.2.8   # the `ic` CLI and MCP server
 ```
+
+**The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
+`iron_crypto::`, and that package stays at 0.2.7 with no further releases.
+Depend on `ironcrypto` and import `ironcrypto::`; nothing else changed.
 
 The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.2.7 publication.
+submission and the 0.2.8 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
@@ -560,7 +563,7 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 These are historical developer-machine comparisons from `bench/` against
 RustCrypto and dalek, using the same buffers and the best of nine runs. They
-have not been rerun for 0.2.7 and are not performance guarantees. Shared-machine
+have not been rerun for 0.2.8 and are not performance guarantees. Shared-machine
 interference caused substantial variation between runs.
 
 | operation | historical comparison against RustCrypto/dalek |
