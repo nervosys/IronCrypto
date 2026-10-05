@@ -123,7 +123,23 @@ The maintainer subsequently created `v0.2.7` at `85183e5` and pushed master
 and the tag. The supplied terminal output reported both successful updates
 and a passing full pre-push gate, including all 76 compiled-code probe checks.
 
-## Determination
+## 0.2.8 notification submission
+
+On 2026-10-05 the maintainer reported "Submitted" after this agent printed an
+updated IronCrypto 0.2.8 release notice addressed to `crypt@bis.doc.gov` and
+`enc@nsa.gov`. The notice identified the GitHub repository and eighteen
+crates.io package names, including `iron-crypto`, and described the release
+as memory-use reductions with no new algorithms or parameter sets.
+
+In the same message the maintainer asked for the facade crate to be renamed
+from `iron-crypto` to `ironcrypto`, which publishes it at a crates.io location
+the notice does not name. Asked how that location should be covered, the
+maintainer answered that the existing notification already covers the
+renamed package. Publication proceeds on that answer. This records the
+maintainer's report and answer, not the sent message, its completed contact
+fields or its sending time, none of which have been supplied here.
+
+`iron-crypto` stays on crates.io at 0.2.7 and receives no further releases.
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
 apply to an implementation of published standards at all, and why that reading

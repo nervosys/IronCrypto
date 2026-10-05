@@ -15,7 +15,7 @@
         └────────┴───────┴──────────┤
                                  ic-fips     (policy, self-tests, service indicator)
                                     │
-                            iron-crypto   (facade + prelude)
+                            ironcrypto   (facade + prelude)
                                     │
                                  ic-cli      (ic: CLI + MCP server)
 ```
@@ -38,7 +38,7 @@ lines and each one is directly tested.
 
 Every crate is `#![no_std]` unless the `std` feature is on, and `std` only ever
 buys `String`-returning conveniences and the OS entropy backend. CI
-cross-compiles `iron-crypto` to `thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
+cross-compiles `ironcrypto` to `thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
 `riscv32imac-unknown-none-elf`, and `wasm32-unknown-unknown`, because a
 `--no-default-features` build on a host with `std` available does not actually
 prove anything.
@@ -112,7 +112,7 @@ cannot read unauthenticated plaintext.
 
 `ic-ontology` does not depend on the implementation crates, and the
 implementation crates do not depend on it. They are joined by string identifiers
-(`Algorithm::ID`) and held together by tests in `iron-crypto` and `ic-fips`
+(`Algorithm::ID`) and held together by tests in `ironcrypto` and `ic-fips`
 that assert the join is intact: sizes match, paths resolve, self-tests exist.
 
 That direction of dependency matters. The ontology can describe algorithms that
@@ -147,9 +147,9 @@ behaviour can reproduce it from a shell.
 | `ic-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ic-core` and performs no cryptography |
 | `ic-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
 | `ic-ontology::standards` | The standards knowledgebase: the documents the registry cites, and the obligations they impose. Coupled to the code by tests - a met requirement names a file and a symbol, and both must exist |
-| `iron-crypto/tests/hostile_input.rs` | Every public entry point that parses attacker-chosen bytes, held to three properties: total (never panics), sound (never accepts a forgery) and deep (enough input reaches the cryptography for the first two to mean something) |
+| `ironcrypto/tests/hostile_input.rs` | Every public entry point that parses attacker-chosen bytes, held to three properties: total (never panics), sound (never accepts a forgery) and deep (enough input reaches the cryptography for the first two to mean something) |
 | `ic-fips` | state machine, approved-mode policy, CAST table, service indicator |
-| `iron-crypto` | facade, prelude, and the ontology/implementation agreement tests |
+| `ironcrypto` | facade, prelude, and the ontology/implementation agreement tests |
 | `ic-cli` | JSON reader/writer, shared ops, CLI, MCP server |
 
 ## Testing strategy

@@ -121,7 +121,7 @@ fn main() {
     println!();
     println!("AES-256, raw blocks");
     let ic_aes = <ic_cipher::Aes256 as BlockCipher>::new(&key).unwrap();
-    let a = bulk("iron-crypto (active)", SIZE, REPEATS, || {
+    let a = bulk("ironcrypto (active)", SIZE, REPEATS, || {
         ic_aes.encrypt_blocks(&mut data).unwrap();
     });
     let rc_key = aes::cipher::generic_array::GenericArray::from_slice(&key);
@@ -135,7 +135,7 @@ fn main() {
     let small = 64 * 1024;
     let mut small_buf = vec![0u8; small];
     let ic_port = ic_cipher::Aes256::new_portable(&key).unwrap();
-    let p = bulk("iron-crypto (portable)", small, 3, || {
+    let p = bulk("ironcrypto (portable)", small, 3, || {
         ic_port.encrypt_blocks(&mut small_buf).unwrap();
     });
     verdict("aes blocks, active vs rustcrypto", a, b, true);
@@ -145,7 +145,7 @@ fn main() {
     println!();
     println!("AEAD, sealing in place");
     let gcm = <ic_cipher::Aes256Gcm as Aead>::new(&key).unwrap();
-    let g1 = bulk("iron-crypto aes-256-gcm", SIZE, REPEATS, || {
+    let g1 = bulk("ironcrypto aes-256-gcm", SIZE, REPEATS, || {
         gcm.seal_detached(&[0u8; 12], b"", &mut data, &mut tag)
             .unwrap();
     });
@@ -159,7 +159,7 @@ fn main() {
     verdict("aes-256-gcm", g1, g2, true);
 
     let cc = <ic_cipher::ChaCha20Poly1305 as Aead>::new(&key).unwrap();
-    let c1 = bulk("iron-crypto chacha20-poly1305", SIZE, REPEATS, || {
+    let c1 = bulk("ironcrypto chacha20-poly1305", SIZE, REPEATS, || {
         cc.seal_detached(&[0u8; 12], b"", &mut data, &mut tag)
             .unwrap();
     });
@@ -179,14 +179,14 @@ fn main() {
     println!();
     println!("ChaCha20-Poly1305, split");
     bulk(
-        "  iron-crypto chacha20 keystream only",
+        "  ironcrypto chacha20 keystream only",
         SIZE,
         REPEATS,
         || {
             ic_cipher::chacha20_xor(&key, &[0u8; 12], 1, &mut data).unwrap();
         },
     );
-    bulk("  iron-crypto poly1305 only", SIZE, REPEATS, || {
+    bulk("  ironcrypto poly1305 only", SIZE, REPEATS, || {
         let _ = <ic_cipher::Poly1305 as Mac>::mac(&key, &data).unwrap();
     });
 
@@ -194,8 +194,8 @@ fn main() {
     println!();
     println!("Hashes");
     let mut out32 = [0u8; 32];
-    let h1 = bulk("iron-crypto sha-256", SIZE, REPEATS, || {
-        out32 = iron_crypto::hash::Sha256::digest(&data);
+    let h1 = bulk("ironcrypto sha-256", SIZE, REPEATS, || {
+        out32 = ironcrypto::hash::Sha256::digest(&data);
     });
     let h2 = bulk("rustcrypto sha2 sha-256", SIZE, REPEATS, || {
         use sha2::Digest;
@@ -204,8 +204,8 @@ fn main() {
     verdict("sha-256", h1, h2, true);
 
     let mut out64 = [0u8; 64];
-    let h3 = bulk("iron-crypto sha-512", SIZE, REPEATS, || {
-        out64 = iron_crypto::hash::Sha512::digest(&data);
+    let h3 = bulk("ironcrypto sha-512", SIZE, REPEATS, || {
+        out64 = ironcrypto::hash::Sha512::digest(&data);
     });
     let h4 = bulk("rustcrypto sha2 sha-512", SIZE, REPEATS, || {
         use sha2::Digest;
@@ -213,8 +213,8 @@ fn main() {
     });
     verdict("sha-512", h3, h4, true);
 
-    let h5 = bulk("iron-crypto sha3-256", SIZE, REPEATS, || {
-        out32 = iron_crypto::hash::Sha3_256::digest(&data);
+    let h5 = bulk("ironcrypto sha3-256", SIZE, REPEATS, || {
+        out32 = ironcrypto::hash::Sha3_256::digest(&data);
     });
     let h6 = bulk("rustcrypto sha3-256", SIZE, REPEATS, || {
         use sha3::Digest;
@@ -225,8 +225,8 @@ fn main() {
     // ---------------------------------------------------------------- MAC ---
     println!();
     println!("HMAC-SHA256");
-    let m1 = bulk("iron-crypto hmac-sha256", SIZE, REPEATS, || {
-        let _ = iron_crypto::mac::HmacSha256::mac(&key, &data).unwrap();
+    let m1 = bulk("ironcrypto hmac-sha256", SIZE, REPEATS, || {
+        let _ = ironcrypto::mac::HmacSha256::mac(&key, &data).unwrap();
     });
     let m2 = bulk("rustcrypto hmac", SIZE, REPEATS, || {
         use hmac::Mac as _;
@@ -241,8 +241,8 @@ fn main() {
     // SHA-NI: over 4 MiB there is one such block, and over 200 bytes there are
     // most of them.
     let short = &data[..200];
-    let s1 = per_op("iron-crypto hmac-sha256, 200 bytes", 200_000, 5, || {
-        let _ = iron_crypto::mac::HmacSha256::mac(&key, short).unwrap();
+    let s1 = per_op("ironcrypto hmac-sha256, 200 bytes", 200_000, 5, || {
+        let _ = ironcrypto::mac::HmacSha256::mac(&key, short).unwrap();
     });
     let s2 = per_op("rustcrypto hmac, 200 bytes", 200_000, 5, || {
         use hmac::Mac as _;
@@ -258,10 +258,10 @@ fn main() {
 
     let sk = [0x77u8; 32];
     let mut pk = [0u8; 32];
-    iron_crypto::ec::X25519::public_key(&sk, &mut pk).unwrap();
+    ironcrypto::ec::X25519::public_key(&sk, &mut pk).unwrap();
     let mut shared = [0u8; 32];
-    let x1 = per_op("iron-crypto x25519 agree", 3000, 5, || {
-        iron_crypto::ec::X25519::agree(&sk, &pk, &mut shared).unwrap();
+    let x1 = per_op("ironcrypto x25519 agree", 3000, 5, || {
+        ironcrypto::ec::X25519::agree(&sk, &pk, &mut shared).unwrap();
     });
     let d_sk = x25519_dalek::StaticSecret::from(sk);
     let d_pk = x25519_dalek::PublicKey::from(pk);
@@ -276,11 +276,11 @@ fn main() {
     // comparing it against the seed-only call had IronCrypto doing a second
     // basepoint multiplication dalek never pays. `Ed25519Key` is the
     // equivalent; both figures are kept so the cost of that derivation shows.
-    let e0 = per_op("iron-crypto ed25519 sign (from seed)", 3000, 5, || {
-        iron_crypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
+    let e0 = per_op("ironcrypto ed25519 sign (from seed)", 3000, 5, || {
+        ironcrypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
     });
-    let ic_key = iron_crypto::ec::Ed25519Key::from_seed(&sk).unwrap();
-    let e1 = per_op("iron-crypto ed25519 sign (cached key)", 3000, 5, || {
+    let ic_key = ironcrypto::ec::Ed25519Key::from_seed(&sk).unwrap();
+    let e1 = per_op("ironcrypto ed25519 sign (cached key)", 3000, 5, || {
         ic_key.sign(msg, &mut sig).unwrap();
     });
     let d_key = ed25519_dalek::SigningKey::from_bytes(&sk);
@@ -292,8 +292,8 @@ fn main() {
     verdict("ed25519 sign, seed vs cached", e0, e1, false);
 
     let mut ed_pk = [0u8; 32];
-    iron_crypto::ec::Ed25519::public_key(&sk, &mut ed_pk).unwrap();
-    iron_crypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
+    ironcrypto::ec::Ed25519::public_key(&sk, &mut ed_pk).unwrap();
+    ironcrypto::ec::Ed25519::sign(&sk, msg, &mut sig).unwrap();
     // Point primitives against dalek's, directly. Everything above is a whole
     // operation, which cannot separate "our field arithmetic is slower" from
     // "our scalar multiplication does more work". These can.
@@ -311,7 +311,7 @@ Edwards point primitives (lower is better)"
         let ours = Point::decompress(&pk).unwrap();
         let theirs = CompressedEdwardsY(pk).decompress().unwrap();
 
-        let a0 = per_op("iron-crypto point add", 20000, 5, || {
+        let a0 = per_op("ironcrypto point add", 20000, 5, || {
             std::hint::black_box(std::hint::black_box(&ours).add(std::hint::black_box(&ours)));
         });
         let a1 = per_op("dalek point add", 20000, 5, || {
@@ -319,7 +319,7 @@ Edwards point primitives (lower is better)"
         });
         verdict("point addition", a0, a1, false);
 
-        let d0 = per_op("iron-crypto point double", 20000, 5, || {
+        let d0 = per_op("ironcrypto point double", 20000, 5, || {
             std::hint::black_box(std::hint::black_box(&ours).double());
         });
         let d1 = per_op("dalek point double (via mul by 2)", 20000, 5, || {
@@ -337,7 +337,7 @@ Edwards point primitives (lower is better)"
         kb[31] &= 0x0f;
         let k = DScalar::from_bytes_mod_order(kb);
         let s = DScalar::from_bytes_mod_order(kb);
-        let m0 = per_op("iron-crypto [k]A + [s]B", 2000, 5, || {
+        let m0 = per_op("ironcrypto [k]A + [s]B", 2000, 5, || {
             std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
                 std::hint::black_box(&ours),
                 &kb,
@@ -363,7 +363,7 @@ Edwards point primitives (lower is better)"
         let mut sparse = [0u8; 32];
         sparse[31] = 0x08;
         let d_sparse = DScalar::from_bytes_mod_order(sparse);
-        let s0 = per_op("iron-crypto [k]A + [s]B, sparse", 2000, 5, || {
+        let s0 = per_op("ironcrypto [k]A + [s]B, sparse", 2000, 5, || {
             std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
                 std::hint::black_box(&ours),
                 &sparse,
@@ -387,14 +387,14 @@ Edwards point primitives (lower is better)"
         // rather than arithmetic-bound, these differ.
         let zero = [0u8; 32];
         let d_zero = DScalar::from_bytes_mod_order(zero);
-        let ka = per_op("iron-crypto [k]A only", 2000, 5, || {
+        let ka = per_op("ironcrypto [k]A only", 2000, 5, || {
             std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
                 std::hint::black_box(&ours),
                 &kb,
                 &zero,
             ));
         });
-        let kb_ = per_op("iron-crypto [s]B only", 2000, 5, || {
+        let kb_ = per_op("ironcrypto [s]B only", 2000, 5, || {
             std::hint::black_box(ic_ec::ed25519::double_scalar_mul_vartime_for_bench(
                 std::hint::black_box(&ours),
                 &zero,
@@ -422,7 +422,7 @@ Edwards point primitives (lower is better)"
         verdict("[k]A only", ka, da, false);
         verdict("[s]B only", kb_, db, false);
 
-        let b0 = per_op("iron-crypto [s]B (const time)", 5000, 5, || {
+        let b0 = per_op("ironcrypto [s]B (const time)", 5000, 5, || {
             std::hint::black_box(ic_ec::ed25519::mul_basepoint_for_bench(
                 std::hint::black_box(&kb),
             ));
@@ -434,7 +434,7 @@ Edwards point primitives (lower is better)"
         });
         verdict("basepoint multiplication", b0, b1, false);
 
-        let p0 = per_op("iron-crypto compress", 20000, 5, || {
+        let p0 = per_op("ironcrypto compress", 20000, 5, || {
             std::hint::black_box(std::hint::black_box(&ours).compress());
         });
         let p1 = per_op("dalek compress", 20000, 5, || {
@@ -442,7 +442,7 @@ Edwards point primitives (lower is better)"
         });
         verdict("compression", p0, p1, false);
 
-        let c0 = per_op("iron-crypto decompress", 20000, 5, || {
+        let c0 = per_op("ironcrypto decompress", 20000, 5, || {
             std::hint::black_box(Point::decompress(std::hint::black_box(&pk)));
         });
         let c1 = per_op("dalek decompress", 20000, 5, || {
@@ -454,11 +454,11 @@ Edwards point primitives (lower is better)"
     // Held, not rebuilt per call -- the like-for-like comparison with dalek's
     // VerifyingKey, which caches its decompressed point the same way.
     let ic_vk = ic_ec::Ed25519VerifyKey::from_bytes(&ed_pk).unwrap();
-    let e3 = per_op("iron-crypto ed25519 verify", 3000, 5, || {
+    let e3 = per_op("ironcrypto ed25519 verify", 3000, 5, || {
         ic_vk.verify(msg, &sig).unwrap();
     });
-    let e3b = per_op("iron-crypto ed25519 verify (from bytes)", 3000, 5, || {
-        iron_crypto::ec::Ed25519::verify(&ed_pk, msg, &sig).unwrap();
+    let e3b = per_op("ironcrypto ed25519 verify (from bytes)", 3000, 5, || {
+        ironcrypto::ec::Ed25519::verify(&ed_pk, msg, &sig).unwrap();
     });
     let d_vk = d_key.verifying_key();
     let d_sig = {
@@ -477,10 +477,10 @@ Edwards point primitives (lower is better)"
     // nonce derivation and the modular inversion. Building a generator table
     // is only worth it if the multiplication is where the time goes.
     let mut ecdh_pk = [0u8; 65];
-    iron_crypto::ec::EcdhP256::public_key(&[0x5au8; 32], &mut ecdh_pk).unwrap();
+    ironcrypto::ec::EcdhP256::public_key(&[0x5au8; 32], &mut ecdh_pk).unwrap();
     let mut shared_p = [0u8; 32];
-    let c1 = per_op("iron-crypto ecdh p-256 (one scalar mul)", 200, 3, || {
-        iron_crypto::ec::EcdhP256::agree(&[0x5au8; 32], &ecdh_pk, &mut shared_p).unwrap();
+    let c1 = per_op("ironcrypto ecdh p-256 (one scalar mul)", 200, 3, || {
+        ironcrypto::ec::EcdhP256::agree(&[0x5au8; 32], &ecdh_pk, &mut shared_p).unwrap();
         std::hint::black_box(&shared_p);
     });
     let c_sk = p256::SecretKey::from_bytes(&[0x5au8; 32].into()).unwrap();
@@ -495,8 +495,8 @@ Edwards point primitives (lower is better)"
     // should cost what the table makes it cost. It did not until 0.2.1: it
     // bypassed the table, and nothing compared it against anything.
     let mut k_pk = [0u8; 65];
-    let k1 = per_op("iron-crypto p-256 public key", 200, 3, || {
-        iron_crypto::ec::EcdhP256::public_key(&[0x5au8; 32], &mut k_pk).unwrap();
+    let k1 = per_op("ironcrypto p-256 public key", 200, 3, || {
+        ironcrypto::ec::EcdhP256::public_key(&[0x5au8; 32], &mut k_pk).unwrap();
     });
     let k2 = per_op("p256 crate public key", 200, 3, || {
         let _ = c_sk.public_key();
@@ -505,8 +505,8 @@ Edwards point primitives (lower is better)"
 
     let p_sk = [0x5au8; 32];
     let mut p_sig = [0u8; 64];
-    let s1 = per_op("iron-crypto ecdsa p-256 sign", 200, 3, || {
-        iron_crypto::ec::p256::EcdsaP256Sha256::sign(&p_sk, msg, &mut p_sig).unwrap();
+    let s1 = per_op("ironcrypto ecdsa p-256 sign", 200, 3, || {
+        ironcrypto::ec::p256::EcdsaP256Sha256::sign(&p_sk, msg, &mut p_sig).unwrap();
     });
     let p_key = p256::ecdsa::SigningKey::from_bytes(&p_sk.into()).unwrap();
     let s2 = per_op("p256 crate ecdsa sign", 200, 3, || {
@@ -516,10 +516,10 @@ Edwards point primitives (lower is better)"
     verdict("ecdsa p-256 sign", s1, s2, false);
 
     let mut p_pk = [0u8; 65];
-    iron_crypto::ec::p256::EcdsaP256Sha256::public_key(&p_sk, &mut p_pk).unwrap();
-    iron_crypto::ec::p256::EcdsaP256Sha256::sign(&p_sk, msg, &mut p_sig).unwrap();
-    let v1 = per_op("iron-crypto ecdsa p-256 verify", 200, 3, || {
-        iron_crypto::ec::p256::EcdsaP256Sha256::verify(&p_pk, msg, &p_sig).unwrap();
+    ironcrypto::ec::p256::EcdsaP256Sha256::public_key(&p_sk, &mut p_pk).unwrap();
+    ironcrypto::ec::p256::EcdsaP256Sha256::sign(&p_sk, msg, &mut p_sig).unwrap();
+    let v1 = per_op("ironcrypto ecdsa p-256 verify", 200, 3, || {
+        ironcrypto::ec::p256::EcdsaP256Sha256::verify(&p_pk, msg, &p_sig).unwrap();
     });
     let p_vk = p256::ecdsa::VerifyingKey::from(&p_key);
     let p_s: p256::ecdsa::Signature = {

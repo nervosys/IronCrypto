@@ -144,7 +144,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
     if has_flag(args, "--version") || args[0] == "version" {
         return Ok(format!(
             "ic {} (ontology {}, backend {})",
-            iron_crypto::VERSION,
+            ironcrypto::VERSION,
             ic_ontology::ONTOLOGY_VERSION,
             ic_ontology::runtime::backend().id()
         ));
@@ -431,7 +431,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             }
             let mut out = format!(
                 "IronCrypto {}\n  backend:       {}\n  ontology:      {} ({} algorithms, {} available)\n  module state:  {}\n\n",
-                iron_crypto::VERSION,
+                ironcrypto::VERSION,
                 ic_ontology::runtime::backend().id(),
                 ic_ontology::ONTOLOGY_VERSION,
                 ic_ontology::all().len(),

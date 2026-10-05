@@ -208,7 +208,7 @@ pub static CONTROLS: &[Control] = &[
         description: "A signature is accepted that should have been rejected, or the verification result is not acted on.",
         bearing: "Two distinct failures, and the second is the one libraries usually miss. Verification is checked against hostile input for totality and soundness, and every function returning a verification result is marked must_use, so discarding the answer does not compile.",
         compliance: Compliance::Met {
-            file: "crates/iron-crypto/tests/api_hygiene.rs",
+            file: "crates/ironcrypto/tests/api_hygiene.rs",
             symbol: "public_predicates_cannot_be_ignored",
         },
         algorithms: &["ecdsa-p256-sha256", "ed25519", "rsa-pss-sha256", "ml-dsa-65"],
@@ -221,7 +221,7 @@ pub static CONTROLS: &[Control] = &[
         description: "Corrupted or forged data is accepted because its integrity check was not properly validated.",
         bearing: "A failed AEAD open releases nothing. A caller who ignores the error and reads the buffer anyway is making a mistake, and handing them decrypted-but-unauthenticated bytes is what would make that mistake dangerous.",
         compliance: Compliance::Met {
-            file: "crates/iron-crypto/tests/hostile_input.rs",
+            file: "crates/ironcrypto/tests/hostile_input.rs",
             symbol: "aead_opening_is_total_and_sound",
         },
         algorithms: &["aes-256-gcm", "chacha20-poly1305"],
@@ -379,7 +379,7 @@ pub static CONTROLS: &[Control] = &[
         description: "An adversary alters data to influence an outcome.",
         bearing: "Authenticated encryption and signatures are the countermeasure, and the library's contribution is that its verification paths are total and sound against hostile input, and that their results cannot be silently discarded.",
         compliance: Compliance::Met {
-            file: "crates/iron-crypto/tests/hostile_input.rs",
+            file: "crates/ironcrypto/tests/hostile_input.rs",
             symbol: "aead_opening_is_total_and_sound",
         },
         algorithms: &["aes-256-gcm", "ed25519"],

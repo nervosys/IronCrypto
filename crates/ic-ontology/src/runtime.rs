@@ -159,7 +159,7 @@ mod tests {
     /// The report is consistent with the predicates it is built from.
     ///
     /// This cannot show that it matches what the cipher crate selects, since
-    /// this crate cannot see `ic-cipher`; `iron-crypto`'s `backend_report`
+    /// this crate cannot see `ic-cipher`; `ironcrypto`'s `backend_report`
     /// test does that, and caught a 32-bit x86 build that this one passed.
     #[test]
     fn backend_matches_the_cpu() {

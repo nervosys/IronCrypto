@@ -6,7 +6,7 @@ publish = false
 description = "Throughput comparison against other implementations. Not part of the library."
 
 [dependencies]
-iron-crypto = { path = "../crates/iron-crypto" }
+ironcrypto = { path = "../crates/ironcrypto" }
 ic-cipher = { path = "../crates/ic-cipher" }
 ic-core = { path = "../crates/ic-core", features = ["std"] }
 ic-ec = { path = "../crates/ic-ec", features = ["bench-internals"] }

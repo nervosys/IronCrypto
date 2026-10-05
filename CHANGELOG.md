@@ -3,7 +3,16 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.8
+
+### Renamed
+
+- **The facade crate is now `ironcrypto`**, imported as `ironcrypto::`. It
+  was `iron-crypto`, imported as `iron_crypto::`; that package stays on
+  crates.io at 0.2.7 and receives no further releases. To move, change the
+  dependency to `ironcrypto = "0.2.8"` and the paths from `iron_crypto::` to
+  `ironcrypto::`; nothing else differs. The seventeen `ic-*` crates keep
+  their names. The MCP server reports itself as `ironcrypto`.
 
 ### Performance
 

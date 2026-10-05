@@ -488,7 +488,7 @@ const FIPS140_REQS: [Requirement; 6] = [
         rationale: "Key material left in freed memory outlives the operation that needed it, and can be recovered from a core dump, a swapped page or a reused allocation.",
         applies_to: &[],
         compliance: Compliance::Partial {
-            file: "crates/iron-crypto/tests/api_hygiene.rs",
+            file: "crates/ironcrypto/tests/api_hygiene.rs",
             symbol: "secret_bearing_types_wipe_on_drop",
             gap: "Rust cannot guarantee a wipe survives moves and optimisation, so every case here is best-effort rather than a guarantee, and that is the honest ceiling on this requirement. Within it, the types that hold secret or key-derived state are enumerated in `api_hygiene.rs` and each is asserted to implement Drop, so removing one fails the build. Hmac is deliberately not on that list: it holds two digest states with the key already absorbed, and those states wipe themselves, so it inherits the property through field drop rather than restating it. What is not covered is material a caller holds -- a private key passed in as a slice is the caller's memory and the caller's responsibility, and no library can discharge that."
         },

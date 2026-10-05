@@ -7,7 +7,7 @@
 //! ## The short version
 //!
 //! ```
-//! use iron_crypto::prelude::*;
+//! use ironcrypto::prelude::*;
 //!
 //! // 1. Ask what to use, rather than picking a name from memory.
 //! let choice = recommend(Intent::EncryptMessage, Policy::FIPS_APPROVED).unwrap();

@@ -449,7 +449,7 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
             elapsed
         }
         Target::MlDsaRounding => {
-            use iron_crypto::mldsa::{poly, rounding};
+            use ironcrypto::mldsa::{poly, rounding};
             // Public synthetic inputs, not private key material. Preparation
             // is outside the timed region. A full polynomial amortizes the
             // timer overhead; all six outputs per coefficient are retained.

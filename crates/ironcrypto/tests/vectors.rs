@@ -9,8 +9,8 @@
 //! so that when someone drops in an ACVP file the only new thing is the data.
 
 use ic_vectors::{hex, hex_field, optional_hex_field, VectorFile};
-use iron_crypto::prelude::*;
-use iron_crypto::{cipher, mldsa, mlkem};
+use ironcrypto::prelude::*;
+use ironcrypto::{cipher, mldsa, mlkem};
 
 /// RFC 3394, loaded from the bundled file rather than inlined.
 ///

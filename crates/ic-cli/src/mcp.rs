@@ -9,7 +9,7 @@
 //! ```jsonc
 //! {
 //!   "mcpServers": {
-//!     "iron-crypto": { "command": "ic", "args": ["mcp"] }
+//!     "ironcrypto": { "command": "ic", "args": ["mcp"] }
 //!   }
 //! }
 //! ```
@@ -524,8 +524,8 @@ pub fn handle(request: &Json) -> Option<Json> {
                 (
                     "serverInfo",
                     Json::object([
-                        ("name", Json::str("iron-crypto")),
-                        ("version", Json::str(iron_crypto::VERSION)),
+                        ("name", Json::str("ironcrypto")),
+                        ("version", Json::str(ironcrypto::VERSION)),
                     ]),
                 ),
                 (
@@ -1001,7 +1001,7 @@ mod tests {
                 .get("name")
                 .unwrap()
                 .as_str(),
-            Some("iron-crypto")
+            Some("ironcrypto")
         );
         assert!(result.get("instructions").is_some());
     }

@@ -42,9 +42,9 @@
 //! them, which is why covering seventy-two costs far less than seventy-two
 //! preambles.
 
-use iron_crypto::core_types::traits::{Aead, BlockCipher, Digest, Kdf, Mac, SignatureScheme};
-use iron_crypto::prelude::*;
-use iron_crypto::{cipher, drbg, ec, hash, kdf, mac, mldsa, mlkem, rsa};
+use ironcrypto::core_types::traits::{Aead, BlockCipher, Digest, Kdf, Mac, SignatureScheme};
+use ironcrypto::prelude::*;
+use ironcrypto::{cipher, drbg, ec, hash, kdf, mac, mldsa, mlkem, rsa};
 
 /// `aes-256-gcm`.
 const AES_256_GCM: &str =
@@ -300,7 +300,7 @@ fn every_example_is_covered() {
     let mut with_example = 0;
     let mut missing = Vec::new();
 
-    for e in iron_crypto::ontology::REGISTRY {
+    for e in ironcrypto::ontology::REGISTRY {
         if e.example.is_empty() {
             continue;
         }
@@ -333,7 +333,7 @@ fn every_example_is_covered() {
 #[test]
 fn no_example_names_a_crate_that_no_longer_exists() {
     let mut checked = 0;
-    for e in iron_crypto::ontology::REGISTRY {
+    for e in ironcrypto::ontology::REGISTRY {
         if e.example.is_empty() {
             continue;
         }
@@ -383,7 +383,7 @@ fn slow_examples() -> bool {
 /// `use` lines are hoisted to the top of this file rather than repeated in
 /// every function, so they are filtered out of the comparison.
 fn check_example(id: &str, compiled: &str) {
-    let entry = iron_crypto::ontology::get(id).unwrap_or_else(|| panic!("no entry {id}"));
+    let entry = ironcrypto::ontology::get(id).unwrap_or_else(|| panic!("no entry {id}"));
     let body: String = entry
         .example
         .lines()
@@ -417,7 +417,7 @@ macro_rules! digest_family {
         #[test]
         fn digest_examples_compile_and_match() {
             $({
-                let _d = iron_crypto::hash::$ty::digest(b"message");
+                let _d = ironcrypto::hash::$ty::digest(b"message");
                 let expected = concat!(
                     "let d = ic_hash::", stringify!($ty), "::digest(b\"message\");"
                 );
@@ -449,7 +449,7 @@ macro_rules! mac_family {
             $({
                 // CMAC takes the key length of its cipher; HMAC takes any.
                 let key: &[u8] = &[0x11u8; $keylen];
-                let _tag = iron_crypto::mac::$ty::mac(key, msg)?;
+                let _tag = ironcrypto::mac::$ty::mac(key, msg)?;
                 let expected = concat!(
                     "let tag = ic_mac::", stringify!($ty), "::mac(key, msg)?;"
                 );
@@ -480,7 +480,7 @@ macro_rules! block_cipher_family {
         fn block_cipher_examples_compile_and_match() -> Result<()> {
             $({
                 let key: &[u8] = &[0x22u8; $len];
-                let _c = iron_crypto::cipher::$ty::new(key)?;
+                let _c = ironcrypto::cipher::$ty::new(key)?;
                 let expected = concat!(
                     "let c = ic_cipher::", stringify!($ty), "::new(key)?;"
                 );
@@ -508,7 +508,7 @@ macro_rules! aead_family {
                 let key: &[u8] = &[0x44u8; $len];
                 let mut buf = [0x55u8; 16];
                 let mut tag = [0u8; 16];
-                let c = iron_crypto::cipher::$ty::new(key)?;
+                let c = ironcrypto::cipher::$ty::new(key)?;
                 c.seal_detached(&nonce, aad, &mut buf, &mut tag)?;
                 let expected = concat!(
                     "let c = ic_cipher::", stringify!($ty), "::new(key)?;\n",
@@ -538,7 +538,7 @@ macro_rules! hkdf_family {
             let info: &[u8] = b"info";
             $({
                 let mut key = [0u8; 32];
-                iron_crypto::kdf::Hkdf::<iron_crypto::mac::$mac>::derive(
+                ironcrypto::kdf::Hkdf::<ironcrypto::mac::$mac>::derive(
                     ikm, salt, info, &mut key,
                 )?;
                 let expected = concat!(
@@ -570,7 +570,7 @@ macro_rules! ecdsa_family {
                 let mut sk = [0x07u8; $sklen];
                 sk[0] = 0;
                 let mut sig = [0u8; $siglen];
-                iron_crypto::ec::$module::$ty::sign(&sk, msg, &mut sig)?;
+                ironcrypto::ec::$module::$ty::sign(&sk, msg, &mut sig)?;
                 let expected = concat!(
                     "ic_ec::", stringify!($module), "::", stringify!($ty),
                     "::sign(&sk, msg, &mut sig)?;"
@@ -723,7 +723,7 @@ fn sp800_185_examples_compile_and_match() -> Result<()> {
 /// The password and key-based derivations.
 #[test]
 fn derivation_examples_compile_and_match() -> Result<()> {
-    use iron_crypto::kdf::argon2::{argon2, Argon2Params, Variant};
+    use ironcrypto::kdf::argon2::{argon2, Argon2Params, Variant};
 
     let password: &[u8] = b"correct horse";
     let salt: &[u8] = &[0x77u8; 16];
@@ -1005,7 +1005,7 @@ fn every_example_is_compiled_or_exempt() {
 
     let source = include_str!("examples_compile.rs");
     let mut uncompiled = Vec::new();
-    for e in iron_crypto::ontology::REGISTRY {
+    for e in ironcrypto::ontology::REGISTRY {
         if e.example.is_empty() {
             continue;
         }

@@ -16,7 +16,7 @@ name = "ic"
 path = "src/main.rs"
 
 [dependencies]
-iron-crypto = { workspace = true, features = ["std"] }
+ironcrypto = { workspace = true, features = ["std"] }
 ic-ontology = { workspace = true, features = ["std"] }
 ic-core = { workspace = true, features = ["std"] }
 ic-json = { workspace = true }

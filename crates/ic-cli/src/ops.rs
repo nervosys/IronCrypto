@@ -318,7 +318,7 @@ pub fn selftest_json(only: Option<&str>) -> Result<Json, String> {
 /// Describe this build: backend, capabilities, and validation status.
 pub fn capabilities_json() -> Json {
     Json::object([
-        ("version", Json::str(iron_crypto::VERSION)),
+        ("version", Json::str(ironcrypto::VERSION)),
         ("ontologyVersion", Json::str(ic_ontology::ONTOLOGY_VERSION)),
         ("backend", Json::str(ic_ontology::runtime::backend().id())),
         (

@@ -37,8 +37,8 @@
 //! matters in each module; measuring it reliably needs a quieter machine than a
 //! test suite runs on, and a flaky timing test is worse than none.
 
-use iron_crypto::core_types::traits::{Aead, KeyAgreement, SignatureScheme};
-use iron_crypto::{cipher, drbg, ec, mlkem, pkix, rsa};
+use ironcrypto::core_types::traits::{Aead, KeyAgreement, SignatureScheme};
+use ironcrypto::{cipher, drbg, ec, mlkem, pkix, rsa};
 
 /// SplitMix64, so every failure reproduces exactly.
 struct Rng(u64);

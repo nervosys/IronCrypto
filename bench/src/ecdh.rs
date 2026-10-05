@@ -19,17 +19,17 @@ pub fn run() {
     let secret = Zeroizing::new([0x5au8; 32]);
     let peer_secret = Zeroizing::new([0x6bu8; 32]);
     let mut peer = [0u8; 65];
-    iron_crypto::ec::EcdhP256::public_key(&*peer_secret, &mut peer).unwrap();
+    ironcrypto::ec::EcdhP256::public_key(&*peer_secret, &mut peer).unwrap();
     let other_secret = p256::SecretKey::from_bytes((&*secret).into()).unwrap();
     let other_peer = p256::PublicKey::from_sec1_bytes(&peer).unwrap();
     let mut shared = Zeroizing::new([0u8; 32]);
-    iron_crypto::ec::EcdhP256::agree(&*secret, &peer, &mut *shared).unwrap();
+    ironcrypto::ec::EcdhP256::agree(&*secret, &peer, &mut *shared).unwrap();
     let expected =
         p256::ecdh::diffie_hellman(other_secret.to_nonzero_scalar(), other_peer.as_affine());
     assert!(ic_core::ct::verify(&*shared, expected.raw_secret_bytes()));
 
     let mut iron = || {
-        iron_crypto::ec::EcdhP256::agree(black_box(&*secret), black_box(&peer), &mut *shared)
+        ironcrypto::ec::EcdhP256::agree(black_box(&*secret), black_box(&peer), &mut *shared)
             .unwrap();
         black_box(&*shared);
     };

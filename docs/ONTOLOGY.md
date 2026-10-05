@@ -146,7 +146,7 @@ examples contain newlines and quotes.
 An ontology that drifts from the code is worse than none: it lies with
 authority. Three test suites hold them together.
 
-**Sizes must match.** `iron-crypto` asserts that every declared parameter
+**Sizes must match.** `ironcrypto` asserts that every declared parameter
 equals the constant on the implementing type:
 
 ```rust

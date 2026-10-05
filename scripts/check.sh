@@ -88,7 +88,7 @@ built=0
 for target in thumbv7em-none-eabihf thumbv6m-none-eabi riscv32imac-unknown-none-elf wasm32-unknown-unknown; do
     if rustup target list --installed 2>/dev/null | grep -qx "$target"; then
         echo "-- $target"
-        cargo build -p iron-crypto --no-default-features --target "$target"
+        cargo build -p ironcrypto --no-default-features --target "$target"
         built=$((built + 1))
     else
         echo "-- $target (not installed)"

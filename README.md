@@ -114,13 +114,13 @@ to one that still does not.
 
 ```toml
 [dependencies]
-iron-crypto = "0.2.7"
+ironcrypto = "0.2.7"
 ```
 
 The current release is **0.2.7**, published for all eighteen crates on crates.io.
 It fixes compiler-generated branches in core secret-selection masks and extends
 the compiled-code checks; see [CHANGELOG.md](CHANGELOG.md).
-`iron-crypto` is the facade and
+`ironcrypto` is the facade and
 re-exports the rest; depend on the primitives directly if you want a smaller
 graph:
 
@@ -146,7 +146,7 @@ The [source repository](https://github.com/nervosys/IronCrypto) is public.
 ## Use
 
 ```rust
-use iron_crypto::prelude::*;
+use ironcrypto::prelude::*;
 
 fn main() -> Result<()> {
     // Ask what to use, rather than picking a name from memory.
@@ -185,7 +185,7 @@ reset across restarts. Never reuse a `(key, nonce)` pair.
 ```jsonc
 {
   "mcpServers": {
-    "iron-crypto": { "command": "ic", "args": ["mcp"] }
+    "ironcrypto": { "command": "ic", "args": ["mcp"] }
   }
 }
 ```
@@ -756,7 +756,7 @@ without your having to read this paragraph.
 
 ```console
 $ cargo test --workspace
-$ cargo build -p iron-crypto --no-default-features --target thumbv7em-none-eabihf
+$ cargo build -p ironcrypto --no-default-features --target thumbv7em-none-eabihf
 $ cargo clippy --workspace --all-targets
 $ bash scripts/check.sh
 ```

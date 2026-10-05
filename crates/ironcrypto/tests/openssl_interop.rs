@@ -20,7 +20,7 @@
 //! test time, and nothing under `crates/` depends on it.
 
 use ic_vectors::{hex, hex_field, VectorFile};
-use iron_crypto::{mldsa, mlkem};
+use ironcrypto::{mldsa, mlkem};
 
 /// Run one ML-DSA case against the module for its parameter set.
 macro_rules! dsa_case {

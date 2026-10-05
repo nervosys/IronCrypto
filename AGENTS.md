@@ -118,11 +118,11 @@ already done it -- see the note above `Core512` in `crates/ic-hash/src/sha2.rs`.
 
 ```console
 $ cargo test --workspace
-$ cargo build -p iron-crypto --no-default-features --target thumbv7em-none-eabihf
+$ cargo build -p ironcrypto --no-default-features --target thumbv7em-none-eabihf
 $ cargo clippy --workspace --all-targets
 ```
 
-The cross-layer tests in `iron-crypto` and `ic-fips` will fail if the
+The cross-layer tests in `ironcrypto` and `ic-fips` will fail if the
 ontology and the implementations disagree. That failure is the point — fix the
 disagreement, do not relax the test.
 

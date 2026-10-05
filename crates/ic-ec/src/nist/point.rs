@@ -420,7 +420,7 @@ impl<C: Curve> Point<C> {
     ///
     /// Every generator multiplication goes through here rather than calling
     /// `mul_scalar` on the generator, so the two cannot drift apart and no
-    /// caller takes the slow path by accident; `iron-crypto`'s
+    /// caller takes the slow path by accident; `ironcrypto`'s
     /// `fixed_base_multiplication_goes_through_its_funnel` holds that, after
     /// public-key derivation was found skipping it. Only the generator half of
     /// verification benefits; the other multiplication is against the public

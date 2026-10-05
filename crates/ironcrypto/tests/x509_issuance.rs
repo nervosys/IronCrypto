@@ -15,7 +15,7 @@
 //! `docs/FIPS.md` records that those were verified by OpenSSL instead.
 
 use ic_vectors::{hex, hex_field, VectorFile};
-use iron_crypto::{ec, mldsa, pkix};
+use ironcrypto::{ec, mldsa, pkix};
 use pkix::cert::{
     write_certificate, write_ml_dsa_public_key, write_tbs_certificate, BasicConstraints,
     CertificateParams, ExtendedKeyUsage, KeyUsage, SignatureAlgorithm, SubjectAltName,

@@ -7,8 +7,8 @@
 //! parser that returned a slice one byte off, would round-trip perfectly and
 //! fail here.
 
-use iron_crypto::prelude::*;
-use iron_crypto::{ec, pkix, rsa};
+use ironcrypto::prelude::*;
+use ironcrypto::{ec, pkix, rsa};
 
 fn rng(label: &[u8]) -> ic_drbg::Rng {
     ic_drbg::Rng::from_entropy(&[0x5au8; 32], label).expect("drbg")

@@ -248,7 +248,7 @@ macro_rules! gcm_siv {
             /// plaintext.
             ///
             /// All 50 published cases run in
-            /// `crates/iron-crypto/tests/vectors.rs`; this is the one the module
+            /// `crates/ironcrypto/tests/vectors.rs`; this is the one the module
             /// checks at startup, where FIPS 140-3 wants a known-answer test and
             /// not a test suite.
             fn self_test() -> Result<()> {

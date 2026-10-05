@@ -113,7 +113,7 @@ const COMPONENTS: &[Component] = &[
         description: "The algorithm registry, the standards knowledgebase and the frameworks.",
     },
     Component {
-        name: "iron-crypto",
+        name: "ironcrypto",
         description: "The facade crate that re-exports everything above.",
     },
     Component {
@@ -166,10 +166,10 @@ pub fn cyclonedx() -> Json {
                     "component",
                     Json::object([
                         ("type", Json::str("library")),
-                        ("bom-ref", Json::str(purl("iron-crypto"))),
-                        ("name", Json::str("iron-crypto")),
+                        ("bom-ref", Json::str(purl("ironcrypto"))),
+                        ("name", Json::str("ironcrypto")),
                         ("version", Json::str(VERSION)),
-                        ("purl", Json::str(purl("iron-crypto"))),
+                        ("purl", Json::str(purl("ironcrypto"))),
                         (
                             "description",
                             Json::str(
@@ -749,7 +749,7 @@ mod tests {
     /// The workspace declares its internal dependencies with
     /// `default-features = false`, so a crate's `std` feature is the only
     /// thing that turns `std` on beneath it. Leave one out and a caller who
-    /// depends on that crate directly -- not through `iron-crypto`, which
+    /// depends on that crate directly -- not through `ironcrypto`, which
     /// forwards everything -- silently loses whatever the dependency does only
     /// under `std`: runtime CPU detection, so SHA-NI, AVX2 and AES-NI. Nothing
     /// else notices. A workspace build unifies features across every crate, so

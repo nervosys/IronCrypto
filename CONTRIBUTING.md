@@ -97,7 +97,7 @@ verification and is not.
 2. A `SelfTest` implementation registered in `crates/ic-fips/src/selftest.rs`
    (bump `TEST_COUNT` and recompute the integrity tag).
 3. Parameter bounds in the ontology that match the type's constants — the
-   cross-layer tests in `iron-crypto` will fail otherwise.
+   cross-layer tests in `ironcrypto` will fail otherwise.
 
 If an algorithm is *not* implemented, it still gets an ontology entry with
 `status: Planned` and a `notes` field explaining what a caller should do

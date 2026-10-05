@@ -4,7 +4,7 @@
 //! whoever is on the other end: a certificate from an unknown peer, a
 //! `CertificateVerify` from a server not yet authenticated. Everything here has
 //! to return rather than panic on any byte string at all, which `ic_ec`'s
-//! verifiers do and the hostile-input suite in `iron-crypto` holds them to.
+//! verifiers do and the hostile-input suite in `ironcrypto` holds them to.
 //!
 //! The signature arrives as an X.509 `Ecdsa-Sig-Value` -- a DER SEQUENCE of two
 //! INTEGERs -- while `ic_ec` verifies fixed-width `r || s`, so `ic_pkix`
@@ -544,7 +544,7 @@ mod tests {
     /// Verification reads bytes an attacker chose, so it must return for all of
     /// them -- no panic, no index out of range.
     ///
-    /// This is a smaller version of what `iron-crypto`'s hostile-input suite
+    /// This is a smaller version of what `ironcrypto`'s hostile-input suite
     /// does to the verifiers underneath; it is here because the DER decode in
     /// front of them is part of this crate rather than part of theirs.
     #[test]

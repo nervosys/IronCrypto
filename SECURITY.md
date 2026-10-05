@@ -45,7 +45,7 @@ current answer and this file is not.
 Interoperability is a separate question: matching NIST's vectors shows the
 algorithms are right, not that a handshake with some other implementation
 completes. For all six parameter sets there is now evidence of that as well,
-checked here against OpenSSL 3.5.7. `iron-crypto/tests/openssl_interop.rs` runs
+checked here against OpenSSL 3.5.7. `ironcrypto/tests/openssl_interop.rs` runs
 on every build from fixtures OpenSSL produced
 (`testvectors/openssl-ml-kem.json`, `testvectors/openssl-ml-dsa.json`):
 
