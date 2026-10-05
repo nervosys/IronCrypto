@@ -1020,3 +1020,37 @@ fn every_example_is_compiled_or_exempt() {
          with a reason: {uncompiled:?}"
     );
 }
+
+/// HPKE: the sender's two calls, compiled, then opened by the recipient so
+/// the example is shown to do what it says.
+#[test]
+fn hpke_example_compiles_and_matches() -> Result<()> {
+    struct Counter(u8);
+    impl ironcrypto::core_types::traits::RandomSource for Counter {
+        fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+            for b in out.iter_mut() {
+                self.0 = self.0.wrapping_mul(29).wrapping_add(7);
+                *b = self.0;
+            }
+            Ok(())
+        }
+    }
+    let mut rng = Counter(3);
+    let recipient = ironcrypto::hpke::KeyPair::generate(&mut rng)?;
+    let recipient_pk = *recipient.public();
+    let mut msg = *b"message";
+    let mut tag = [0u8; ironcrypto::hpke::TAG_LEN];
+
+    let (enc, mut tx) =
+        ic_hpke::setup_sender(&recipient_pk, b"app/v1", ic_hpke::Aead::Aes128Gcm, &mut rng)?;
+    tx.seal_in_place(b"aad", &mut msg, &mut tag)?;
+    check_example(
+        "hpke-x25519-sha256",
+        "let (enc, mut tx) = ic_hpke::setup_sender(&recipient_pk, b\"app/v1\", ic_hpke::Aead::Aes128Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;",
+    );
+
+    let mut rx = ic_hpke::setup_receiver(&enc, &recipient, b"app/v1", ic_hpke::Aead::Aes128Gcm)?;
+    rx.open_in_place(b"aad", &mut msg, &tag)?;
+    assert_eq!(&msg, b"message");
+    Ok(())
+}

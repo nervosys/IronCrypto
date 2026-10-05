@@ -79,6 +79,7 @@ pub use ic_drbg as drbg;
 pub use ic_ec as ec;
 pub use ic_fips as fips;
 pub use ic_hash as hash;
+pub use ic_hpke as hpke;
 pub use ic_kdf as kdf;
 pub use ic_mac as mac;
 pub use ic_mldsa as mldsa;

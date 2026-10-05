@@ -569,6 +569,35 @@ const SP80038D_REQS: [Requirement; 1] = [Requirement {
     },
 }];
 
+const RFC9180_REQS: [Requirement; 2] = [
+    Requirement {
+        id: "rfc-9180-reject-zero-dh",
+        section: "7.1.4",
+        obligation: Obligation::Shall,
+        statement: "DHKEM over X25519 shall reject an all-zero Diffie-Hellman output.",
+        rationale: "A small-order public key forces a known shared secret, and with it a known \
+                    AEAD key.",
+        applies_to: &["hpke-x25519-sha256"],
+        compliance: Compliance::Met {
+            file: "crates/ic-hpke/src/lib.rs",
+            symbol: "an_all_zero_shared_secret_is_refused",
+        },
+    },
+    Requirement {
+        id: "rfc-9180-no-nonce-reuse",
+        section: "5.2",
+        obligation: Obligation::ShallNot,
+        statement: "A context shall not seal or open past the last sequence number its nonce \
+                    can represent.",
+        rationale: "Reaching it would reuse a nonce under the same AEAD key.",
+        applies_to: &["hpke-x25519-sha256"],
+        compliance: Compliance::Met {
+            file: "crates/ic-hpke/src/lib.rs",
+            symbol: "an_exhausted_context_refuses_rather_than_reusing_a_nonce",
+        },
+    },
+];
+
 const RFC8017_REQS: [Requirement; 1] = [Requirement {
     id: "rfc-8017-no-signature-parsing",
     section: "8.2.2",
@@ -1003,6 +1032,19 @@ pub static STANDARDS: &[Standard] = &[
         url: "https://www.rfc-editor.org/rfc/rfc7693",
         summary: "BLAKE2b and BLAKE2s, with keying built in rather than bolted on through HMAC.",
         requirements: &NO_REQS,
+    },
+    Standard {
+        id: "RFC 9180",
+        title: "Hybrid Public Key Encryption",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2022,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc9180",
+        summary: "HPKE: a KEM, a KDF and an AEAD composed into encryption to a public key, with \
+                  an exporter. The base mode is what Encrypted Client Hello and MLS use.",
+        requirements: &RFC9180_REQS,
     },
     Standard {
         id: "RFC 7748",

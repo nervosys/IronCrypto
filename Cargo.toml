@@ -19,6 +19,7 @@ members = [
     "crates/ironcrypto",
     "crates/ic-cli",
     "crates/ic-rustls",
+    "crates/ic-hpke",
 ]
 
 # Not a workspace member, and deliberately so. `bench/` compares this library
@@ -71,6 +72,7 @@ ic-rsa = { path = "crates/ic-rsa", version = "0.2.10", default-features = false 
 ic-pkix = { path = "crates/ic-pkix", version = "0.2.10", default-features = false }
 ic-mlkem = { path = "crates/ic-mlkem", version = "0.2.10", default-features = false }
 ic-mldsa = { path = "crates/ic-mldsa", version = "0.2.10", default-features = false }
+ic-hpke = { path = "crates/ic-hpke", version = "0.2.10", default-features = false }
 ic-json = { path = "crates/ic-json", version = "0.2.10" }
 ic-vectors = { path = "crates/ic-vectors", version = "0.2.10" }
 ic-fips = { path = "crates/ic-fips", version = "0.2.10", default-features = false }

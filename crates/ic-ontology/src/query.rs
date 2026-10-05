@@ -219,14 +219,23 @@ mod tests {
         // only entry in it and was `experimental`. It is vector-tested now, so
         // the filter keeps it -- and that is the point of the filter, not a
         // failure of it. ML-KEM-512 and ML-KEM-1024 joined it once their own
-        // ACVP vectors passed.
+        // ACVP vectors passed. HPKE is in the class too: its core is a KEM, and
+        // the class has no closer member for public-key encryption.
         let kems: Vec<&str> = Query::new()
             .class(Class::Kem)
             .available_only()
             .run()
             .map(|e| e.id)
             .collect();
-        assert_eq!(kems, ["ml-kem-768", "ml-kem-512", "ml-kem-1024"]);
+        assert_eq!(
+            kems,
+            [
+                "hpke-x25519-sha256",
+                "ml-kem-768",
+                "ml-kem-512",
+                "ml-kem-1024"
+            ]
+        );
 
         // Excluded algorithms are what the filter must still remove. They are
         // in the registry so that asking for one gets a reasoned refusal rather

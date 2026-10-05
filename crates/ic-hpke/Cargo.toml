@@ -1,0 +1,23 @@
+[package]
+name = "ic-hpke"
+description = "HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) for IronCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-cipher/std", "ic-ec/std"]
+
+[dependencies]
+ic-core = { workspace = true }
+ic-hash = { workspace = true }
+ic-mac = { workspace = true }
+ic-cipher = { workspace = true }
+ic-ec = { workspace = true }

@@ -7,6 +7,20 @@ all of them.
 
 ### Added
 
+- **HPKE, RFC 9180, in a new crate, `ic-hpke`.** Base mode with
+  DHKEM(X25519, HKDF-SHA256) and HKDF-SHA256, over AES-128-GCM, AES-256-GCM or
+  ChaCha20-Poly1305, with the exporter. Key pairs, sender and receiver setup
+  (the sender's with a fresh ephemeral key, or a given one for test vectors),
+  and contexts that seal and open in place, or into a `Vec` under `std`.
+  Contexts refuse rather than reuse a nonce, a failed open does not advance the
+  sequence, and an all-zero DH output is refused. No PSK, auth or auth-PSK
+  modes. IronSocketLayer (for Encrypted Client Hello) and IronPrivacyGuard (for
+  MLS) each needed it; both can now use this one. It has a self-test, an
+  ontology entry, `hpke-x25519-sha256`, not FIPS-approved because X25519 is
+  not, and RFC 9180 in the standards knowledgebase with two requirements tied
+  to tests. Checked against RFC 9180 A.1.1 and an independent implementation
+  written from the specification.
+
 - **ML-DSA private keys in PKCS#8.** `ic_pkix::MlDsaPrivateKey` reads and
   writes RFC 9881's three forms -- the seed, the expanded key, and both -- for
   ML-DSA-44, -65 and -87, as strictly as `PrivateKeyInfo`, and writes back

@@ -90,11 +90,16 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         name: "ic-mlkem",
-        description: "ML-KEM-512, -768 and -1024 (FIPS 203), each checked against 50 NIST ACVP cases.",
+        description:
+            "ML-KEM-512, -768 and -1024 (FIPS 203), each checked against 50 NIST ACVP cases.",
     },
     Component {
         name: "ic-mldsa",
         description: "ML-DSA-44, -65 and -87 (FIPS 204), each checked against 55 NIST ACVP cases.",
+    },
+    Component {
+        name: "ic-hpke",
+        description: "HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256).",
     },
     Component {
         name: "ic-json",
@@ -122,7 +127,9 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         name: "ic-rustls",
-        description: "IronCrypto as a rustls CryptoProvider. The one crate here                       that depends on anything outside the workspace: it implements                       rustls's traits, so it requires rustls.",
+        description: "IronCrypto as a rustls CryptoProvider. The one crate here \
+                      that depends on anything outside the workspace: it implements \
+                      rustls's traits, so it requires rustls.",
     },
 ];
 

@@ -38,7 +38,7 @@
 //! test suite runs on, and a flaky timing test is worse than none.
 
 use ironcrypto::core_types::traits::{Aead, KeyAgreement, SignatureScheme};
-use ironcrypto::{cipher, drbg, ec, mlkem, pkix, rsa};
+use ironcrypto::{cipher, drbg, ec, hpke, mlkem, pkix, rsa};
 
 /// SplitMix64, so every failure reproduces exactly.
 struct Rng(u64);
@@ -578,6 +578,7 @@ fn hammered_here() -> Vec<&'static str> {
         "ml-kem-768",
         "ml-kem-512",
         "ml-kem-1024",
+        "hpke-x25519-sha256",
     ]);
     ids
 }
@@ -759,3 +760,85 @@ decapsulation_survives!(
     MlKem1024,
     0x8124
 );
+
+/// HPKE, from both ends of the wire.
+///
+/// Total: a hostile encapsulated key or peer public key, in every length and
+/// shape, gives a context or an error and never a panic, for every AEAD.
+/// Deep: random 32-byte encapsulations are X25519 points, so most of them run
+/// the whole key schedule; the count proves the parser is not refusing
+/// everything on its face. Sound: no random ciphertext opens, no single-bit
+/// change to a genuine message, its tag or its associated data opens, and none
+/// of those failures moves the receiver's sequence number, so the genuine
+/// message still opens afterwards.
+#[test]
+fn hpke_is_total_and_sound() {
+    let mut rng = Rng::new(0x4b9e);
+    let mut drbg = drbg::Rng::from_entropy(&[0x5cu8; 32], b"hostile-input").unwrap();
+    let recipient = hpke::KeyPair::generate(&mut drbg).unwrap();
+    let aeads = [
+        hpke::Aead::Aes128Gcm,
+        hpke::Aead::Aes256Gcm,
+        hpke::Aead::ChaCha20Poly1305,
+    ];
+
+    let mut reached = 0;
+    for aead in aeads {
+        for enc in hostile_inputs(&mut rng, hpke::ENC_LEN, 24) {
+            if hpke::setup_receiver(&enc, &recipient, b"info", aead).is_ok() {
+                reached += 1;
+            }
+            let _ = hpke::setup_sender(&enc, b"info", aead, &mut drbg);
+        }
+    }
+    assert!(
+        reached >= 3 * 20,
+        "only {reached} hostile encapsulations reached the key schedule"
+    );
+
+    for aead in aeads {
+        let (enc, mut tx) =
+            hpke::setup_sender(recipient.public(), b"info", aead, &mut drbg).unwrap();
+        let mut rx = hpke::setup_receiver(&enc, &recipient, b"info", aead).unwrap();
+
+        for len in [0usize, 1, 15, 16, 17, 64] {
+            for _ in 0..8 {
+                let mut body = vec![0u8; len];
+                rng.fill(&mut body);
+                let mut tag = [0u8; hpke::TAG_LEN];
+                rng.fill(&mut tag);
+                assert!(
+                    rx.open_in_place(b"aad", &mut body, &tag).is_err(),
+                    "random {len}-byte ciphertext opened"
+                );
+            }
+        }
+
+        let plaintext = *b"a genuine message";
+        let mut body = plaintext;
+        let mut tag = [0u8; hpke::TAG_LEN];
+        tx.seal_in_place(b"aad", &mut body, &mut tag).unwrap();
+        for bit in 0..(body.len() + tag.len()) * 8 {
+            let (mut b, mut t) = (body, tag);
+            let byte = bit / 8;
+            if byte < b.len() {
+                b[byte] ^= 1 << (bit % 8);
+            } else {
+                t[byte - b.len()] ^= 1 << (bit % 8);
+            }
+            assert!(
+                rx.open_in_place(b"aad", &mut b, &t).is_err(),
+                "{aead:?}: bit {bit} flipped and opened"
+            );
+        }
+        let mut b = body;
+        assert!(
+            rx.open_in_place(b"aae", &mut b, &tag).is_err(),
+            "{aead:?}: other aad opened"
+        );
+        assert_eq!(rx.sequence(), 0, "{aead:?}: failures moved the sequence");
+        let mut b = body;
+        rx.open_in_place(b"aad", &mut b, &tag).unwrap();
+        assert_eq!(b, plaintext);
+    }
+}

@@ -143,6 +143,7 @@ behaviour can reproduce it from a shell.
 | `ic-json` | an RFC 8259 reader and writer, extracted from the CLI once the test harness needed it too |
 | `ic-vectors` | loads test vectors supplied from outside the repository; test-only |
 | `ic-mldsa` | ML-DSA-65: ring arithmetic and NTT, rounding and hints (FIPS 204 alg. 35-40), bit packing (alg. 16-21), samplers (alg. 29-34), and key generation, signing and verification. Checked against ACVP ML-DSA-keyGen-FIPS204 and ML-DSA-sigGen-FIPS204. `tests/robustness.rs` separately establishes that verification is total and sound against hostile input, which is a different question from correctness |
+| `ic-hpke` | HPKE (RFC 9180) base mode: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, and AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, built on `ic-ec`, `ic-mac` and `ic-cipher`. Checked against RFC 9180 A.1.1 and an independent implementation |
 | `ic-mlkem` | ML-KEM-768: the ring Z_q[X]/(X^256+1), NTT, packing, samplers, K-PKE and the FO transform. Checked against ACVP ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203 |
 | `ic-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ic-core` and performs no cryptography |
 | `ic-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |

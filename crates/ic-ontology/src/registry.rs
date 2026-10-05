@@ -245,6 +245,41 @@ const PBKDF2_P: [Param; 3] = [
     },
 ];
 
+const HPKE_P: [Param; 4] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "An X25519 private key; any 32 bytes, clamped.",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "The recipient's X25519 public key.",
+    },
+    Param {
+        name: "enc",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 32,
+        recommended: 32,
+        note: "The encapsulated key the sender transmits: its ephemeral public key.",
+    },
+    Param {
+        name: "tag",
+        unit: Unit::Bytes,
+        min: 16,
+        max: 16,
+        recommended: 16,
+        note: "Appended to each sealed message, for every AEAD offered.",
+    },
+];
+
 const X25519_P: [Param; 3] = [
     Param {
         name: "private-key",
@@ -1919,6 +1954,61 @@ pub static REGISTRY: &[Entry] = &[
         rust_path: "ic_ec::X25519",
         example: "use ic_core::traits::KeyAgreement;\nic_ec::X25519::agree(&my_sk, &peer_pk, &mut shared)?;",
         notes: "Shor breaks this outright; pair it with ML-KEM in a hybrid once that lands.",
+    },
+    Entry {
+        id: "hpke-x25519-sha256",
+        name: "HPKE, DHKEM(X25519, HKDF-SHA256)",
+        aliases: &["hpke", "rfc9180"],
+        summary: "Encryption to a public key: X25519, HKDF-SHA256 and an AEAD, in RFC 9180's \
+                  base mode. What Encrypted Client Hello and MLS use.",
+        class: Class::Kem,
+        family: "HPKE",
+        purposes: &[Purpose::Confidentiality, Purpose::KeyEstablishment],
+        strength: Strength::classical_only(128),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 9180"],
+        params: &HPKE_P,
+        constraints: &[
+            Constraint {
+                id: "hpke-base-mode-is-unauthenticated",
+                requirement: "Authenticate the sender by other means; base mode proves nothing \
+                              about who encrypted.",
+                consequence: "Anyone holding the recipient's public key can produce messages \
+                              the recipient will open.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "hpke-fresh-ephemeral",
+                requirement: "Use setup_sender, which draws a fresh ephemeral key, outside test \
+                              vectors; never reuse the key passed to setup_sender_with_ephemeral.",
+                consequence: "Two setups with one ephemeral key to one recipient and the same \
+                              info derive the same AEAD key and nonces.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "hpke-bind-info",
+                requirement: "Put the application and protocol context in info, and use the \
+                              same info on both sides.",
+                consequence: "A ciphertext made for one purpose opens under another that \
+                              shares the recipient key.",
+                severity: Severity::Advisory,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "x25519" },
+            Edge { relation: Relation::BuiltOn, target: "hkdf-sha2-256" },
+            Edge { relation: Relation::BuiltOn, target: "aes-128-gcm" },
+            Edge { relation: Relation::BuiltOn, target: "aes-256-gcm" },
+            Edge { relation: Relation::BuiltOn, target: "chacha20-poly1305" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ic_hpke::Hpke",
+        example: "let (enc, mut tx) = ic_hpke::setup_sender(&recipient_pk, b\"app/v1\", \
+                  ic_hpke::Aead::Aes128Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;",
+        notes: "Base mode only: no PSK, auth or auth-PSK modes, and one KEM. Not FIPS-approved, \
+                because X25519 is not. Contexts refuse rather than reuse a nonce once the \
+                64-bit sequence number would wrap.",
     },
     Entry {
         id: "ecdh-p384",
