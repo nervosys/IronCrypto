@@ -66,6 +66,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.12 | 2026-10-06 03:59:47 | all nineteen crates published from `0c945bd`, after the maintainer answered, when asked, that the notification covers this release; HPKE DeriveKeyPair |
 | 0.2.13 | 2026-10-06 15:29:21 | all nineteen crates published from `adf1f16` by the maintainer, after instructing this agent to proceed when told the release needed confirmation that the notification covers it; security audit fixes |
 | 0.2.14 | 2026-10-06 17:38:05 | all nineteen crates published from `1821d9c` by the maintainer, after instructing this agent to proceed when told the release needed their decision on whether the notification covers it; nonce-managing sealer, shipped rules, MCP tools and `ic lint` |
+| 0.2.15 | 2026-10-06 19:39:23 | all nineteen crates published from `a39dfeb` by the maintainer, after instructing this agent to push and publish when told the release adds an algorithm and that whether the notification covers it was their decision; HPKE with DHKEM(P-384, HKDF-SHA384) |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -285,6 +286,13 @@ primitives already in the library. The maintainer replied "Push and
 publish". Publication proceeds on that instruction; this records the
 instruction, not a statement that the notification covers 0.2.15, and no
 new notice was sent or supplied here.
+
+The maintainer pushed `master` and the `v0.2.15` tag, created the GitHub
+release, and ran `cargo publish --workspace` themselves. The crates.io API
+confirmed all nineteen 0.2.15 packages live and not yanked. The first upload
+was `ic-core` at 2026-10-06 19:39:23 UTC; the last was `ic-cli` at 19:40:06
+UTC. The published source commit is `a39dfeb`; all nineteen packages
+identified that clean commit in their VCS metadata.
 
 ## Determination
 
