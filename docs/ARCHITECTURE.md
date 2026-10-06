@@ -5,23 +5,30 @@
 ```
                       ic-core        (errors, traits, ct, zeroize, entropy, codec)
                          │
-        ┌────────┬───────┼───────┬──────────┐
-     ic-hash  ic-cipher  │    ic-ontology   │
-        │        │       │       (registry, query, select, export)
-        ├────────┤       │          │
-      ic-mac ────┤       │          │
-        │        │       │          │
-      ic-kdf  ic-drbg  ic-ec        │
-        └────────┴───────┴──────────┤
-                                 ic-fips     (policy, self-tests, service indicator)
-                                    │
-                            ironcrypto   (facade + prelude)
-                                    │
-                                 ic-cli      (ic: CLI + MCP server)
+   ┌──────────┬──────────┼──────────┬───────────┬───────────┐
+ic-hash   ic-cipher   ic-pkix    ic-ontology  ic-json    ic-vectors
+   │          │      (DER, PEM,  (registry,   (JSON)     (test-only)
+ ic-mac ──────┤       PKCS#8,     query,
+   │          │       X.509)      select)
+   ├──────┬───┴────┬────────┬─────────┬─────────┐
+ic-kdf ic-drbg   ic-ec    ic-rsa   ic-mlkem  ic-mldsa
+          (ic-ec, ic-mac, ic-cipher) ──> ic-hpke
+   └──────┴────────┴────────┴─────────┴─────────┴──────> ic-fips
+                                    (policy, self-tests, service indicator)
+                                            │
+                                     ironcrypto   (facade + prelude)
+                                            │
+                                         ic-cli      (ic: CLI + MCP server)
+
+                   ic-rustls   (a rustls CryptoProvider over the above)
 ```
 
-No crate depends on anything outside this graph. There are no build scripts and
-no C. `cargo tree` is the whole picture.
+The arrows are simplified: each crate depends on `ic-core` and on the crates
+it builds on, and `cargo tree -p <crate>` gives any one exactly.
+
+No crate depends on anything outside this graph except `ic-rustls`, which
+implements rustls's traits and so depends on rustls. There are no build scripts
+and no C. `cargo tree` is the whole picture.
 
 ## Design decisions, and what they cost
 
@@ -68,13 +75,16 @@ with recovery semantics attached, so a caller can distinguish "retry",
 - **Tag comparison** goes through `ic_core::ct::verify`, which folds differences
   into an accumulator and passes the result through `black_box`.
 
-The cost is throughput, and it is steep: around 1.4 MiB/s for AES-256.
+The cost was throughput, and it was steep: around 1.4 MiB/s for AES-256 with
+the byte-at-a-time S-box. Encryption now goes through a bitsliced form of the
+same algebra: roughly 1.5 MiB/s for raw AES-256 blocks and 1 MiB/s for
+AES-256-GCM on the portable path. The README carries the current figures.
 
 ### ...with an accelerated backend where the CPU offers one
 
 On x86-64 with AES-NI and `PCLMULQDQ`, a second backend is selected at runtime,
-which moves raw AES from roughly 1.4 MiB/s to the low GiB/s and AES-256-GCM to
-around 0.7 GiB/s. Both
+which moves raw AES to the GiB/s range and AES-256-GCM to a few GiB/s; the
+README carries the current figures. Both
 instructions have data-independent latency and touch no tables, so the
 constant-time property is preserved rather than traded away.
 
@@ -131,27 +141,28 @@ behaviour can reproduce it from a shell.
 | crate | contents |
 |---|---|
 | `ic-core` | `Error`/`ErrorKind`, the algorithm traits, `ct`, `Zeroizing`, OS entropy, CPU detection, hex/base64 |
-| `ic-hash` | SHA-2 (two shared cores, six variants), SHA-3/SHAKE (one sponge) |
+| `ic-hash` | SHA-2 (two shared cores, six variants), SHA-3/SHAKE (one sponge), SP 800-185 (cSHAKE, KMAC's core, TupleHash, ParallelHash), BLAKE2b |
 | `ic-mac` | HMAC generic over `Digest`, CMAC generic over `BlockCipher`, KMAC over cSHAKE |
-| `ic-cipher` | GF(2^8) arithmetic, AES (portable + AES-NI), SP 800-38A modes, GCM (portable + PCLMULQDQ GHASH), ChaCha20, Poly1305 |
+| `ic-cipher` | GF(2^8) arithmetic, AES (bitsliced portable + AES-NI), SP 800-38A modes, AES key wrap (KW, KWP), GCM (portable + PCLMULQDQ GHASH), GCM-SIV, ChaCha20, Poly1305, and Shamir secret sharing over the same GF(2^8) |
 | `ic-cipher::aes::aarch64` | The ARMv8 AES backend, behind the off-by-default `aarch64-crypto` feature. Written and cross-compiled on x86 and never executed by its author; CI's arm64 macOS runner is what exercises it. AES only - there is no PMULL GHASH, so the ontology keeps reporting portable on ARM |
 | `ic-cipher::aes::armv8_model` | A software model of AESE/AESMC/AESD/AESIMC from their FIPS 197 definitions, driven by the same macro the real backend expands. Runs everywhere, and is how the ARM round structure is checked on a host with no ARM hardware. It found a wrong decryption key schedule that review did not |
-| `ic-kdf` | HKDF, PBKDF2, SP 800-108 counter mode |
+| `ic-kdf` | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | `ic-drbg` | HMAC_DRBG, CTR_DRBG, and `Rng` (OS-seeded, auto-reseeding) |
 | `ic-ec` | GF(2^255-19) field, X25519, Ed25519; a limb-generic Montgomery field, one Jacobian group law, ECDSA and ECDH, instantiated for P-256, P-384 and P-521 |
 | `ic-rsa` | fixed-capacity bignums, Montgomery modular exponentiation, CRT private operations with output verification, PKCS#1 v1.5 and PSS signatures, Miller-Rabin key generation |
 | `ic-json` | an RFC 8259 reader and writer, extracted from the CLI once the test harness needed it too |
 | `ic-vectors` | loads test vectors supplied from outside the repository; test-only |
-| `ic-mldsa` | ML-DSA-65: ring arithmetic and NTT, rounding and hints (FIPS 204 alg. 35-40), bit packing (alg. 16-21), samplers (alg. 29-34), and key generation, signing and verification. Checked against ACVP ML-DSA-keyGen-FIPS204 and ML-DSA-sigGen-FIPS204. `tests/robustness.rs` separately establishes that verification is total and sound against hostile input, which is a different question from correctness |
+| `ic-mldsa` | ML-DSA-44, -65 and -87, one body instantiated per set: ring arithmetic and NTT, rounding and hints (FIPS 204 alg. 35-40), bit packing (alg. 16-21), samplers (alg. 29-34), and key generation, signing and verification. Each set is checked against its own ACVP ML-DSA-keyGen-FIPS204 and ML-DSA-sigGen-FIPS204 cases. Neither the matrix nor the decoded secret key is held whole, for stack use. `tests/robustness.rs` separately establishes that verification is total and sound against hostile input, which is a different question from correctness |
 | `ic-hpke` | HPKE (RFC 9180) base mode: DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, and AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, built on `ic-ec`, `ic-mac` and `ic-cipher`. Checked against RFC 9180 A.1.1 and an independent implementation |
-| `ic-mlkem` | ML-KEM-768: the ring Z_q[X]/(X^256+1), NTT, packing, samplers, K-PKE and the FO transform. Checked against ACVP ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203 |
-| `ic-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8, SEC1, Ecdsa-Sig-Value; depends only on `ic-core` and performs no cryptography |
+| `ic-mlkem` | ML-KEM-512, -768 and -1024, one body instantiated per set: the ring Z_q[X]/(X^256+1), NTT, packing, samplers, K-PKE and the FO transform, with the matrix sampled per entry rather than held. Each set is checked against its own ACVP ML-KEM-keyGen-FIPS203 and ML-KEM-encapDecap-FIPS203 cases |
+| `ic-pkix` | strict DER reader and writer, PEM, SubjectPublicKeyInfo, PKCS#8 (including ML-DSA's three RFC 9881 forms), SEC1, Ecdsa-Sig-Value, and X.509 issuance for one profile; depends only on `ic-core` and performs no cryptography |
 | `ic-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
 | `ic-ontology::standards` | The standards knowledgebase: the documents the registry cites, and the obligations they impose. Coupled to the code by tests - a met requirement names a file and a symbol, and both must exist |
 | `ironcrypto/tests/hostile_input.rs` | Every public entry point that parses attacker-chosen bytes, held to three properties: total (never panics), sound (never accepts a forgery) and deep (enough input reaches the cryptography for the first two to mean something) |
 | `ic-fips` | state machine, approved-mode policy, CAST table, service indicator |
 | `ironcrypto` | facade, prelude, and the ontology/implementation agreement tests |
-| `ic-cli` | JSON reader/writer, shared ops, CLI, MCP server |
+| `ic-cli` | shared ops, CLI, MCP server, SBOM, timing harness |
+| `ic-rustls` | IronCrypto as a rustls `CryptoProvider`: TLS 1.2 and 1.3, QUIC packet and header protection, signing and verification. The one crate that depends on something outside the workspace |
 
 ## Testing strategy
 

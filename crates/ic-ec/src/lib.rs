@@ -69,6 +69,9 @@ pub use x25519::X25519;
 /// Digest widths ECDSA's `verify_prehash` accepts.
 pub use nist::ecdsa::PREHASH_LENS;
 
+/// The narrowest digest ECDSA's `verify_prehash` accepts on a curve.
+pub use nist::ecdsa::min_prehash_len;
+
 /// Build every precomputed table now, rather than on first use.
 ///
 /// Under `std`, the generator tables for P-256, P-384 and P-521 and the

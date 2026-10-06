@@ -26,4 +26,4 @@ ic-pkix = { workspace = true, features = ["std"] }
 # `tls12` for the TLS 1.2 suites; without it rustls has no `Tls12CipherSuite`
 # and no `Iv::new`. Nothing else is enabled: no default provider, no logging,
 # so this pulls in rustls and its three required crates and nothing further.
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["std", "tls12"] }

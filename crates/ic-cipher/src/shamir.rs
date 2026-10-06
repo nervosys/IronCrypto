@@ -71,8 +71,12 @@ pub fn split<R: RandomSource + ?Sized>(
         "shamir share count is below the threshold"
     );
     let len = secret.len();
+    let total = len.checked_mul(share_count as usize).ok_or(ic_core::err!(
+        InvalidLength,
+        "shamir secret too long for this many shares"
+    ))?;
     ensure!(
-        out.len() == len * share_count as usize,
+        out.len() == total,
         InvalidLength,
         "shamir output must be share_count * secret.len() bytes"
     );
@@ -185,7 +189,11 @@ pub fn split_vec<R: RandomSource + ?Sized>(
     rng: &mut R,
 ) -> Result<std::vec::Vec<Share>> {
     let len = secret.len();
-    let mut all = ic_core::Zeroizing::new(std::vec![0u8; len * share_count as usize]);
+    let total = len.checked_mul(share_count as usize).ok_or(ic_core::err!(
+        InvalidLength,
+        "shamir secret too long for this many shares"
+    ))?;
+    let mut all = ic_core::Zeroizing::new(std::vec![0u8; total]);
     split(secret, threshold, share_count, rng, all.get_mut())?;
     Ok(all
         .get()

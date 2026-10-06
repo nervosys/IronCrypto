@@ -35,7 +35,10 @@ use crate::oid::{self, KeyAlgorithm};
 use ic_core::{ensure, Result};
 
 /// A parsed private key, borrowing from the DER it was read out of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Debug` prints the algorithm and the public parts only, and equality
+/// compares the secret parts in constant time.
+#[derive(Clone, Copy)]
 pub enum PrivateKeyInfo<'a> {
     /// An RSA private key, with every field PKCS#1 defines for the two-prime
     /// case.
@@ -79,6 +82,97 @@ pub enum PrivateKeyInfo<'a> {
         oid: &'a [u8],
     },
 }
+
+impl core::fmt::Debug for PrivateKeyInfo<'_> {
+    /// No private exponent, prime, CRT value, scalar or seed: a key logged by
+    /// mistake should not be a key disclosed.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Rsa {
+                modulus,
+                public_exponent,
+                ..
+            } => f
+                .debug_struct("Rsa")
+                .field("modulus_len", &modulus.len())
+                .field("public_exponent", public_exponent)
+                .finish_non_exhaustive(),
+            Self::Ec {
+                algorithm,
+                public_key,
+                ..
+            } => f
+                .debug_struct("Ec")
+                .field("algorithm", algorithm)
+                .field("public_key", public_key)
+                .finish_non_exhaustive(),
+            Self::Ed25519(_) => f.write_str("Ed25519(..)"),
+            Self::X25519(_) => f.write_str("X25519(..)"),
+            Self::Unsupported { oid } => f.debug_struct("Unsupported").field("oid", oid).finish(),
+        }
+    }
+}
+
+impl PartialEq for PrivateKeyInfo<'_> {
+    /// Field by field, with every secret field compared in constant time;
+    /// public fields and the variant are compared normally.
+    fn eq(&self, other: &Self) -> bool {
+        use ic_core::ct::verify as same;
+        match (self, other) {
+            (
+                Self::Rsa {
+                    modulus: n1,
+                    public_exponent: e1,
+                    private_exponent: d1,
+                    prime1: p1,
+                    prime2: q1,
+                    exponent1: dp1,
+                    exponent2: dq1,
+                    coefficient: qi1,
+                },
+                Self::Rsa {
+                    modulus: n2,
+                    public_exponent: e2,
+                    private_exponent: d2,
+                    prime1: p2,
+                    prime2: q2,
+                    exponent1: dp2,
+                    exponent2: dq2,
+                    coefficient: qi2,
+                },
+            ) => {
+                // Every comparison runs, so the time does not say which
+                // secret field differed.
+                let secrets = [
+                    same(d1, d2),
+                    same(p1, p2),
+                    same(q1, q2),
+                    same(dp1, dp2),
+                    same(dq1, dq2),
+                    same(qi1, qi2),
+                ];
+                n1 == n2 && e1 == e2 && secrets.iter().all(|s| *s)
+            }
+            (
+                Self::Ec {
+                    algorithm: a1,
+                    private_key: k1,
+                    public_key: q1,
+                },
+                Self::Ec {
+                    algorithm: a2,
+                    private_key: k2,
+                    public_key: q2,
+                },
+            ) => a1 == a2 && q1 == q2 && same(k1, k2),
+            (Self::Ed25519(a), Self::Ed25519(b)) | (Self::X25519(a), Self::X25519(b)) => same(a, b),
+            (Self::Unsupported { oid: a }, Self::Unsupported { oid: b }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PrivateKeyInfo<'_> {}
 
 impl<'a> PrivateKeyInfo<'a> {
     /// Which algorithm this key is for.
@@ -159,6 +253,16 @@ impl<'a> PrivateKeyInfo<'a> {
     ///
     /// RSA is refused; see the module docs.
     pub fn to_der(&self, out: &mut [u8]) -> Result<usize> {
+        // A write that fails part way, for a buffer too small, has already put
+        // some of the key into `out`; none of it is left there.
+        let written = self.write_der(out);
+        if written.is_err() {
+            ic_core::Zeroize::zeroize(out);
+        }
+        written
+    }
+
+    fn write_der(&self, out: &mut [u8]) -> Result<usize> {
         let mut w = Writer::new(out);
         let start = w.len();
 

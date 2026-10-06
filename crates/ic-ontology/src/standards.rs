@@ -440,9 +440,10 @@ const FIPS140_REQS: [Requirement; 6] = [
         rationale: "A module that never checks itself cannot know it is computing the function \
                     it claims, and a corrupted build looks exactly like a correct one.",
         applies_to: &[],
-        compliance: Compliance::Met {
+        compliance: Compliance::Partial {
             file: "crates/ic-fips/src/selftest.rs",
             symbol: "tested_algorithms",
+            gap: "The self-tests and the error state are real, and they gate every service requested through ic_fips::check or guarded. They do not gate a primitive called directly: the primitive crates cannot depend on the policy crate, and the facade re-exports them, so a caller who skips the policy layer reaches the algorithms whatever the module's state. A validated module needs the boundary enforced, by routing every service through one gate.",
         },
     },
     Requirement {
@@ -454,9 +455,10 @@ const FIPS140_REQS: [Requirement; 6] = [
         rationale: "Continuing after a failed self-test produces output nobody can vouch for \
                     while reporting success.",
         applies_to: &[],
-        compliance: Compliance::Met {
+        compliance: Compliance::Partial {
             file: "crates/ic-fips/src/lib.rs",
             symbol: "enter_error_state",
+            gap: "The self-tests and the error state are real, and they gate every service requested through ic_fips::check or guarded. They do not gate a primitive called directly: the primitive crates cannot depend on the policy crate, and the facade re-exports them, so a caller who skips the policy layer reaches the algorithms whatever the module's state. A validated module needs the boundary enforced, by routing every service through one gate.",
         },
     },
     Requirement {

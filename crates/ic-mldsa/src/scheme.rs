@@ -243,6 +243,11 @@ macro_rules! ml_dsa {
             for (s, v) in v_hat.iter().enumerate() {
                 acc.pointwise_acc(&a_entry(rho, r, s), v);
             }
+            // Reduced first, as FIPS 204's reference code does. The inverse
+            // transform's first lane sums all 256 inputs unreduced; `l` products
+            // each just under q can reach 256 * l * q, past i32, which with
+            // overflow checks on is a panic. Reducing changes no value mod q.
+            acc.reduce();
             acc.inv_ntt();
             acc
         }
@@ -722,6 +727,11 @@ macro_rules! ml_dsa {
 
                 // w1 = HighBits(w), encoded as it is computed.
                 for (acc, chunk) in w.iter_mut().zip(w1_packed.chunks_mut(W1_LEN)) {
+                    // Reduced first, as FIPS 204's reference code does. The inverse
+                    // transform's first lane sums all 256 inputs unreduced; `l` products
+                    // each just under q can reach 256 * l * q, past i32, which with
+                    // overflow checks on is a panic. Reducing changes no value mod q.
+                    acc.reduce();
                     acc.inv_ntt();
                     acc.normalize();
                     let (w1, _) = decompose_poly(acc, GAMMA2);

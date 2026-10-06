@@ -3,6 +3,68 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+From a security audit on 2026-10-06 against CVE and RustSec, MITRE ATT&CK,
+NIST FIPS 140-3 and CMMC 2.0. What it left open is recorded where it lives:
+the knowledgebase's Partial and Unmet entries, and `docs/FIPS.md`.
+
+### Security
+
+- **PBKDF2 and SP 800-108 now have known-answer self-tests.** Both are
+  approved KDFs available in the registry, and both were on the CAST
+  exemption list with the reason "covered by the SHA-256 instantiation" --
+  while being the SHA-256 instantiations, with no test behind them. 72 CASTs,
+  where there were 70.
+- **ECDSA `verify_prehash` refuses a digest narrower than the curve's
+  strength**: 32 bytes on P-256, 48 on P-384, 64 on P-521. It accepted any of
+  28, 32, 48 or 64 on every curve, so SHA-224 could stand under P-521; the
+  ontology constraint said the hash had to be at least as strong as the curve
+  and nothing enforced it. Calls that pass a strong-enough digest are
+  unchanged; weaker ones now fail with `InvalidLength`. `ic_ec::min_prehash_len`
+  gives each curve's floor.
+- **Private-key types no longer print key material through `Debug`.**
+  `ic_pkix::PrivateKeyInfo` and `MlDsaPrivateKey` derived `Debug`, which
+  printed RSA primes, EC scalars and ML-DSA seeds, and `PartialEq`, which
+  compared them with a short-circuiting `==`. `Debug` now shows the algorithm
+  and public parts; equality compares secret parts in constant time. A test
+  fails if any key-holding type derives either again.
+- **DER writing leaves no stray key bytes.** `Writer::finish` wipes the part
+  of the buffer past the encoding, which held a second copy of it, and the
+  private-key `to_der`s wipe their output when a write fails part way.
+- **ML-DSA reduces before each inverse NTT of an accumulated sum**, as FIPS
+  204's reference code does. The inverse transform's first lane adds all 256
+  inputs unreduced, and a worst-case sum of products overflows `i32`, which
+  with overflow checks on is a panic. No input reaching it was found;
+  outputs are unchanged.
+- **HPKE wipes its base nonce** with the rest of a context's secrets.
+- **Shamir refuses, rather than panics on, a secret too long for its share
+  count** on 32-bit targets, where the output length could overflow.
+- **`ic_hpke::doc_rng` is gone.** It was public, though hidden from the
+  documentation, and produced a fixed, predictable stream; the example uses
+  `ic_drbg::Rng::from_os()`.
+- **`ic-rustls` requires rustls 0.23.45**, the version that fixed
+  RUSTSEC-2026-0285, so a downstream build cannot resolve an older one.
+
+### Changed
+
+- **The FIPS posture says what the gate covers.** The self-tests, the error
+  state and approved mode gate services requested through `ic_fips::check` or
+  `guarded`; a primitive called directly does not consult them, because the
+  primitive crates cannot depend on the policy crate. `docs/FIPS.md` said no
+  service was available before `initialize()`, and the knowledgebase marked
+  the self-test and error-state requirements met; both now say partial, with
+  the gap, and enforcing the boundary is listed among what validation would
+  still require.
+- **CMMC practices that protect CUI are partial, not met**, since for CUI each
+  also requires FIPS-validated cryptography (SC.L2-3.13.11), which this module
+  does not have. The CWE and ATT&CK mappings cover the code added since 0.2.7
+  -- HPKE, Shamir, `verify_prehash`, ML-DSA PKCS#8 -- and CWE-323 is partial
+  rather than not applicable, since HPKE contexts enforce their own nonces.
+- **CI runs with a read-only token and pins its actions to commit SHAs**; the
+  self-hosted checkout keeps no token on disk. The advisory floors table cites
+  every advisory below each floor, and warns once its review is a month old.
+
 ## 0.2.12
 
 ### Added

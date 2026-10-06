@@ -454,7 +454,8 @@ every other crate individually rather than looking at the workspace as a whole
 
 Those seven are also held to a floor. `scripts/advisories.sh` pins each to the
 version that fixed what is known against it — rustls to 0.23.45 for
-RUSTSEC-2026-0285, rustls-webpki to 0.103.15 for RUSTSEC-2026-0104 — and fails
+RUSTSEC-2026-0285, rustls-webpki to 0.103.15, the version in use, above the
+0.103.13 that fixed RUSTSEC-2026-0104 — and fails
 the build below it, so a downgrade into a known vulnerability cannot pass
 quietly. It runs on every commit and needs no network, because it compares
 compiled versions against a table rather than fetching a database. The table
@@ -467,7 +468,7 @@ service is slow teaches people to bypass gates.
 SCA tools read `Cargo.lock`, which lists what the resolver considered rather
 than what the compiler builds — eighteen packages here are never compiled,
 `ring` among them, an optional dependency of rustls that no feature in this
-workspace enables. `cargo tree -i ring` returns nothing. So a report of 43
+workspace enables. `cargo tree -i ring` returns nothing. So a report of 44
 dependencies is not wrong about the lock file and is not describing what ships;
 `SECURITY.md` says how to tell the two apart before acting on a finding.
 
@@ -541,7 +542,7 @@ converting ACVP output.
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 70 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 72 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `ic capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.

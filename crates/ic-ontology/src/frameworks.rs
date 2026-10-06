@@ -137,7 +137,7 @@ pub fn cve_posture() -> &'static str {
      `scripts/advisories.sh` to the versions that fixed what is known against \
      them, which the build checks on every commit. A scanner will count more \
      than seven: `Cargo.lock` names eighteen packages the compiler never \
-     builds, `ring` among them, so a report of 43 dependencies is describing \
+     builds, `ring` among them, so a report of 44 dependencies is describing \
      the resolver's candidates rather than what ships. SECURITY.md carries the \
      disclosure process and explains that discrepancy."
 }
@@ -167,10 +167,10 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Use of Weak Hash",
         description: "A hash function is used whose collision or preimage resistance is inadequate for the purpose.",
-        bearing: "MD5 and SHA-1 are implemented only so that a request for them is refused with a reason. Neither is reachable through the approved-mode policy or through recommend.",
+        bearing: "Neither MD5 nor SHA-1 is implemented. Both are registered as excluded so that a request for either is refused with a reason rather than met with silence, and an approved-mode check refuses them as unsupported. They are reachable through neither the policy nor recommend.",
         compliance: Compliance::Met {
             file: "crates/ic-fips/src/lib.rs",
-            symbol: "NotApprovedInFipsMode",
+            symbol: "unknown algorithm",
         },
         algorithms: &["sha-1", "md5"],
         standards: &["FIPS 180-4"],
@@ -180,12 +180,12 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Use of Insufficiently Random Values",
         description: "Security depends on values an attacker can predict.",
-        bearing: "Instantiation draws at least the declared security strength in entropy and fails rather than proceeding with less, which is the failure mode that cannot be repaired by any later operation.",
+        bearing: "Instantiation draws at least the declared security strength in entropy and fails rather than proceeding with less, which is the failure mode no later operation can repair. Key generation, HPKE ephemerals and Shamir coefficients take the caller's RandomSource; the library supplies OS-seeded and approved generators for it, and a predictable source handed in is the caller's choice, which Shamir's and HPKE's registry constraints mark critical.",
         compliance: Compliance::Met {
             file: "crates/ic-drbg/src/rng.rs",
             symbol: "from_entropy",
         },
-        algorithms: &["ctr-drbg-aes-256"],
+        algorithms: &["ctr-drbg-aes-256", "hpke-x25519-sha256", "shamir-gf256"],
         standards: &["SP 800-90A"],
     },
     Control {
@@ -193,7 +193,7 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Use of Cryptographically Weak Pseudo-Random Number Generator",
         description: "A PRNG not intended for security is used where unpredictability matters.",
-        bearing: "The library offers only approved DRBGs and takes entropy from the caller or the platform. Nothing here wraps a general-purpose PRNG, and the only non-cryptographic generators in the tree are in test code, where they exist so failures reproduce.",
+        bearing: "The library offers only approved DRBGs and takes entropy from the caller or the platform. Nothing here wraps a general-purpose PRNG. The only non-cryptographic generators in the tree are in tests, where they exist so failures reproduce, and in self-tests, which need fixed inputs; none is reachable through the public API.",
         compliance: Compliance::Met {
             file: "crates/ic-drbg/src/ctr.rs",
             symbol: "reseed_counter",
@@ -206,12 +206,12 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Improper Verification of Cryptographic Signature",
         description: "A signature is accepted that should have been rejected, or the verification result is not acted on.",
-        bearing: "Two distinct failures, and the second is the one libraries usually miss. Verification is checked against hostile input for totality and soundness, and every function returning a verification result is marked must_use, so discarding the answer does not compile.",
+        bearing: "Two distinct failures, and the second is the one libraries usually miss. Verification is checked against hostile input for totality and soundness, and every function returning a verification result is marked must_use, so discarding the answer does not compile. ECDSA verification over a caller-supplied digest refuses a digest narrower than the curve's strength, so a weaker hash cannot be substituted under it.",
         compliance: Compliance::Met {
             file: "crates/ironcrypto/tests/api_hygiene.rs",
             symbol: "public_predicates_cannot_be_ignored",
         },
-        algorithms: &["ecdsa-p256-sha256", "ed25519", "rsa-pss-sha256", "ml-dsa-65"],
+        algorithms: &["ecdsa-p256-sha256", "ecdsa-p384-sha384", "ecdsa-p521-sha512", "ed25519", "rsa-pss-sha256", "ml-dsa-44", "ml-dsa-65", "ml-dsa-87"],
         standards: &["FIPS 186-5", "FIPS 204"],
     },
     Control {
@@ -219,12 +219,12 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Improper Validation of Integrity Check Value",
         description: "Corrupted or forged data is accepted because its integrity check was not properly validated.",
-        bearing: "A failed AEAD open releases nothing. A caller who ignores the error and reads the buffer anyway is making a mistake, and handing them decrypted-but-unauthenticated bytes is what would make that mistake dangerous.",
+        bearing: "A failed AEAD open releases nothing. A caller who ignores the error and reads the buffer anyway is making a mistake, and handing them decrypted-but-unauthenticated bytes is what would make that mistake dangerous. Shamir shares carry no integrity value at all, so the registry marks splitting a key, and protecting the data under an AEAD keyed by it, as a serious constraint: the AEAD is what detects a bad recovery.",
         compliance: Compliance::Met {
             file: "crates/ironcrypto/tests/hostile_input.rs",
             symbol: "aead_opening_is_total_and_sound",
         },
-        algorithms: &["aes-256-gcm", "chacha20-poly1305"],
+        algorithms: &["aes-256-gcm", "chacha20-poly1305", "hpke-x25519-sha256", "shamir-gf256"],
         standards: &["SP 800-38D", "RFC 8439"],
     },
     Control {
@@ -246,11 +246,13 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cwe,
         title: "Reusing a Nonce, Key Pair in Encryption",
         description: "A nonce is reused under the same key, destroying the mode's security guarantees.",
-        bearing: "The library cannot enforce this without owning the counter, and pretending otherwise would be worse than saying so. Every AEAD entry carries a Critical constraint stating exactly what reuse costs under that mode, and AES-GCM-SIV is offered for callers who cannot guarantee uniqueness.",
-        compliance: Compliance::NotApplicable {
-            why: "Nonce management belongs to the protocol, not the primitive. What a library can do is make the consequence discoverable before the mistake rather than after, which is what the registry constraint does, and offer a mode that survives it.",
+        bearing: "For a bare AEAD the library cannot enforce uniqueness without owning the counter, and every AEAD entry carries a Critical constraint stating what reuse costs, with AES-GCM-SIV offered for callers who cannot guarantee it. Where the library does own the counter it enforces it: an HPKE context derives each nonce from its own sequence number, refuses once that would wrap, does not advance on a failed open, and cannot be cloned. HPKE's key-pair half rests on a fresh ephemeral per setup, which setup_sender draws and the registry marks critical for the vector-replay form that takes one.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-hpke/src/lib.rs",
+            symbol: "an_exhausted_context_refuses_rather_than_reusing_a_nonce",
+            gap: "Enforced where the library owns the counter, in HPKE contexts. A caller of a bare AEAD chooses its own nonces, and nonce management there belongs to the protocol; what the library does is make the consequence discoverable before the mistake, through the registry constraint, and offer a mode that survives it.",
         },
-        algorithms: &["aes-256-gcm", "aes-256-gcm-siv"],
+        algorithms: &["aes-256-gcm", "aes-256-gcm-siv", "hpke-x25519-sha256"],
         standards: &["SP 800-38D", "RFC 8452"],
     },
     Control {
@@ -298,7 +300,7 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Attack,
         title: "Weaken Encryption",
         description: "An adversary compromises a system's cryptography to make protected traffic readable.",
-        bearing: "The library-level defence is that weakening is not reachable through the API: key-size floors are enforced at construction rather than documented, and approved mode refuses unapproved algorithms outright rather than warning.",
+        bearing: "The library-level defence is that weakening is not reachable through the API: key-size floors are enforced at construction rather than documented, and approved mode refuses unapproved algorithms outright rather than warning -- for callers that route through ic_fips::check or guarded. The primitive crates cannot depend on the policy crate, so a primitive called directly does not consult it.",
         compliance: Compliance::Met {
             file: "crates/ic-rsa/src/key.rs",
             symbol: "MIN_MODULUS_BITS",
@@ -311,12 +313,12 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Attack,
         title: "Weaken Encryption: Reduce Key Space",
         description: "An adversary reduces the key space a system uses, so that keys become brute-forceable.",
-        bearing: "Key sizes are not caller-selectable below the floor. RSA refuses a modulus under 2048 bits at construction, so a short key cannot be loaded and then used, and the registry states each algorithm's strength so a downgrade is visible rather than inferred.",
+        bearing: "Key sizes are not caller-selectable below the floor. RSA refuses a modulus under 2048 bits at construction, so a short key cannot be loaded and then used, and ECDSA verification over a caller-supplied digest refuses one narrower than the curve's strength. The registry states each algorithm's strength so a downgrade is visible rather than inferred.",
         compliance: Compliance::Met {
             file: "crates/ic-rsa/src/key.rs",
             symbol: "rsa modulus must be 2048",
         },
-        algorithms: &["rsa-pkcs1-sha256", "rsa-pss-sha256"],
+        algorithms: &["rsa-pkcs1-sha256", "rsa-pss-sha256", "ecdsa-p256-sha256", "ecdsa-p384-sha384", "ecdsa-p521-sha512"],
         standards: &["SP 800-131A"],
     },
     Control {
@@ -324,12 +326,12 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Attack,
         title: "Unsecured Credentials",
         description: "An adversary recovers credentials or key material left accessible.",
-        bearing: "Key material is zeroized when it goes out of scope, so it does not outlive the operation that needed it in a core dump, a swapped page, or a reused allocation. What the library cannot control is where a caller copies it afterwards.",
+        bearing: "Key material is zeroized when it goes out of scope, so it does not outlive the operation that needed it in a core dump, a swapped page, or a reused allocation, and the types holding it print no key bytes through Debug, so a key logged by mistake is not a key disclosed. Shamir shares, which back up keys, wipe on drop. What the library cannot control is where a caller copies key material afterwards.",
         compliance: Compliance::Met {
             file: "crates/ic-core/src/zeroize.rs",
             symbol: "Zeroize",
         },
-        algorithms: &[],
+        algorithms: &["shamir-gf256"],
         standards: &["FIPS 140-3"],
     },
     Control {
@@ -337,12 +339,12 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Attack,
         title: "Adversary-in-the-Middle",
         description: "An adversary positions between two parties to read or alter what passes between them.",
-        bearing: "Peer key validation is the library's part: a public key that is not on the curve, or a low-order X25519 point, is refused rather than used. Everything above that -- identity, trust decisions, certificate path validation -- is out of scope and deliberately not implemented rather than partially implemented.",
+        bearing: "Peer key validation is the library's part: a public key that is not on the curve, or a low-order X25519 point, is refused rather than used, and HPKE refuses an all-zero shared secret in its own layer as well. Everything above that -- identity, trust decisions, certificate path validation -- is out of scope and deliberately not implemented rather than partially implemented.",
         compliance: Compliance::Met {
             file: "crates/ic-ec/src/nist/point.rs",
             symbol: "is_on_curve",
         },
-        algorithms: &["ecdh-p256", "x25519"],
+        algorithms: &["ecdh-p256", "x25519", "hpke-x25519-sha256"],
         standards: &["SP 800-56A", "RFC 7748"],
     },
     Control {
@@ -404,9 +406,10 @@ pub static CONTROLS: &[Control] = &[
         title: "Implement cryptographic mechanisms to prevent unauthorized disclosure of CUI during transmission",
         description: "Transmitted CUI must be protected by cryptographic mechanisms unless otherwise protected by physical safeguards.",
         bearing: "The library supplies the mechanisms; a system satisfies the practice. Note that satisfying this practice for CUI also requires SC.L2-3.13.11, which IronCrypto does not satisfy.",
-        compliance: Compliance::Met {
+        compliance: Compliance::Partial {
             file: "crates/ic-cipher/src/gcm.rs",
             symbol: "Aes256Gcm",
+            gap: "For CUI this practice also requires FIPS-validated cryptography, SC.L2-3.13.11, which IronCrypto does not have. The mechanism is implemented; a deployment protecting CUI cannot rest the practice on it until a validated module does.",
         },
         algorithms: &["aes-256-gcm", "chacha20-poly1305"],
         standards: &["SP 800-38D", "RFC 8439"],
@@ -417,9 +420,10 @@ pub static CONTROLS: &[Control] = &[
         title: "Protect the confidentiality of CUI at rest",
         description: "CUI held at rest must be protected, commonly by encryption.",
         bearing: "The library supplies authenticated encryption and key wrapping. Key management, storage and rotation are the system's, and are the part that usually fails.",
-        compliance: Compliance::Met {
+        compliance: Compliance::Partial {
             file: "crates/ic-cipher/src/keywrap.rs",
             symbol: "Aes256Kw",
+            gap: "For CUI this practice also requires FIPS-validated cryptography, SC.L2-3.13.11, which IronCrypto does not have. The mechanism is implemented; a deployment protecting CUI cannot rest the practice on it until a validated module does.",
         },
         algorithms: &["aes-256-gcm", "aes-256-kw"],
         standards: &["SP 800-38F"],
@@ -430,9 +434,10 @@ pub static CONTROLS: &[Control] = &[
         title: "Store and transmit only cryptographically-protected passwords",
         description: "Passwords must not be held or sent in recoverable form.",
         bearing: "The library supplies password-based KDFs with required salts, and the ontology recommends the memory-hard one over PBKDF2 where the deployment allows a non-approved algorithm.",
-        compliance: Compliance::Met {
+        compliance: Compliance::Partial {
             file: "crates/ic-kdf/src/argon2.rs",
             symbol: "Argon2Params",
+            gap: "For CUI this practice also requires FIPS-validated cryptography, SC.L2-3.13.11, which IronCrypto does not have. The mechanism is implemented; a deployment protecting CUI cannot rest the practice on it until a validated module does.",
         },
         algorithms: &["argon2id", "pbkdf2-hmac-sha2-256"],
         standards: &["SP 800-132", "RFC 9106"],
@@ -443,9 +448,10 @@ pub static CONTROLS: &[Control] = &[
         title: "Implement cryptographic mechanisms to protect the confidentiality of CUI stored on digital media during transport",
         description: "CUI on media in transit must be cryptographically protected unless otherwise safeguarded.",
         bearing: "Same mechanisms as SC.L2-3.13.16, and the same boundary: the library encrypts, the system decides what and when.",
-        compliance: Compliance::Met {
+        compliance: Compliance::Partial {
             file: "crates/ic-cipher/src/gcm.rs",
             symbol: "Aes256Gcm",
+            gap: "For CUI this practice also requires FIPS-validated cryptography, SC.L2-3.13.11, which IronCrypto does not have. The mechanism is implemented; a deployment protecting CUI cannot rest the practice on it until a validated module does.",
         },
         algorithms: &["aes-256-gcm"],
         standards: &["SP 800-38D"],
@@ -455,7 +461,7 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Cmmc,
         title: "Establish and manage cryptographic keys for cryptography employed in the system",
         description: "Keys must be generated, distributed, stored and destroyed under a defined process.",
-        bearing: "The library generates keys from an approved DRBG, checks generated key pairs for pairwise consistency before releasing them, and zeroizes material when it goes out of scope. Distribution, escrow and rotation are the system's and are not modelled here.",
+        bearing: "Key generation takes a caller-supplied random source, for which the library provides OS-seeded and approved generators; ML-KEM, ML-DSA and RSA key generation check pairwise consistency before releasing a key; and secret material is zeroized when it goes out of scope. Distribution, escrow and rotation are the system's and are not modelled here.",
         compliance: Compliance::Partial {
             file: "crates/ic-mlkem/src/kem.rs",
             symbol: "pairwise_consistency",

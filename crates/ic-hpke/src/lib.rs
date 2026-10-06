@@ -9,7 +9,7 @@
 //! ```
 //! # fn main() -> ic_core::Result<()> {
 //! use ic_hpke::{setup_receiver, setup_sender, Aead, KeyPair};
-//! # let mut rng = ic_hpke::doc_rng();
+//! let mut rng = ic_drbg::Rng::from_os()?;
 //! let recipient = KeyPair::generate(&mut rng)?;
 //! let (enc, mut sender) = setup_sender(recipient.public(), b"app/v1", Aead::Aes128Gcm, &mut rng)?;
 //! let mut receiver = setup_receiver(&enc, &recipient, b"app/v1", Aead::Aes128Gcm)?;
@@ -241,11 +241,11 @@ impl Cipher {
 /// An established HPKE context: the sender's or the receiver's side.
 ///
 /// Seals or opens messages in order, each under the next sequence number. The
-/// AEAD key and exporter secret are wiped when it is dropped; the AEAD types
-/// wipe their own key schedules.
+/// AEAD key, base nonce and exporter secret are wiped when it is dropped; the
+/// AEAD types wipe their own key schedules.
 pub struct Context {
     cipher: Cipher,
-    base_nonce: [u8; NONCE_LEN],
+    base_nonce: Zeroizing<[u8; NONCE_LEN]>,
     exporter_secret: Zeroizing<[u8; 32]>,
     seq: u64,
 }
@@ -277,7 +277,7 @@ impl Context {
             CounterExhausted,
             "hpke sequence number exhausted; a context never reuses a nonce"
         );
-        let mut nonce = self.base_nonce;
+        let mut nonce = *self.base_nonce.get();
         for (n, s) in nonce[NONCE_LEN - 8..]
             .iter_mut()
             .zip(self.seq.to_be_bytes())
@@ -460,13 +460,13 @@ fn key_schedule(aead: Aead, shared_secret: &[u8; 32], info: &[u8]) -> Result<Con
     let mut key = Zeroizing::new([0u8; 32]);
     let key = &mut key.get_mut()[..aead.key_len()];
     labeled_expand(&suite, secret.get(), b"key", &[&ksc], key)?;
-    let mut base_nonce = [0u8; NONCE_LEN];
+    let mut base_nonce = Zeroizing::new([0u8; NONCE_LEN]);
     labeled_expand(
         &suite,
         secret.get(),
         b"base_nonce",
         &[&ksc],
-        &mut base_nonce,
+        base_nonce.get_mut(),
     )?;
     let mut exporter_secret = Zeroizing::new([0u8; 32]);
     labeled_expand(
@@ -614,22 +614,6 @@ fn hex32(hex: &str) -> Result<[u8; 32]> {
     let mut out = [0u8; 32];
     ic_core::codec::hex_decode(hex.as_bytes(), &mut out)?;
     Ok(out)
-}
-
-/// A deterministic random source for this crate's documentation examples.
-#[doc(hidden)]
-pub fn doc_rng() -> impl RandomSource {
-    struct Counter(u8);
-    impl RandomSource for Counter {
-        fn fill(&mut self, out: &mut [u8]) -> Result<()> {
-            for b in out.iter_mut() {
-                self.0 = self.0.wrapping_mul(29).wrapping_add(7);
-                *b = self.0;
-            }
-            Ok(())
-        }
-    }
-    Counter(1)
 }
 
 #[cfg(test)]

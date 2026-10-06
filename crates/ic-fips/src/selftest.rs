@@ -104,6 +104,11 @@ static CASTS: &[Cast] = &[
         ic_kdf::Hkdf::<ic_mac::HmacSha256>::self_test,
     ),
     ("argon2id", argon2id_self_test),
+    ("pbkdf2-hmac-sha2-256", pbkdf2_hmac_sha2_256_self_test),
+    (
+        "sp800-108-counter-hmac-sha2-256",
+        sp800_108_counter_hmac_sha2_256_self_test,
+    ),
     // Post-quantum
     ("ml-kem-512", ml_kem_512_self_test),
     ("ml-kem-768", ml_kem_768_self_test),
@@ -139,6 +144,61 @@ static CASTS: &[Cast] = &[
     ("rsa-pss-sha384", ic_rsa::PssSha384::self_test),
     ("rsa-pss-sha512", ic_rsa::PssSha512::self_test),
 ];
+
+/// PBKDF2-HMAC-SHA256 known-answer test.
+///
+/// RFC 7914 section 11 publishes PBKDF2-HMAC-SHA256 vectors, but at one
+/// iteration, which `pbkdf2` refuses as below SP 800-132's floor of 1000. So
+/// this case runs at 1000 iterations, and the expected value is
+/// `hashlib.pbkdf2_hmac`'s, OpenSSL's implementation rather than this one's;
+/// the RFC vector itself passes against `hashlib`. Recorded in docs/FIPS.md.
+fn pbkdf2_hmac_sha2_256_self_test() -> Result<()> {
+    let mut got = [0u8; 32];
+    ic_kdf::pbkdf2::<ic_mac::HmacSha256>(
+        b"IronCrypto self-test password",
+        b"sixteen-byte-salt",
+        1000,
+        &mut got,
+    )?;
+    let mut want = [0u8; 32];
+    ic_core::codec::hex_decode(
+        b"c995fdfb115da8f22db24f086faac0b9e75c0233c524559639483cece2aa182a",
+        &mut want,
+    )?;
+    ic_core::ensure!(
+        ic_core::ct::verify(&want, &got),
+        SelfTestFailed,
+        "pbkdf2-hmac-sha2-256"
+    );
+    Ok(())
+}
+
+/// SP 800-108 counter-mode KDF with HMAC-SHA256, known-answer test.
+///
+/// No published vector for this input encoding was available offline, so the
+/// expected value comes from an independent transcription of the counter-mode
+/// construction -- `HMAC(key, [i]_32 || label || 0x00 || context || [L]_32)`
+/// per block -- in Python's `hmac`, sharing nothing with `ic_kdf`. Two blocks,
+/// so the counter's increment is covered. Recorded in docs/FIPS.md.
+fn sp800_108_counter_hmac_sha2_256_self_test() -> Result<()> {
+    let mut key = [0u8; 32];
+    for (i, b) in key.iter_mut().enumerate() {
+        *b = i as u8;
+    }
+    let mut got = [0u8; 48];
+    ic_kdf::kbkdf_counter::<ic_mac::HmacSha256>(&key, b"IronCrypto", b"self-test", &mut got)?;
+    let mut want = [0u8; 48];
+    ic_core::codec::hex_decode(
+        b"9388d4be5f62e976766497a16a3dd6edca95efa5009a812d59a30ffff509a043255c98dbcf5c2e360079f967c384e327",
+        &mut want,
+    )?;
+    ic_core::ensure!(
+        ic_core::ct::verify(&want, &got),
+        SelfTestFailed,
+        "sp800-108-counter-hmac-sha2-256"
+    );
+    Ok(())
+}
 
 /// BLAKE2b known-answer test: RFC 7693 Appendix A.
 ///
@@ -592,7 +652,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 70;
+pub const TEST_COUNT: usize = 72;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -690,7 +750,7 @@ pub fn integrity_check() -> Result<()> {
 const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "4406d3f02daeae032d9da4a755d0a58585e8fa49e8618556d5e8b15d51ecfd81";
+const INTEGRITY_TAG: &str = "ead9be5550eb1d9113af2846198dff93995915d58e4ff10968d00c9a82638588";
 
 #[cfg(test)]
 mod tests {
@@ -721,15 +781,17 @@ mod tests {
             .filter(|e| e.status == ic_ontology::ImplStatus::Available)
         {
             // Modes are exercised through the AEAD and block-cipher tests, and
-            // the generic KDFs through their SHA-256 instantiation.
+            // the generic KDFs and the DRBG through their SHA-256
+            // instantiations, each of which has its own CAST. PBKDF2 and
+            // SP 800-108 were on this list with that reason and no SHA-256
+            // CAST behind it, so two approved KDFs ran untested; both have
+            // one now.
             let exempt = matches!(
                 e.id,
                 "aes-cbc"
                     | "aes-ctr"
                     | "hkdf-sha2-384"
                     | "hkdf-sha2-512"
-                    | "sp800-108-counter-hmac-sha2-256"
-                    | "pbkdf2-hmac-sha2-256"
                     | "pbkdf2-hmac-sha2-512"
                     | "hmac-drbg-sha2-512"
             );

@@ -38,6 +38,12 @@ concurrency:
   group: self-hosted-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only by default: no job here writes to the repository, and a token
+# that cannot write is one a compromised step cannot misuse. Actions are pinned
+# to commit SHAs rather than tags or branches, which their owners can move.
+permissions:
+  contents: read
+
 jobs:
   check:
     name: full check
@@ -46,7 +52,10 @@ jobs:
     # from cold on the first run.
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # This machine persists between runs; leave no token in .git/config.
+          persist-credentials: false
 
       # `shell: bash` resolves against PATH, and on a Windows machine PATH the
       # first `bash.exe` is `C:\Windows\System32\bash.exe` -- the WSL launcher,

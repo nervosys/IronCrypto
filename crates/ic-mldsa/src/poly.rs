@@ -544,4 +544,27 @@ mod tests {
             assert!(!q.exceeds(1001), "index {index}");
         }
     }
+
+    /// The inverse transform's input bound, which `a_row_times` and signing's
+    /// `w` rely on by reducing first.
+    ///
+    /// Seven pointwise products each just under q, the most ML-DSA-87 sums,
+    /// overflow `i32` in the inverse transform's first lane, which adds all
+    /// 256 inputs before reducing; with overflow checks on that is a panic.
+    /// Reduced first, the same values transform without one.
+    #[test]
+    fn an_unreduced_worst_case_sum_overflows_the_inverse_transform() {
+        let worst = Poly {
+            c: [7 * (Q - 1); N],
+        };
+        let unreduced = std::panic::catch_unwind(|| {
+            let mut p = worst;
+            p.inv_ntt();
+            p
+        });
+        assert!(unreduced.is_err(), "the bound this guards no longer holds");
+        let mut reduced = worst;
+        reduced.reduce();
+        reduced.inv_ntt();
+    }
 }

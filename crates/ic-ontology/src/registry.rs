@@ -2124,13 +2124,12 @@ pub static REGISTRY: &[Entry] = &[
             },
             Constraint {
                 id: "prehash-digest-is-trusted",
-                requirement: "When verifying over a digest you computed (verify_prehash), use \
-                              a SHA-2 or SHA-3 hash at least as strong as the curve, and \
-                              bind which hash it was.",
-                consequence: "verify_prehash cannot tell which hash produced the digest; a \
-                              weaker hash lowers the signature's strength to the hash's, \
-                              and an unbound choice lets a signature over one hash be \
-                              presented as over another.",
+                requirement: "When verifying over a digest you computed (verify_prehash), bind \
+                              which SHA-2 or SHA-3 hash produced it. A digest narrower than \
+                              the curve's strength is refused.",
+                consequence: "verify_prehash can check a digest's width but not which hash \
+                              produced it; an unbound choice lets a signature over one \
+                              hash be presented as over another of the same width.",
                 severity: Severity::Serious,
             },
         ],
@@ -2742,13 +2741,12 @@ pub static REGISTRY: &[Entry] = &[
             },
             Constraint {
                 id: "prehash-digest-is-trusted",
-                requirement: "When verifying over a digest you computed (verify_prehash), use \
-                              a SHA-2 or SHA-3 hash at least as strong as the curve, and \
-                              bind which hash it was.",
-                consequence: "verify_prehash cannot tell which hash produced the digest; a \
-                              weaker hash lowers the signature's strength to the hash's, \
-                              and an unbound choice lets a signature over one hash be \
-                              presented as over another.",
+                requirement: "When verifying over a digest you computed (verify_prehash), bind \
+                              which SHA-2 or SHA-3 hash produced it. A digest narrower than \
+                              the curve's strength is refused.",
+                consequence: "verify_prehash can check a digest's width but not which hash \
+                              produced it; an unbound choice lets a signature over one \
+                              hash be presented as over another of the same width.",
                 severity: Severity::Serious,
             },
         ],
@@ -2822,13 +2820,12 @@ pub static REGISTRY: &[Entry] = &[
             },
             Constraint {
                 id: "prehash-digest-is-trusted",
-                requirement: "When verifying over a digest you computed (verify_prehash), use \
-                              a SHA-2 or SHA-3 hash at least as strong as the curve, and \
-                              bind which hash it was.",
-                consequence: "verify_prehash cannot tell which hash produced the digest; a \
-                              weaker hash lowers the signature's strength to the hash's, \
-                              and an unbound choice lets a signature over one hash be \
-                              presented as over another.",
+                requirement: "When verifying over a digest you computed (verify_prehash), bind \
+                              which SHA-2 or SHA-3 hash produced it. A digest narrower than \
+                              the curve's strength is refused.",
+                consequence: "verify_prehash can check a digest's width but not which hash \
+                              produced it; an unbound choice lets a signature over one \
+                              hash be presented as over another of the same width.",
                 severity: Severity::Serious,
             },
         ],

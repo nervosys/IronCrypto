@@ -421,9 +421,16 @@ impl<'a> Writer<'a> {
     }
 
     /// Move the encoding to the front of the buffer and return its length.
+    ///
+    /// The rest of the buffer is wiped. The writer builds from the end, so
+    /// before the move the encoding sits at the back; after it, the back still
+    /// holds a second copy of everything past the new length. For a private
+    /// key that copy is the key, in bytes the caller was never told about and
+    /// so would not think to clear.
     pub fn finish(self) -> usize {
         let len = self.len();
         self.buf.copy_within(self.pos.., 0);
+        ic_core::Zeroize::zeroize(&mut self.buf[len..]);
         len
     }
 }

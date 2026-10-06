@@ -138,15 +138,33 @@ fn verify(curve: &str, pk: &[u8], digest: &[u8], sig: &[u8]) -> ic_core::Result<
     }
 }
 
-/// Every pairing verifies, and the curve's own pairing agrees with `verify`.
+/// The narrowest digest each curve accepts: as strong as the curve.
+fn min_len(curve: &str) -> usize {
+    match curve {
+        "P-256" => 32,
+        "P-384" => 48,
+        _ => 64,
+    }
+}
+
+/// Every pairing at least as strong as its curve verifies, and the curve's
+/// own pairing agrees with `verify`. Every weaker pairing -- SHA-224 on any
+/// curve, SHA-256 on P-384 and P-521, SHA-384 on P-521 -- is refused for its
+/// width, although the signature is valid.
 #[test]
-fn every_curve_and_hash_pairing_verifies() {
+fn every_strong_enough_pairing_verifies_and_weaker_ones_are_refused() {
     use ic_core::traits::SignatureScheme;
-    let mut checked = 0;
+    let (mut verified, mut refused) = (0, 0);
     for case in CASES {
         let (pk, digest, sig) = (bytes(case.public_key), bytes(case.digest), bytes(case.signature));
-        verify(case.curve, &pk, &digest, &sig)
-            .unwrap_or_else(|e| panic!("{} {} {}: {e:?}", case.curve, case.hash, case.message));
+        let result = verify(case.curve, &pk, &digest, &sig);
+        if digest.len() < min_len(case.curve) {
+            let err = result.expect_err("a digest weaker than the curve");
+            assert_eq!(err.kind(), ic_core::ErrorKind::InvalidLength, "{} {}", case.curve, case.hash);
+            refused += 1;
+            continue;
+        }
+        result.unwrap_or_else(|e| panic!("{} {} {}: {e:?}", case.curve, case.hash, case.message));
         let native = matches!(
             (case.curve, case.hash),
             ("P-256", "SHA-256") | ("P-384", "SHA-384") | ("P-521", "SHA-512")
@@ -160,9 +178,10 @@ fn every_curve_and_hash_pairing_verifies() {
             }
             .expect("the message form agrees");
         }
-        checked += 1;
+        verified += 1;
     }
-    assert_eq!(checked, 24, "the cases did not run");
+    // Per message: P-256 accepts 3 hashes, P-384 2, P-521 1.
+    assert_eq!((verified, refused), (12, 12), "the cases did not run");
 }
 
 /// A signature is bound to the part of its digest FIPS 186-5 uses, and to its
@@ -175,7 +194,7 @@ fn every_curve_and_hash_pairing_verifies() {
 #[test]
 fn a_wrong_digest_key_or_signature_is_refused() {
     let mut beyond_checked = 0;
-    for case in CASES {
+    for case in CASES.iter().filter(|c| c.digest.len() / 2 >= min_len(c.curve)) {
         let (pk, digest, sig) = (bytes(case.public_key), bytes(case.digest), bytes(case.signature));
         // Bytes of the order: 32, 48, 66.
         let order_bytes = sig.len() / 2;

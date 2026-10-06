@@ -284,8 +284,17 @@ pub const PREHASH_LENS: [usize; 4] = [28, 32, 48, 64];
 /// [`PREHASH_LENS`] that is the leftmost bytes, which `scalar_reduce_slice`
 /// takes.
 ///
-/// The digest is trusted: which hash produced it, and whether that hash is
-/// strong enough for the curve, is the caller's to establish.
+/// The digest must also be at least as wide as the curve's strength demands:
+/// 32 bytes on P-256, 48 on P-384, 64 on P-521. A narrower one would make the
+/// hash the weakest part of the signature -- SHA-224 under P-521 is 112-bit
+/// collision resistance under a 256-bit key -- and SP 800-57 asks for a hash at
+/// least as strong as the key. That rule is enforced here rather than left to
+/// the caller, because the digest's width is the one thing about it this
+/// function can see.
+///
+/// Which hash produced the digest is still the caller's to establish: a
+/// 64-byte BLAKE2b digest is as wide as SHA-512's, and nothing here can tell
+/// them apart.
 pub fn verify_prehash<C: EcdsaCurve>(
     public_key: &[u8],
     digest: &[u8],
@@ -296,7 +305,18 @@ pub fn verify_prehash<C: EcdsaCurve>(
         InvalidLength,
         "ecdsa digest must be 28, 32, 48 or 64 bytes"
     );
+    ensure!(
+        digest.len() >= min_prehash_len::<C>(),
+        InvalidLength,
+        "ecdsa digest narrower than the curve's strength"
+    );
     verify_digest::<C>(public_key, digest, signature)
+}
+
+/// The narrowest digest `verify_prehash` accepts on `C`: as wide as the
+/// order, or SHA-512's 64 bytes where the order is wider (P-521).
+pub fn min_prehash_len<C: EcdsaCurve>() -> usize {
+    core::cmp::min(C::SCALAR_BYTES, 64)
 }
 
 /// The verification both entry points share, from the digest onwards.

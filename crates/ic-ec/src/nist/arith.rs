@@ -415,7 +415,8 @@ pub trait Field: Copy + Clone + core::fmt::Debug + PartialEq + Eq + Sized {
     fn from_bytes_reduced(bytes: &Self::Bytes) -> Self;
     /// Encode canonically.
     fn to_bytes(&self) -> Self::Bytes;
-    /// Build a zeroed byte buffer of the right width.
+    /// Build a zeroed byte buffer of the right width. Only the tests need one.
+    #[cfg(test)]
     fn zero_bytes() -> Self::Bytes;
 
     /// Constant-time test for zero.
@@ -637,6 +638,7 @@ macro_rules! mont_field {
                 out
             }
 
+            #[cfg(test)]
             fn zero_bytes() -> Self::Bytes {
                 [0u8; $bytes]
             }

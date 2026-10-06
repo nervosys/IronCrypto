@@ -21,3 +21,7 @@ ic-hash = { workspace = true }
 ic-mac = { workspace = true }
 ic-cipher = { workspace = true }
 ic-ec = { workspace = true }
+
+# For the documentation example's random source only.
+[dev-dependencies]
+ic-drbg = { workspace = true, features = ["std"] }

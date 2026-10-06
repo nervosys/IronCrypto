@@ -37,6 +37,7 @@ const CRYPTO_CRATES: &[&str] = &[
     "ic-kdf",
     "ic-drbg",
     "ic-hash",
+    "ic-hpke",
 ];
 
 fn workspace_root() -> PathBuf {
@@ -289,5 +290,85 @@ fn fixed_base_multiplication_goes_through_its_funnel() {
     assert!(
         offenders.is_empty(),
         "these multiply a base point without its table: {offenders:?}"
+    );
+}
+
+/// Types that hold key material, whether they own it or borrow it.
+///
+/// A derived `Debug` on one prints the key into any log that formats it, and a
+/// derived `PartialEq` compares it with a short-circuiting `==`. Both were
+/// found on `PrivateKeyInfo` and `MlDsaPrivateKey` in the 2026-10-06 audit,
+/// where the key views had been left off every list; these types write both
+/// by hand, or not at all.
+const KEY_HOLDING: &[&str] = &[
+    "PrivateKeyInfo",  // ic-pkix: RSA primes, EC scalars, seeds
+    "MlDsaPrivateKey", // ic-pkix: an ML-DSA seed and expanded key
+    "KeyPair",         // ic-hpke: an X25519 private key
+    "Context",         // ic-hpke: AEAD key, base nonce, exporter secret
+    "Share",           // ic-cipher::shamir: a share of a secret
+];
+
+/// No secret-bearing or key-holding type derives `Debug` or `PartialEq`.
+#[test]
+fn key_holding_types_do_not_derive_debug_or_equality() {
+    let root = workspace_root();
+    let watched: Vec<&str> = MUST_WIPE_ON_DROP
+        .iter()
+        .chain(KEY_HOLDING.iter())
+        .copied()
+        .collect();
+    let mut offenders: Vec<String> = Vec::new();
+    let mut seen = 0;
+
+    for crate_name in CRYPTO_CRATES {
+        let mut files = Vec::new();
+        rust_files(
+            &root.join("crates").join(crate_name).join("src"),
+            &mut files,
+        );
+        for file in files {
+            let text = std::fs::read_to_string(&file).expect("readable source");
+            let lines: Vec<&str> = text.lines().map(str::trim_start).collect();
+            for (i, line) in lines.iter().enumerate() {
+                let Some(item) = line
+                    .strip_prefix("pub struct ")
+                    .or_else(|| line.strip_prefix("pub enum "))
+                    .or_else(|| line.strip_prefix("struct "))
+                    .or_else(|| line.strip_prefix("enum "))
+                else {
+                    continue;
+                };
+                let name: String = item
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !watched.contains(&name.as_str()) {
+                    continue;
+                }
+                seen += 1;
+                // The attributes directly above the item, past its doc comment.
+                let mut j = i;
+                while j > 0 {
+                    j -= 1;
+                    let above = lines[j];
+                    if above.starts_with("#[derive(")
+                        && (above.contains("Debug") || above.contains("PartialEq"))
+                    {
+                        offenders.push(format!("{} in {}", name, file.display()));
+                    }
+                    if !(above.starts_with("#[") || above.starts_with("///")) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        seen >= KEY_HOLDING.len(),
+        "only {seen} watched types were found; the scan is not running"
+    );
+    assert!(
+        offenders.is_empty(),
+        "these derive Debug or PartialEq over key material: {offenders:?}"
     );
 }

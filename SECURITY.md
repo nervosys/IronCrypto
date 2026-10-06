@@ -281,7 +281,7 @@ unactivated optional dependency of rustls, along with `cc`, `getrandom`,
 `libc`, `wasi` and the `windows-*` family. `cargo tree -i ring` returns
 nothing.
 
-So a report listing 43 dependencies is not wrong about the lock file and is not
+So a report listing 44 dependencies is not wrong about the lock file and is not
 describing what ships. If one of those eighteen draws an advisory, expect a
 finding that does not apply here; confirm it with `cargo tree -i <crate>`
 before acting on it, and do not silence it globally, because the same name

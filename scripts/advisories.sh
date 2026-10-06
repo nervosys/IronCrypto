@@ -12,7 +12,7 @@
 #
 # `cargo audit` and most SCA tools read `Cargo.lock`, which lists packages the
 # resolver considered, not packages the compiler builds. This workspace's lock
-# file contains sixteen such packages, `ring` among them -- an unactivated
+# file contains eighteen such packages, `ring` among them -- an unactivated
 # optional dependency of rustls. `cargo tree -i ring` returns nothing: it is
 # never compiled and its advisories do not apply here.
 #
@@ -34,19 +34,20 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# Last reviewed against https://rustsec.org/advisories/ on this date.
-reviewed="2026-09-22"
+# Last reviewed against the RustSec advisory database on this date (local copy
+# updated 2026-10-03; no advisory for these crates since).
+reviewed="2026-10-06"
 
 # crate<TAB>minimum version<TAB>why that floor
 #
 # "none known" means the crate had no advisory at the review date; the floor is
 # then the version in use, so a downgrade still has to be deliberate.
 floors="once_cell	1.21.4	RUSTSEC-2019-0017 fixed in >=1.0.1; floor held at the version in use
-rustls	0.23.45	RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption level boundaries, fixed in >=0.23.45
+rustls	0.23.45	RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption level boundaries, fixed in >=0.23.45; RUSTSEC-2024-0336 and -0399 fixed earlier
 rustls-pki-types	1.15.1	none known at the review date
-rustls-webpki	0.103.15	RUSTSEC-2026-0104 / CVE-2026-93599, reachable panic parsing a CRL, fixed in >=0.103.13
+rustls-webpki	0.103.15	RUSTSEC-2026-0104 / CVE-2026-93599, reachable panic parsing a CRL, fixed in >=0.103.13; RUSTSEC-2023-0053, 2026-0049, -0098 and -0099 fixed earlier; floor held at the version in use
 subtle	2.6.1	none known at the review date
-untrusted	0.9.0	none known at the review date
+untrusted	0.9.0	RUSTSEC-2018-0001 fixed in >=0.6.2; floor held at the version in use
 zeroize	1.9.0	none known at the review date"
 
 # What is actually compiled, across every target. Same mechanism as
@@ -111,6 +112,17 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 echo "$checked third-party crates at or above their advisory floors (reviewed $reviewed)"
+
+# A floor can only go stale in one direction, and nothing here learns that by
+# itself, so say so once the review is a month old. A warning rather than a
+# failure: a gate that breaks on the calendar teaches people to bump the date
+# without reviewing. `date -d` is GNU; elsewhere the age is not computed.
+if reviewed_epoch=$(date -d "$reviewed" +%s 2>/dev/null); then
+    age_days=$(( ( $(date +%s) - reviewed_epoch ) / 86400 ))
+    if [ "$age_days" -gt 30 ]; then
+        echo "WARNING: the advisory floors were last reviewed $age_days days ago; check https://rustsec.org/advisories/ for these crates and update \$reviewed."
+    fi
+fi
 
 # `cargo audit` is not required and is not installed by this script: it would be
 # a build-time dependency on a tool that fetches a database over the network,

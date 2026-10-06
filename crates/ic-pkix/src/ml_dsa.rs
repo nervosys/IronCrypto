@@ -94,7 +94,10 @@ impl MlDsaParameterSet {
 pub const SEED_LEN: usize = 32;
 
 /// An ML-DSA private key, in whichever of RFC 9881's forms it was written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Debug` names the parameter set and the form and prints no key material,
+/// and equality compares the secret fields in constant time.
+#[derive(Clone, Copy)]
 pub enum MlDsaPrivateKey<'a> {
     /// The 32-byte seed alone. RFC 9881 recommends this form.
     Seed {
@@ -121,6 +124,40 @@ pub enum MlDsaPrivateKey<'a> {
         expanded_key: &'a [u8],
     },
 }
+
+impl core::fmt::Debug for MlDsaPrivateKey<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let form = match self {
+            Self::Seed { .. } => "Seed",
+            Self::ExpandedKey { .. } => "ExpandedKey",
+            Self::Both { .. } => "Both",
+        };
+        f.debug_struct("MlDsaPrivateKey")
+            .field("set", &self.parameter_set())
+            .field("form", &form)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for MlDsaPrivateKey<'_> {
+    /// Same form, same parameter set, and the same key bytes, compared in
+    /// constant time: these are secrets, and `==` on slices stops at the
+    /// first difference.
+    fn eq(&self, other: &Self) -> bool {
+        let same_form = core::mem::discriminant(self) == core::mem::discriminant(other);
+        let field = |a: Option<&[u8]>, b: Option<&[u8]>| match (a, b) {
+            (Some(a), Some(b)) => ic_core::ct::verify(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        same_form
+            && self.parameter_set() == other.parameter_set()
+            && field(self.seed(), other.seed())
+            && field(self.expanded_key(), other.expanded_key())
+    }
+}
+
+impl Eq for MlDsaPrivateKey<'_> {}
 
 impl<'a> MlDsaPrivateKey<'a> {
     /// Parse a PKCS#8 `PrivateKeyInfo` holding an ML-DSA key.
@@ -232,6 +269,16 @@ impl<'a> MlDsaPrivateKey<'a> {
     /// The exact bytes [`Self::from_der`] reads, in the same form: a key read
     /// and written back is unchanged.
     pub fn to_der(&self, out: &mut [u8]) -> Result<usize> {
+        // A write that fails part way, for a buffer too small, has already put
+        // some of the key into `out`; none of it is left there.
+        let written = self.write_der(out);
+        if written.is_err() {
+            ic_core::Zeroize::zeroize(out);
+        }
+        written
+    }
+
+    fn write_der(&self, out: &mut [u8]) -> Result<usize> {
         self.check_lengths()?;
         let mut w = Writer::new(out);
         let start = w.len();
@@ -396,5 +443,58 @@ mod tests {
                 ic_core::ErrorKind::InvalidLength
             );
         }
+    }
+
+    /// Debug output names the set and form and none of the key; equality
+    /// still distinguishes keys.
+    #[test]
+    fn debug_hides_the_key_and_equality_still_works() {
+        let der = seed_key();
+        let key = MlDsaPrivateKey::from_der(&der[..SEED_KEY_LEN]).unwrap();
+        let shown = std::format!("{key:?}");
+        assert!(
+            shown.contains("MlDsa65") && shown.contains("Seed"),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("31") && !shown.contains("1f"),
+            "key bytes leaked: {shown}"
+        );
+        assert_eq!(
+            key,
+            MlDsaPrivateKey::from_der(&der[..SEED_KEY_LEN]).unwrap()
+        );
+        let mut other = der;
+        other[SEED_KEY_LEN - 1] ^= 1;
+        assert_ne!(
+            key,
+            MlDsaPrivateKey::from_der(&other[..SEED_KEY_LEN]).unwrap()
+        );
+    }
+
+    /// The writer leaves no copy of the key past the encoding, and a write
+    /// that fails for space leaves none at all.
+    #[test]
+    fn writing_leaves_no_stray_key_bytes() {
+        let seed = [0x5au8; SEED_LEN];
+        let expanded = [0xa5u8; 2560];
+        let key = MlDsaPrivateKey::Both {
+            set: MlDsaParameterSet::MlDsa44,
+            seed: &seed,
+            expanded_key: &expanded,
+        };
+        let mut out = [0xeeu8; 6000];
+        let n = key.to_der(&mut out).unwrap();
+        assert!(
+            out[n..].iter().all(|b| *b == 0),
+            "stale bytes after the encoding"
+        );
+
+        let mut small = [0xeeu8; 2000];
+        assert!(key.to_der(&mut small).is_err());
+        assert!(
+            small.iter().all(|b| *b == 0),
+            "partial key left after a failed write"
+        );
     }
 }
