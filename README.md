@@ -338,7 +338,7 @@ leaving the stronger claim to stand for all of them.
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | Secret sharing | Shamir over GF(2^8), k of n, for backing up a key; constant time, in the AES field |
-| Public-key encryption | HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) and AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, with the exporter |
+| Public-key encryption | HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) or DHKEM(P-384, HKDF-SHA384) -- MLS suites 1 and 7 -- and AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, with the exporter |
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
 | Backends | portable, written constant-time; on x86-64 AES-NI, `PCLMULQDQ`, SHA-NI and AVX2, each behind runtime detection. On 32-bit RISC-V the curve and RSA arithmetic runs on 32-bit words, because the 64-bit form compiled to branches on secrets there; [SECURITY.md](SECURITY.md) has what was checked on which target |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
@@ -548,7 +548,7 @@ converting ACVP output.
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 72 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 73 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `ic capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.

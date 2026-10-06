@@ -1,6 +1,6 @@
 [package]
 name = "ic-hpke"
-description = "HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) for IronCrypto"
+description = "HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) and DHKEM(P-384, HKDF-SHA384) for IronCrypto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

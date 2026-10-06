@@ -1061,6 +1061,30 @@ fn hpke_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// HPKE over P-384: the example, compiled, then the recipient opens it.
+#[test]
+fn hpke_p384_example_compiles_and_matches() -> Result<()> {
+    let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x38u8; 32], b"example").unwrap();
+    let recipient = ironcrypto::hpke::p384::KeyPair::generate(&mut rng)?;
+    let recipient_pk = *recipient.public();
+    let mut msg = *b"message";
+    let mut tag = [0u8; ironcrypto::hpke::TAG_LEN];
+
+    let (enc, mut tx) =
+        ic_hpke::p384::setup_sender(&recipient_pk, b"app/v1", ic_hpke::Aead::Aes256Gcm, &mut rng)?;
+    tx.seal_in_place(b"aad", &mut msg, &mut tag)?;
+    check_example(
+        "hpke-p384-sha384",
+        "let (enc, mut tx) = ic_hpke::p384::setup_sender(&recipient_pk, b\"app/v1\", ic_hpke::Aead::Aes256Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;",
+    );
+
+    let mut rx =
+        ic_hpke::p384::setup_receiver(&enc, &recipient, b"app/v1", ic_hpke::Aead::Aes256Gcm)?;
+    rx.open_in_place(b"aad", &mut msg, &tag)?;
+    assert_eq!(&msg, b"message");
+    Ok(())
+}
+
 /// Shamir: the split, compiled, then three of the five shares recover the key.
 #[test]
 fn shamir_example_compiles_and_matches() -> Result<()> {

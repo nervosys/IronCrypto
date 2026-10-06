@@ -575,7 +575,7 @@ const SP80038D_REQS: [Requirement; 1] = [Requirement {
     },
 }];
 
-const RFC9180_REQS: [Requirement; 2] = [
+const RFC9180_REQS: [Requirement; 3] = [
     Requirement {
         id: "rfc-9180-reject-zero-dh",
         section: "7.1.4",
@@ -596,10 +596,24 @@ const RFC9180_REQS: [Requirement; 2] = [
         statement: "A context shall not seal or open past the last sequence number its nonce \
                     can represent.",
         rationale: "Reaching it would reuse a nonce under the same AEAD key.",
-        applies_to: &["hpke-x25519-sha256"],
+        applies_to: &["hpke-x25519-sha256", "hpke-p384-sha384"],
         compliance: Compliance::Met {
             file: "crates/ic-hpke/src/lib.rs",
             symbol: "an_exhausted_context_refuses_rather_than_reusing_a_nonce",
+        },
+    },
+    Requirement {
+        id: "rfc-9180-validate-nist-public-keys",
+        section: "7.1.4",
+        obligation: Obligation::Shall,
+        statement: "Senders and recipients of DHKEM over a NIST curve shall validate every \
+                    public key input (RFC 9180's MUST).",
+        rationale: "A point off the curve can confine the shared secret to a small subgroup of \
+                    another curve and leak the private key a piece at a time.",
+        applies_to: &["hpke-p384-sha384"],
+        compliance: Compliance::Met {
+            file: "crates/ic-hpke/src/p384.rs",
+            symbol: "compressed_and_invalid_public_keys_are_refused",
         },
     },
 ];

@@ -231,6 +231,7 @@ mod tests {
             kems,
             [
                 "hpke-x25519-sha256",
+                "hpke-p384-sha384",
                 "ml-kem-768",
                 "ml-kem-512",
                 "ml-kem-1024"

@@ -185,7 +185,7 @@ pub static CONTROLS: &[Control] = &[
             file: "crates/ic-drbg/src/rng.rs",
             symbol: "from_entropy",
         },
-        algorithms: &["ctr-drbg-aes-256", "hpke-x25519-sha256", "shamir-gf256"],
+        algorithms: &["ctr-drbg-aes-256", "hpke-x25519-sha256", "hpke-p384-sha384", "shamir-gf256"],
         standards: &["SP 800-90A"],
     },
     Control {
@@ -344,7 +344,7 @@ pub static CONTROLS: &[Control] = &[
             file: "crates/ic-ec/src/nist/point.rs",
             symbol: "is_on_curve",
         },
-        algorithms: &["ecdh-p256", "x25519", "hpke-x25519-sha256"],
+        algorithms: &["ecdh-p256", "x25519", "hpke-x25519-sha256", "hpke-p384-sha384"],
         standards: &["SP 800-56A", "RFC 7748"],
     },
     Control {

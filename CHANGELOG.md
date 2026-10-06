@@ -3,6 +3,32 @@
 All nineteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **HPKE with DHKEM(P-384, HKDF-SHA384)**, KEM `0x0011` with KDF `0x0002`, in
+  `ic_hpke::p384`: `KeyPair` with `generate`, `from_private` and RFC 9180's
+  `DeriveKeyPair`, and `setup_sender`, `setup_receiver` and
+  `setup_sender_with_ephemeral`, returning the same `Context` as the X25519
+  suite. With AES-256-GCM it is the HPKE of MLS cipher suite 7
+  (`MLS_256_DHKEMP384_AES256GCM_SHA384_P384`), requested by IronPrivacyGuard.
+  Public keys and encapsulations are uncompressed points, each validated on
+  the curve; compressed points are refused. No published HPKE vector uses
+  P-384, so `testvectors/hpke-p384.json` comes from an independent
+  implementation that first reproduces the CFRG's twelve P-256 and P-521
+  base-mode vectors and exchanges a message each way with
+  pyca/cryptography's HPKE. A known-answer self-test joins the table (73).
+- **The ontology entry says it is not FIPS-approved, and why.** Its
+  primitives are approved -- ECDH P-384, HMAC-SHA384, AES-GCM -- but DHKEM
+  extracts from `"HPKE-v1" || suite || label || Z` where SP 800-56C's
+  two-step KDF extracts from `Z` alone.
+
+### Changed
+
+- `ic-hpke`'s key schedule and labeled HKDF run over SHA-256 or SHA-384. The
+  X25519 suite's API and outputs are unchanged, and its vectors still pass.
+
 ## 0.2.14
 
 Changes that make the library harder to misuse by an agent, and easier for

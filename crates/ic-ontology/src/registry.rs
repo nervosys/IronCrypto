@@ -301,6 +301,41 @@ const HPKE_P: [Param; 4] = [
     },
 ];
 
+const HPKE_P384_P: [Param; 4] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 48,
+        max: 48,
+        recommended: 48,
+        note: "A P-384 scalar in [1, n - 1], big-endian.",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 97,
+        max: 97,
+        recommended: 97,
+        note: "The recipient's P-384 public key, SEC1 uncompressed; compressed is refused.",
+    },
+    Param {
+        name: "enc",
+        unit: Unit::Bytes,
+        min: 97,
+        max: 97,
+        recommended: 97,
+        note: "The encapsulated key the sender transmits: its ephemeral public key, uncompressed.",
+    },
+    Param {
+        name: "tag",
+        unit: Unit::Bytes,
+        min: 16,
+        max: 16,
+        recommended: 16,
+        note: "Appended to each sealed message, for every AEAD offered.",
+    },
+];
+
 const X25519_P: [Param; 3] = [
     Param {
         name: "private-key",
@@ -2069,6 +2104,64 @@ pub static REGISTRY: &[Entry] = &[
         notes: "Base mode only: no PSK, auth or auth-PSK modes, and one KEM. Not FIPS-approved, \
                 because X25519 is not. Contexts refuse rather than reuse a nonce once the \
                 64-bit sequence number would wrap.",
+    },
+    Entry {
+        id: "hpke-p384-sha384",
+        name: "HPKE, DHKEM(P-384, HKDF-SHA384)",
+        aliases: &["hpke-p384", "mls-suite-7-hpke"],
+        summary: "Encryption to a public key: P-384 ECDH, HKDF-SHA384 and an AEAD, in RFC 9180's \
+                  base mode. With AES-256-GCM, the HPKE of MLS cipher suite 7.",
+        class: Class::Kem,
+        family: "HPKE",
+        purposes: &[Purpose::Confidentiality, Purpose::KeyEstablishment],
+        strength: Strength::classical_only(192),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 9180", "SP 800-56A"],
+        params: &HPKE_P384_P,
+        constraints: &[
+            Constraint {
+                id: "hpke-base-mode-is-unauthenticated",
+                requirement: "Authenticate the sender by other means; base mode proves nothing \
+                              about who encrypted.",
+                consequence: "Anyone holding the recipient's public key can produce messages \
+                              the recipient will open.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "hpke-fresh-ephemeral",
+                requirement: "Use setup_sender, which draws a fresh ephemeral key, outside test \
+                              vectors; never reuse the key passed to setup_sender_with_ephemeral.",
+                consequence: "Two setups with one ephemeral key to one recipient and the same \
+                              info derive the same AEAD key and nonces.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "hpke-not-a-fips-kdf",
+                requirement: "Do not present this suite as FIPS-approved: its primitives are, \
+                              its key derivation is not SP 800-56C's as written.",
+                consequence: "DHKEM extracts from \"HPKE-v1\" || suite || label || Z rather \
+                              than Z alone, so a claim of approval rests on an assessor \
+                              accepting a construction SP 800-56C does not describe.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "ecdh-p384" },
+            Edge { relation: Relation::BuiltOn, target: "hkdf-sha2-384" },
+            Edge { relation: Relation::BuiltOn, target: "aes-128-gcm" },
+            Edge { relation: Relation::BuiltOn, target: "aes-256-gcm" },
+            Edge { relation: Relation::BuiltOn, target: "chacha20-poly1305" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ic_hpke::p384::HpkeP384",
+        example: "let (enc, mut tx) = ic_hpke::p384::setup_sender(&recipient_pk, b\"app/v1\", \
+                  ic_hpke::Aead::Aes256Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;",
+        notes: "Base mode only. Keys and encapsulations are uncompressed points, each checked \
+                on the curve. No published HPKE vector uses P-384; this is checked against an \
+                independent implementation that reproduces the CFRG's P-256 and P-521 vectors \
+                and interoperates with pyca/cryptography's HPKE. Not FIPS-approved: see the \
+                hpke-not-a-fips-kdf constraint.",
     },
     Entry {
         id: "ecdh-p384",

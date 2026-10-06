@@ -1,5 +1,6 @@
 //! HPKE, RFC 9180, in base mode with DHKEM(X25519, HKDF-SHA256) and
-//! HKDF-SHA256, over AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305.
+//! HKDF-SHA256 -- or, in [`p384`], DHKEM(P-384, HKDF-SHA384) and HKDF-SHA384 --
+//! over AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305.
 //!
 //! HPKE encrypts to a recipient's public key: a fresh X25519 exchange makes a
 //! shared secret, a key schedule turns it and the caller's `info` into an AEAD
@@ -25,9 +26,11 @@
 //!
 //! # What is here, and what is not
 //!
-//! Base mode only: no PSK, auth or auth-PSK modes, and one KEM. That is what
-//! Encrypted Client Hello and MLS use; the other modes and KEMs are not
-//! implemented rather than half-implemented. The export interface is here.
+//! Base mode only: no PSK, auth or auth-PSK modes. Two KEMs: X25519, here,
+//! and P-384 in [`p384`], each with its own KDF -- MLS cipher suites 1 and 7.
+//! That is what Encrypted Client Hello and MLS use; the other modes and KEMs
+//! are not implemented rather than half-implemented. The export interface is
+//! here.
 //!
 //! # Sequence numbers
 //!
@@ -54,7 +57,9 @@ use ic_cipher::{Aes128Gcm, Aes256Gcm, ChaCha20Poly1305};
 use ic_core::traits::{Aead as AeadTrait, Algorithm, KeyAgreement, Mac, RandomSource, SelfTest};
 use ic_core::{ensure, Result, Zeroize, Zeroizing};
 use ic_ec::X25519;
-use ic_mac::HmacSha256;
+use ic_mac::{HmacSha256, HmacSha384};
+
+pub mod p384;
 
 /// `DHKEM(X25519, HKDF-SHA256)`, RFC 9180 section 7.1.
 pub const KEM_ID: u16 = 0x0020;
@@ -72,6 +77,58 @@ pub const TAG_LEN: usize = 16;
 pub const NONCE_LEN: usize = 12;
 /// The longest export: `255 * Nh`.
 pub const MAX_EXPORT_LEN: usize = 255 * 32;
+
+/// The HKDF hash: the KEM's own, and the key schedule's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kdf {
+    /// HKDF-SHA256, identifier `0x0001`.
+    Sha256,
+    /// HKDF-SHA384, identifier `0x0002`.
+    Sha384,
+}
+
+/// The longest `Nh` among the KDFs here.
+pub(crate) const MAX_NH: usize = 48;
+
+impl Kdf {
+    pub(crate) const fn id(self) -> u16 {
+        match self {
+            Self::Sha256 => 0x0001,
+            Self::Sha384 => 0x0002,
+        }
+    }
+
+    /// The hash length, `Nh`.
+    pub(crate) const fn nh(self) -> usize {
+        match self {
+            Self::Sha256 => 32,
+            Self::Sha384 => 48,
+        }
+    }
+
+    /// HMAC under `key` over the concatenation of `parts`, written to
+    /// `out`, which is `Nh` bytes.
+    fn hmac(self, key: &[u8], parts: &[&[u8]], out: &mut [u8]) -> Result<()> {
+        ensure!(out.len() == self.nh(), Internal, "hpke hmac output length");
+        match self {
+            Self::Sha256 => {
+                let mut mac = HmacSha256::new(key)?;
+                for part in parts {
+                    mac.update(part);
+                }
+                out.copy_from_slice(mac.finalize().as_ref());
+            }
+            Self::Sha384 => {
+                let mut mac = HmacSha384::new(key)?;
+                for part in parts {
+                    mac.update(part);
+                }
+                out.copy_from_slice(mac.finalize().as_ref());
+            }
+        }
+        Ok(())
+    }
+}
 
 /// The AEADs this crate implements, RFC 9180 section 7.3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,11 +240,18 @@ impl KeyPair {
             InvalidLength,
             "hpke DeriveKeyPair needs at least 32 bytes of ikm"
         );
-        let kem = kem_suite_id();
+        let kem = kem_suite_id(KEM_ID);
         let mut dkp_prk = Zeroizing::new([0u8; 32]);
-        labeled_extract(&kem, b"", b"dkp_prk", &[ikm], dkp_prk.get_mut())?;
+        labeled_extract(
+            Kdf::Sha256,
+            &kem,
+            b"",
+            b"dkp_prk",
+            &[ikm],
+            dkp_prk.get_mut(),
+        )?;
         let mut sk = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
-        labeled_expand(&kem, dkp_prk.get(), b"sk", &[], sk.get_mut())?;
+        labeled_expand(Kdf::Sha256, &kem, dkp_prk.get(), b"sk", &[], sk.get_mut())?;
         Self::from_private(sk.get())
     }
 
@@ -245,8 +309,11 @@ impl Cipher {
 /// AEAD types wipe their own key schedules.
 pub struct Context {
     cipher: Cipher,
+    kdf: Kdf,
+    suite: [u8; 10],
     base_nonce: Zeroizing<[u8; NONCE_LEN]>,
-    exporter_secret: Zeroizing<[u8; 32]>,
+    /// The first `Nh` bytes are the exporter secret.
+    exporter_secret: Zeroizing<[u8; MAX_NH]>,
     seq: u64,
 }
 
@@ -350,11 +417,14 @@ impl Context {
     /// The exporter, `Context.Export`: `out.len()` bytes bound to this context
     /// and to `exporter_context`.
     ///
-    /// Up to [`MAX_EXPORT_LEN`] bytes; longer is refused with `InvalidLength`.
+    /// Up to `255 * Nh` bytes -- [`MAX_EXPORT_LEN`] for the X25519 suite,
+    /// [`p384::MAX_EXPORT_LEN`] for P-384; longer is refused with
+    /// `InvalidLength`.
     pub fn export(&self, exporter_context: &[u8], out: &mut [u8]) -> Result<()> {
         labeled_expand(
-            &suite_id(self.aead()),
-            self.exporter_secret.get(),
+            self.kdf,
+            &self.suite,
+            &self.exporter_secret.get()[..self.kdf.nh()],
             b"sec",
             &[exporter_context],
             out,
@@ -396,7 +466,7 @@ pub fn setup_sender_with_ephemeral(
     X25519::agree(ephemeral.private.get(), recipient_public, dh.get_mut())?;
     let enc = ephemeral.public;
     let shared_secret = extract_and_expand(dh.get(), &enc, recipient_public)?;
-    let context = key_schedule(aead, shared_secret.get(), info)?;
+    let context = key_schedule(KEM_ID, Kdf::Sha256, aead, shared_secret.get(), info)?;
     Ok((enc, context))
 }
 
@@ -412,10 +482,10 @@ pub fn setup_receiver(enc: &[u8], recipient: &KeyPair, info: &[u8], aead: Aead) 
     let mut dh = Zeroizing::new([0u8; 32]);
     X25519::agree(recipient.private.get(), enc, dh.get_mut())?;
     let shared_secret = extract_and_expand(dh.get(), enc, &recipient.public)?;
-    key_schedule(aead, shared_secret.get(), info)
+    key_schedule(KEM_ID, Kdf::Sha256, aead, shared_secret.get(), info)
 }
 
-/// DHKEM's `ExtractAndExpand`, from the DH output and `enc || pkR`.
+/// DHKEM(X25519)'s `ExtractAndExpand`, from the DH output and `enc || pkR`.
 ///
 /// An all-zero DH output is refused here as well as in X25519, as RFC 9180
 /// section 7.1.4 requires of the KEM: the second check is what holds if the
@@ -426,61 +496,103 @@ fn extract_and_expand(dh: &[u8; 32], enc: &[u8], pk_r: &[u8]) -> Result<Zeroizin
         InvalidParameter,
         "hpke: all-zero x25519 output"
     );
-    let kem_suite = kem_suite_id();
-    let mut eae_prk = Zeroizing::new([0u8; 32]);
-    labeled_extract(&kem_suite, b"", b"eae_prk", &[dh], eae_prk.get_mut())?;
     let mut shared_secret = Zeroizing::new([0u8; 32]);
-    labeled_expand(
-        &kem_suite,
-        eae_prk.get(),
-        b"shared_secret",
-        &[enc, pk_r],
-        shared_secret.get_mut(),
-    )?;
+    dhkem_extract_and_expand(KEM_ID, Kdf::Sha256, dh, enc, pk_r, shared_secret.get_mut())?;
     Ok(shared_secret)
 }
 
+/// DHKEM's `ExtractAndExpand` for any KEM: `Nsecret` bytes, `out.len()`,
+/// under the KEM's suite identifier and hash.
+pub(crate) fn dhkem_extract_and_expand(
+    kem_id: u16,
+    kdf: Kdf,
+    dh: &[u8],
+    enc: &[u8],
+    pk_r: &[u8],
+    out: &mut [u8],
+) -> Result<()> {
+    let kem_suite = kem_suite_id(kem_id);
+    let mut eae_prk = Zeroizing::new([0u8; MAX_NH]);
+    let eae_prk = &mut eae_prk.get_mut()[..kdf.nh()];
+    labeled_extract(kdf, &kem_suite, b"", b"eae_prk", &[dh], eae_prk)?;
+    labeled_expand(
+        kdf,
+        &kem_suite,
+        eae_prk,
+        b"shared_secret",
+        &[enc, pk_r],
+        out,
+    )
+}
+
 /// `KeySchedule` in base mode: no PSK, so `psk` and `psk_id` are empty.
-fn key_schedule(aead: Aead, shared_secret: &[u8; 32], info: &[u8]) -> Result<Context> {
+pub(crate) fn key_schedule(
+    kem_id: u16,
+    kdf: Kdf,
+    aead: Aead,
+    shared_secret: &[u8],
+    info: &[u8],
+) -> Result<Context> {
     const MODE_BASE: u8 = 0x00;
-    let suite = suite_id(aead);
+    let suite = suite_id(kem_id, kdf, aead);
+    let nh = kdf.nh();
 
-    let mut psk_id_hash = [0u8; 32];
-    labeled_extract(&suite, b"", b"psk_id_hash", &[], &mut psk_id_hash)?;
-    let mut info_hash = [0u8; 32];
-    labeled_extract(&suite, b"", b"info_hash", &[info], &mut info_hash)?;
-    let mut ksc = [0u8; 65];
+    let mut psk_id_hash = [0u8; MAX_NH];
+    labeled_extract(
+        kdf,
+        &suite,
+        b"",
+        b"psk_id_hash",
+        &[],
+        &mut psk_id_hash[..nh],
+    )?;
+    let mut info_hash = [0u8; MAX_NH];
+    labeled_extract(
+        kdf,
+        &suite,
+        b"",
+        b"info_hash",
+        &[info],
+        &mut info_hash[..nh],
+    )?;
+    let mut ksc = [0u8; 1 + 2 * MAX_NH];
     ksc[0] = MODE_BASE;
-    ksc[1..33].copy_from_slice(&psk_id_hash);
-    ksc[33..].copy_from_slice(&info_hash);
+    ksc[1..1 + nh].copy_from_slice(&psk_id_hash[..nh]);
+    ksc[1 + nh..1 + 2 * nh].copy_from_slice(&info_hash[..nh]);
+    let ksc = &ksc[..1 + 2 * nh];
 
-    let mut secret = Zeroizing::new([0u8; 32]);
-    labeled_extract(&suite, shared_secret, b"secret", &[], secret.get_mut())?;
+    let mut secret = Zeroizing::new([0u8; MAX_NH]);
+    let secret = &mut secret.get_mut()[..nh];
+    labeled_extract(kdf, &suite, shared_secret, b"secret", &[], secret)?;
 
     let mut key = Zeroizing::new([0u8; 32]);
     let key = &mut key.get_mut()[..aead.key_len()];
-    labeled_expand(&suite, secret.get(), b"key", &[&ksc], key)?;
+    labeled_expand(kdf, &suite, secret, b"key", &[ksc], key)?;
     let mut base_nonce = Zeroizing::new([0u8; NONCE_LEN]);
     labeled_expand(
+        kdf,
         &suite,
-        secret.get(),
+        secret,
         b"base_nonce",
-        &[&ksc],
+        &[ksc],
         base_nonce.get_mut(),
     )?;
-    let mut exporter_secret = Zeroizing::new([0u8; 32]);
+    let mut exporter_secret = Zeroizing::new([0u8; MAX_NH]);
     labeled_expand(
+        kdf,
         &suite,
-        secret.get(),
+        secret,
         b"exp",
-        &[&ksc],
-        exporter_secret.get_mut(),
+        &[ksc],
+        &mut exporter_secret.get_mut()[..nh],
     )?;
 
     let cipher = Cipher::new(aead, key)?;
     key.zeroize();
     Ok(Context {
         cipher,
+        kdf,
+        suite,
         base_nonce,
         exporter_secret,
         seq: 0,
@@ -488,75 +600,78 @@ fn key_schedule(aead: Aead, shared_secret: &[u8; 32], info: &[u8]) -> Result<Con
 }
 
 /// `"KEM" || I2OSP(kem_id, 2)`.
-fn kem_suite_id() -> [u8; 5] {
-    let [a, b] = KEM_ID.to_be_bytes();
+pub(crate) fn kem_suite_id(kem_id: u16) -> [u8; 5] {
+    let [a, b] = kem_id.to_be_bytes();
     [b'K', b'E', b'M', a, b]
 }
 
 /// `"HPKE" || I2OSP(kem_id, 2) || I2OSP(kdf_id, 2) || I2OSP(aead_id, 2)`.
-fn suite_id(aead: Aead) -> [u8; 10] {
+fn suite_id(kem_id: u16, kdf: Kdf, aead: Aead) -> [u8; 10] {
     let mut s = [0u8; 10];
     s[..4].copy_from_slice(b"HPKE");
-    s[4..6].copy_from_slice(&KEM_ID.to_be_bytes());
-    s[6..8].copy_from_slice(&KDF_ID.to_be_bytes());
+    s[4..6].copy_from_slice(&kem_id.to_be_bytes());
+    s[6..8].copy_from_slice(&kdf.id().to_be_bytes());
     s[8..].copy_from_slice(&aead.id().to_be_bytes());
     s
 }
 
 /// `LabeledExtract(salt, label, ikm)`: HKDF-Extract with key `salt` over
 /// `"HPKE-v1" || suite_id || label || ikm`, the ikm given in parts so that no
-/// concatenation is ever built.
+/// concatenation is ever built. `out` is `Nh` bytes.
 ///
 /// An empty salt is the HKDF default of `Nh` zero bytes, which HMAC's key
 /// padding makes the same key.
-fn labeled_extract(
+pub(crate) fn labeled_extract(
+    kdf: Kdf,
     suite: &[u8],
     salt: &[u8],
     label: &[u8],
     ikm: &[&[u8]],
-    out: &mut [u8; 32],
+    out: &mut [u8],
 ) -> Result<()> {
-    let mut mac = HmacSha256::new(salt)?;
-    mac.update(b"HPKE-v1");
-    mac.update(suite);
-    mac.update(label);
-    for part in ikm {
-        mac.update(part);
-    }
-    out.copy_from_slice(mac.finalize().as_ref());
-    Ok(())
+    let mut parts: [&[u8]; 8] = [b"HPKE-v1", suite, label, &[], &[], &[], &[], &[]];
+    ensure!(
+        ikm.len() <= 5,
+        Internal,
+        "hpke labeled extract: too many parts"
+    );
+    parts[3..3 + ikm.len()].copy_from_slice(ikm);
+    kdf.hmac(salt, &parts[..3 + ikm.len()], out)
 }
 
 /// `LabeledExpand(prk, label, info, L)`: HKDF-Expand over
 /// `I2OSP(L, 2) || "HPKE-v1" || suite_id || label || info`, info in parts.
-fn labeled_expand(
+pub(crate) fn labeled_expand(
+    kdf: Kdf,
     suite: &[u8],
-    prk: &[u8; 32],
+    prk: &[u8],
     label: &[u8],
     info: &[&[u8]],
     out: &mut [u8],
 ) -> Result<()> {
+    let nh = kdf.nh();
     ensure!(
-        out.len() <= MAX_EXPORT_LEN,
+        out.len() <= 255 * nh,
         InvalidLength,
         "hpke expand longer than 255 * Nh"
     );
+    ensure!(
+        info.len() <= 3,
+        Internal,
+        "hpke labeled expand: too many parts"
+    );
     let length = (out.len() as u16).to_be_bytes();
-    let mut previous = Zeroizing::new([0u8; 32]);
-    for (i, chunk) in out.chunks_mut(32).enumerate() {
-        let mut mac = HmacSha256::new(prk)?;
-        if i > 0 {
-            mac.update(previous.get());
-        }
-        mac.update(&length);
-        mac.update(b"HPKE-v1");
-        mac.update(suite);
-        mac.update(label);
-        for part in info {
-            mac.update(part);
-        }
-        mac.update(&[i as u8 + 1]);
-        previous.get_mut().copy_from_slice(mac.finalize().as_ref());
+    let mut previous = Zeroizing::new([0u8; MAX_NH]);
+    for (i, chunk) in out.chunks_mut(nh).enumerate() {
+        let counter = [i as u8 + 1];
+        let prev: &[u8] = if i > 0 { &previous.get()[..nh] } else { &[] };
+        let mut parts: [&[u8]; 9] = [prev, &length, b"HPKE-v1", suite, label, &[], &[], &[], &[]];
+        parts[5..5 + info.len()].copy_from_slice(info);
+        parts[5 + info.len()] = &counter;
+        let mut block = [0u8; MAX_NH];
+        kdf.hmac(prk, &parts[..6 + info.len()], &mut block[..nh])?;
+        previous.get_mut()[..nh].copy_from_slice(&block[..nh]);
+        block.zeroize();
         chunk.copy_from_slice(&previous.get()[..chunk.len()]);
     }
     Ok(())

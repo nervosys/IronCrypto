@@ -579,6 +579,7 @@ fn hammered_here() -> Vec<&'static str> {
         "ml-kem-512",
         "ml-kem-1024",
         "hpke-x25519-sha256",
+        "hpke-p384-sha384",
     ]);
     ids
 }
@@ -841,4 +842,51 @@ fn hpke_is_total_and_sound() {
         rx.open_in_place(b"aad", &mut b, &tag).unwrap();
         assert_eq!(b, plaintext);
     }
+}
+
+/// HPKE over P-384 is total on its encapsulation, the bytes an attacker sends.
+///
+/// Unlike X25519, almost no 97-byte string is a P-384 public key, so the
+/// question is different: every hostile encapsulation, at every length, is
+/// refused without a panic, and so is every single-bit change to a genuine one
+/// -- each moves the point off the curve, changes its form byte, or is a
+/// different valid point, which then fails to open. The genuine one still
+/// opens afterwards. The context it sets up is the X25519 suite's `Context`,
+/// whose soundness `hpke_is_total_and_sound` hammers.
+#[test]
+fn hpke_p384_is_total_on_its_encapsulation() {
+    use hpke::p384;
+    let mut rng = Rng::new(0x384e);
+    let mut drbg = drbg::Rng::from_entropy(&[0x38u8; 32], b"hostile-input p384").unwrap();
+    let recipient = p384::KeyPair::generate(&mut drbg).unwrap();
+    let aead = hpke::Aead::Aes256Gcm;
+
+    for len in [p384::ENC_LEN, 49, 96, 98, 0] {
+        for enc in hostile_inputs(&mut rng, len, 24) {
+            assert!(
+                p384::setup_receiver(&enc, &recipient, b"info", aead).is_err(),
+                "a hostile {len}-byte encapsulation was accepted"
+            );
+            assert!(p384::setup_sender(&enc, b"info", aead, &mut drbg).is_err());
+        }
+    }
+
+    let (enc, mut tx) = p384::setup_sender(recipient.public(), b"info", aead, &mut drbg).unwrap();
+    let mut body = *b"a genuine message";
+    let mut tag = [0u8; hpke::TAG_LEN];
+    tx.seal_in_place(b"aad", &mut body, &mut tag).unwrap();
+    for bit in 0..p384::ENC_LEN * 8 {
+        let mut e = enc;
+        e[bit / 8] ^= 1 << (bit % 8);
+        if let Ok(mut rx) = p384::setup_receiver(&e, &recipient, b"info", aead) {
+            let mut b = body;
+            assert!(
+                rx.open_in_place(b"aad", &mut b, &tag).is_err(),
+                "bit {bit} of enc flipped and the message still opened"
+            );
+        }
+    }
+    let mut rx = p384::setup_receiver(&enc, &recipient, b"info", aead).unwrap();
+    rx.open_in_place(b"aad", &mut body, &tag).unwrap();
+    assert_eq!(&body, b"a genuine message");
 }

@@ -1,0 +1,297 @@
+{
+ "algorithm": "hpke base mode, DHKEM(P-384, HKDF-SHA384), HKDF-SHA384",
+ "source": "scripts/gen_hpke_p384_vectors.py, an RFC 9180 implementation of every NIST-curve DHKEM written from the specification on pyca/cryptography's ECDH and AEADs and Python's hmac. Before writing, it reproduced all 12 base-mode P-256 and P-521 cases of the CFRG test-vectors.json (SHA-256 61fc662f01996cd06d713dacf5e133167bd309a1f329442d53f1e21a47b3ede6), and exchanged a P-384 message each way with pyca/cryptography's own HPKE. No published vector uses P-384: these values are this implementation's outputs, from inputs chosen here.",
+ "cases": [
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "setup",
+   "info": "4f6465206f6e2061204772656369616e2055726e",
+   "ikm_e": "a2d2043c7dae983f66605543f0c33a88839bc074187f0552be4f1fcd6e13b486c15cb771e080b0c3dca02c6d955a2909",
+   "ikm_r": "b8c741124c99f2340b9c329a486467fd585c8da73e11c1cd3152161609e2715071104b88e8d5c263fcd9cd10888eafc0",
+   "sk_em": "f01c2df2b61288fcd5db1c42737550932df8bd78aca08307d9b2dbffc1607cb57b161d44205ee1896cf2b8dcd15919b1",
+   "pk_em": "04185425434860016f6ed1a0be0754f609d42026046448244c7358416551f33dcbc8547eafd0d126a3a612a4b706b56da2c916139bf798ccb42d7741d60aef857e4f64c7897df96ac8fc30a98e127e632bd7f33ff65dbb15e39f2ba19b5a51669f",
+   "sk_rm": "25cdc9b0ec03053dd1246d7aea350526543e54ad3a09075d06bfbf3145366b7d311f0a7557d2f340b9b7268a3e4632e8",
+   "pk_rm": "0428af6bb73a72c11938b9a4e39db9919f5776727532de294bfa0ff9c4a0cb28947ad02713f1a788db1f9b805ae90addf3bd8634bed21a3a1c9fc545fa7d43546e7cdff355a6bebbae345838fd4b76b67473072dec842faa226da2caa7eb1ee98b",
+   "enc": "04185425434860016f6ed1a0be0754f609d42026046448244c7358416551f33dcbc8547eafd0d126a3a612a4b706b56da2c916139bf798ccb42d7741d60aef857e4f64c7897df96ac8fc30a98e127e632bd7f33ff65dbb15e39f2ba19b5a51669f",
+   "shared_secret": "6334241f72fa6127221367ebe2f61c1e3dff9abd17d082a692099b14913942c0f50a9f3b7af0eff397fa1f1555be1bca",
+   "key_schedule_context": "00c304153876a3370387256979416b46b9b0fef57dc9e7853c010f700fe9eb317dbdce08c94e3072211cabb3c069a3f330b89fd081e14107d75f0b8198a6946a5f903f9937bfa52a6654616390c76851e8385b5072528a6007a96ddab398cb1f0a",
+   "secret": "ffa7e55a22947ab2a4ed868db617bb4940fee2c558a3d8ed4874dbb652758b0f2c730011e756a5f9e81ca99d8d8209f3",
+   "key": "947cd16a7cd736d7386ba893a94f00d8",
+   "base_nonce": "9a3faec1738b82a9d7d28387",
+   "exporter_secret": "4106ba9ff6acad255c5ec06de2b1157e2a643d30b2e30c47bf2eead5ec9a32c32a2ef2e01d7cf2a17d7cb7cb23de7e94"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "encryption",
+   "seq": "0",
+   "aad": "436f756e742d30",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "ba6d76144a19724c8ed0c400e7737d3de104196f76a4f51ce60dd3a8bf6101113c05bfff98fa5e008be2fb4781"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "encryption",
+   "seq": "1",
+   "aad": "436f756e742d31",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "c7357c0b17ab37f7257fa36e511aaa175fbad32f43fff040a10d5dbf2aba754478fcf85e766f8788bdd602ada3"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "encryption",
+   "seq": "2",
+   "aad": "436f756e742d32",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "cf6ae2bcae3ee3a2afb265c93e0d867a2e40d7078e1e0e8690cb3298846c7434cda1e416c11035d8129ad01bfe"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "encryption",
+   "seq": "4",
+   "aad": "436f756e742d34",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "8d90b23ce7b1cf438061f6d26c29a9495704b2bd3e66cd93e0a1e33b89a2de0f7e78544fbe872197243f4be86e"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "encryption",
+   "seq": "255",
+   "aad": "436f756e742d323535",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "23c3f233fa98ded7d7316a3cd76accf700e8ef83d2c337f396de76604c12b68951fa3fa8a45f1dbb90b86b75ae"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "encryption",
+   "seq": "256",
+   "aad": "436f756e742d323536",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "7f24f43bf01cff58ea3e2607cb5604ca9a5a2b96cba763bcc5d59e2212031dd0606575331bac24ddd66b629bca"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "export",
+   "exporter_context": "",
+   "length": "48",
+   "value": "9808e2462b87cf6310fb900b2c8bb15579b9e6c74d6c11e242ec4a3e86ffdebe96c75e378afb9febfd2f1df85c89e94b"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "export",
+   "exporter_context": "00",
+   "length": "48",
+   "value": "85dc0de6ff1d661ec83b038cb301943e737bccd10b8ea6cc3b342bf205169ef03b3cf2e86732c108bddafb7344a2b7d2"
+  },
+  {
+   "aead_id": "0001",
+   "aead": "AES-128-GCM",
+   "kind": "export",
+   "exporter_context": "54657374436f6e74657874",
+   "length": "48",
+   "value": "64a60255f93494ea412f95be37e3c1e3f5a5aba7d25f34220102189a73d2efd43281f19b743e51ef7e18abd7f5602cce"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "setup",
+   "info": "4f6465206f6e2061204772656369616e2055726e",
+   "ikm_e": "a2d2043c7dae983f66605543f0c33a88839bc074187f0552be4f1fcd6e13b486c15cb771e080b0c3dca02c6d955a2909",
+   "ikm_r": "b8c741124c99f2340b9c329a486467fd585c8da73e11c1cd3152161609e2715071104b88e8d5c263fcd9cd10888eafc0",
+   "sk_em": "f01c2df2b61288fcd5db1c42737550932df8bd78aca08307d9b2dbffc1607cb57b161d44205ee1896cf2b8dcd15919b1",
+   "pk_em": "04185425434860016f6ed1a0be0754f609d42026046448244c7358416551f33dcbc8547eafd0d126a3a612a4b706b56da2c916139bf798ccb42d7741d60aef857e4f64c7897df96ac8fc30a98e127e632bd7f33ff65dbb15e39f2ba19b5a51669f",
+   "sk_rm": "25cdc9b0ec03053dd1246d7aea350526543e54ad3a09075d06bfbf3145366b7d311f0a7557d2f340b9b7268a3e4632e8",
+   "pk_rm": "0428af6bb73a72c11938b9a4e39db9919f5776727532de294bfa0ff9c4a0cb28947ad02713f1a788db1f9b805ae90addf3bd8634bed21a3a1c9fc545fa7d43546e7cdff355a6bebbae345838fd4b76b67473072dec842faa226da2caa7eb1ee98b",
+   "enc": "04185425434860016f6ed1a0be0754f609d42026046448244c7358416551f33dcbc8547eafd0d126a3a612a4b706b56da2c916139bf798ccb42d7741d60aef857e4f64c7897df96ac8fc30a98e127e632bd7f33ff65dbb15e39f2ba19b5a51669f",
+   "shared_secret": "6334241f72fa6127221367ebe2f61c1e3dff9abd17d082a692099b14913942c0f50a9f3b7af0eff397fa1f1555be1bca",
+   "key_schedule_context": "00cb6b6c22166837986129d57dd606893c6d38ce24b765e577f45d3c7259947d44ac499819e00b3d260abffeebb7e108c91d1b7f97b58c3c144a664adb27f4c6ce43743d82c37e8845aeb0a888cff34fd209953e77cd59160a96ce69a179a2ee90",
+   "secret": "0ef44fde7373de42779eb483d12688e5342471fc7d7905168a9b0bafa1acf05204dea0942ce9593405fa131c1833f135",
+   "key": "6c89d2c88893bc40a1f0e850185b9d5c3aa200c5d1ea0ca7845f8222816703c3",
+   "base_nonce": "883ce9a1da9141dec13fd857",
+   "exporter_secret": "3665292e34625854221101c3b09505730bce795ff83b311b9d76389566bd9eeaefd622a0320c4847a199c6df15841cc7"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "encryption",
+   "seq": "0",
+   "aad": "436f756e742d30",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "ec2091e35993751068c27ce20e2bf8aa93fb0398eff2fca0d1ad6d36afe7c37ddf3e3832be2b43e49536b7bf72"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "encryption",
+   "seq": "1",
+   "aad": "436f756e742d31",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "043673ed8025adff903469f148c7aff53388adbefdce74dbda3dc1511725e3cc5afcfd55560174c942bfb59e76"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "encryption",
+   "seq": "2",
+   "aad": "436f756e742d32",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "40e9a34eea8ebc0ae07b2cdba1d66b55542282e81cd16fdb52bafb057d05000dde194dd2d19ed5535f953675f6"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "encryption",
+   "seq": "4",
+   "aad": "436f756e742d34",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "f396a3de1716541861d3e6a1c80c46951c4788b3aa1582567924c834f5160e4f3a81401cd672c8ed41d79ca8d6"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "encryption",
+   "seq": "255",
+   "aad": "436f756e742d323535",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "9052f3f870fc910f73ae98e6f0a2bb5a55cd3227f7aa0520f7e07d2fe99796b5ab0e71d5cc7ee182c4f1368ac3"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "encryption",
+   "seq": "256",
+   "aad": "436f756e742d323536",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "f8b4d2be259da10fb007569499fb6c1609084f8945cdf16c070b3c990d6232144efad398a0ac6fdf800c7dc5ef"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "export",
+   "exporter_context": "",
+   "length": "48",
+   "value": "779862a360582bb753d9c4a782323dd54609aae48e332326f330d74619d90aa6b025df1c5cd6cba965f71394623c25db"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "export",
+   "exporter_context": "00",
+   "length": "48",
+   "value": "57f77dd47b44130456cb394a2512556842ef423d24ec08d94a939118d66e9955172783e23604a10d4db6ba46815dc345"
+  },
+  {
+   "aead_id": "0002",
+   "aead": "AES-256-GCM",
+   "kind": "export",
+   "exporter_context": "54657374436f6e74657874",
+   "length": "48",
+   "value": "0a6c5e3d7ffc92e4f5b7768fe4774f61eec846ee5c2ffd8e1e8fe66201ebf97110b6c29f4e724aaa5e11ca6099fab539"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "setup",
+   "info": "4f6465206f6e2061204772656369616e2055726e",
+   "ikm_e": "a2d2043c7dae983f66605543f0c33a88839bc074187f0552be4f1fcd6e13b486c15cb771e080b0c3dca02c6d955a2909",
+   "ikm_r": "b8c741124c99f2340b9c329a486467fd585c8da73e11c1cd3152161609e2715071104b88e8d5c263fcd9cd10888eafc0",
+   "sk_em": "f01c2df2b61288fcd5db1c42737550932df8bd78aca08307d9b2dbffc1607cb57b161d44205ee1896cf2b8dcd15919b1",
+   "pk_em": "04185425434860016f6ed1a0be0754f609d42026046448244c7358416551f33dcbc8547eafd0d126a3a612a4b706b56da2c916139bf798ccb42d7741d60aef857e4f64c7897df96ac8fc30a98e127e632bd7f33ff65dbb15e39f2ba19b5a51669f",
+   "sk_rm": "25cdc9b0ec03053dd1246d7aea350526543e54ad3a09075d06bfbf3145366b7d311f0a7557d2f340b9b7268a3e4632e8",
+   "pk_rm": "0428af6bb73a72c11938b9a4e39db9919f5776727532de294bfa0ff9c4a0cb28947ad02713f1a788db1f9b805ae90addf3bd8634bed21a3a1c9fc545fa7d43546e7cdff355a6bebbae345838fd4b76b67473072dec842faa226da2caa7eb1ee98b",
+   "enc": "04185425434860016f6ed1a0be0754f609d42026046448244c7358416551f33dcbc8547eafd0d126a3a612a4b706b56da2c916139bf798ccb42d7741d60aef857e4f64c7897df96ac8fc30a98e127e632bd7f33ff65dbb15e39f2ba19b5a51669f",
+   "shared_secret": "6334241f72fa6127221367ebe2f61c1e3dff9abd17d082a692099b14913942c0f50a9f3b7af0eff397fa1f1555be1bca",
+   "key_schedule_context": "0061c6e78dfc473471e884c62b952eb588af7409cfbdb4db53d0924785bf39a91680368f26bd3b4c6c4d19874cdda522df08bce0d99bec7320b751e2acc7265b2d8edcbb94c677f94c3d0348bac6edc07797305108d3bab902d09453f5f4411336",
+   "secret": "5bd47ee22a9d3272bf419a76579c55f9e2642d6b8d903ab4a2445ae392476546fec838c9d6f4abbd93b2383de28403cc",
+   "key": "9b6de71a1f94ceb4977f2eb5b3e71557f765e3e38766c5c1561398c39db524a3",
+   "base_nonce": "d60d83ac464777a73bf26cc5",
+   "exporter_secret": "c882662e0c964389428300089e0b5a3021f3e7a43d115f62209113210036965865adb50e8fca3146fbcb590d3294f166"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "encryption",
+   "seq": "0",
+   "aad": "436f756e742d30",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "f23b9a982a90f0c8f4731febd1fa828bac93f4e7a5c889357661c3c8f469d36fa60050e350e5ff53912ca44333"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "encryption",
+   "seq": "1",
+   "aad": "436f756e742d31",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "961e760a292f6d120dc1f9d2856ebd356a0cd0191f1509427046e7b7bc5e9e1eeed98deb4950c933592155e3e1"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "encryption",
+   "seq": "2",
+   "aad": "436f756e742d32",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "c8b41c7dbe06156534913a17496d6f0595f8150743fb466fcf3d384af96d927711003ab520695c7294aade1127"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "encryption",
+   "seq": "4",
+   "aad": "436f756e742d34",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "2497b136c6707ec926039864ce6154d574ff9c552781f17cf6ea140a546a898c96f45e4047f35064b2ef92c1f4"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "encryption",
+   "seq": "255",
+   "aad": "436f756e742d323535",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "03aa217ab21a86522e57bb10aa5675ae588301a7baa5551d47a6c9355d0a0bc4ddd6e88c4908151930448d3522"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "encryption",
+   "seq": "256",
+   "aad": "436f756e742d323536",
+   "pt": "4265617574792069732074727574682c20747275746820626561757479",
+   "ct": "3e4c13d58e1a565c3808ed70768907103a1fd579700475dcfa2f17cfd3442879a5be7703d6b1f8dfb74c2ef1e4"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "export",
+   "exporter_context": "",
+   "length": "48",
+   "value": "cdb3b04a54434b4da03ef84f65bcfcd4b6dc7d03c1f374c0bcc4be2163259c7e4d4a96f2855fb7a6b5874086fe4fa0bb"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "export",
+   "exporter_context": "00",
+   "length": "48",
+   "value": "5ebaedbbc3f35dd0d873319716b34145822e921917acb915b22458d88efbce5dda7a2f1f16299997788105a07e7a7bf7"
+  },
+  {
+   "aead_id": "0003",
+   "aead": "ChaCha20-Poly1305",
+   "kind": "export",
+   "exporter_context": "54657374436f6e74657874",
+   "length": "48",
+   "value": "1aea2a6533b44ad8583501aee6afc3bebba9427ee04c0d304490c989c0fd9d7c1b1ecb5c9d2b6ccc5188c11686adaf06"
+  }
+ ]
+}
