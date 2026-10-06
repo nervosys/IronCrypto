@@ -47,6 +47,13 @@ fn bool_prop(desc: &str) -> Json {
     ])
 }
 
+fn integer_prop(desc: &str) -> Json {
+    Json::object([
+        ("type", Json::str("integer")),
+        ("description", Json::str(desc)),
+    ])
+}
+
 fn enum_prop(desc: &str, values: &str) -> Json {
     Json::object([
         ("type", Json::str("string")),
@@ -88,6 +95,28 @@ fn required<'a>(args: &'a Json, name: &str) -> Result<&'a str, String> {
 fn hex_arg(args: &Json, name: &str) -> Result<Vec<u8>, String> {
     let text = required(args, name)?;
     ic_core::codec::unhex(text).map_err(|e| format!("'{name}' must be hex: {e}"))
+}
+
+/// An optional hex argument, empty when absent.
+fn optional_hex(args: &Json, name: &str) -> Result<Vec<u8>, String> {
+    match arg(args, name) {
+        Some(text) if !text.is_empty() => {
+            ic_core::codec::unhex(text).map_err(|e| format!("'{name}' must be hex: {e}"))
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// A message given as UTF-8 text in `text_name` or as hex in `hex_name`,
+/// exactly one of them.
+fn message_arg(args: &Json, text_name: &str, hex_name: &str) -> Result<Vec<u8>, String> {
+    match (arg(args, text_name), arg(args, hex_name)) {
+        (Some(t), None) => Ok(t.as_bytes().to_vec()),
+        (None, Some(h)) => {
+            ic_core::codec::unhex(h).map_err(|e| format!("'{hex_name}' must be hex: {e}"))
+        }
+        _ => Err(format!("give exactly one of '{text_name}' or '{hex_name}'")),
+    }
 }
 
 /// What a client is told when it connects: how to use the server, then the
@@ -478,6 +507,111 @@ fn tools() -> Vec<Tool> {
                     ("tag", Json::str(tag)),
                     ("nonce", Json::str(ic_core::codec::hex(&nonce))),
                 ]))
+            },
+        },
+        Tool {
+            name: "crypto_open",
+            description:
+                "Verify and decrypt an AEAD ciphertext, the inverse of crypto_seal. Returns the \
+                 plaintext as hex, and as text when it is UTF-8. A wrong key, nonce, \
+                 associated data or tag is one error, 'authentication failed', and no \
+                 plaintext.",
+            schema: || {
+                schema(
+                    vec![
+                        ("algorithm", string_prop("AEAD id, e.g. aes-256-gcm.")),
+                        ("key", string_prop("Hex-encoded key.")),
+                        ("nonce", string_prop("Hex nonce, as crypto_seal returned it.")),
+                        ("aad", string_prop("Optional hex associated data, as sealed.")),
+                        ("ciphertext", string_prop("Hex ciphertext.")),
+                        ("tag", string_prop("Hex authentication tag.")),
+                    ],
+                    &["algorithm", "key", "nonce", "ciphertext", "tag"],
+                )
+            },
+            call: |args| {
+                let key = ic_core::Zeroizing::new(hex_arg(args, "key")?);
+                let plaintext = ops::open_bytes(
+                    required(args, "algorithm")?,
+                    &key,
+                    &hex_arg(args, "nonce")?,
+                    &optional_hex(args, "aad")?,
+                    &hex_arg(args, "ciphertext")?,
+                    &hex_arg(args, "tag")?,
+                )?;
+                let hex = Json::str(ic_core::codec::hex(&plaintext));
+                Ok(match core::str::from_utf8(&plaintext) {
+                    Ok(text) => Json::object([("plaintextHex", hex), ("plaintext", Json::str(text))]),
+                    Err(_) => Json::object([("plaintextHex", hex)]),
+                })
+            },
+        },
+        Tool {
+            name: "crypto_verify",
+            description:
+                "Check a signature. Returns {valid: true|false}; an invalid signature is an \
+                 answer, not an error. Errors mean the question could not be asked: an unknown \
+                 algorithm, or a key or signature of the wrong shape. Public keys are raw \
+                 (uncompressed SEC1 point for ECDSA, 32 bytes for Ed25519, FIPS 204 encoding \
+                 for ML-DSA), except RSA, which takes DER: a SubjectPublicKeyInfo or a PKCS#1 \
+                 RSAPublicKey.",
+            schema: || {
+                schema(
+                    vec![
+                        ("algorithm", string_prop("Signature id, e.g. ecdsa-p256-sha256, ed25519, ml-dsa-65, rsa-pss-sha256.")),
+                        ("publicKey", string_prop("Hex public key.")),
+                        ("message", string_prop("The signed message as UTF-8 text; or use messageHex.")),
+                        ("messageHex", string_prop("The signed message as hex; or use message.")),
+                        ("signature", string_prop("Hex signature.")),
+                        ("context", string_prop("Optional hex ML-DSA context string.")),
+                    ],
+                    &["algorithm", "publicKey", "signature"],
+                )
+            },
+            call: |args| {
+                let valid = ops::verify_signature(
+                    required(args, "algorithm")?,
+                    &hex_arg(args, "publicKey")?,
+                    &message_arg(args, "message", "messageHex")?,
+                    &hex_arg(args, "signature")?,
+                    &optional_hex(args, "context")?,
+                )?;
+                Ok(Json::object([("valid", Json::Bool(valid))]))
+            },
+        },
+        Tool {
+            name: "crypto_derive",
+            description:
+                "Derive key material with HKDF (RFC 5869) and return it as hex. Use it to turn \
+                 a shared secret into a key: put both parties' public keys in info. The output \
+                 is secret; treat it as a key.",
+            schema: || {
+                schema(
+                    vec![
+                        ("algorithm", string_prop("hkdf-sha2-256, hkdf-sha2-384 or hkdf-sha2-512.")),
+                        ("ikm", string_prop("Hex input keying material, e.g. a shared secret.")),
+                        ("salt", string_prop("Optional hex salt.")),
+                        ("info", string_prop("Optional hex context, binding the key to its use.")),
+                        ("length", integer_prop("Output bytes, at most 255 hash lengths.")),
+                    ],
+                    &["algorithm", "ikm", "length"],
+                )
+            },
+            call: |args| {
+                let length = args
+                    .get("length")
+                    .and_then(|v| v.as_i64())
+                    .filter(|&n| (1..=16320).contains(&n))
+                    .ok_or("'length' must be an integer from 1 to 16320")?;
+                let ikm = ic_core::Zeroizing::new(hex_arg(args, "ikm")?);
+                let okm = ops::hkdf_bytes(
+                    required(args, "algorithm")?,
+                    &ikm,
+                    &optional_hex(args, "salt")?,
+                    &optional_hex(args, "info")?,
+                    length as usize,
+                )?;
+                Ok(Json::object([("okm", Json::str(ic_core::codec::hex(&okm)))]))
             },
         },
         Tool {
@@ -1410,6 +1544,179 @@ mod tests {
             ]),
         );
         assert!(is_error(&r));
+    }
+
+    #[test]
+    fn open_inverts_seal_and_refuses_a_bad_tag() {
+        let key = "33".repeat(32);
+        let sealed = call(
+            "crypto_seal",
+            Json::object([
+                ("algorithm", Json::str("aes-256-gcm")),
+                ("key", Json::str(key.as_str())),
+                ("aad", Json::str("abcd")),
+                ("plaintext", Json::str("round trip")),
+            ]),
+        );
+        let b = body(&sealed);
+        let field = |n: &str| b.get(n).unwrap().as_str().unwrap().to_string();
+        let open = |tag: &str, aad: &str| {
+            call(
+                "crypto_open",
+                Json::object([
+                    ("algorithm", Json::str("aes-256-gcm")),
+                    ("key", Json::str(key.as_str())),
+                    ("nonce", Json::str(field("nonce"))),
+                    ("aad", Json::str(aad)),
+                    ("ciphertext", Json::str(field("ciphertext"))),
+                    ("tag", Json::str(tag)),
+                ]),
+            )
+        };
+        let r = open(&field("tag"), "abcd");
+        assert!(!is_error(&r));
+        assert_eq!(
+            body(&r).get("plaintext").unwrap().as_str(),
+            Some("round trip")
+        );
+
+        let mut bad = field("tag");
+        bad.replace_range(0..2, if &bad[0..2] == "00" { "01" } else { "00" });
+        let r = open(&bad, "abcd");
+        assert!(is_error(&r), "a forged tag opened");
+        let r = open(&field("tag"), "abce");
+        assert!(is_error(&r), "the wrong associated data opened");
+    }
+
+    #[test]
+    fn verify_answers_valid_or_invalid_and_errors_only_on_malformed_input() {
+        use ic_core::traits::SignatureScheme;
+        let verify = |alg: &str, pk: &[u8], msg: &str, sig: &[u8]| {
+            call(
+                "crypto_verify",
+                Json::object([
+                    ("algorithm", Json::str(alg)),
+                    ("publicKey", Json::str(ic_core::codec::hex(pk))),
+                    ("message", Json::str(msg)),
+                    ("signature", Json::str(ic_core::codec::hex(sig))),
+                ]),
+            )
+        };
+        let valid = |r: &Json| body(r).get("valid").and_then(|v| v.as_bool());
+
+        // ECDSA P-256 and Ed25519 through the common trait.
+        let sk = [7u8; 32];
+        let mut pk = [0u8; 65];
+        ic_ec::p256::EcdsaP256Sha256::public_key(&sk, &mut pk).unwrap();
+        let mut sig = [0u8; 64];
+        ic_ec::p256::EcdsaP256Sha256::sign(&sk, b"signed", &mut sig).unwrap();
+        assert_eq!(
+            valid(&verify("ecdsa-p256-sha256", &pk, "signed", &sig)),
+            Some(true)
+        );
+        assert_eq!(
+            valid(&verify("ecdsa-p256-sha256", &pk, "altered", &sig)),
+            Some(false)
+        );
+        assert!(is_error(&verify(
+            "ecdsa-p256-sha256",
+            &pk[..64],
+            "signed",
+            &sig
+        )));
+
+        let mut epk = [0u8; 32];
+        ic_ec::Ed25519::public_key(&sk, &mut epk).unwrap();
+        let mut esig = [0u8; 64];
+        ic_ec::Ed25519::sign(&sk, b"signed", &mut esig).unwrap();
+        assert_eq!(valid(&verify("ed25519", &epk, "signed", &esig)), Some(true));
+        esig[0] ^= 1;
+        assert_eq!(
+            valid(&verify("ed25519", &epk, "signed", &esig)),
+            Some(false)
+        );
+
+        // ML-DSA-44, with and without the context it was signed under.
+        use ironcrypto::mldsa::sign44 as m;
+        let mut mpk = [0u8; m::PUBLIC_KEY_LEN];
+        let mut msk = [0u8; m::SECRET_KEY_LEN];
+        assert!(m::keygen(&[9u8; 32], &mut mpk, &mut msk));
+        let mut msig = [0u8; m::SIGNATURE_LEN];
+        assert!(m::sign(&msk, b"signed", b"ctx", &[0u8; 32], &mut msig));
+        let with_ctx = |ctx: &str| {
+            call(
+                "crypto_verify",
+                Json::object([
+                    ("algorithm", Json::str("ml-dsa-44")),
+                    ("publicKey", Json::str(ic_core::codec::hex(&mpk))),
+                    ("message", Json::str("signed")),
+                    ("signature", Json::str(ic_core::codec::hex(&msig))),
+                    ("context", Json::str(ctx)),
+                ]),
+            )
+        };
+        assert_eq!(valid(&with_ctx("637478")), Some(true));
+        assert_eq!(valid(&with_ctx("")), Some(false));
+
+        // RSA takes a SubjectPublicKeyInfo or a PKCS#1 RSAPublicKey.
+        let mut rng = ic_drbg::Rng::from_entropy(&[0x45u8; 32], b"verify tool").unwrap();
+        let rsa = ic_rsa::generate(2048, &mut rng).unwrap();
+        let mut n = [0u8; 256];
+        rsa.public_key().modulus_bytes(&mut n).unwrap();
+        let e = rsa.public_key().exponent();
+        let mut spki = [0u8; 400];
+        let spki_len = ic_pkix::PublicKeyInfo::Rsa {
+            modulus: &n,
+            exponent: e,
+        }
+        .to_der(&mut spki)
+        .unwrap();
+        let mut pkcs1 = [0u8; 400];
+        let pkcs1_len = ic_pkix::write_rsa_public_key(&n, e, &mut pkcs1).unwrap();
+        let mut rsig = [0u8; 256];
+        ic_rsa::PssSha256::sign(&rsa, b"signed", &mut rng, &mut rsig).unwrap();
+        for key in [&spki[..spki_len], &pkcs1[..pkcs1_len]] {
+            assert_eq!(
+                valid(&verify("rsa-pss-sha256", key, "signed", &rsig)),
+                Some(true)
+            );
+            assert_eq!(
+                valid(&verify("rsa-pss-sha256", key, "other", &rsig)),
+                Some(false)
+            );
+        }
+        assert!(
+            is_error(&verify("rsa-pss-sha256", &n, "signed", &rsig)),
+            "a bare modulus is not a key"
+        );
+
+        assert!(is_error(&verify("ecdsa-p256-sha1", &pk, "signed", &sig)));
+    }
+
+    /// RFC 5869 appendix A.1, the case `ic-kdf` checks too.
+    #[test]
+    fn derive_matches_rfc5869_and_bounds_its_length() {
+        let derive = |length: f64| {
+            call(
+                "crypto_derive",
+                Json::object([
+                    ("algorithm", Json::str("hkdf-sha2-256")),
+                    ("ikm", Json::str("0b".repeat(22))),
+                    ("salt", Json::str("000102030405060708090a0b0c")),
+                    ("info", Json::str("f0f1f2f3f4f5f6f7f8f9")),
+                    ("length", Json::num(length)),
+                ]),
+            )
+        };
+        assert_eq!(
+            body(&derive(42.0)).get("okm").unwrap().as_str(),
+            Some("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
+        );
+        assert!(is_error(&derive(0.0)));
+        assert!(
+            is_error(&derive(255.0 * 32.0 + 1.0)),
+            "longer than HKDF can produce"
+        );
     }
 
     #[test]

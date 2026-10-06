@@ -509,10 +509,189 @@ pub fn seal_hex(
             .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
         "chacha20-poly1305" => ic_cipher::ChaCha20Poly1305::new(key)
             .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
+        "aes-128-gcm-siv" => ic_cipher::Aes128GcmSiv::new(key)
+            .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
+        "aes-256-gcm-siv" => ic_cipher::Aes256GcmSiv::new(key)
+            .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
         other => return Err(format!("unknown AEAD '{other}'; try aes-256-gcm")),
     }
     .map_err(|e| e.to_string())?;
     Ok((ic_core::codec::hex(&buf), ic_core::codec::hex(&tag)))
+}
+
+/// Verify and decrypt with an AEAD, returning the plaintext.
+///
+/// The AEAD wipes its buffer when the tag does not verify, so nothing
+/// unauthenticated leaves this function; the error says only that it failed.
+pub fn open_bytes(
+    algorithm: &str,
+    key: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Result<ic_core::Zeroizing<Vec<u8>>, String> {
+    let mut buf = ic_core::Zeroizing::new(ciphertext.to_vec());
+    let out: &mut [u8] = buf.get_mut();
+    match algorithm {
+        "aes-128-gcm" => {
+            ic_cipher::Aes128Gcm::new(key).and_then(|c| c.open_detached(nonce, aad, out, tag))
+        }
+        "aes-192-gcm" => {
+            ic_cipher::Aes192Gcm::new(key).and_then(|c| c.open_detached(nonce, aad, out, tag))
+        }
+        "aes-256-gcm" => {
+            ic_cipher::Aes256Gcm::new(key).and_then(|c| c.open_detached(nonce, aad, out, tag))
+        }
+        "chacha20-poly1305" => ic_cipher::ChaCha20Poly1305::new(key)
+            .and_then(|c| c.open_detached(nonce, aad, out, tag)),
+        "aes-128-gcm-siv" => {
+            ic_cipher::Aes128GcmSiv::new(key).and_then(|c| c.open_detached(nonce, aad, out, tag))
+        }
+        "aes-256-gcm-siv" => {
+            ic_cipher::Aes256GcmSiv::new(key).and_then(|c| c.open_detached(nonce, aad, out, tag))
+        }
+        other => return Err(format!("unknown AEAD '{other}'; try aes-256-gcm")),
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+/// The signature algorithms `verify_signature` accepts.
+pub const VERIFY_ALGORITHMS: &[&str] = &[
+    "ed25519",
+    "ecdsa-p256-sha256",
+    "ecdsa-p384-sha384",
+    "ecdsa-p521-sha512",
+    "ml-dsa-44",
+    "ml-dsa-65",
+    "ml-dsa-87",
+    "rsa-pkcs1-sha256",
+    "rsa-pkcs1-sha384",
+    "rsa-pkcs1-sha512",
+    "rsa-pss-sha256",
+    "rsa-pss-sha384",
+    "rsa-pss-sha512",
+];
+
+/// Verify a signature, returning whether it is valid.
+///
+/// An invalid signature is `Ok(false)`, not an error: the question was asked
+/// and answered. An error means the question could not be asked -- an unknown
+/// algorithm, or a key or signature of the wrong shape.
+///
+/// Public keys are each algorithm's raw encoding (an uncompressed SEC1 point
+/// for ECDSA, 32 bytes for Ed25519, FIPS 204's encoding for ML-DSA), except
+/// RSA's, which is DER: a SubjectPublicKeyInfo, or a bare PKCS#1
+/// `RSAPublicKey`. The two cannot be mistaken for each other -- one opens with
+/// an AlgorithmIdentifier, the other with the modulus. `context` is ML-DSA's context
+/// string and must be empty for every other algorithm.
+pub fn verify_signature(
+    algorithm: &str,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+    context: &[u8],
+) -> Result<bool, String> {
+    use ic_core::traits::SignatureScheme;
+    use ironcrypto::mldsa;
+
+    if !algorithm.starts_with("ml-dsa") && !context.is_empty() {
+        return Err(format!("{algorithm} takes no context string"));
+    }
+    let answer = |r: ic_core::Result<()>| match r {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == ic_core::ErrorKind::AuthenticationFailed => Ok(false),
+        Err(e) => Err(e.to_string()),
+    };
+    macro_rules! mldsa {
+        ($m:ident) => {{
+            let pk: &[u8; mldsa::$m::PUBLIC_KEY_LEN] = public_key.try_into().map_err(|_| {
+                format!(
+                    "{algorithm} public key must be {} bytes",
+                    mldsa::$m::PUBLIC_KEY_LEN
+                )
+            })?;
+            let sig: &[u8; mldsa::$m::SIGNATURE_LEN] = signature.try_into().map_err(|_| {
+                format!(
+                    "{algorithm} signature must be {} bytes",
+                    mldsa::$m::SIGNATURE_LEN
+                )
+            })?;
+            if context.len() > 255 {
+                return Err("ml-dsa context must be at most 255 bytes".to_string());
+            }
+            Ok(mldsa::$m::verify(pk, message, context, sig))
+        }};
+    }
+    let rsa_key = || -> Result<ic_rsa::RsaPublicKey, String> {
+        let (modulus, exponent) = match ic_pkix::PublicKeyInfo::from_der(public_key) {
+            Ok(ic_pkix::PublicKeyInfo::Rsa { modulus, exponent }) => (modulus, exponent),
+            Ok(_) => return Err("that SubjectPublicKeyInfo is not an RSA key".to_string()),
+            Err(_) => ic_pkix::parse_rsa_public_key(public_key).map_err(|e| {
+                format!(
+                    "an RSA public key must be DER, a SubjectPublicKeyInfo or a PKCS#1 \
+                     RSAPublicKey: {}",
+                    e.kind().id()
+                )
+            })?,
+        };
+        ic_rsa::RsaPublicKey::from_components(modulus, exponent).map_err(|e| e.to_string())
+    };
+    match algorithm {
+        "ed25519" => answer(ic_ec::Ed25519::verify(public_key, message, signature)),
+        "ecdsa-p256-sha256" => answer(ic_ec::p256::EcdsaP256Sha256::verify(
+            public_key, message, signature,
+        )),
+        "ecdsa-p384-sha384" => answer(ic_ec::p384::EcdsaP384Sha384::verify(
+            public_key, message, signature,
+        )),
+        "ecdsa-p521-sha512" => answer(ic_ec::p521::EcdsaP521Sha512::verify(
+            public_key, message, signature,
+        )),
+        "ml-dsa-44" => mldsa!(sign44),
+        "ml-dsa-65" => mldsa!(sign),
+        "ml-dsa-87" => mldsa!(sign87),
+        "rsa-pkcs1-sha256" => answer(ic_rsa::Pkcs1Sha256::verify(&rsa_key()?, message, signature)),
+        "rsa-pkcs1-sha384" => answer(ic_rsa::Pkcs1Sha384::verify(&rsa_key()?, message, signature)),
+        "rsa-pkcs1-sha512" => answer(ic_rsa::Pkcs1Sha512::verify(&rsa_key()?, message, signature)),
+        "rsa-pss-sha256" => answer(ic_rsa::PssSha256::verify(&rsa_key()?, message, signature)),
+        "rsa-pss-sha384" => answer(ic_rsa::PssSha384::verify(&rsa_key()?, message, signature)),
+        "rsa-pss-sha512" => answer(ic_rsa::PssSha512::verify(&rsa_key()?, message, signature)),
+        other => Err(format!(
+            "unknown signature algorithm '{other}'; one of {}",
+            VERIFY_ALGORITHMS.join(", ")
+        )),
+    }
+}
+
+/// Derive `length` bytes with HKDF (RFC 5869).
+pub fn hkdf_bytes(
+    algorithm: &str,
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    length: usize,
+) -> Result<ic_core::Zeroizing<Vec<u8>>, String> {
+    use ic_core::traits::Kdf;
+    use ironcrypto::{kdf::Hkdf, mac};
+    if length == 0 {
+        return Err("length must be at least 1".to_string());
+    }
+    let mut out = ic_core::Zeroizing::new(vec![0u8; length]);
+    let o: &mut [u8] = out.get_mut();
+    match algorithm {
+        "hkdf-sha2-256" => Hkdf::<mac::HmacSha256>::derive(ikm, salt, info, o),
+        "hkdf-sha2-384" => Hkdf::<mac::HmacSha384>::derive(ikm, salt, info, o),
+        "hkdf-sha2-512" => Hkdf::<mac::HmacSha512>::derive(ikm, salt, info, o),
+        other => {
+            return Err(format!(
+                "unknown KDF '{other}'; one of hkdf-sha2-256, hkdf-sha2-384, hkdf-sha2-512"
+            ))
+        }
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(out)
 }
 
 /// A fresh random 96-bit nonce from the OS-seeded DRBG.

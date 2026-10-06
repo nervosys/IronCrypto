@@ -30,6 +30,14 @@ one to use correctly.
   `ic ontology show` sample are compared word for word with what the commands
   print. The registry's own examples were already compiled, by
   `examples_compile.rs`.
+- **MCP tools to open, verify and derive.** `crypto_open` is `crypto_seal`'s
+  inverse, and a wrong key, nonce, associated data or tag gives one error and
+  no plaintext. `crypto_verify` checks ECDSA, Ed25519, ML-DSA and RSA
+  signatures and answers `valid: true` or `false`, keeping errors for input
+  it cannot interpret; RSA keys may be a SubjectPublicKeyInfo or a PKCS#1
+  `RSAPublicKey`. `crypto_derive` is HKDF, checked against RFC 5869 A.1. An
+  agent that needed any of these used to write and compile Rust for it.
+  `crypto_seal` and `crypto_open` also take AES-GCM-SIV.
 - **The always-in-force rules ship with the library**, as
   `ic_ontology::RULES`: nonce reuse, unauthenticated modes, tag comparison,
   password hashing, raw OS bytes, raw shared secrets, and wiping secrets, each

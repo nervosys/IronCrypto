@@ -209,7 +209,9 @@ or shared with a second sealer -- needs its counter persisted and restored with
 | `crypto_capabilities` | "What can this build actually do?" |
 | `crypto_rules` | "What must I never do, whichever algorithm I use?" Also sent in the server's instructions at connect time |
 | `crypto_selftest` | "Is the module healthy?" |
-| `crypto_digest` / `crypto_hmac` / `crypto_seal` / `crypto_random` | primitive operations |
+| `crypto_digest` / `crypto_hmac` / `crypto_seal` / `crypto_open` / `crypto_random` | primitive operations; `crypto_seal` draws the nonce when none is given |
+| `crypto_verify` | "Is this signature valid?" ECDSA, Ed25519, ML-DSA and RSA; an invalid signature is an answer, not an error |
+| `crypto_derive` | HKDF, to turn a shared secret into a key |
 
 ---
 
