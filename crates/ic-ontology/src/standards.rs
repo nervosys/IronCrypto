@@ -73,6 +73,9 @@ pub enum Body {
     Nist,
     /// The IETF: RFCs.
     Ietf,
+    /// A peer-reviewed publication, for a construction no standards body
+    /// defines. Located by DOI.
+    Literature,
 }
 
 impl Body {
@@ -81,6 +84,7 @@ impl Body {
         match self {
             Self::Nist => "nist",
             Self::Ietf => "ietf",
+            Self::Literature => "literature",
         }
     }
 }
@@ -1034,6 +1038,21 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "Shamir 1979",
+        title: "How to Share a Secret",
+        body: Body::Literature,
+        scope: Scope::Algorithm,
+        year: 1979,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://doi.org/10.1145/359168.359176",
+        summary: "Communications of the ACM 22(11), 612-613. Threshold secret sharing by \
+                  polynomial interpolation over a finite field: any k of n shares recover the \
+                  secret, and fewer reveal nothing about it. No standards body defines the \
+                  scheme, so the paper that does is cited.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "RFC 9180",
         title: "Hybrid Public Key Encryption",
         body: Body::Ietf,
@@ -1351,6 +1370,12 @@ mod tests {
                 Body::Ietf => assert!(
                     s.url.starts_with("https://www.rfc-editor.org/rfc/rfc"),
                     "{} does not use the RFC editor scheme: {}",
+                    s.id,
+                    s.url
+                ),
+                Body::Literature => assert!(
+                    s.url.starts_with("https://doi.org/10."),
+                    "{} does not use a DOI: {}",
                     s.id,
                     s.url
                 ),

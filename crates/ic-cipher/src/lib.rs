@@ -63,6 +63,7 @@ pub mod gf;
 pub mod keywrap;
 pub mod modes;
 pub mod polyval;
+pub mod shamir;
 
 pub use aes::{Aes128, Aes192, Aes256};
 pub use chacha::{chacha20_xor, ChaCha20Poly1305, Poly1305};

@@ -245,6 +245,25 @@ const PBKDF2_P: [Param; 3] = [
     },
 ];
 
+const SHAMIR_P: [Param; 2] = [
+    Param {
+        name: "threshold",
+        unit: Unit::Count,
+        min: 2,
+        max: 255,
+        recommended: 3,
+        note: "Shares needed to recover; fewer reveal nothing.",
+    },
+    Param {
+        name: "share-count",
+        unit: Unit::Count,
+        min: 2,
+        max: 255,
+        recommended: 5,
+        note: "At least the threshold; one per nonzero field element at most.",
+    },
+];
+
 const HPKE_P: [Param; 4] = [
     Param {
         name: "private-key",
@@ -1954,6 +1973,45 @@ pub static REGISTRY: &[Entry] = &[
         rust_path: "ic_ec::X25519",
         example: "use ic_core::traits::KeyAgreement;\nic_ec::X25519::agree(&my_sk, &peer_pk, &mut shared)?;",
         notes: "Shor breaks this outright; pair it with ML-KEM in a hybrid once that lands.",
+    },
+    Entry {
+        id: "shamir-gf256",
+        name: "Shamir secret sharing over GF(2^8)",
+        aliases: &["shamir", "sss"],
+        summary: "Split a secret into n shares, any k of which recover it and any fewer of \
+                  which reveal nothing. For backing up a key.",
+        class: Class::SecretSharing,
+        family: "Shamir",
+        purposes: &[Purpose::Confidentiality],
+        strength: Strength { classical: 256, quantum: 256 },
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["Shamir 1979"],
+        params: &SHAMIR_P,
+        constraints: &[
+            Constraint {
+                id: "shamir-shares-have-no-integrity",
+                requirement: "Split a random key, not data, and protect the data with an AEAD \
+                              under that key.",
+                consequence: "A corrupted share or too few shares recover a wrong secret \
+                              silently; only an authenticated use of the key detects it.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "shamir-fresh-randomness",
+                requirement: "Split with a cryptographic random source, a fresh draw per split.",
+                consequence: "Predictable coefficients let fewer than threshold shares recover \
+                              the secret.",
+                severity: Severity::Critical,
+            },
+        ],
+        edges: &[],
+        performance: Performance::Fast,
+        rust_path: "ic_cipher::shamir::Shamir",
+        example: "ic_cipher::shamir::split(&key, 3, 5, &mut rng, &mut shares)?;",
+        notes: "Information-theoretically secret below the threshold, so its strength is not a \
+                key length: an attacker with fewer shares learns nothing at any computational \
+                cost. Indices and the threshold travel with each share in the caller's format.",
     },
     Entry {
         id: "hpke-x25519-sha256",

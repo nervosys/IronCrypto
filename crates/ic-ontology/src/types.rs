@@ -32,6 +32,8 @@ pub enum Class {
     Kem,
     /// A digital signature scheme.
     Signature,
+    /// A threshold secret-sharing scheme.
+    SecretSharing,
 }
 
 impl Class {
@@ -50,6 +52,7 @@ impl Class {
             Self::KeyAgreement => "key-agreement",
             Self::Kem => "kem",
             Self::Signature => "signature",
+            Self::SecretSharing => "secret-sharing",
         }
     }
 
@@ -67,6 +70,7 @@ impl Class {
         Class::KeyAgreement,
         Class::Kem,
         Class::Signature,
+        Class::SecretSharing,
     ];
 
     /// Parse a class from its identifier.

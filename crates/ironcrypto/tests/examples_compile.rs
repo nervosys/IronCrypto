@@ -1054,3 +1054,29 @@ fn hpke_example_compiles_and_matches() -> Result<()> {
     assert_eq!(&msg, b"message");
     Ok(())
 }
+
+/// Shamir: the split, compiled, then three of the five shares recover the key.
+#[test]
+fn shamir_example_compiles_and_matches() -> Result<()> {
+    let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x3du8; 32], b"example").unwrap();
+    let key = [0x42u8; 32];
+    let mut shares = [0u8; 5 * 32];
+
+    ic_cipher::shamir::split(&key, 3, 5, &mut rng, &mut shares)?;
+    check_example(
+        "shamir-gf256",
+        "ic_cipher::shamir::split(&key, 3, 5, &mut rng, &mut shares)?;",
+    );
+
+    let mut recovered = [0u8; 32];
+    ic_cipher::shamir::combine(
+        &[
+            (1, &shares[..32]),
+            (3, &shares[64..96]),
+            (5, &shares[128..]),
+        ],
+        &mut recovered,
+    )?;
+    assert_eq!(recovered, key);
+    Ok(())
+}

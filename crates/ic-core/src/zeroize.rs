@@ -58,6 +58,15 @@ impl Zeroize for [u64] {
     }
 }
 
+#[cfg(feature = "std")]
+impl Zeroize for std::vec::Vec<u8> {
+    /// The vector's bytes, through the slice wipe. The length and capacity
+    /// are left as they are; only the contents are secret.
+    fn zeroize(&mut self) {
+        self.as_mut_slice().zeroize();
+    }
+}
+
 impl<const N: usize> Zeroize for [u8; N] {
     fn zeroize(&mut self) {
         self.as_mut_slice().zeroize();

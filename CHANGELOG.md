@@ -7,6 +7,23 @@ all of them.
 
 ### Added
 
+- **Shamir secret sharing, `ic_cipher::shamir`.** Split a secret into up to
+  255 shares, any `threshold` of which recover it and fewer of which reveal
+  nothing, over GF(2^8) with `ic_cipher::gf`'s branch-free, table-free
+  arithmetic. `split` and `combine` work in caller storage under `no_std`;
+  `split_vec` and `combine_vec` return shares and a secret that wipe on drop.
+  Shares carry no integrity, so the intended use is splitting a random key
+  that protects data under an AEAD. IronPrivacyGuard wanted it for key
+  backups. A module rather than a crate, so no new package. It has a
+  self-test and an ontology entry, `shamir-gf256`, citing Shamir's 1979
+  paper.
+- **Two ontology terms.** `Class::SecretSharing` (`secret-sharing`) for
+  Shamir, and `Body::Literature` in the standards knowledgebase for a
+  construction no standards body defines, located by DOI. Both enums are
+  exhaustive, so code outside this workspace that matches on either without a
+  wildcard arm needs one; nothing in this workspace or its known dependents
+  does.
+
 - **HPKE, RFC 9180, in a new crate, `ic-hpke`.** Base mode with
   DHKEM(X25519, HKDF-SHA256) and HKDF-SHA256, over AES-128-GCM, AES-256-GCM or
   ChaCha20-Poly1305, with the exporter. Key pairs, sender and receiver setup
