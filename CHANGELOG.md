@@ -3,7 +3,7 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.12
 
 ### Added
 

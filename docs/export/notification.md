@@ -217,6 +217,14 @@ the order of events as it was: 0.2.11, and with it the `ic-hpke` location,
 was published at 2026-10-06 02:51:52 UTC on the instruction recorded above,
 before this notice was printed.
 
+## 0.2.12 release authorization
+
+On 2026-10-06 the maintainer was asked whether the BIS/NSA notification covers
+0.2.12, which publishes under the same nineteen package names as 0.2.11 and
+adds only HPKE's DeriveKeyPair inside the already-notified `ic-hpke`. The
+maintainer answered that it is covered. Publication proceeds on that answer;
+no new notice was sent or supplied here.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
