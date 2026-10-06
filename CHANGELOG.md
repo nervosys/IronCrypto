@@ -23,7 +23,13 @@ one to use correctly.
   it, and refuses a (key, nonce) pair it has already sealed under in this
   process. It keeps an HMAC of each pair under a per-process key, never the
   key. `ic seal` takes `random` in place of a nonce and prints the nonce used.
-- **The README's Rust examples compile and run as doctests** of `ironcrypto`.
+- **The documentation's Rust compiles and its sample output is checked.** The
+  Rust blocks in the README, `docs/FIPS.md` and `docs/ONTOLOGY.md` run as
+  doctests of `ironcrypto`; five of the six in `docs/` did not compile, and one
+  was a diagram. The README's `ic recommend` sample and `docs/ONTOLOGY.md`'s
+  `ic ontology show` sample are compared word for word with what the commands
+  print. The registry's own examples were already compiled, by
+  `examples_compile.rs`.
 - **The always-in-force rules ship with the library**, as
   `ic_ontology::RULES`: nonce reuse, unauthenticated modes, tag comparison,
   password hashing, raw OS bytes, raw shared secrets, and wiping secrets, each

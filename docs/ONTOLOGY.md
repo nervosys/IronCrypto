@@ -44,21 +44,25 @@ parameters:
   key            32..32 bytes (recommended 32)
       256-bit key.
   nonce          1..64 bytes (recommended 12)
-      96-bit nonces are used directly as the counter block; other lengths are
-      hashed first.
+      96-bit nonces are used directly as the counter block; other lengths are hashed first.
   tag            16..16 bytes (recommended 16)
       Full-length authentication tag.
 
 constraints:
   [critical] Never reuse a (key, nonce) pair.
-      Reuse leaks the authentication subkey, allowing forgery of arbitrary
-      messages, and XORs the two plaintexts together.
-  [serious] Derive the nonce from a strictly increasing counter, or draw 96
-      random bits and bound the number of messages per key.
+      Reuse leaks the authentication subkey, allowing forgery of arbitrary messages, and XORs the two plaintexts together.
+  [serious] Let ic_cipher::Sealer choose the nonce: a sender tag and a strictly increasing counter, never reused within it. Otherwise derive the nonce from a counter yourself, or draw 96 random bits and bound the number of messages per key.
       Random 96-bit nonces collide with meaningful probability past 2^32 messages.
 
 relations:
   built-on aes-256
+
+example:
+  let mut tx = ic_cipher::Sealer::<ic_cipher::Aes256Gcm>::new(key, *b"c->s")?;
+  let nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext
+
+notes:
+  Also the choice when a single key must protect data for a long time, since the 256-bit key retains 128-bit strength against Grover.
 ```
 
 ## Three levels of query
@@ -89,12 +93,12 @@ modelled as `0` (Shor), while symmetric strengths are halved (Grover).
 ```rust
 use ic_ontology::select::{recommend, Intent, Policy};
 
-let r = recommend(Intent::EncryptMessage, Policy::DEFAULT)?;
-r.primary;        // the chosen entry
-r.rationale;      // why
-r.alternative;    // second choice
-r.rejected();     // what was passed over, with reasons
-r.must_observe;   // constraints the caller has to honour
+let r = recommend(Intent::EncryptMessage, Policy::DEFAULT).expect("an AEAD is built in");
+let _ = r.primary; // the chosen entry
+let _ = r.rationale; // why
+let _ = r.alternative; // second choice
+let _ = r.rejected(); // what was passed over, with reasons
+let _ = r.must_observe; // constraints the caller has to honour
 ```
 
 The ranking is context-sensitive. Without AES hardware the portable AES backend
@@ -114,7 +118,9 @@ degraded answer:
 ### 3. Traverse — "what is this related to?"
 
 ```rust
-ic_ontology::related("sha2-256")  // finds hmac-sha2-256, hkdf-sha2-256, ...
+// Finds hmac-sha2-256, hkdf-sha2-256, ...
+let related: Vec<_> = ic_ontology::related("sha2-256").collect();
+assert!(related.iter().any(|e| e.id == "hmac-sha2-256"));
 ```
 
 Edges are traversed in both directions. `sha2-256` does not record that HMAC is
@@ -150,7 +156,11 @@ authority. Three test suites hold them together.
 equals the constant on the implementing type:
 
 ```rust
-assert_eq!(key_param.recommended as usize, Aes256Gcm::KEY_LEN);
+use ic_core::traits::Aead;
+
+let entry = ic_ontology::get("aes-256-gcm").expect("registered");
+let key_param = entry.params.iter().find(|p| p.name == "key").expect("a key");
+assert_eq!(key_param.recommended as usize, ic_cipher::Aes256Gcm::KEY_LEN);
 ```
 
 **Paths must resolve.** Every `available` entry must name a `rust_path` starting

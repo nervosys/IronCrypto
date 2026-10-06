@@ -29,7 +29,7 @@ holds no certificate number. Do not represent it as FIPS validated.
 
 `ic-fips` defines the boundary. The module moves through:
 
-```
+```text
 Uninitialized ──initialize()──> SelfTestInProgress ──all pass──> Operational(Unrestricted)
                                         │                               ↕ set_mode()
                                         │                        Operational(Approved)
@@ -60,9 +60,15 @@ not mark as permitted. The policy is data, not a hard-coded list — it reads
 policy and the documentation cannot drift apart.
 
 ```rust
-ic_fips::set_mode(Mode::Approved)?;
-ic_fips::check("aes-256-gcm")?;            // ServiceIndicator::Approved
-ic_fips::check("chacha20-poly1305")        // Err(NotApprovedInFipsMode)
+use ic_fips::{Mode, ServiceIndicator};
+
+fn main() -> ic_core::Result<()> {
+    ic_fips::initialize()?;
+    ic_fips::set_mode(Mode::Approved)?;
+    assert_eq!(ic_fips::check("aes-256-gcm")?, ServiceIndicator::Approved);
+    assert!(ic_fips::check("chacha20-poly1305").is_err()); // NotApprovedInFipsMode
+    Ok(())
+}
 ```
 
 ### Service indicator
@@ -72,8 +78,18 @@ was an approved one. `check` returns that indicator, and `guarded` pairs it with
 the operation:
 
 ```rust
-let (digest, indicator) = ic_fips::guarded("sha2-256", || Sha256::digest(data))?;
-assert_eq!(indicator, ServiceIndicator::Approved);
+use ic_core::traits::Digest;
+use ic_fips::ServiceIndicator;
+use ic_hash::Sha256;
+
+fn main() -> ic_core::Result<()> {
+    ic_fips::initialize()?;
+    let data = b"payload";
+    let (digest, indicator) = ic_fips::guarded("sha2-256", || Sha256::digest(data))?;
+    assert_eq!(indicator, ServiceIndicator::Approved);
+    assert_eq!(digest.len(), 32);
+    Ok(())
+}
 ```
 
 Three values: `Approved`, `ApprovedAsComponent` (a raw block cipher used inside

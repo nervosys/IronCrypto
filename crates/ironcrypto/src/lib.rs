@@ -353,3 +353,12 @@ mod tests {
 #[cfg(doctest)]
 #[doc = include_str!("../../../README.md")]
 struct ReadmeDoctests;
+
+// The same for the two documents in docs/ that show Rust.
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/FIPS.md")]
+struct FipsDocDoctests;
+
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/ONTOLOGY.md")]
+struct OntologyDocDoctests;

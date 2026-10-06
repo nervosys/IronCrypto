@@ -1436,4 +1436,41 @@ mod tests {
         let args = ["ontology", "list", "--class", "--fips"];
         assert_eq!(opt(&args, "--class"), None);
     }
+
+    /// The command output shown in the README and docs/ONTOLOGY.md is what
+    /// the command prints.
+    ///
+    /// Both samples are what an agent reads to learn what to expect, and the
+    /// nonce constraint in both had gone stale before this existed. Lines are
+    /// wrapped for the page, so the comparison is on words, not layout.
+    #[test]
+    fn documented_output_is_what_the_commands_print() {
+        let root = {
+            let mut here = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            while !(here.join("Cargo.toml").is_file() && here.join("crates").is_dir()) {
+                assert!(here.pop(), "workspace root not found");
+            }
+            here
+        };
+        let words = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        for (doc, command) in [
+            ("README.md", "ic recommend encrypt-message --fips"),
+            ("docs/ONTOLOGY.md", "ic ontology show aes-256-gcm"),
+        ] {
+            let text = std::fs::read_to_string(root.join(doc)).unwrap();
+            let start = text
+                .find(&format!("$ {command}\n"))
+                .unwrap_or_else(|| panic!("{doc} shows no '$ {command}'"));
+            let body = &text[start..];
+            let body = &body[body.find('\n').unwrap() + 1..];
+            let shown = &body[..body.find("```").unwrap()];
+            let args: Vec<&str> = command.split_whitespace().skip(1).collect();
+            let printed = run(&args).unwrap();
+            assert_eq!(
+                words(shown),
+                words(&printed),
+                "{doc}'s sample of '{command}' is not what it prints"
+            );
+        }
+    }
 }
