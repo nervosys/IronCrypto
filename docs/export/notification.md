@@ -201,6 +201,22 @@ UTC; the last was `ic-cli` at 02:52:12 UTC. The published source commit is
 `d5a8587`; all nineteen packages identified that clean commit in their VCS
 metadata.
 
+## 0.2.11 notification submission
+
+After 0.2.11 was published, this agent printed an updated notice addressed to
+`crypt@bis.doc.gov` and `enc@nsa.gov`. It names the GitHub repository and all
+nineteen crates.io package names, identifies `ic-hpke` as new with 0.2.11
+(https://crates.io/crates/ic-hpke), notes `iron-crypto` as the earlier name of
+the main package, and lists the release's additions: HPKE (RFC 9180), ECDSA
+verification over a caller-supplied digest, ML-DSA private-key encoding, and
+Shamir secret sharing. On 2026-10-05 the maintainer reported "Submitted".
+
+This records the report, not the sent message, its completed contact fields
+or its sending time, none of which have been supplied here. It also leaves
+the order of events as it was: 0.2.11, and with it the `ic-hpke` location,
+was published at 2026-10-06 02:51:52 UTC on the instruction recorded above,
+before this notice was printed.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
