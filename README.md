@@ -116,29 +116,27 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.2.13"
+ironcrypto = "0.2.14"
 ```
 
-The current release is **0.2.13**, published for all nineteen crates on
-crates.io. It carries the fixes from a security audit: self-tests for PBKDF2
-and SP 800-108, a minimum digest width for ECDSA's `verify_prehash`, and
-private-key types that no longer print or short-circuit-compare key material;
-0.2.11 and 0.2.12 added HPKE (RFC 9180) in the `ic-hpke` crate, ECDSA
-verification over a caller-supplied digest, ML-DSA private keys in PKCS#8 and
-Shamir secret sharing. See [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.2.14**, published for all nineteen crates on
+crates.io. It makes the library harder for an agent to misuse: `Sealer`
+chooses AEAD nonces itself, the always-in-force rules ship as data and reach
+MCP clients when they connect, `ic lint` checks code against them, and MCP
+gains tools to open, verify and derive. See [CHANGELOG.md](CHANGELOG.md).
 `ironcrypto` is the facade and re-exports the rest; depend on the primitives
 directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2.13"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.13"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.2.13"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.2.13"     # HPKE, RFC 9180
+ic-cipher = "0.2.14"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2.14"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2.14"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.2.14"     # HPKE, RFC 9180
 ```
 
 ```console
-$ cargo install ic-cli --version 0.2.13   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.2.14   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -149,7 +147,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.2.13 publication.
+submission and the 0.2.14 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
@@ -577,7 +575,7 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 These are historical developer-machine comparisons from `bench/` against
 RustCrypto and dalek, using the same buffers and the best of nine runs. They
-have not been rerun for 0.2.13 and are not performance guarantees. Shared-machine
+have not been rerun for 0.2.14 and are not performance guarantees. Shared-machine
 interference caused substantial variation between runs.
 
 | operation | historical comparison against RustCrypto/dalek |
