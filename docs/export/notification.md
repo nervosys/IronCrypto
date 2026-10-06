@@ -63,6 +63,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.9 | 2026-10-05 22:31:00 | all eighteen crates published from `7853469`, after the maintainer instructed this agent to proceed when asked to confirm that the notification covers this release; ML-KEM stack reduction |
 | 0.2.10 | 2026-10-05 22:59:11 | all eighteen crates published from `66857b2`, after the maintainer answered, when asked, that the notification covers this release; ML-DSA stack reduction |
 | 0.2.11 | 2026-10-06 02:51:52 | all nineteen crates published from `d5a8587`, after the maintainer instructed this agent to proceed when told the release needed confirmation that the notification covers it; adds `ic-hpke`, a new location |
+| 0.2.12 | 2026-10-06 03:59:47 | all nineteen crates published from `0c945bd`, after the maintainer answered, when asked, that the notification covers this release; HPKE DeriveKeyPair |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -224,6 +225,11 @@ On 2026-10-06 the maintainer was asked whether the BIS/NSA notification covers
 adds only HPKE's DeriveKeyPair inside the already-notified `ic-hpke`. The
 maintainer answered that it is covered. Publication proceeds on that answer;
 no new notice was sent or supplied here.
+
+The crates.io API confirmed all nineteen 0.2.12 packages live and not yanked.
+The first upload was `ic-core` at 2026-10-06 03:59:47 UTC; the last was
+`ic-cli` at 04:00:06 UTC. The published source commit is `0c945bd`; all
+nineteen packages identified that clean commit in their VCS metadata.
 
 ## Determination
 

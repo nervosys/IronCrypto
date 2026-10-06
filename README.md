@@ -114,27 +114,27 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.2.11"
+ironcrypto = "0.2.12"
 ```
 
-The current release is **0.2.11**, published for all nineteen crates on
-crates.io. It adds HPKE (RFC 9180) in the new `ic-hpke` crate, ECDSA
-verification over a caller-supplied digest, ML-DSA private keys in PKCS#8 and
-Shamir secret sharing, and declares Rust 1.87 as the minimum; see
+The current release is **0.2.12**, published for all nineteen crates on
+crates.io. It adds HPKE's `DeriveKeyPair`, following 0.2.11's HPKE (RFC 9180)
+in the new `ic-hpke` crate, ECDSA verification over a caller-supplied digest,
+ML-DSA private keys in PKCS#8 and Shamir secret sharing; see
 [CHANGELOG.md](CHANGELOG.md).
 `ironcrypto` is the facade and re-exports the rest; depend on the primitives
 directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2.11"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.11"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.2.11"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.2.11"     # HPKE, RFC 9180
+ic-cipher = "0.2.12"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2.12"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2.12"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.2.12"     # HPKE, RFC 9180
 ```
 
 ```console
-$ cargo install ic-cli --version 0.2.11   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.2.12   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -145,7 +145,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.2.11 publication.
+submission and the 0.2.12 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
@@ -568,7 +568,7 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 These are historical developer-machine comparisons from `bench/` against
 RustCrypto and dalek, using the same buffers and the best of nine runs. They
-have not been rerun for 0.2.11 and are not performance guarantees. Shared-machine
+have not been rerun for 0.2.12 and are not performance guarantees. Shared-machine
 interference caused substantial variation between runs.
 
 | operation | historical comparison against RustCrypto/dalek |
