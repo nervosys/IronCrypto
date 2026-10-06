@@ -3,6 +3,16 @@
 All eighteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **`ic_hpke::KeyPair::derive`**, RFC 9180's `DeriveKeyPair` for
+  DHKEM(X25519): a key pair from at least 32 bytes of input keying material,
+  deterministically. MLS's TreeKEM derives every node key this way, and
+  IronPrivacyGuard needs it for MLS. Checked against RFC 9180 A.1.1, whose
+  `ikmE` and `ikmR` now derive the appendix's keys.
+
 ## 0.2.11
 
 ### Added

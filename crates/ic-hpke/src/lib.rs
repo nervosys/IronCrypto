@@ -167,6 +167,30 @@ impl KeyPair {
         Ok(key)
     }
 
+    /// The key pair derived from `ikm`: RFC 9180 section 7.1.3's
+    /// `DeriveKeyPair` for DHKEM(X25519).
+    ///
+    /// `dkp_prk = LabeledExtract("", "dkp_prk", ikm)` and
+    /// `sk = LabeledExpand(dkp_prk, "sk", "", 32)`, under the KEM's suite
+    /// identifier. Deterministic: the same `ikm` always gives the same pair,
+    /// which is what MLS's TreeKEM relies on to turn a path secret into a node
+    /// key. `ikm` must carry at least `Nsk` bytes of entropy, so shorter input
+    /// is refused with `InvalidLength`; its length is the one thing here that
+    /// can be checked.
+    pub fn derive(ikm: &[u8]) -> Result<Self> {
+        ensure!(
+            ikm.len() >= PRIVATE_KEY_LEN,
+            InvalidLength,
+            "hpke DeriveKeyPair needs at least 32 bytes of ikm"
+        );
+        let kem = kem_suite_id();
+        let mut dkp_prk = Zeroizing::new([0u8; 32]);
+        labeled_extract(&kem, b"", b"dkp_prk", &[ikm], dkp_prk.get_mut())?;
+        let mut sk = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
+        labeled_expand(&kem, dkp_prk.get(), b"sk", &[], sk.get_mut())?;
+        Self::from_private(sk.get())
+    }
+
     /// The public key, `SerializePublicKey`.
     pub fn public(&self) -> &[u8; PUBLIC_KEY_LEN] {
         &self.public
@@ -700,6 +724,45 @@ mod tests {
         let err = extract_and_expand(&[0u8; 32], &[1u8; 32], &[2u8; 32]).unwrap_err();
         assert_eq!(err.kind(), ic_core::ErrorKind::InvalidParameter);
         assert!(extract_and_expand(&[1u8; 32], &[1u8; 32], &[2u8; 32]).is_ok());
+    }
+
+    /// RFC 9180 appendix A.1.1's key derivation: `ikmE` and `ikmR` give the
+    /// appendix's `skEm` and `skRm`, and with them `pkEm`. The two private keys
+    /// are the ones `the_self_test_passes` and `tests/hpke.rs` already use, so
+    /// the whole appendix case now runs from its seeds. The `ikm` values were
+    /// confirmed by an independent derivation reaching the same keys.
+    #[test]
+    fn derive_key_pair_matches_rfc9180_a1_1() {
+        let hex = |h: &str| {
+            let mut out = [0u8; 32];
+            ic_core::codec::hex_decode(h.as_bytes(), &mut out).unwrap();
+            out
+        };
+        let e = KeyPair::derive(&hex(
+            "7268600d403fce431561aef583ee1613527cff655c1343f29812e66706df3234",
+        ))
+        .unwrap();
+        let r = KeyPair::derive(&hex(
+            "6db9df30aa07dd42ee5e8181afdb977e538f5e1fec8a06223f33f7013e525037",
+        ))
+        .unwrap();
+        assert_eq!(
+            *e.private.get(),
+            hex("52c4a758a802cd8b936eceea314432798d5baf2d7e9235dc084ab1b9cfa2f736"),
+            "skEm"
+        );
+        assert_eq!(
+            *e.public(),
+            hex("37fda3567bdbd628e88668c3c8d7e97d1d1253b6d4ea6d44c150f741f1bf4431"),
+            "pkEm"
+        );
+        assert_eq!(
+            *r.private.get(),
+            hex("4612c550263fc8ad58375df3f557aac531d26850903e55a9f23f21d8534e8ac8"),
+            "skRm"
+        );
+        assert!(KeyPair::derive(&[7u8; 31]).is_err(), "31 bytes of ikm");
+        assert!(KeyPair::derive(&[7u8; 64]).is_ok(), "longer ikm");
     }
 
     #[test]
