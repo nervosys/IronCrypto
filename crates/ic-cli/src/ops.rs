@@ -381,6 +381,39 @@ pub fn capabilities_json() -> Json {
 }
 
 /// The error catalog as JSON.
+pub fn rules_json() -> Json {
+    Json::Array(
+        ic_ontology::RULES
+            .iter()
+            .map(|r| {
+                Json::object([
+                    ("id", Json::str(r.id)),
+                    ("rule", Json::str(r.rule)),
+                    ("why", Json::str(r.why)),
+                    ("instead", Json::str(r.instead)),
+                    ("severity", Json::str(r.severity.id())),
+                ])
+            })
+            .collect(),
+    )
+}
+
+/// The rules as text: one line each, then what to use instead.
+pub fn rules_text() -> String {
+    let mut out = String::new();
+    for r in ic_ontology::RULES {
+        out.push_str(&format!(
+            "[{}] {}\n    {}\n    Instead: {}\n",
+            r.severity.id(),
+            r.rule,
+            r.why,
+            r.instead
+        ));
+    }
+    out
+}
+
+/// The error catalog as JSON.
 pub fn errors_json() -> Json {
     Json::Array(
         ic_ontology::errors::catalog()

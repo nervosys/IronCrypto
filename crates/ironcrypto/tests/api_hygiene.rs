@@ -230,7 +230,7 @@ fn secret_bearing_types_wipe_on_drop() {
 
     assert!(
         implemented.len() >= 12,
-        "only {} Drop implementations found, which suggests the scan broke rather than that          they were removed: {implemented:?}",
+        "only {} Drop implementations found, which suggests the scan broke rather than that they were removed: {implemented:?}",
         implemented.len()
     );
 

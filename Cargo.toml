@@ -42,6 +42,9 @@ repository = "https://github.com/nervosys/IronCrypto"
 authors = ["Nervosys"]
 keywords = ["cryptography", "fips", "no-std", "agentic", "post-quantum"]
 categories = ["cryptography", "no-std"]
+# Every package carries the README, so its crates.io page says what it is and
+# links back here; a blank page is where an agent finding one crate stops.
+readme = "README.md"
 
 # Publishing this is an export. Encryption source code controlled under
 # ECCN 5D002 requires notifying BIS and the NSA's ENC Encryption Request

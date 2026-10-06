@@ -207,6 +207,7 @@ or shared with a second sealer -- needs its counter persisted and restored with
 | `ontology_show` | "What are the parameter bounds and failure modes?" |
 | `ontology_errors` | "What does this error mean and can I retry?" |
 | `crypto_capabilities` | "What can this build actually do?" |
+| `crypto_rules` | "What must I never do, whichever algorithm I use?" Also sent in the server's instructions at connect time |
 | `crypto_selftest` | "Is the module healthy?" |
 | `crypto_digest` / `crypto_hmac` / `crypto_seal` / `crypto_random` | primitive operations |
 

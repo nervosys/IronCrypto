@@ -24,6 +24,17 @@ one to use correctly.
   process. It keeps an HMAC of each pair under a per-process key, never the
   key. `ic seal` takes `random` in place of a nonce and prints the nonce used.
 - **The README's Rust examples compile and run as doctests** of `ironcrypto`.
+- **The always-in-force rules ship with the library**, as
+  `ic_ontology::RULES`: nonce reuse, unauthenticated modes, tag comparison,
+  password hashing, raw OS bytes, raw shared secrets, and wiping secrets, each
+  with the reason and what to call instead. They were only in the
+  repository's `AGENTS.md`, which no published package contains. The MCP
+  server now sends them in its `instructions` when a client connects, the new
+  `crypto_rules` tool and `ic rules` command return them, and the `ironcrypto`
+  documentation lists them. A test fails if `AGENTS.md`, that documentation
+  and `RULES` disagree.
+- **Every package carries the README**, so the crates.io pages are no longer
+  blank.
 
 ### Changed
 

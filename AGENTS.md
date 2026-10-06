@@ -40,6 +40,10 @@ $ ic ontology show <algorithm> --json
 
 ## Rules that are always in force
 
+These ship with the library as `ic_ontology::RULES`: `ic rules` prints them,
+the MCP server sends them when a client connects, and `crypto_rules` returns
+them with reasons. A test fails if this list and that one disagree.
+
 - **Never reuse a `(key, nonce)` pair.** Under GCM this leaks the
   authentication subkey; under ChaCha20-Poly1305 it XORs plaintexts. Use
   `ic_cipher::Sealer`, which chooses each nonce itself, and `Opener`, which
@@ -47,12 +51,12 @@ $ ic ontology show <algorithm> --json
   Through MCP, omit `crypto_seal`'s nonce and one is drawn for you.
 - **Never use an unauthenticated mode alone.** `aes-cbc` and `aes-ctr` need a
   MAC. Prefer an AEAD.
-- **Never compare tags with `==`.** Use `ic_core::ct::verify`.
+- **Never compare tags or MACs with `==`.** Use `ic_core::ct::verify`.
 - **Never hash a password with a plain hash.** Use `ic_kdf::pbkdf2` with at
   least 600 000 iterations and 16 bytes of fresh salt.
 - **Never use raw OS bytes as key material.** Use `ic_drbg::Rng::from_os()`.
-- **Never use the raw X25519 shared secret as a key.** Run it through HKDF with
-  both public keys as `info`.
+- **Never use a raw X25519 or ECDH shared secret as a key.** Run it through
+  HKDF with both public keys as `info`, or use `ic_hpke`.
 - **Wrap secrets in `Zeroizing`.** Round keys, derived keys, shared secrets.
 
 ## Repository conventions

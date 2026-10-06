@@ -478,7 +478,7 @@ mod tests {
                     assert_eq!(
                         r,
                         Q - gamma2,
-                        "r0 may only reach -gamma2 at the very bottom of the                          folded interval, gamma2={gamma2}"
+                        "r0 may only reach -gamma2 at the very bottom of the folded interval, gamma2={gamma2}"
                     );
                 }
                 assert!(

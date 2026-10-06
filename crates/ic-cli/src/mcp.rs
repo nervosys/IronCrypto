@@ -90,6 +90,24 @@ fn hex_arg(args: &Json, name: &str) -> Result<Vec<u8>, String> {
     ic_core::codec::unhex(text).map_err(|e| format!("'{name}' must be hex: {e}"))
 }
 
+/// What a client is told when it connects: how to use the server, then the
+/// rules that hold for every algorithm, so an agent has them before its first
+/// call rather than only if it thinks to ask.
+fn instructions() -> String {
+    format!(
+        "Call crypto_recommend before choosing an algorithm. It reports the correct choice for \
+         your constraints, and says plainly when the correct choice is not implemented here \
+         rather than offering a substitute. Use ontology_show to read parameter bounds and usage \
+         constraints before writing a call. IronCrypto is not CMVP validated.\n\n\
+         Rules that hold for every algorithm (crypto_rules has the reasons):\n{}",
+        ic_ontology::RULES
+            .iter()
+            .map(|r| format!("- {} Instead: {}", r.rule, r.instead))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
+
 /// The tools this server exposes.
 fn tools() -> Vec<Tool> {
     vec![
@@ -220,6 +238,15 @@ fn tools() -> Vec<Tool> {
                     .ok_or_else(|| format!("unknown algorithm '{name}'"))?;
                 Ok(ops::entry_detail_json(e))
             },
+        },
+        Tool {
+            name: "crypto_rules",
+            description:
+                "The rules that hold whichever algorithm is chosen -- nonce reuse, tag \
+                 comparison, password hashing, key material -- each with why and what to call \
+                 instead. Read them before writing code against this library.",
+            schema: || schema(vec![], &[]),
+            call: |_| Ok(ops::rules_json()),
         },
         Tool {
             name: "ontology_errors",
@@ -542,16 +569,7 @@ pub fn handle(request: &Json) -> Option<Json> {
                         ("version", Json::str(ironcrypto::VERSION)),
                     ]),
                 ),
-                (
-                    "instructions",
-                    Json::str(
-                        "Call crypto_recommend before choosing an algorithm. It reports the \
-                         correct choice for your constraints, and says plainly when the correct \
-                         choice is not implemented here rather than offering a substitute. Use \
-                         ontology_show to read parameter bounds and usage constraints before \
-                         writing a call.",
-                    ),
-                ),
+                ("instructions", Json::str(instructions())),
             ]),
         ),
         "tools/list" => result_response(
@@ -1017,7 +1035,11 @@ mod tests {
                 .as_str(),
             Some("ironcrypto")
         );
-        assert!(result.get("instructions").is_some());
+        // Every rule reaches the client at connect time, without a call.
+        let instructions = result.get("instructions").unwrap().as_str().unwrap();
+        for r in ic_ontology::RULES {
+            assert!(instructions.contains(r.rule), "{} missing", r.id);
+        }
     }
 
     #[test]
@@ -1265,6 +1287,13 @@ mod tests {
             Json::object([("algorithm", Json::str("SHA-256"))]),
         );
         assert_eq!(body(&r).get("id").unwrap().as_str(), Some("sha2-256"));
+
+        let r = call("crypto_rules", Json::object([]));
+        assert!(!is_error(&r));
+        assert_eq!(
+            body(&r).as_array().map(|a| a.len()),
+            Some(ic_ontology::RULES.len())
+        );
 
         let r = call("ontology_errors", Json::object([]));
         assert!(!is_error(&r));

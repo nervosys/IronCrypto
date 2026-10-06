@@ -45,6 +45,24 @@
 //! | enforce a policy | [`ic_fips::check`], [`ic_fips::guarded`] |
 //! | inspect this build | [`ic_ontology::runtime`] |
 //!
+//! ## Rules that hold for every algorithm
+//!
+//! Whichever algorithm [`recommend`] picks, these hold. They are data in
+//! [`ic_ontology::RULES`], with the reason for each; the MCP server sends them
+//! to a client when it connects, and `ic rules` prints them.
+//!
+//! * **Never reuse a (key, nonce) pair.** Use [`ic_cipher::Sealer`], which
+//!   chooses each nonce, and [`ic_cipher::Opener`], which refuses replays.
+//! * **Never use an unauthenticated mode alone.** CBC and CTR need a MAC;
+//!   prefer an AEAD.
+//! * **Never compare tags or MACs with ==.** Use [`ic_core::ct::verify`].
+//! * **Never hash a password with a plain hash.** Use `ic_kdf::pbkdf2` with at
+//!   least 600 000 iterations and 16 bytes of fresh salt, or Argon2id.
+//! * **Never use raw OS bytes as key material.** Use `ic_drbg::Rng::from_os()`.
+//! * **Never use a raw X25519 or ECDH shared secret as a key.** Run it through
+//!   HKDF with both public keys in `info`, or use `ic_hpke`.
+//! * **Wrap secrets in Zeroizing.** Keys, derived keys, shared secrets.
+//!
 //! ## Honest limits
 //!
 //! * **Not CMVP validated.** The FIPS machinery is real; the certificate does

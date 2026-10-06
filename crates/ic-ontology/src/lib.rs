@@ -58,6 +58,7 @@ extern crate std;
 
 pub mod query;
 pub mod registry;
+pub mod rules;
 pub mod select;
 pub mod standards;
 pub mod types;
@@ -70,6 +71,7 @@ pub mod runtime;
 
 pub use query::{all, get, related, Query};
 pub use registry::REGISTRY;
+pub use rules::{Rule, RULES};
 pub use select::{recommend, Intent, NoRecommendation, Policy, Recommendation};
 pub use types::{
     Class, Constraint, Edge, Entry, FipsStatus, ImplStatus, Param, Performance, Purpose, Relation,

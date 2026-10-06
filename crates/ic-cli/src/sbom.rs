@@ -374,7 +374,7 @@ mod tests {
         for copied in ["cargo tree", "cargo clippy", "cargo fmt"] {
             assert!(
                 !self_hosted.contains(copied),
-                "the self-hosted workflow has its own copy of {copied:?}; it                  should call scripts/check.sh, which already runs it"
+                "the self-hosted workflow has its own copy of {copied:?}; it should call scripts/check.sh, which already runs it"
             );
         }
 
@@ -433,6 +433,11 @@ mod tests {
             assert!(
                 !text.contains("publish = true") && !text.contains("publish = false"),
                 "{name} sets its own publish value instead of inheriting"
+            );
+            // A package without a README has a blank crates.io page.
+            assert!(
+                text.contains("readme.workspace = true"),
+                "{name} does not carry the workspace README"
             );
             checked += 1;
         }

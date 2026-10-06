@@ -34,6 +34,7 @@ DISCOVERY
     ontology show <algorithm>   Full record for one algorithm
     ontology export <format>    json | jsonld | turtle | schema | markdown
     ontology errors             The error vocabulary
+    rules                       Rules that hold for every algorithm
     capabilities                What this build can and cannot do
 
 OPERATIONS
@@ -403,7 +404,7 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     "markdown" | "md" => Ok(ic_ontology::export::to_markdown()),
                     "standards" => Ok(ops::standards_json(None)?.to_string()),
                     other => Err(format!(
-                        "unknown format '{other}'; try json, jsonld, turtle, schema, markdown,                          or standards"
+                        "unknown format '{other}'; try json, jsonld, turtle, schema, markdown, or standards"
                     )),
                 }
             }
@@ -424,6 +425,12 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                 "unknown ontology subcommand '{other}'; try list, show, export, or errors"
             )),
         },
+
+        "rules" => Ok(if want_json {
+            ops::rules_json().to_string()
+        } else {
+            ops::rules_text().trim_end().to_string()
+        }),
 
         "capabilities" => {
             let caps = ops::capabilities_json();
@@ -1400,7 +1407,7 @@ mod tests {
         for flag in &found {
             assert!(
                 VALUED_FLAGS.contains(flag),
-                "{flag} takes a value but is not in VALUED_FLAGS, so its value will be parsed                  as a positional argument"
+                "{flag} takes a value but is not in VALUED_FLAGS, so its value will be parsed as a positional argument"
             );
         }
         // And nothing declared that is never read, which would be dead config.
