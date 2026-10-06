@@ -273,6 +273,19 @@ packages live and not yanked. The first upload was `ic-core` at 2026-10-06
 commit is `1821d9c`; all nineteen packages identified that clean commit in
 their VCS metadata.
 
+## 0.2.15 release authorization
+
+On 2026-10-06 this agent told the maintainer that releasing 0.2.15 needed
+their go-ahead, and that because it adds an algorithm -- HPKE with
+DHKEM(P-384, HKDF-SHA384), inside the already-notified `ic-hpke` package --
+whether the BIS/NSA notification covers it, or needs updating first, was
+their decision. The release publishes under the same nineteen package names
+as 0.2.14; the algorithm is RFC 9180's, a published standard, built from
+primitives already in the library. The maintainer replied "Push and
+publish". Publication proceeds on that instruction; this records the
+instruction, not a statement that the notification covers 0.2.15, and no
+new notice was sent or supplied here.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
