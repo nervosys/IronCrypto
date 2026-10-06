@@ -231,6 +231,17 @@ The first upload was `ic-core` at 2026-10-06 03:59:47 UTC; the last was
 `ic-cli` at 04:00:06 UTC. The published source commit is `0c945bd`; all
 nineteen packages identified that clean commit in their VCS metadata.
 
+## 0.2.13 release authorization
+
+On 2026-10-06 this agent told the maintainer that releasing 0.2.13 needed
+their go-ahead and confirmation that the BIS/NSA notification covers it. The
+release publishes under the same nineteen package names as 0.2.12 and adds
+no algorithm: it carries fixes from a security audit, two self-tests for
+existing KDFs, and documentation. The maintainer replied "Proceed".
+Publication proceeds on that instruction; this records the instruction, not
+a statement that the notification covers 0.2.13, and no new notice was sent
+or supplied here.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not

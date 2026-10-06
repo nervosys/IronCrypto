@@ -1,9 +1,9 @@
 # Changelog
 
-All eighteen crates share a version and are released together, so this covers
+All nineteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.13
 
 From a security audit on 2026-10-06 against CVE and RustSec, MITRE ATT&CK,
 NIST FIPS 140-3 and CMMC 2.0. What it left open is recorded where it lives:
