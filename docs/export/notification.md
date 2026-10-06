@@ -181,6 +181,19 @@ The first upload was `ic-core` at 2026-10-05 22:59:11 UTC; the last was
 `ic-cli` at 22:59:30 UTC. The published source commit is `66857b2`; all
 eighteen packages identified that clean commit in their VCS metadata.
 
+## 0.2.11 release authorization
+
+0.2.11 adds a nineteenth package, `ic-hpke`, at a crates.io location no
+earlier notice named (https://crates.io/crates/ic-hpke), and new cryptographic
+functionality: HPKE (RFC 9180), ECDSA verification over a caller-supplied
+digest, ML-DSA private-key encoding, and Shamir secret sharing. On 2026-10-05
+this agent listed what the release needed from the maintainer -- approval to
+push, approval to publish, and confirmation that the BIS/NSA notification
+covers the release, `ic-hpke` being a new location -- and the maintainer
+replied "Proceed". Publication proceeds on that instruction. No updated
+notice naming `ic-hpke` was printed for this release, and no submission was
+reported; this records the instruction, not a sent notification.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
