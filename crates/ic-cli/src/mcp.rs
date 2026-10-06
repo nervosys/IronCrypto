@@ -404,23 +404,36 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "crypto_seal",
             description:
-                "Encrypt with an AEAD and return the ciphertext and tag as hex. Key, nonce, and \
-                 associated data are hex; the plaintext is a UTF-8 string.",
+                "Encrypt with an AEAD and return the ciphertext, tag and nonce as hex. Key and \
+                 associated data are hex; the plaintext is a UTF-8 string. Omit the nonce and a \
+                 fresh random 96-bit one is drawn and returned: do that unless a protocol fixes \
+                 the nonce. A (key, nonce) pair this server has already sealed under is refused.",
             schema: || {
                 schema(
                     vec![
                         ("algorithm", string_prop("AEAD id, e.g. aes-256-gcm.")),
                         ("key", string_prop("Hex-encoded key.")),
-                        ("nonce", string_prop("Hex-encoded nonce; never reuse one under a key.")),
+                        (
+                            "nonce",
+                            string_prop(
+                                "Optional hex nonce. Omit it to have a random one drawn; a \
+                                 supplied one must never have been used under this key.",
+                            ),
+                        ),
                         ("aad", string_prop("Optional hex-encoded associated data.")),
                         ("plaintext", string_prop("The text to encrypt.")),
                     ],
-                    &["algorithm", "key", "nonce", "plaintext"],
+                    &["algorithm", "key", "plaintext"],
                 )
             },
             call: |args| {
-                let key = hex_arg(args, "key")?;
-                let nonce = hex_arg(args, "nonce")?;
+                let key = ic_core::Zeroizing::new(hex_arg(args, "key")?);
+                let nonce = match arg(args, "nonce") {
+                    Some(text) if !text.is_empty() => ic_core::codec::unhex(text)
+                        .map_err(|e| format!("'nonce' must be hex: {e}"))?,
+                    _ => ops::random_nonce()?.to_vec(),
+                };
+                ops::claim_nonce(&key, &nonce)?;
                 let aad = match arg(args, "aad") {
                     Some(text) if !text.is_empty() => ic_core::codec::unhex(text)
                         .map_err(|e| format!("'aad' must be hex: {e}"))?,
@@ -436,6 +449,7 @@ fn tools() -> Vec<Tool> {
                 Ok(Json::object([
                     ("ciphertext", Json::str(ct)),
                     ("tag", Json::str(tag)),
+                    ("nonce", Json::str(ic_core::codec::hex(&nonce))),
                 ]))
             },
         },
@@ -1302,6 +1316,59 @@ mod tests {
         let b = body(&r);
         assert_eq!(b.get("ciphertext").unwrap().as_str().unwrap().len(), 8);
         assert_eq!(b.get("tag").unwrap().as_str().unwrap().len(), 32);
+
+        // Omitting the nonce draws one, returns it, and never repeats it.
+        let seal = |key: &str| {
+            call(
+                "crypto_seal",
+                Json::object([
+                    ("algorithm", Json::str("aes-256-gcm")),
+                    ("key", Json::str(key)),
+                    ("plaintext", Json::str("data")),
+                ]),
+            )
+        };
+        let key = "11".repeat(32);
+        let first = seal(&key);
+        let second = seal(&key);
+        assert!(!is_error(&first) && !is_error(&second));
+        let n1 = body(&first)
+            .get("nonce")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        let n2 = body(&second)
+            .get("nonce")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(n1.len(), 24);
+        assert_ne!(n1, n2);
+
+        // Supplying a nonce already used under this key is refused.
+        let again = call(
+            "crypto_seal",
+            Json::object([
+                ("algorithm", Json::str("aes-256-gcm")),
+                ("key", Json::str(key.as_str())),
+                ("nonce", Json::str(n1.as_str())),
+                ("plaintext", Json::str("other")),
+            ]),
+        );
+        assert!(is_error(&again), "a reused (key, nonce) was sealed");
+        // The same nonce under a different key is a different pair.
+        let other_key = call(
+            "crypto_seal",
+            Json::object([
+                ("algorithm", Json::str("aes-256-gcm")),
+                ("key", Json::str("22".repeat(32))),
+                ("nonce", Json::str(n1.as_str())),
+                ("plaintext", Json::str("other")),
+            ]),
+        );
+        assert!(!is_error(&other_key));
 
         // A wrong-sized key is a tool error the agent can correct.
         let r = call(

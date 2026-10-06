@@ -13,12 +13,16 @@
 //! let choice = recommend(Intent::EncryptMessage, Policy::FIPS_APPROVED).unwrap();
 //! assert_eq!(choice.primary.id, "aes-256-gcm");
 //!
-//! // 2. Use it.
-//! let cipher = Aes256Gcm::new(&[0x2a; 32])?;
+//! // 2. Use it. The sealer picks each nonce, so none is ever reused; the
+//! //    receiver refuses replays. In real use the key comes from a key
+//! //    exchange and a KDF, never a constant.
+//! let key = [0x2a; 32];
+//! let mut tx = Sealer::<Aes256Gcm>::new(&key, *b"c->s")?;
+//! let mut rx = Opener::<Aes256Gcm>::new(&key, *b"c->s")?;
 //! let mut buf = *b"the payload";
 //! let mut tag = [0u8; 16];
-//! cipher.seal_detached(&[0u8; 12], b"context", &mut buf, &mut tag)?;
-//! cipher.open_detached(&[0u8; 12], b"context", &mut buf, &tag)?;
+//! let nonce = tx.seal(b"context", &mut buf, &mut tag)?;
+//! rx.open(&nonce, b"context", &mut buf, &tag)?;
 //! assert_eq!(&buf, b"the payload");
 //! # Ok::<(), ic_core::Error>(())
 //! ```
@@ -100,6 +104,7 @@ pub mod prelude {
     pub use ic_cipher::{Aes128Gcm, Aes192Gcm, Aes256Gcm, ChaCha20Poly1305};
     pub use ic_cipher::{Aes128GcmSiv, Aes256GcmSiv};
     pub use ic_cipher::{Aes128Kw, Aes192Kwp, Aes256Kw, Aes256Kwp};
+    pub use ic_cipher::{Opener, Sealer};
     pub use ic_ec::p256::{EcdhP256, EcdsaP256Sha256};
     pub use ic_ec::p384::{EcdhP384, EcdsaP384Sha384};
     pub use ic_ec::p521::{EcdhP521, EcdsaP521Sha512};
@@ -321,3 +326,12 @@ mod tests {
         assert_eq!(&buf[..], b"protocol payload");
     }
 }
+
+// The README's Rust examples, compiled and run as doctests so they cannot
+// drift from the API. Only under `cargo test`: a published package has no
+// README at this path, and does not need one to build. The rustls example is
+// marked `ignore` there, since this crate does not depend on rustls; the same
+// code is a doctest in `ic-rustls`.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+struct ReadmeDoctests;

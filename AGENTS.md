@@ -41,8 +41,10 @@ $ ic ontology show <algorithm> --json
 ## Rules that are always in force
 
 - **Never reuse a `(key, nonce)` pair.** Under GCM this leaks the
-  authentication subkey; under ChaCha20-Poly1305 it XORs plaintexts. Derive
-  nonces from a counter.
+  authentication subkey; under ChaCha20-Poly1305 it XORs plaintexts. Use
+  `ic_cipher::Sealer`, which chooses each nonce itself, and `Opener`, which
+  refuses replays. Pass a nonce by hand only where a protocol dictates it.
+  Through MCP, omit `crypto_seal`'s nonce and one is drawn for you.
 - **Never use an unauthenticated mode alone.** `aes-cbc` and `aes-ctr` need a
   MAC. Prefer an AEAD.
 - **Never compare tags with `==`.** Use `ic_core::ct::verify`.

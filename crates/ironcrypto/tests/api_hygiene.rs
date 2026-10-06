@@ -306,6 +306,8 @@ const KEY_HOLDING: &[&str] = &[
     "KeyPair",         // ic-hpke: an X25519 private key
     "Context",         // ic-hpke: AEAD key, base nonce, exporter secret
     "Share",           // ic-cipher::shamir: a share of a secret
+    "Sealer",          // ic-cipher::sealer: an AEAD key
+    "Opener",          // ic-cipher::sealer: an AEAD key
 ];
 
 /// No secret-bearing or key-holding type derives `Debug` or `PartialEq`.

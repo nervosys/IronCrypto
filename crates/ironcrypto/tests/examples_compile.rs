@@ -47,18 +47,21 @@ use ironcrypto::prelude::*;
 use ironcrypto::{cipher, drbg, ec, hash, kdf, mac, mldsa, mlkem, rsa};
 
 /// `aes-256-gcm`.
-const AES_256_GCM: &str =
-    "let c = ic_cipher::Aes256Gcm::new(key)?;\nc.seal_detached(&nonce, aad, &mut buf, &mut tag)?;";
+const AES_256_GCM: &str = "let mut tx = ic_cipher::Sealer::<ic_cipher::Aes256Gcm>::new(key, *b\"c->s\")?;\nlet nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext";
 
 fn run_aes_256_gcm() -> Result<()> {
     let key: &[u8] = &[0x11u8; 32];
-    let nonce = [0x22u8; 12];
     let aad: &[u8] = b"aad";
     let mut buf = [0x33u8; 16];
     let mut tag = [0u8; 16];
 
-    let c = cipher::Aes256Gcm::new(key)?;
-    c.seal_detached(&nonce, aad, &mut buf, &mut tag)?;
+    let mut tx = cipher::Sealer::<cipher::Aes256Gcm>::new(key, *b"c->s")?;
+    let nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext
+
+    // And the receiver opens it with the nonce the sealer reported.
+    let mut rx = cipher::Opener::<cipher::Aes256Gcm>::new(key, *b"c->s")?;
+    rx.open(&nonce, aad, &mut buf, &tag)?;
+    assert_eq!(buf, [0x33u8; 16]);
     Ok(())
 }
 
@@ -502,17 +505,20 @@ macro_rules! aead_family {
     ($($id:literal => $ty:ident, $len:literal),* $(,)?) => {
         #[test]
         fn aead_examples_compile_and_match() -> Result<()> {
-            let nonce = [0x33u8; 12];
             let aad: &[u8] = b"aad";
             $({
                 let key: &[u8] = &[0x44u8; $len];
                 let mut buf = [0x55u8; 16];
                 let mut tag = [0u8; 16];
-                let c = ironcrypto::cipher::$ty::new(key)?;
-                c.seal_detached(&nonce, aad, &mut buf, &mut tag)?;
+                let mut tx = ironcrypto::cipher::Sealer::<ironcrypto::cipher::$ty>::new(key, *b"c->s")?;
+                let nonce = tx.seal(aad, &mut buf, &mut tag)?;
+                let mut rx = ironcrypto::cipher::Opener::<ironcrypto::cipher::$ty>::new(key, *b"c->s")?;
+                rx.open(&nonce, aad, &mut buf, &tag)?;
+                assert_eq!(buf, [0x55u8; 16]);
                 let expected = concat!(
-                    "let c = ic_cipher::", stringify!($ty), "::new(key)?;\n",
-                    "c.seal_detached(&nonce, aad, &mut buf, &mut tag)?;"
+                    "let mut tx = ic_cipher::Sealer::<ic_cipher::", stringify!($ty),
+                    ">::new(key, *b\"c->s\")?;\n",
+                    "let nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext"
                 );
                 check_example($id, expected);
             })*

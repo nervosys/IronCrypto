@@ -23,8 +23,10 @@ const UNIQUE_NONCE: Constraint = Constraint {
 
 const NONCE_COUNTER: Constraint = Constraint {
     id: "prefer-counter-nonce",
-    requirement: "Derive the nonce from a strictly increasing counter, or draw 96 random bits and \
-                  bound the number of messages per key.",
+    requirement: "Let ic_cipher::Sealer choose the nonce: a sender tag and a strictly \
+                  increasing counter, never reused within it. Otherwise derive the nonce from a \
+                  counter yourself, or draw 96 random bits and bound the number of messages per \
+                  key.",
     consequence: "Random 96-bit nonces collide with meaningful probability past 2^32 messages.",
     severity: Severity::Serious,
 };
@@ -1640,7 +1642,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::BuiltOn, target: "aes-128" }],
         performance: Performance::Slow,
         rust_path: "ic_cipher::Aes128Gcm",
-        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::Aes128Gcm::new(key)?;\nc.seal_detached(&nonce, aad, &mut buf, &mut tag)?;",
+        example: "let mut tx = ic_cipher::Sealer::<ic_cipher::Aes128Gcm>::new(key, *b\"c->s\")?;\nlet nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
         notes: "",
     },
     Entry {
@@ -1660,7 +1662,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::BuiltOn, target: "aes-192" }],
         performance: Performance::Slow,
         rust_path: "ic_cipher::Aes192Gcm",
-        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::Aes192Gcm::new(key)?;\nc.seal_detached(&nonce, aad, &mut buf, &mut tag)?;",
+        example: "let mut tx = ic_cipher::Sealer::<ic_cipher::Aes192Gcm>::new(key, *b\"c->s\")?;\nlet nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
         notes: "Rarely used; prefer 128 or 256.",
     },
     Entry {
@@ -1680,7 +1682,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::BuiltOn, target: "aes-256" }],
         performance: Performance::Slow,
         rust_path: "ic_cipher::Aes256Gcm",
-        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::Aes256Gcm::new(key)?;\nc.seal_detached(&nonce, aad, &mut buf, &mut tag)?;",
+        example: "let mut tx = ic_cipher::Sealer::<ic_cipher::Aes256Gcm>::new(key, *b\"c->s\")?;\nlet nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
         notes: "Also the choice when a single key must protect data for a long time, since the \
                 256-bit key retains 128-bit strength against Grover.",
     },
@@ -1701,7 +1703,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::BuiltOn, target: "poly1305" }],
         performance: Performance::Fast,
         rust_path: "ic_cipher::ChaCha20Poly1305",
-        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::ChaCha20Poly1305::new(key)?;\nc.seal_detached(&nonce, aad, &mut buf, &mut tag)?;",
+        example: "let mut tx = ic_cipher::Sealer::<ic_cipher::ChaCha20Poly1305>::new(key, *b\"c->s\")?;\nlet nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
         notes: "The right answer without AES hardware, and much faster than this build's portable \
                 AES. Blocked in FIPS approved mode.",
     },

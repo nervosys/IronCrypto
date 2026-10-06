@@ -40,8 +40,9 @@ OPERATIONS
     selftest [algorithm]        Run FIPS known-answer tests
     digest <algorithm>          Hash stdin, print hex
     hmac <algorithm> <hexkey>   Authenticate stdin, print hex
-    seal <algorithm> <hexkey> <hexnonce>
-                                Encrypt stdin, print ciphertext and tag
+    seal <algorithm> <hexkey> <hexnonce|random>
+                                Encrypt stdin, print ciphertext, tag and nonce;
+                                'random' draws the nonce (prefer it)
     random <bytes>              Random bytes from the DRBG, as hex
 
 KEYS
@@ -565,8 +566,16 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             let algorithm = pos.get(1).copied().ok_or("seal needs an algorithm")?;
             let key = ic_core::codec::unhex(pos.get(2).copied().ok_or("seal needs a hex key")?)
                 .map_err(|e| format!("key must be hex: {e}"))?;
-            let nonce = ic_core::codec::unhex(pos.get(3).copied().ok_or("seal needs a hex nonce")?)
-                .map_err(|e| format!("nonce must be hex: {e}"))?;
+            // `random` draws a fresh 96-bit nonce, which is printed with the
+            // output; a hex nonce is the caller's to keep unique.
+            let nonce = match pos
+                .get(3)
+                .copied()
+                .ok_or("seal needs a hex nonce or 'random'")?
+            {
+                "random" => ops::random_nonce()?.to_vec(),
+                hex => ic_core::codec::unhex(hex).map_err(|e| format!("nonce must be hex: {e}"))?,
+            };
             let aad = match pos.get(4).copied() {
                 Some(text) => {
                     ic_core::codec::unhex(text).map_err(|e| format!("aad must be hex: {e}"))?
@@ -580,12 +589,15 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                     ("algorithm", Json::str(algorithm)),
                     ("ciphertext", Json::str(ct)),
                     ("tag", Json::str(tag)),
+                    ("nonce", Json::str(ic_core::codec::hex(&nonce))),
                 ])
                 .to_string()
             } else {
                 format!(
                     "{ct}
-{tag}"
+{tag}
+{}",
+                    ic_core::codec::hex(&nonce)
                 )
             })
         }

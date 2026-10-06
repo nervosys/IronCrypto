@@ -24,8 +24,10 @@ must observe:
   [critical] Never reuse a (key, nonce) pair.
       Reuse leaks the authentication subkey, allowing forgery of arbitrary
       messages, and XORs the two plaintexts together.
-  [serious] Derive the nonce from a strictly increasing counter, or draw 96
-      random bits and bound the number of messages per key.
+  [serious] Let ic_cipher::Sealer choose the nonce: a sender tag and a strictly
+      increasing counter, never reused within it. Otherwise derive the nonce
+      from a counter yourself, or draw 96 random bits and bound the number of
+      messages per key.
       Random 96-bit nonces collide with meaningful probability past 2^32 messages.
 
 considered and rejected:
@@ -167,24 +169,24 @@ fn main() -> Result<()> {
     let mut rng = Rng::from_os()?;
     let mut key = Zeroizing::new([0u8; 32]);
     rng.fill(&mut *key)?;
-    let cipher = Aes256Gcm::new(&*key)?;
 
-    // A reused key requires a persistent, strictly increasing counter.
-    let message_counter = 0u64;
-    let mut nonce = [0u8; 12];
-    nonce[4..].copy_from_slice(&message_counter.to_be_bytes());
+    // The sealer chooses every nonce -- a sender tag, then a counter -- and
+    // the opener refuses replays and reordering.
+    let mut tx = Sealer::<Aes256Gcm>::new(&*key, *b"c->s")?;
+    let mut rx = Opener::<Aes256Gcm>::new(&*key, *b"c->s")?;
     let mut buf = *b"the payload";
     let mut tag = [0u8; 16];
-    cipher.seal_detached(&nonce, b"context", &mut buf, &mut tag)?;
-    cipher.open_detached(&nonce, b"context", &mut buf, &tag)?;
+    let nonce = tx.seal(b"context", &mut buf, &mut tag)?;
+    rx.open(&nonce, b"context", &mut buf, &tag)?;
     assert_eq!(&buf, b"the payload");
     Ok(())
 }
 ```
 
-This example uses the default `std` feature for OS seeding. For every subsequent
-encryption under the same key, increment the counter and prevent overflow or
-reset across restarts. Never reuse a `(key, nonce)` pair.
+This example uses the default `std` feature for OS seeding. A sealer's counter
+is unique only within that sealer: a key that outlives it -- across a restart,
+or shared with a second sealer -- needs its counter persisted and restored with
+`Sealer::resume`, or AES-256-GCM-SIV. Never reuse a `(key, nonce)` pair.
 
 ## Connect an agent
 
@@ -215,7 +217,7 @@ reset across restarts. Never reuse a `(key, nonce)` pair.
 `ic-rustls` presents IronCrypto to [rustls](https://docs.rs/rustls) as a
 `CryptoProvider`:
 
-```rust
+```rust,ignore
 let roots = rustls::RootCertStore::empty();
 let config = rustls::ClientConfig::builder_with_provider(ic_rustls::arc_provider())
     .with_safe_default_protocol_versions()?

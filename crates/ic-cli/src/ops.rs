@@ -482,6 +482,86 @@ pub fn seal_hex(
     Ok((ic_core::codec::hex(&buf), ic_core::codec::hex(&tag)))
 }
 
+/// A fresh random 96-bit nonce from the OS-seeded DRBG.
+///
+/// SP 800-38D section 8.2.2's random construction: safe for up to 2^32
+/// messages under one key, which `GcmLimits::MAX_RANDOM_NONCE_INVOCATIONS`
+/// records.
+pub fn random_nonce() -> Result<[u8; 12], String> {
+    let mut rng = ic_drbg::Rng::from_os().map_err(|e| e.to_string())?;
+    let mut nonce = [0u8; 12];
+    rng.fill(&mut nonce).map_err(|e| e.to_string())?;
+    Ok(nonce)
+}
+
+/// How many (key, nonce) pairs a process remembers before it stops accepting
+/// caller-chosen nonces. At 32 bytes each, 2^16 of them is 2 MiB.
+const NONCE_MEMORY: usize = 1 << 16;
+
+/// Record that `nonce` is about to be used under `key`, refusing a pair this
+/// process has sealed under before.
+///
+/// Each pair is kept as HMAC-SHA256 under a key drawn for this process, so
+/// what is remembered reveals neither the key nor which keys were used. The
+/// memory is per process: it catches an agent repeating itself within one
+/// session, not reuse across sessions, which only a nonce it never chose can
+/// rule out. Once full, a caller-chosen nonce is refused, and the caller is
+/// told to omit it; drawn nonces are still recorded while there is room.
+pub fn claim_nonce(key: &[u8], nonce: &[u8]) -> Result<(), String> {
+    use ic_core::traits::Mac;
+    use std::collections::BTreeSet;
+    use std::sync::{Mutex, OnceLock};
+
+    struct Memory {
+        key: ic_core::Zeroizing<[u8; 32]>,
+        seen: BTreeSet<[u8; 32]>,
+    }
+    static MEMORY: OnceLock<Mutex<Memory>> = OnceLock::new();
+    if MEMORY.get().is_none() {
+        // Without a key the fingerprints would be unkeyed hashes of key
+        // material, which is not something to hold.
+        let mut key = ic_core::Zeroizing::new([0u8; 32]);
+        ic_drbg::Rng::from_os()
+            .and_then(|mut r| r.fill(key.get_mut()))
+            .map_err(|e| e.to_string())?;
+        // Losing a race to another thread is fine: its key serves as well.
+        let _ = MEMORY.set(Mutex::new(Memory {
+            key,
+            seen: BTreeSet::new(),
+        }));
+    }
+    let mut memory = MEMORY
+        .get()
+        .ok_or("nonce memory unavailable")?
+        .lock()
+        .map_err(|_| "nonce memory poisoned".to_string())?;
+
+    // Length-prefix the key so that no (key, nonce) split collides with
+    // another, and stream it into the MAC rather than copying it.
+    let mut mac = ic_mac::HmacSha256::new(memory.key.get()).map_err(|e| e.to_string())?;
+    mac.update(&(key.len() as u64).to_be_bytes());
+    mac.update(key);
+    mac.update(nonce);
+    let fingerprint: [u8; 32] = mac.finalize();
+
+    if memory.seen.contains(&fingerprint) {
+        return Err(
+            "this (key, nonce) pair has already been used to seal; reusing it breaks the \
+             AEAD. Omit the nonce to have a fresh one drawn."
+                .to_string(),
+        );
+    }
+    if memory.seen.len() >= NONCE_MEMORY {
+        return Err(
+            "this server can no longer check caller-chosen nonces for reuse; omit the nonce \
+             to have a fresh one drawn, or use a new key."
+                .to_string(),
+        );
+    }
+    memory.seen.insert(fingerprint);
+    Ok(())
+}
+
 /// Generate `n` random bytes from the OS-seeded DRBG, as hex.
 use std::collections::BTreeMap;
 

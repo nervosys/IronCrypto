@@ -5,17 +5,24 @@
 //! RFC 8439 ChaCha20-Poly1305 suite.
 //!
 //! ```
-//! use ic_cipher::Aes256Gcm;
-//! use ic_core::traits::Aead;
+//! use ic_cipher::{Aes256Gcm, Opener, Sealer};
 //!
-//! let cipher = Aes256Gcm::new(&[0x2a; 32])?;
+//! // A session key, from a key exchange and a KDF in real use.
+//! let key = [0x2a; 32];
+//! let mut tx = Sealer::<Aes256Gcm>::new(&key, *b"c->s")?;
+//! let mut rx = Opener::<Aes256Gcm>::new(&key, *b"c->s")?;
 //! let mut buf = *b"ship it";
 //! let mut tag = [0u8; 16];
-//! cipher.seal_detached(&[0u8; 12], b"context", &mut buf, &mut tag)?;
-//! cipher.open_detached(&[0u8; 12], b"context", &mut buf, &tag)?;
+//! let nonce = tx.seal(b"context", &mut buf, &mut tag)?;
+//! rx.open(&nonce, b"context", &mut buf, &tag)?;
 //! assert_eq!(&buf, b"ship it");
 //! # Ok::<(), ic_core::Error>(())
 //! ```
+//!
+//! [`Sealer`] chooses every nonce itself and [`Opener`] refuses replays; see
+//! [`sealer`] for when that is enough. The AEAD types underneath take a nonce
+//! from the caller, which is what protocols with their own nonce rules (TLS,
+//! QUIC, HPKE) need, and which is where nonce reuse comes from.
 //!
 //! ## Backend status
 //!
@@ -63,6 +70,7 @@ pub mod gf;
 pub mod keywrap;
 pub mod modes;
 pub mod polyval;
+pub mod sealer;
 pub mod shamir;
 
 pub use aes::{Aes128, Aes192, Aes256};
@@ -71,6 +79,7 @@ pub use gcm::{Aes128Gcm, Aes192Gcm, Aes256Gcm, GcmLimits};
 pub use gcm_siv::{Aes128GcmSiv, Aes256GcmSiv};
 pub use keywrap::{Aes128Kw, Aes128Kwp, Aes192Kw, Aes192Kwp, Aes256Kw, Aes256Kwp};
 pub use modes::{cbc_decrypt, cbc_encrypt, ctr_xor, pkcs7_pad, pkcs7_unpad};
+pub use sealer::{Opener, Sealer};
 
 /// Ontology identifiers for the AEADs this crate provides.
 pub const AEAD_IDS: &[&str] = &[

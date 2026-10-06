@@ -3,6 +3,36 @@
 All nineteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+Changes that make the library harder to misuse by an agent, and easier for
+one to use correctly.
+
+### Added
+
+- **`ic_cipher::Sealer` and `Opener`: AEAD encryption that chooses its own
+  nonces.** A sealer builds each nonce as SP 800-38D section 8.2.1's
+  deterministic construction does -- a 4-byte sender tag, then a 64-bit
+  counter -- returns it, and refuses rather than wraps when the counter runs
+  out. An opener accepts only its sender's tag and only counters it has not
+  passed, so replays and reordering are refused before the AEAD runs. Both
+  work over AES-GCM, ChaCha20-Poly1305 and AES-GCM-SIV. A counter is unique
+  only within its sealer; the documentation says what that requires of the
+  key, and `Sealer::resume` restores a persisted counter. In the prelude.
+- **The MCP `crypto_seal` tool draws the nonce when none is given**, returns
+  it, and refuses a (key, nonce) pair it has already sealed under in this
+  process. It keeps an HMAC of each pair under a per-process key, never the
+  key. `ic seal` takes `random` in place of a nonce and prints the nonce used.
+- **The README's Rust examples compile and run as doctests** of `ironcrypto`.
+
+### Changed
+
+- **The examples no longer teach nonce reuse.** The first example in the
+  `ironcrypto` and `ic-cipher` documentation sealed under a constant key and
+  an all-zero nonce, and the registry's AEAD examples passed an undefined
+  `nonce`; all now use `Sealer`. The `prefer-counter-nonce` constraint and
+  `AGENTS.md` name it as the first choice.
+
 ## 0.2.13
 
 From a security audit on 2026-10-06 against CVE and RustSec, MITRE ATT&CK,
