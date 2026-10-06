@@ -3,7 +3,7 @@
 All nineteen crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.14
 
 Changes that make the library harder to misuse by an agent, and easier for
 one to use correctly.

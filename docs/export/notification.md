@@ -251,6 +251,20 @@ packages live and not yanked. The first upload was `ic-core` at 2026-10-06
 commit is `adf1f16`; all nineteen packages identified that clean commit in
 their VCS metadata.
 
+## 0.2.14 release authorization
+
+On 2026-10-06 this agent told the maintainer that 0.2.14 needed two
+decisions of theirs: pushing `master`, which publishes the source since the
+repository is public, and whether the BIS/NSA notification covers the
+release. The release publishes under the same nineteen package names as
+0.2.13. It adds `ic_cipher::Sealer` and `Opener`, SP 800-38D section 8.2.1's
+deterministic nonce construction over AEADs already in the library; MCP
+tools that open, verify and derive with existing primitives; a source
+linter that performs no cryptography; and documentation. The maintainer
+replied "Proceed". Publication proceeds on that instruction; this records
+the instruction, not a statement that the notification covers 0.2.14, and
+no new notice was sent or supplied here.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
