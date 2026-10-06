@@ -64,6 +64,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.10 | 2026-10-05 22:59:11 | all eighteen crates published from `66857b2`, after the maintainer answered, when asked, that the notification covers this release; ML-DSA stack reduction |
 | 0.2.11 | 2026-10-06 02:51:52 | all nineteen crates published from `d5a8587`, after the maintainer instructed this agent to proceed when told the release needed confirmation that the notification covers it; adds `ic-hpke`, a new location |
 | 0.2.12 | 2026-10-06 03:59:47 | all nineteen crates published from `0c945bd`, after the maintainer answered, when asked, that the notification covers this release; HPKE DeriveKeyPair |
+| 0.2.13 | 2026-10-06 15:29:21 | all nineteen crates published from `adf1f16` by the maintainer, after instructing this agent to proceed when told the release needed confirmation that the notification covers it; security audit fixes |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -241,6 +242,14 @@ existing KDFs, and documentation. The maintainer replied "Proceed".
 Publication proceeds on that instruction; this records the instruction, not
 a statement that the notification covers 0.2.13, and no new notice was sent
 or supplied here.
+
+This agent's attempt to push was refused by its own permission checks, so the
+maintainer pushed `master` and the `v0.2.13` tag and ran `cargo publish
+--workspace` themselves. The crates.io API confirmed all nineteen 0.2.13
+packages live and not yanked. The first upload was `ic-core` at 2026-10-06
+15:29:21 UTC; the last was `ic-cli` at 15:29:44 UTC. The published source
+commit is `adf1f16`; all nineteen packages identified that clean commit in
+their VCS metadata.
 
 ## Determination
 
