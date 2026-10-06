@@ -38,6 +38,15 @@ one to use correctly.
   `RSAPublicKey`. `crypto_derive` is HKDF, checked against RFC 5869 A.1. An
   agent that needed any of these used to write and compile Rust for it.
   `crypto_seal` and `crypto_open` also take AES-GCM-SIV.
+- **`ic lint` and the MCP `crypto_lint` tool** check Rust source for the
+  known misuses -- literal nonces and keys, tags compared with `==`, passwords
+  through a plain hash or PBKDF2 below 600 000 iterations, raw OS randomness,
+  raw shared secrets as keys, CBC or CTR with no MAC -- and name the rule each
+  finding breaks. They match text a line at a time, and every report says
+  that a finding can be wrong, that no findings is not proof, and which rule
+  (`wrap-secrets`) is not checked at all.
+- **A rule against keys written into code**, `no-literal-key`, joins the
+  always-in-force rules.
 - **The always-in-force rules ship with the library**, as
   `ic_ontology::RULES`: nonce reuse, unauthenticated modes, tag comparison,
   password hashing, raw OS bytes, raw shared secrets, and wiping secrets, each

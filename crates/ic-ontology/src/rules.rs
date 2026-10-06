@@ -64,6 +64,15 @@ pub const RULES: &[Rule] = &[
         severity: Severity::Critical,
     },
     Rule {
+        id: "no-literal-key",
+        rule: "Never write a key into the code.",
+        why: "A key in source is in every copy of the source, its history and its binaries, and \
+              is the same for every deployment.",
+        instead: "A key from a key exchange and a KDF, from ic_drbg::Rng::from_os(), or loaded \
+                  from a secret store at run time.",
+        severity: Severity::Critical,
+    },
+    Rule {
         id: "no-raw-os-bytes",
         rule: "Never use raw OS bytes as key material.",
         why: "OS entropy is the input to an approved DRBG, not a replacement for one; reading \

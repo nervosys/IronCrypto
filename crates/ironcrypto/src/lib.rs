@@ -58,6 +58,8 @@
 //! * **Never compare tags or MACs with ==.** Use [`ic_core::ct::verify`].
 //! * **Never hash a password with a plain hash.** Use `ic_kdf::pbkdf2` with at
 //!   least 600 000 iterations and 16 bytes of fresh salt, or Argon2id.
+//! * **Never write a key into the code.** Derive it, draw it from
+//!   `ic_drbg::Rng::from_os()`, or load it at run time.
 //! * **Never use raw OS bytes as key material.** Use `ic_drbg::Rng::from_os()`.
 //! * **Never use a raw X25519 or ECDH shared secret as a key.** Run it through
 //!   HKDF with both public keys in `info`, or use `ic_hpke`.

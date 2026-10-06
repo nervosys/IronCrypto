@@ -212,6 +212,7 @@ or shared with a second sealer -- needs its counter persisted and restored with
 | `crypto_digest` / `crypto_hmac` / `crypto_seal` / `crypto_open` / `crypto_random` | primitive operations; `crypto_seal` draws the nonce when none is given |
 | `crypto_verify` | "Is this signature valid?" ECDSA, Ed25519, ML-DSA and RSA; an invalid signature is an answer, not an error |
 | `crypto_derive` | HKDF, to turn a shared secret into a key |
+| `crypto_lint` | "Does this code misuse the library?" Pattern checks for each rule; a finding can be wrong, and none is not proof |
 
 ---
 

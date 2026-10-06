@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod lint;
 mod mcp;
 mod ops;
 mod sbom;
@@ -35,6 +36,8 @@ DISCOVERY
     ontology export <format>    json | jsonld | turtle | schema | markdown
     ontology errors             The error vocabulary
     rules                       Rules that hold for every algorithm
+    lint <path>...              Find misuses of those rules in Rust source
+        --tests                     Include test code, skipped by default
     capabilities                What this build can and cannot do
 
 OPERATIONS
@@ -425,6 +428,25 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                 "unknown ontology subcommand '{other}'; try list, show, export, or errors"
             )),
         },
+
+        "lint" => {
+            let paths = &pos[1..];
+            if paths.is_empty() {
+                return Err("lint needs a file or directory of Rust source".to_string());
+            }
+            let mut findings = Vec::new();
+            for p in paths {
+                findings.extend(lint::lint_path(
+                    std::path::Path::new(p),
+                    has_flag(args, "--tests"),
+                )?);
+            }
+            Ok(if want_json {
+                lint::report_json(&findings).to_string()
+            } else {
+                lint::report_text(&findings)
+            })
+        }
 
         "rules" => Ok(if want_json {
             ops::rules_json().to_string()

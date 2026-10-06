@@ -278,6 +278,37 @@ fn tools() -> Vec<Tool> {
             call: |_| Ok(ops::rules_json()),
         },
         Tool {
+            name: "crypto_lint",
+            description:
+                "Check Rust source that uses this library for the known misuses: literal \
+                 nonces and keys, tags compared with ==, passwords through a plain hash or \
+                 weak PBKDF2, raw OS randomness, raw shared secrets as keys, CBC or CTR \
+                 without a MAC. Each finding names its rule. It matches text a line at a \
+                 time: a finding can be wrong, and no findings is not proof of correctness.",
+            schema: || {
+                schema(
+                    vec![
+                        ("source", string_prop("The Rust source to check.")),
+                        ("path", string_prop("Optional name to report findings under.")),
+                        (
+                            "includeTests",
+                            bool_prop("Check #[cfg(test)] code too; skipped by default."),
+                        ),
+                    ],
+                    &["source"],
+                )
+            },
+            call: |args| {
+                let name = arg(args, "path").unwrap_or("source").to_string();
+                let findings: Vec<_> =
+                    crate::lint::lint_with(required(args, "source")?, flag(args, "includeTests"))
+                    .into_iter()
+                    .map(|f| (name.clone(), f))
+                    .collect();
+                Ok(crate::lint::report_json(&findings))
+            },
+        },
+        Tool {
             name: "ontology_errors",
             description:
                 "The library's complete error vocabulary, with what each failure means, how to \
@@ -1717,6 +1748,29 @@ mod tests {
             is_error(&derive(255.0 * 32.0 + 1.0)),
             "longer than HKDF can produce"
         );
+    }
+
+    #[test]
+    fn lint_tool_reports_findings_with_their_rules_and_limits() {
+        let r = call(
+            "crypto_lint",
+            Json::object([(
+                "source",
+                Json::str("let c = Aes256Gcm::new(&[7; 32])?;\nif tag == expected {}"),
+            )]),
+        );
+        assert!(!is_error(&r));
+        let b = body(&r);
+        let rules: Vec<_> = b
+            .get("findings")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f.get("rule").unwrap().as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(rules, ["no-literal-key", "no-tag-equality"]);
+        assert!(b.get("caveat").is_some());
     }
 
     #[test]

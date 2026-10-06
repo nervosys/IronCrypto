@@ -38,6 +38,17 @@ $ ic ontology show <algorithm> --json
 - `serious` — do not violate it without saying so to the user.
 - `advisory` — prefer to honour it.
 
+## After writing it, lint it
+
+```console
+$ ic lint path/to/your/code --json
+```
+
+Through MCP, `crypto_lint` takes the source as a string. Each finding names the
+rule below that it breaks. The checks match text a line at a time: a finding
+can be wrong, so read the line before changing it, and no findings is not proof
+of correctness. Test code is skipped unless you pass `--tests`.
+
 ## Rules that are always in force
 
 These ship with the library as `ic_ontology::RULES`: `ic rules` prints them,
@@ -54,6 +65,8 @@ them with reasons. A test fails if this list and that one disagree.
 - **Never compare tags or MACs with `==`.** Use `ic_core::ct::verify`.
 - **Never hash a password with a plain hash.** Use `ic_kdf::pbkdf2` with at
   least 600 000 iterations and 16 bytes of fresh salt.
+- **Never write a key into the code.** Derive it from a key exchange, draw it
+  from `ic_drbg::Rng::from_os()`, or load it from a secret store at run time.
 - **Never use raw OS bytes as key material.** Use `ic_drbg::Rng::from_os()`.
 - **Never use a raw X25519 or ECDH shared secret as a key.** Run it through
   HKDF with both public keys as `info`, or use `ic_hpke`.
