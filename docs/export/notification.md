@@ -68,6 +68,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.14 | 2026-10-06 17:38:05 | all nineteen crates published from `1821d9c` by the maintainer, after instructing this agent to proceed when told the release needed their decision on whether the notification covers it; nonce-managing sealer, shipped rules, MCP tools and `ic lint` |
 | 0.2.15 | 2026-10-06 19:39:23 | all nineteen crates published from `a39dfeb` by the maintainer, after instructing this agent to push and publish when told the release adds an algorithm and that whether the notification covers it was their decision; HPKE with DHKEM(P-384, HKDF-SHA384) |
 | 0.2.16 | 2026-10-08 18:49:40 | all twenty crates published from `d54aebf` by the maintainer, after replying "then release it" when asked whether to send an updated notice first; adds `ic-sig`, a new location, for which a notice was printed before the publish commands and has not been reported sent |
+| 0.2.17 | 2026-10-08 20:05:34 | all twenty-one crates published from `0792efb` by the maintainer, after replying "Proceed" when told the release needed an updated notice; adds `ic-lms`, a new location and a new algorithm (HSS/LMS verification), for which a notice naming it and `ic-sig` was printed before the publish commands and has not been reported sent |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -345,6 +346,16 @@ to send before publishing. Publication proceeds on the maintainer's
 instruction; this records that instruction and that the notice was printed,
 not that it or the 0.2.16 notice was sent, neither of which has been reported
 here.
+
+The maintainer pushed `master` and the `v0.2.17` tag, created the GitHub
+release, and ran `cargo publish --workspace` themselves. This agent reminded
+them, before the tag push and again before the publish command, that the
+notice could still be sent first; no report that it was sent came before
+publication. The crates.io API confirmed all twenty-one 0.2.17 packages live
+and not yanked, `ic-lms` among them. The first upload was `ic-core` at
+2026-10-08 20:05:34 UTC; `ic-lms` at 20:05:47 UTC; the last was `ic-cli` at
+20:06:09 UTC. The published source commit is `0792efb`; all twenty-one
+packages identified that clean commit in their VCS metadata.
 
 ## Determination
 

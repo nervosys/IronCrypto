@@ -116,29 +116,30 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.2.16"
+ironcrypto = "0.2.17"
 ```
 
-The current release is **0.2.16**, published for all twenty crates on
-crates.io. It adds `ic-sig`, one `verify` for every signature algorithm over
-the public keys certificates carry; a `Signer` interface for keys held in an
-HSM, a TPM or a key service; and NIST SP 800-53 control mappings. 0.2.15
-added HPKE with DHKEM(P-384, HKDF-SHA384), and 0.2.14 made the library harder
-for an agent to misuse. See [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.2.17**, published for all twenty-one crates on
+crates.io. It adds `ic-lms`: verification of HSS/LMS, the hash-based
+signatures CNSA 2.0 names for signing firmware and software. 0.2.16 added
+`ic-sig`, one `verify` for every signature algorithm over the public keys
+certificates carry, and a `Signer` interface for keys held in an HSM, a TPM
+or a key service. See [CHANGELOG.md](CHANGELOG.md).
 `ironcrypto` is the facade and re-exports the rest; depend on the primitives
 directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2.16"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.16"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.2.16"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.2.16"     # HPKE, RFC 9180
-ic-sig = "0.2.16"      # verify any signature over an X.509 public key
+ic-cipher = "0.2.17"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2.17"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2.17"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.2.17"     # HPKE, RFC 9180
+ic-sig = "0.2.17"      # verify any signature over an X.509 public key
+ic-lms = "0.2.17"      # verify HSS/LMS hash-based signatures
 ```
 
 ```console
-$ cargo install ic-cli --version 0.2.16   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.2.17   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -149,7 +150,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.2.16 publication.
+submission and the 0.2.17 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
@@ -578,7 +579,7 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 These are historical developer-machine comparisons from `bench/` against
 RustCrypto and dalek, using the same buffers and the best of nine runs. They
-have not been rerun for 0.2.16 and are not performance guarantees. Shared-machine
+have not been rerun for 0.2.17 and are not performance guarantees. Shared-machine
 interference caused substantial variation between runs.
 
 | operation | historical comparison against RustCrypto/dalek |
