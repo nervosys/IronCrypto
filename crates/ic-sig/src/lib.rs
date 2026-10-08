@@ -105,8 +105,13 @@ impl<'a> PublicKey<'a> {
     /// curve's length. ML-DSA, which `ic_pkix::PublicKeyInfo` does not name,
     /// is read here per RFC 9881: no parameters, and a key of exactly the
     /// parameter set's length. A key `ic_pkix` refuses is not given a second
-    /// reading. X25519 keys and algorithms this library does not implement are
-    /// `Unsupported`: they are well-formed and cannot verify a signature.
+    /// reading.
+    ///
+    /// Two failures, kept apart because a protocol answers them differently: a
+    /// structure that is not a valid `SubjectPublicKeyInfo` is
+    /// `MalformedEncoding`, and a well-formed one this library cannot verify
+    /// with -- an X25519 key, an unimplemented algorithm or curve, a compressed
+    /// EC point -- is `Unsupported`.
     pub fn from_spki(spki: &'a [u8]) -> Result<Self> {
         match PublicKeyInfo::from_der(spki)? {
             PublicKeyInfo::Rsa { modulus, exponent } => Ok(Self::Rsa { modulus, exponent }),
@@ -154,6 +159,56 @@ impl<'a> PublicKey<'a> {
             "ml-dsa public key length"
         );
         Ok(make(key))
+    }
+
+    /// The kind of key: `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,
+    /// `rsa`, `ml-dsa-44`, `ml-dsa-65` or `ml-dsa-87`. For reports.
+    #[must_use = "the key's kind; discarding it reports nothing"]
+    pub const fn kind_id(&self) -> &'static str {
+        match self {
+            Self::EcP256(_) => "ecdsa-p256",
+            Self::EcP384(_) => "ecdsa-p384",
+            Self::EcP521(_) => "ecdsa-p521",
+            Self::Ed25519(_) => "ed25519",
+            Self::Rsa { .. } => "rsa",
+            Self::MlDsa44(_) => "ml-dsa-44",
+            Self::MlDsa65(_) => "ml-dsa-65",
+            Self::MlDsa87(_) => "ml-dsa-87",
+        }
+    }
+
+    /// The size of an RSA modulus in bits, leading zero bytes and bits not
+    /// counted; `None` for every other key.
+    #[must_use = "the modulus size; discarding it checks nothing"]
+    pub fn rsa_bits(&self) -> Option<usize> {
+        let Self::Rsa { modulus, .. } = self else {
+            return None;
+        };
+        let significant = modulus.iter().position(|b| *b != 0)?;
+        let top = modulus[significant];
+        Some((modulus.len() - significant) * 8 - top.leading_zeros() as usize)
+    }
+
+    /// Security strength against a classical adversary, in bits, as the
+    /// ontology records it for the key's algorithms.
+    ///
+    /// RSA's depends on the modulus, by SP 800-57 Part 1 table 2: 112 from
+    /// 2048 bits, 128 from 3072, 192 from 7680, 256 from 15360, and 0 below
+    /// 2048, which nothing here verifies with.
+    #[must_use = "the key's strength; discarding it enforces no minimum"]
+    pub fn classical_bits(&self) -> u16 {
+        match self {
+            Self::EcP256(_) | Self::Ed25519(_) | Self::MlDsa44(_) => 128,
+            Self::EcP384(_) | Self::MlDsa65(_) => 192,
+            Self::EcP521(_) | Self::MlDsa87(_) => 256,
+            Self::Rsa { .. } => match self.rsa_bits().unwrap_or(0) {
+                0..=2047 => 0,
+                2048..=3071 => 112,
+                3072..=7679 => 128,
+                7680..=15359 => 192,
+                _ => 256,
+            },
+        }
     }
 
     /// Whether this key can verify a signature made with `algorithm`.
@@ -444,9 +499,15 @@ mod tests {
             PublicKey::from_spki(&buf[..n]),
             Ok(PublicKey::MlDsa65(_))
         ));
-        // Trailing bytes after the structure.
+        // Trailing bytes after the structure, a truncated one, and nothing at
+        // all: malformed, which is a different answer from unsupported.
         buf[n] = 0;
-        assert!(PublicKey::from_spki(&buf[..n + 1]).is_err());
+        for bad in [&buf[..n + 1], &buf[..n - 1], &buf[..0]] {
+            assert_eq!(
+                kind(PublicKey::from_spki(bad)),
+                ErrorKind::MalformedEncoding
+            );
+        }
     }
 
     #[test]
@@ -481,6 +542,64 @@ mod tests {
                 &[0; 64]
             )),
             ErrorKind::InvalidParameter
+        );
+    }
+
+    /// What a key reports about itself agrees with the ontology's entry for
+    /// its algorithm, and RSA's strength follows its modulus.
+    #[test]
+    fn key_metadata_agrees_with_the_ontology() {
+        let cases: [(PublicKey, &str, &str); 7] = [
+            (PublicKey::EcP256(&[]), "ecdsa-p256", "ecdsa-p256-sha256"),
+            (PublicKey::EcP384(&[]), "ecdsa-p384", "ecdsa-p384-sha384"),
+            (PublicKey::EcP521(&[]), "ecdsa-p521", "ecdsa-p521-sha512"),
+            (PublicKey::Ed25519(&[]), "ed25519", "ed25519"),
+            (PublicKey::MlDsa44(&[]), "ml-dsa-44", "ml-dsa-44"),
+            (PublicKey::MlDsa65(&[]), "ml-dsa-65", "ml-dsa-65"),
+            (PublicKey::MlDsa87(&[]), "ml-dsa-87", "ml-dsa-87"),
+        ];
+        for (key, kind_id, entry) in cases {
+            assert_eq!(key.kind_id(), kind_id);
+            assert_eq!(key.rsa_bits(), None);
+            let strength = ic_ontology::get(entry).expect("registered").strength;
+            assert_eq!(key.classical_bits(), strength.classical, "{entry}");
+        }
+
+        let rsa = |modulus: &'static [u8]| PublicKey::Rsa {
+            modulus,
+            exponent: 65537,
+        };
+        let top = |bits: usize| -> &'static [u8] {
+            let mut m = vec![0u8; bits.div_ceil(8)];
+            m[0] = 1 << ((bits - 1) % 8);
+            m.leak()
+        };
+        for (bits, strength) in [
+            (2047, 0),
+            (2048, 112),
+            (3071, 112),
+            (3072, 128),
+            (4096, 128),
+            (7680, 192),
+            (15360, 256),
+        ] {
+            let key = rsa(top(bits));
+            assert_eq!(key.rsa_bits(), Some(bits));
+            assert_eq!(key.classical_bits(), strength, "{bits} bits");
+        }
+        assert_eq!(rsa(top(2048)).kind_id(), "rsa");
+        // Leading zero bytes are not key size.
+        let mut padded = vec![0u8; 4];
+        padded.extend_from_slice(top(2048));
+        assert_eq!(rsa(padded.leak()).rsa_bits(), Some(2048));
+        assert_eq!(rsa(&[0, 0]).rsa_bits(), None);
+        // 2048-bit RSA is the ontology's 112.
+        assert_eq!(
+            ic_ontology::get("rsa-pss-sha256")
+                .unwrap()
+                .strength
+                .classical,
+            112
         );
     }
 

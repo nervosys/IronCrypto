@@ -26,3 +26,5 @@ ic-mldsa = { workspace = true }
 # For signing the messages the tests verify.
 [dev-dependencies]
 ic-drbg = { workspace = true, features = ["std"] }
+# For checking that a key's reported strength is the registry's.
+ic-ontology = { workspace = true, features = ["std"] }

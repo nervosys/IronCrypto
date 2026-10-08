@@ -154,7 +154,10 @@ impl Custody {
 
 /// A private key that can sign, wherever it is held.
 ///
-/// Object-safe: protocols hold a `&dyn Signer` or box one.
+/// Object-safe, and `Send + Sync`: a server shares one key between the
+/// connections it is serving at once, so a signer that could not cross threads
+/// would be unusable exactly where a signer is most needed. Signing takes
+/// `&self` for the same reason; a signer with state to change guards it itself.
 ///
 /// # What an implementation promises
 ///
@@ -171,11 +174,22 @@ impl Custody {
 /// `sign` returns when the signature exists. For a key in a remote service that
 /// is a network round trip made inside the call; a caller that cannot block
 /// needs to run it elsewhere and is not served by this interface alone.
-pub trait Signer {
-    /// The algorithms this key signs with, in the holder's order of preference.
+pub trait Signer: Send + Sync {
+    /// The algorithms this key signs with, most preferred first.
+    ///
+    /// The order is meaningful: a protocol negotiating an algorithm takes the
+    /// first one here that its peer and its policy also allow. Listing an
+    /// algorithm is a statement about the key, not about any protocol -- an
+    /// RSA key may list PKCS#1 v1.5 for the certificates it signs, and a TLS
+    /// 1.3 handshake still will not use it.
     fn algorithms(&self) -> &[SignatureAlgorithm];
 
     /// The public key, as a DER `SubjectPublicKeyInfo`.
+    ///
+    /// These must be the bytes the key's certificate carries, not a
+    /// re-encoding of the same key: callers compare the two byte for byte to
+    /// check that a certificate and a signer belong together. A signer for a
+    /// remote key reads this once, when it is made.
     fn public_key(&self) -> &[u8];
 
     /// Where the private key lives.
@@ -186,8 +200,10 @@ pub trait Signer {
     ///
     /// `rng` supplies randomness for the algorithms that use it; a device that
     /// draws its own ignores it. `out` shorter than the signature is refused
-    /// with `InvalidLength`; [`SignatureAlgorithm::max_signature_len`] is
-    /// always long enough.
+    /// with `InvalidLength`, with nothing written and nothing consumed;
+    /// [`SignatureAlgorithm::max_signature_len`] is always long enough. An
+    /// algorithm not in [`algorithms`](Signer::algorithms) is refused with
+    /// `InvalidParameter`.
     fn sign(
         &self,
         algorithm: SignatureAlgorithm,
@@ -243,7 +259,10 @@ mod tests {
                 Ok(())
             }
         }
+        // Shared across threads, as a server shares its key.
+        fn shareable<T: Send + Sync + ?Sized>(_: &T) {}
         let signer: &dyn Signer = &Fixed;
+        shareable(signer);
         let mut out = [0u8; 4];
         assert_eq!(
             signer
