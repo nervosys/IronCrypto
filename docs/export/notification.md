@@ -69,6 +69,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.15 | 2026-10-06 19:39:23 | all nineteen crates published from `a39dfeb` by the maintainer, after instructing this agent to push and publish when told the release adds an algorithm and that whether the notification covers it was their decision; HPKE with DHKEM(P-384, HKDF-SHA384) |
 | 0.2.16 | 2026-10-08 18:49:40 | all twenty crates published from `d54aebf` by the maintainer, after replying "then release it" when asked whether to send an updated notice first; adds `ic-sig`, a new location, for which a notice was printed before the publish commands and has not been reported sent |
 | 0.2.17 | 2026-10-08 20:05:34 | all twenty-one crates published from `0792efb` by the maintainer, after replying "Proceed" when told the release needed an updated notice; adds `ic-lms`, a new location and a new algorithm (HSS/LMS verification), for which a notice naming it and `ic-sig` was printed before the publish commands and has not been reported sent |
+| 0.2.18 | 2026-10-08 22:36:28 | all twenty-one crates published from `eb790c3` by the maintainer, after replying "Proceed" when asked whether to release a data-and-documentation change; CNSA 2.0 profile, no new algorithm or package |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -370,6 +371,15 @@ whether to release it as 0.2.18 or hold it. The maintainer replied
 "Proceed". Publication proceeds on that instruction; no new notice was
 printed for this release. The notice naming `ic-sig` and `ic-lms`, printed
 for 0.2.17, has still not been reported sent.
+
+The maintainer pushed `master` and the `v0.2.18` tag, created the GitHub
+release, and ran `cargo publish --workspace` themselves; a first run that
+stalled on a shared build directory uploaded nothing and ended with an
+error, and a second, in a separate build directory, published. The crates.io
+API confirmed all twenty-one 0.2.18 packages live and not yanked. The first
+upload was `ic-core` at 2026-10-08 22:36:28 UTC; the last was `ic-cli` at
+22:37:03 UTC. The published source commit is `eb790c3`; all twenty-one
+packages identified that clean commit in their VCS metadata.
 
 ## Determination
 
