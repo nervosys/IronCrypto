@@ -357,6 +357,20 @@ and not yanked, `ic-lms` among them. The first upload was `ic-core` at
 20:06:09 UTC. The published source commit is `0792efb`; all twenty-one
 packages identified that clean commit in their VCS metadata.
 
+## 0.2.18 release authorization
+
+0.2.18 publishes under the same twenty-one package names as 0.2.17 and adds
+no algorithm and no cryptographic code: a CNSA 2.0 profile in the ontology,
+an entry recording that XMSS is not implemented, and a corrected control
+mapping.
+
+On 2026-10-08 this agent told the maintainer that the change was data and
+documentation only, with no new algorithm and no new package, and asked
+whether to release it as 0.2.18 or hold it. The maintainer replied
+"Proceed". Publication proceeds on that instruction; no new notice was
+printed for this release. The notice naming `ic-sig` and `ic-lms`, printed
+for 0.2.17, has still not been reported sent.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
