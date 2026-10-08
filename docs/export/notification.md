@@ -294,6 +294,26 @@ was `ic-core` at 2026-10-06 19:39:23 UTC; the last was `ic-cli` at 19:40:06
 UTC. The published source commit is `a39dfeb`; all nineteen packages
 identified that clean commit in their VCS metadata.
 
+## 0.2.16 release authorization
+
+0.2.16 adds a twentieth package, `ic-sig`
+(https://crates.io/crates/ic-sig), which is a new location. It verifies
+signatures by algorithm over X.509 public keys by calling the schemes in
+`ic-ec`, `ic-rsa` and `ic-mldsa`, and implements no cryptographic algorithm of
+its own. The release also adds a signing interface to `ic-core` that nothing
+implements, and NIST SP 800-53 control mappings.
+
+On 2026-10-08 this agent told the maintainer that the release adds a package
+name and no new cryptographic functionality, and asked whether they wanted an
+updated notice naming `ic-sig` drafted to send before publication. The
+maintainer replied "then release it". Before any publish command was given
+to the maintainer, this agent printed an updated notice addressed to
+`crypt@bis.doc.gov` and `enc@nsa.gov`, naming the GitHub repository and all
+twenty crates.io package names and identifying `ic-sig` as new with 0.2.16,
+for the maintainer to send first. Publication proceeds on the maintainer's
+instruction; this records that instruction and that the notice was printed,
+not that it was sent, which has not been reported here.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
