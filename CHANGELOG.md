@@ -3,6 +3,30 @@
 All twenty crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **HSS/LMS signature verification, in a new crate `ic-lms`.** The stateful
+  hash-based signatures of RFC 8554, with RFC 9858's parameter sets, as NIST
+  SP 800-208 approves them and CNSA 2.0 names for signing firmware and
+  software: SHA-256, SHA-256/192, SHAKE256/256 and SHAKE256/192, at every
+  Winternitz width and tree height, in hierarchies of one to eight levels.
+  `ic_lms::verify(public_key, message, signature)`, `verify_lms` for the bare
+  forms, and `parameters` for a caller with a policy on parameter sets. No
+  allocation, no panic on any input, at most 8670 hash calls per level.
+- **It verifies and does not sign, on purpose.** An LMS private key is a set
+  of one-time keys; signing twice with one lets a forger sign anything, and
+  keeping the count right across crashes, restores and copies is a device's
+  job. SP 800-208 requires hardware for it. The ontology says so as a
+  critical constraint.
+- **Checked against every published case**: RFC 8554 appendix F's two and RFC
+  9858 appendix A's four, read out of the RFCs' text by script rather than
+  typed. An independent implementation, required to reproduce RFC 9858's keys
+  and signatures from their published seeds, supplies 21 more cases for the
+  parameter sets the RFCs do not cover. A known-answer self-test joins the
+  table (74). Twenty-one crates now.
+
 ## 0.2.16
 
 ### Added

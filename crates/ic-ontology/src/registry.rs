@@ -301,6 +301,26 @@ const HPKE_P: [Param; 4] = [
     },
 ];
 
+const HSS_LMS_P: [Param; 2] = [
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 52,
+        max: 60,
+        recommended: 52,
+        note: "u32(levels) || LMS public key: 52 bytes with a 192-bit hash, 60 with a 256-bit one.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 784,
+        max: 74984,
+        recommended: 784,
+        note: "From 784 bytes for one tree of height 5 at W=8 with a 192-bit hash, to eight \
+               levels of height 25 at W=1 with a 256-bit one. The parameter sets fix it exactly.",
+    },
+];
+
 const HPKE_P384_P: [Param; 4] = [
     Param {
         name: "private-key",
@@ -3055,6 +3075,55 @@ let mut sig = [0u8; ic_mldsa::sign87::SIGNATURE_LEN];
 assert!(ic_mldsa::sign87::sign(&sk, msg, ctx, &rnd, &mut sig));
 assert!(ic_mldsa::sign87::verify(&pk, msg, ctx, &sig));",
         notes: "The ML-DSA-65 scheme at FIPS 204's ML-DSA-87 parameters, sharing its code: the scheme is written once and instantiated per parameter set. Checked against NIST's ACVP vectors for this set on its own account -- all 25 key-generation cases and all 30 external, pure signature cases, 15 deterministic and 15 hedged -- since the parameters are exactly what differs. The largest, at category 5, for a policy that asks for it. `recommend` offers ML-DSA-65, the middle set; choose this one deliberately.",
+    },
+    Entry {
+        id: "hss-lms",
+        name: "HSS/LMS",
+        aliases: &["lms", "hss", "leighton-micali", "stateful-hash-based-signature"],
+        summary: "Hash-based signatures whose security needs only a hash function: what CNSA \
+                  2.0 names for signing firmware and software. Verification only.",
+        class: Class::Signature,
+        family: "Stateful hash-based",
+        purposes: &[Purpose::Authentication, Purpose::Integrity],
+        strength: Strength { classical: 192, quantum: 96 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["SP 800-208", "RFC 8554", "RFC 9858"],
+        params: &HSS_LMS_P,
+        constraints: &[
+            Constraint {
+                id: "lms-verify-only",
+                requirement: "Use this to verify. Sign with a hardware cryptographic module \
+                              that owns the key's state, as SP 800-208 requires.",
+                consequence: "An LMS private key is a set of one-time keys. Signing twice with \
+                              one -- after a crash, a restored backup, a cloned machine -- lets a \
+                              forger sign anything.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "lms-check-parameters",
+                requirement: "If policy fixes the parameter sets, read them with \
+                              ic_lms::parameters and refuse a key outside the policy.",
+                consequence: "Every approved set verifies here; a policy for 192-bit hashes or \
+                              a minimum tree height is the caller's to enforce.",
+                severity: Severity::Advisory,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "sha2-256" },
+            Edge { relation: Relation::BuiltOn, target: "shake256" },
+            Edge { relation: Relation::PairsWith, target: "ml-dsa-87" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ic_lms::HssLms",
+        example: "ic_lms::verify(&public_key, message, &signature)?;",
+        notes: "Verification only: this library holds no LMS private key and never will. All \
+                sixteen LM-OTS and twenty LMS parameter sets of RFC 8554 and RFC 9858 -- SHA-256, \
+                SHA-256/192, SHAKE256/256 and SHAKE256/192, at every Winternitz width and tree \
+                height -- in hierarchies of one to eight levels. The strength recorded is the \
+                192-bit hashes'; the 256-bit ones give 256 classical and 128 quantum. Checked \
+                against all six cases the two RFCs publish, and against an independent \
+                implementation for the parameter sets they do not cover.",
     },
     Entry {
         id: "rsa-pkcs1-sha256",

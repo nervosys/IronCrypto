@@ -259,6 +259,7 @@ mod tests {
             "ic_mlkem::",
             "ic_mldsa::",
             "ic_hpke::",
+            "ic_lms::",
         ];
         for e in REGISTRY
             .iter()

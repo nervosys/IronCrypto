@@ -967,7 +967,7 @@ mod totality_tests {
             // Each argument dropped in turn, once. What this exercises is the
             // absence rather than the value that was absent, so repeating it
             // per hostile value only costs time -- 29 seconds of it, almost all
-            // in `crypto_selftest`, which runs all 73 known-answer tests when
+            // in `crypto_selftest`, which runs all 74 known-answer tests when
             // its argument is missing.
             for dropped in &names {
                 let mut short = std::collections::BTreeMap::new();

@@ -1085,6 +1085,20 @@ fn hpke_p384_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// HSS/LMS: the example verifies RFC 9858 appendix A.1.
+#[test]
+fn hss_lms_example_compiles_and_matches() -> Result<()> {
+    let (public_key, message, signature) = ironcrypto::lms::example();
+    let message: &[u8] = &message;
+
+    ic_lms::verify(&public_key, message, &signature)?;
+    check_example(
+        "hss-lms",
+        "ic_lms::verify(&public_key, message, &signature)?;",
+    );
+    Ok(())
+}
+
 /// Shamir: the split, compiled, then three of the five shares recover the key.
 #[test]
 fn shamir_example_compiles_and_matches() -> Result<()> {

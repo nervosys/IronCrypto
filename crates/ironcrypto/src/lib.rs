@@ -105,6 +105,7 @@ pub use ic_fips as fips;
 pub use ic_hash as hash;
 pub use ic_hpke as hpke;
 pub use ic_kdf as kdf;
+pub use ic_lms as lms;
 pub use ic_mac as mac;
 pub use ic_mldsa as mldsa;
 pub use ic_mlkem as mlkem;

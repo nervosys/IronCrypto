@@ -618,6 +618,40 @@ const RFC9180_REQS: [Requirement; 3] = [
     },
 ];
 
+const RFC8554_REQS: [Requirement; 2] = [
+    Requirement {
+        id: "rfc-8554-one-time-keys",
+        section: "4",
+        obligation: Obligation::ShallNot,
+        statement: "An LM-OTS private key shall not sign more than one message (RFC 8554's MUST).",
+        rationale: "Two signatures under one one-time key let a forger combine their chain \
+                    values into a signature on a third message: the scheme fails entirely.",
+        applies_to: &["hss-lms"],
+        compliance: Compliance::NotApplicable {
+            why: "IronCrypto verifies HSS/LMS signatures and does not make them. It holds no \
+                  LMS private key, so there is no one-time key here to reuse. Signing belongs \
+                  in a device that can keep its count of used keys across failure and \
+                  restoration.",
+        },
+    },
+    Requirement {
+        id: "rfc-8554-exact-signature-length",
+        section: "5.4.2",
+        obligation: Obligation::Shall,
+        statement: "Verification shall return INVALID unless the signature is exactly as long \
+                    as its parameter sets dictate, its typecodes are the public key's, and its \
+                    leaf number is within the tree.",
+        rationale: "A verifier that accepts trailing bytes accepts many encodings of one \
+                    signature, and a leaf number past the tree is arithmetic on a value the \
+                    signer chose.",
+        applies_to: &["hss-lms"],
+        compliance: Compliance::Met {
+            file: "crates/ic-lms/src/lib.rs",
+            symbol: "a_leaf_number_past_the_tree_is_refused_not_computed",
+        },
+    },
+];
+
 const RFC8017_REQS: [Requirement; 1] = [Requirement {
     id: "rfc-8017-no-signature-parsing",
     section: "8.2.2",
@@ -1066,6 +1100,46 @@ pub static STANDARDS: &[Standard] = &[
                   polynomial interpolation over a finite field: any k of n shares recover the \
                   secret, and fewer reveal nothing about it. No standards body defines the \
                   scheme, so the paper that does is cited.",
+        requirements: &NO_REQS,
+    },
+    Standard {
+        id: "SP 800-208",
+        title: "Recommendation for Stateful Hash-Based Signature Schemes",
+        body: Body::Nist,
+        scope: Scope::Algorithm,
+        year: 2020,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://doi.org/10.6028/NIST.SP.800-208",
+        summary: "Approves LMS and XMSS, with their multi-tree forms HSS and XMSS^MT, and the \
+                  SHA-256/192 and SHAKE256 parameter sets. What CNSA 2.0 names for signing \
+                  firmware and software.",
+        requirements: &NO_REQS,
+    },
+    Standard {
+        id: "RFC 8554",
+        title: "Leighton-Micali Hash-Based Signatures",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2019,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc8554",
+        summary: "LM-OTS one-time signatures, LMS trees of them, and HSS hierarchies of trees, \
+                  with SHA-256. The verification algorithms and the formats.",
+        requirements: &RFC8554_REQS,
+    },
+    Standard {
+        id: "RFC 9858",
+        title: "Additional Parameter Sets for HSS/LMS Hash-Based Signatures",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2025,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc9858",
+        summary: "The SHA-256/192, SHAKE256/256 and SHAKE256/192 parameter sets of SP 800-208, \
+                  with their typecodes and test cases.",
         requirements: &NO_REQS,
     },
     Standard {

@@ -103,6 +103,11 @@ const COMPONENTS: &[Component] = &[
             "HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) and DHKEM(P-384, HKDF-SHA384).",
     },
     Component {
+        name: "ic-lms",
+        description:
+            "HSS/LMS hash-based signature verification (RFC 8554, RFC 9858, SP 800-208).",
+    },
+    Component {
         name: "ic-sig",
         description:
             "Signature verification by algorithm over X.509 public keys, dispatching to the schemes above.",

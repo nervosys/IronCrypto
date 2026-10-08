@@ -551,7 +551,7 @@ converting ACVP output.
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 73 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 74 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `ic capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.

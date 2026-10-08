@@ -580,6 +580,7 @@ fn hammered_here() -> Vec<&'static str> {
         "ml-kem-1024",
         "hpke-x25519-sha256",
         "hpke-p384-sha384",
+        "hss-lms",
     ]);
     ids
 }
@@ -889,4 +890,66 @@ fn hpke_p384_is_total_on_its_encapsulation() {
     let mut rx = p384::setup_receiver(&enc, &recipient, b"info", aead).unwrap();
     rx.open_in_place(b"aad", &mut body, &tag).unwrap();
     assert_eq!(&body, b"a genuine message");
+}
+
+/// HSS/LMS verification is total on everything it is handed.
+///
+/// A signature's lengths are dictated by typecodes inside it, and an HSS
+/// signature carries the public keys of its lower levels, so the parser is
+/// driven almost entirely by the signer's bytes. Random strings of every
+/// length around the real ones, as key and as signature, are refused without
+/// a panic, and so is a genuine signature with every one of its typecode and
+/// length-bearing fields set to each of a set of hostile values.
+#[test]
+fn hss_lms_is_total_on_keys_and_signatures() {
+    use ironcrypto::lms;
+    let mut rng = Rng::new(0x1a5);
+    let (key, message, signature) = lms::example();
+
+    for len in [0usize, 3, 4, 8, 51, 52, 53, 60, 783, 784, 785, 1296, 5000] {
+        for input in hostile_inputs(&mut rng, len, 16) {
+            assert!(lms::verify(&key, &message, &input).is_err(), "as signature");
+            assert!(lms::verify(&input, &message, &signature).is_err(), "as key");
+            assert!(lms::verify_lms(&input, &message, &input).is_err());
+            let _ = lms::parameters(&input);
+        }
+    }
+
+    // The fields that steer the parser: the level count, the leaf number, the
+    // LM-OTS typecode, and the LMS typecode after the one-time signature.
+    let lms_type_at = 4 + 4 + 4 + 24 * 27;
+    for at in [0usize, 4, 8, lms_type_at] {
+        for value in [
+            0u32,
+            1,
+            4,
+            5,
+            8,
+            0x0a,
+            0x10,
+            0x14,
+            0x18,
+            0x19,
+            0x8000_0000,
+            u32::MAX,
+        ] {
+            let mut bad = signature;
+            bad[at..at + 4].copy_from_slice(&value.to_be_bytes());
+            if bad != signature {
+                assert!(
+                    lms::verify(&key, &message, &bad).is_err(),
+                    "field at {at} set to {value:#x}"
+                );
+            }
+        }
+    }
+    // A level count that promises more signed keys than there are bytes for.
+    for levels in 2u8..=8 {
+        let mut k = key;
+        k[3] = levels;
+        let mut s = signature;
+        s[3] = levels - 1;
+        assert!(lms::verify(&k, &message, &s).is_err(), "{levels} levels");
+    }
+    lms::verify(&key, &message, &signature).unwrap();
 }
