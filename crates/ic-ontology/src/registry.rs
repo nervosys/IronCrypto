@@ -3126,6 +3126,31 @@ assert!(ic_mldsa::sign87::verify(&pk, msg, ctx, &sig));",
                 implementation for the parameter sets they do not cover.",
     },
     Entry {
+        id: "xmss",
+        name: "XMSS",
+        aliases: &["xmss-mt", "extended-merkle-signature-scheme"],
+        summary: "The other stateful hash-based signature SP 800-208 approves and CNSA 2.0 \
+                  names. Standardised, not implemented here.",
+        class: Class::Signature,
+        family: "Stateful hash-based",
+        purposes: &[Purpose::Authentication, Purpose::Integrity],
+        // The floor of the approved parameter sets, as for HSS/LMS.
+        strength: Strength { classical: 192, quantum: 96 },
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Planned,
+        standards: &["SP 800-208"],
+        params: &NO_PARAMS,
+        constraints: &[],
+        edges: &[Edge { relation: Relation::PairsWith, target: "hss-lms" }],
+        performance: Performance::Fast,
+        rust_path: "",
+        example: "",
+        notes: "Listed so that asking for it resolves to an absence rather than to nothing. \
+                SP 800-208 approves XMSS and XMSS^MT beside LMS and HSS, and CNSA 2.0 names \
+                both families; this library verifies HSS/LMS and does not implement XMSS. A \
+                system that must verify XMSS signatures needs another implementation.",
+    },
+    Entry {
         id: "rsa-pkcs1-sha256",
         name: "RSASSA-PKCS1-v1_5 with SHA-256",
         aliases: &["rsa-pkcs1-v1_5", "rsassa-pkcs1", "sha256withrsa"],

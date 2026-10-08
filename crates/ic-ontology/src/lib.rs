@@ -56,6 +56,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod profile;
 pub mod query;
 pub mod registry;
 pub mod rules;

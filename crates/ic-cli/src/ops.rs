@@ -381,6 +381,117 @@ pub fn capabilities_json() -> Json {
 }
 
 /// The error catalog as JSON.
+/// A profile as JSON: its members with their roles and build status, and
+/// what it chooses for each intent.
+pub fn profile_json(id: &str) -> Result<Json, String> {
+    use ic_ontology::profile::{profile, PROFILES};
+    let p = profile(id).ok_or_else(|| {
+        format!(
+            "unknown profile '{id}'; one of {}",
+            PROFILES.iter().map(|p| p.id).collect::<Vec<_>>().join(", ")
+        )
+    })?;
+    let intents = [
+        Intent::EncryptMessage,
+        Intent::HashData,
+        Intent::AuthenticateMessage,
+        Intent::DeriveKey,
+        Intent::HashPassword,
+        Intent::AgreeKey,
+        Intent::SignData,
+        Intent::GenerateRandom,
+    ];
+    Ok(Json::object([
+        ("id", Json::str(p.id)),
+        ("name", Json::str(p.name)),
+        ("summary", Json::str(p.summary)),
+        ("source", Json::str(p.source)),
+        ("exclusions", Json::str(p.exclusions)),
+        (
+            "members",
+            Json::Array(
+                p.entries()
+                    .map(|(m, e)| {
+                        Json::object([
+                            ("id", Json::str(m.id)),
+                            ("role", Json::str(m.role)),
+                            ("note", Json::str(m.note)),
+                            ("status", Json::str(e.status.id())),
+                            ("rustPath", Json::str(e.rust_path)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "choices",
+            Json::Array(
+                intents
+                    .iter()
+                    .map(|i| {
+                        Json::object([
+                            ("intent", Json::str(i.id())),
+                            (
+                                "algorithm",
+                                match p.choose(*i) {
+                                    Some(e) => Json::str(e.id),
+                                    None => Json::Null,
+                                },
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "validationStatement",
+            Json::str(
+                "Using these algorithms is not fitness for a national security system. \
+                 IronCrypto is not CMVP validated and is not an NSA-approved product.",
+            ),
+        ),
+    ]))
+}
+
+/// A profile as text.
+pub fn profile_text(id: &str) -> Result<String, String> {
+    let j = profile_json(id)?;
+    let field = |n: &str| j.get(n).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let mut out = format!(
+        "{} ({})\n{}\n\nsource: {}\n\nmembers:\n",
+        field("name"),
+        field("id"),
+        field("summary"),
+        field("source")
+    );
+    for m in j.get("members").and_then(|m| m.as_array()).unwrap_or(&[]) {
+        let f = |n: &str| m.get(n).and_then(|v| v.as_str()).unwrap_or("");
+        out.push_str(&format!(
+            "  {:<14} {:<10} {}\n      {}\n",
+            f("id"),
+            f("status"),
+            f("role"),
+            f("note")
+        ));
+    }
+    out.push_str("\nchooses:\n");
+    for c in j.get("choices").and_then(|c| c.as_array()).unwrap_or(&[]) {
+        out.push_str(&format!(
+            "  {:<22} {}\n",
+            c.get("intent").and_then(|v| v.as_str()).unwrap_or(""),
+            c.get("algorithm")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(the profile names none)")
+        ));
+    }
+    out.push_str(&format!(
+        "\nnot in it: {}\n\n{}",
+        field("exclusions"),
+        field("validationStatement")
+    ));
+    Ok(out)
+}
+
 pub fn rules_json() -> Json {
     Json::Array(
         ic_ontology::RULES

@@ -3,6 +3,29 @@
 All twenty-one crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **A CNSA 2.0 profile**, `ic_ontology::profile::CNSA_2_0`: the suite as a list
+  of algorithms rather than a strength floor, since that is what it is --
+  ML-KEM-1024, ML-DSA-87, AES-256, SHA-384 or SHA-512, and LMS and XMSS. Each
+  member carries its role and whether this build implements it, and
+  `choose(intent)` answers from the suite or not at all: it names no password
+  hash and no random bit generator, so those intents have no answer under it.
+  `ic profile cnsa-2.0` and the MCP `crypto_profile` tool return it. The list
+  is from the NSA-authored IETF drafts `draft-jenkins-cnsa2-pkix-profile-05`
+  and `draft-becker-cnsa2-tls-profile-05`; NSA's own advisory was not read,
+  and no transition date is recorded. `Policy::CNSA` is unchanged and now
+  says it is the CNSA 1.0 threshold.
+- **An ontology entry for XMSS**, as planned and not implemented: it is in
+  CNSA 2.0 and SP 800-208, and asking for it should resolve to an absence.
+
+### Changed
+
+- The SP 800-53 mapping for SI-7(15), code authentication, said LMS was not
+  implemented. It is, as of 0.2.17; XMSS is what is missing.
+
 ## 0.2.17
 
 ### Added

@@ -155,8 +155,12 @@ impl Policy {
         }
     }
 
-    /// A 192-bit floor with a FIPS requirement, as CNSA-aligned profiles ask
-    /// for.
+    /// A 192-bit floor with a FIPS requirement, as CNSA 1.0-aligned profiles
+    /// ask for.
+    ///
+    /// This is a threshold, and CNSA 2.0 is not one: it names algorithms, all
+    /// post-quantum for public-key use. For that, see
+    /// [`crate::profile::CNSA_2_0`].
     ///
     /// This is what moves the answer from P-256 to P-384: the curves differ
     /// only in strength, so the selector picks on the number rather than on a

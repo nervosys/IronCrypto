@@ -491,8 +491,8 @@ pub fn verify_lms(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result
     key.verify(message, signature).ok_or_else(rejected)
 }
 
-/// RFC 9858 appendix A.1: LMS_SHA256_M24_H5 with LMOTS_SHA256_N24_W8, the
-/// SHA-256/192 parameters CNSA 2.0 recommends.
+/// RFC 9858 appendix A.1: LMS_SHA256_M24_H5 with LMOTS_SHA256_N24_W8, one of
+/// SP 800-208's SHA-256/192 parameter sets.
 const SELF_TEST_KEY: &str = "000000010000000a00000008202122232425262728292a2b2c2d2e2f2c571450aed99cfb4f4ac285da14882796618314508b12d2";
 const SELF_TEST_MESSAGE: &str = "54657374206d65737361676520666f72205348413235362d3139320a";
 const SELF_TEST_SIGNATURE: &str = "\

@@ -632,14 +632,14 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Sp80053,
         title: "Code Authentication",
         description: "Implement cryptographic mechanisms to authenticate software or firmware components prior to installation. An enhancement of SI-7, in NIST's High baseline.",
-        bearing: "Signature verification is what authenticates a component. ECDSA, Ed25519, RSA and ML-DSA verification are here; the stateful hash-based signatures that CNSA 2.0 names for firmware, LMS and XMSS, are not.",
+        bearing: "Signature verification is what authenticates a component. ECDSA, Ed25519, RSA and ML-DSA verification are here, and so is HSS/LMS, one of the two stateful hash-based signatures CNSA 2.0 names for firmware; XMSS, the other, is not.",
         compliance: Compliance::Partial {
             file: "crates/ic-ec/src/nist/ecdsa.rs",
             symbol: "pub fn verify",
-            gap: "Verification for ECDSA, RSA and ML-DSA is implemented. LMS and XMSS are not, the decision of which signers to trust is a system's, and a federal system needs the verification from a validated module.",
+            gap: "Verification for ECDSA, RSA, ML-DSA and HSS/LMS is implemented. XMSS is not, the decision of which signers to trust is a system's, and a federal system needs the verification from a validated module.",
         },
-        algorithms: &["ecdsa-p384-sha384", "ml-dsa-87"],
-        standards: &["FIPS 186-5", "FIPS 204"],
+        algorithms: &["ecdsa-p384-sha384", "ml-dsa-87", "hss-lms"],
+        standards: &["FIPS 186-5", "FIPS 204", "SP 800-208"],
     },
     Control {
         id: "CM-3(6)",

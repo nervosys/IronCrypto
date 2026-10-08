@@ -208,6 +208,7 @@ or shared with a second sealer -- needs its counter persisted and restored with
 | `ontology_show` | "What are the parameter bounds and failure modes?" |
 | `ontology_errors` | "What does this error mean and can I retry?" |
 | `crypto_capabilities` | "What can this build actually do?" |
+| `crypto_profile` | "What does CNSA 2.0 permit, and what does it choose for this?" A named suite, not a strength floor |
 | `crypto_rules` | "What must I never do, whichever algorithm I use?" Also sent in the server's instructions at connect time |
 | `crypto_selftest` | "Is the module healthy?" |
 | `crypto_digest` / `crypto_hmac` / `crypto_seal` / `crypto_open` / `crypto_random` | primitive operations; `crypto_seal` draws the nonce when none is given |

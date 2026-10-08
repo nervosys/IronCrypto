@@ -36,6 +36,7 @@ DISCOVERY
     ontology export <format>    json | jsonld | turtle | schema | markdown
     ontology errors             The error vocabulary
     rules                       Rules that hold for every algorithm
+    profile <id>                A named suite and what it chooses: cnsa-2.0
     lint <path>...              Find misuses of those rules in Rust source
         --tests                     Include test code, skipped by default
     capabilities                What this build can and cannot do
@@ -446,6 +447,15 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             } else {
                 lint::report_text(&findings)
             })
+        }
+
+        "profile" => {
+            let id = pos.get(1).copied().unwrap_or("cnsa-2.0");
+            if want_json {
+                Ok(ops::profile_json(id)?.to_string())
+            } else {
+                ops::profile_text(id)
+            }
         }
 
         "rules" => Ok(if want_json {

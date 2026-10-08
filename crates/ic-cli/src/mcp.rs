@@ -269,6 +269,21 @@ fn tools() -> Vec<Tool> {
             },
         },
         Tool {
+            name: "crypto_profile",
+            description:
+                "A named algorithm suite: what it permits, each member's role and whether this \
+                 build implements it, and what it chooses for each intent. A profile names \
+                 algorithms rather than setting a strength floor, so an intent it does not \
+                 cover has no answer, not a substitute. Available: cnsa-2.0.",
+            schema: || {
+                schema(
+                    vec![("profile", string_prop("Profile id; cnsa-2.0 if omitted."))],
+                    &[],
+                )
+            },
+            call: |args| ops::profile_json(arg(args, "profile").unwrap_or("cnsa-2.0")),
+        },
+        Tool {
             name: "crypto_rules",
             description:
                 "The rules that hold whichever algorithm is chosen -- nonce reuse, tag \
@@ -1452,6 +1467,21 @@ mod tests {
             Json::object([("algorithm", Json::str("SHA-256"))]),
         );
         assert_eq!(body(&r).get("id").unwrap().as_str(), Some("sha2-256"));
+
+        let r = call("crypto_profile", Json::object([]));
+        assert!(!is_error(&r));
+        let b = body(&r);
+        assert_eq!(b.get("id").unwrap().as_str(), Some("cnsa-2.0"));
+        assert!(b
+            .get("validationStatement")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("not CMVP validated"));
+        assert!(is_error(&call(
+            "crypto_profile",
+            Json::object([("profile", Json::str("suite-b"))])
+        )));
 
         let r = call("crypto_rules", Json::object([]));
         assert!(!is_error(&r));
