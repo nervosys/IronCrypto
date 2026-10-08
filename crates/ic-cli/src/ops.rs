@@ -1591,9 +1591,10 @@ pub fn controls_json(
         Some("cwe") => Some(Framework::Cwe),
         Some("attack") => Some(Framework::Attack),
         Some("cmmc") => Some(Framework::Cmmc),
+        Some("sp800-53") => Some(Framework::Sp80053),
         Some(other) => {
             return Err(format!(
-                "unknown framework '{other}'; try cwe, attack or cmmc"
+                "unknown framework '{other}'; try cwe, attack, cmmc or sp800-53"
             ))
         }
     };

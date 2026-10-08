@@ -1,4 +1,5 @@
-//! Security frameworks: weaknesses, adversary techniques, and CMMC practices.
+//! Security frameworks: weaknesses, adversary techniques, CMMC practices and
+//! SP 800-53 controls.
 //!
 //! [`crate::standards`] answers "what do the documents that define these
 //! algorithms require". This answers a different question that auditors,
@@ -6,8 +7,8 @@
 //! this avoid, which adversary techniques does it bear on, and does it satisfy
 //! the practice my contract names".
 //!
-//! Three frameworks, because they are three different kinds of thing and
-//! collapsing them would lose that:
+//! Four frameworks, because they are different kinds of thing and collapsing
+//! them would lose that:
 //!
 //! - **CWE** — classes of weakness. A library does not "comply with CVE"; CVEs
 //!   are instances, and what an implementation can do is avoid the classes they
@@ -18,6 +19,14 @@
 //!   are the techniques its controls genuinely bear on, and nothing is claimed
 //!   about the rest.
 //! - **CMMC 2.0** — contractual practices, drawn from NIST SP 800-171.
+//! - **NIST SP 800-53 Revision 5** — the federal control catalogue, which
+//!   FedRAMP and the DoD impact levels select baselines from. Only the controls
+//!   that name a cryptographic mechanism are here. Titles and statements are
+//!   the catalogue's, release 5.2.0, read from NIST's OSCAL content on
+//!   2026-10-08; each entry says whether NIST's High baseline includes it.
+//!   FedRAMP's own baseline was not mapped: its published sources were being
+//!   restructured when this was written, and a list from memory is not one to
+//!   attest against.
 //!
 //! # The most important entry in this file
 //!
@@ -50,6 +59,8 @@ pub enum Framework {
     Attack,
     /// CMMC 2.0, the US Department of Defense maturity model.
     Cmmc,
+    /// NIST SP 800-53 Revision 5, the federal security control catalogue.
+    Sp80053,
 }
 
 impl Framework {
@@ -59,6 +70,7 @@ impl Framework {
             Self::Cwe => "cwe",
             Self::Attack => "attack",
             Self::Cmmc => "cmmc",
+            Self::Sp80053 => "sp800-53",
         }
     }
 
@@ -68,6 +80,7 @@ impl Framework {
             Self::Cwe => "MITRE Common Weakness Enumeration",
             Self::Attack => "MITRE ATT&CK",
             Self::Cmmc => "Cybersecurity Maturity Model Certification 2.0",
+            Self::Sp80053 => "NIST SP 800-53 Revision 5",
         }
     }
 }
@@ -146,7 +159,7 @@ pub fn cve_posture() -> &'static str {
 // The controls.
 // ---------------------------------------------------------------------------
 
-/// Every control across the three frameworks.
+/// Every control across the four frameworks.
 pub static CONTROLS: &[Control] = &[
     // -- CWE ----------------------------------------------------------------
     Control {
@@ -482,6 +495,166 @@ pub static CONTROLS: &[Control] = &[
         algorithms: &["hmac-sha2-256"],
         standards: &["FIPS 198-1"],
     },
+    Control {
+        id: "SC-13",
+        framework: Framework::Sp80053,
+        title: "Cryptographic Protection",
+        description: "Determine the required cryptographic uses, and implement the types of cryptography required for each. In NIST's High baseline.",
+        bearing: "The control every other cryptographic control in the catalogue leans on: it is where a system says which cryptography it uses. Federal baselines assign that as FIPS-validated or NSA-approved cryptography, which is the same requirement as CMMC's SC.L2-3.13.11 and fails here for the same reason.",
+        compliance: Compliance::Unmet {
+            why: "IronCrypto has no CMVP certificate and is not FIPS-validated, so it cannot be the cryptography a federal system names under SC-13 where the assignment is FIPS-validated or NSA-approved. It implements approved algorithms and FIPS 140-3's operational discipline, which is a prerequisite for validation and is not validation. That assignment is the common one and was not re-read from FedRAMP's or DoD's current baseline when this was written; an assessor's assignment governs.",
+        },
+        algorithms: &[],
+        standards: &["FIPS 140-3"],
+    },
+    Control {
+        id: "SC-8(1)",
+        framework: Framework::Sp80053,
+        title: "Cryptographic Protection",
+        description: "Implement cryptographic mechanisms to protect the confidentiality or integrity of information during transmission. An enhancement of SC-8, in NIST's High baseline.",
+        bearing: "The library supplies the mechanisms -- AEADs, key agreement, signatures -- and ic-rustls presents them to a TLS stack; a system satisfies the control.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-cipher/src/gcm.rs",
+            symbol: "Aes256Gcm",
+            gap: "In a federal system this control is implemented with the cryptography SC-13 selects, which federal baselines assign as FIPS-validated or NSA-approved. IronCrypto has no CMVP certificate, so the mechanism exists here and a federal deployment cannot rest the control on it until a validated module does.",
+        },
+        algorithms: &["aes-256-gcm", "chacha20-poly1305", "ecdh-p384", "ml-kem-768"],
+        standards: &["SP 800-38D", "SP 800-56A", "FIPS 203"],
+    },
+    Control {
+        id: "SC-28(1)",
+        framework: Framework::Sp80053,
+        title: "Cryptographic Protection",
+        description: "Implement cryptographic mechanisms to prevent unauthorized disclosure and modification of information at rest. An enhancement of SC-28, in NIST's High baseline.",
+        bearing: "Authenticated encryption and key wrapping are what the control calls for, and both are here. Which information, on which components, and where the keys live are the system's to decide.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-cipher/src/keywrap.rs",
+            symbol: "Aes256Kw",
+            gap: "In a federal system this control is implemented with the cryptography SC-13 selects, which federal baselines assign as FIPS-validated or NSA-approved. IronCrypto has no CMVP certificate, so the mechanism exists here and a federal deployment cannot rest the control on it until a validated module does.",
+        },
+        algorithms: &["aes-256-gcm", "aes-256-gcm-siv"],
+        standards: &["SP 800-38D", "SP 800-38F"],
+    },
+    Control {
+        id: "SC-12",
+        framework: Framework::Sp80053,
+        title: "Cryptographic Key Establishment and Management",
+        description: "Establish and manage cryptographic keys, when cryptography is employed, in accordance with defined key management requirements. In NIST's High baseline.",
+        bearing: "A library covers the cryptographic half: keys drawn from an approved generator, agreed, derived, wrapped for transport, and wiped. The other half -- storage, distribution, rotation, revocation, destruction records -- is a system's, and nothing here does it.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-drbg/src/rng.rs",
+            symbol: "from_os",
+            gap: "Generation, agreement, derivation, wrapping and zeroization are implemented; key storage, distribution, rotation and destruction are not a library's and are not here. A federal system also establishes keys with validated cryptography, which IronCrypto is not.",
+        },
+        algorithms: &[],
+        standards: &["SP 800-90A", "SP 800-56A", "SP 800-56C", "SP 800-38F"],
+    },
+    Control {
+        id: "SC-12(2)",
+        framework: Framework::Sp80053,
+        title: "Symmetric Keys",
+        description: "Produce, control, and distribute symmetric cryptographic keys using NIST FIPS-validated or NSA-approved key management technology and processes. An enhancement of SC-12; not in NIST's High baseline.",
+        bearing: "The enhancement names validated key management technology outright, so it is the SC-13 question again, asked of key management.",
+        compliance: Compliance::Unmet {
+            why: "IronCrypto is not FIPS-validated and is not NSA-approved key management technology. Symmetric keys it generates or wraps do not satisfy this enhancement. Those are the only two choices the catalogue gives the parameter.",
+        },
+        algorithms: &[],
+        standards: &["FIPS 140-3"],
+    },
+    Control {
+        id: "SC-17",
+        framework: Framework::Sp80053,
+        title: "Public Key Infrastructure Certificates",
+        description: "Issue public key certificates under a defined certificate policy, or obtain them from an approved service provider, and include only approved trust anchors in trust stores. In NIST's High baseline.",
+        bearing: "IronCrypto encodes and signs X.509 certificates for one profile, and parses keys. It holds no trust store, validates no certification path and checks no revocation, which is most of what this control is about.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-pkix/src/cert.rs",
+            symbol: "write_certificate",
+            gap: "Issuance for one profile is implemented and checked byte for byte against OpenSSL. Certificate policy, path validation, trust anchors and revocation are not implemented; a system needs them from elsewhere.",
+        },
+        algorithms: &[],
+        standards: &["FIPS 186-5", "FIPS 204"],
+    },
+    Control {
+        id: "SC-23",
+        framework: Framework::Sp80053,
+        title: "Session Authenticity",
+        description: "Protect the authenticity of communications sessions. In NIST's High baseline.",
+        bearing: "Sessions belong to a protocol. The library supplies what a protocol authenticates a session with and implements no session of its own.",
+        compliance: Compliance::NotApplicable {
+            why: "A cryptographic library has no communications sessions. TLS and QUIC session authenticity is the protocol implementation's control -- IronSocketLayer's in this stack, or rustls over ic-rustls -- and is recorded there.",
+        },
+        algorithms: &[],
+        standards: &[],
+    },
+    Control {
+        id: "IA-5(1)",
+        framework: Framework::Sp80053,
+        title: "Password-based Authentication",
+        description: "For password-based authentication, among other items: transmit passwords only over cryptographically-protected channels, and store passwords using an approved salted key derivation function, preferably using a keyed hash. An enhancement of IA-5, in NIST's High baseline.",
+        bearing: "One item of eight bears on a library: how a password is stored. PBKDF2 is the approved salted key derivation function, refuses fewer than 1000 iterations, and the always-in-force rules ask for 600 000; Argon2id is here and is not an approved function.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-kdf/src/pbkdf2.rs",
+            symbol: "pub fn pbkdf2",
+            gap: "The storage item is implemented with PBKDF2 over HMAC. The other seven items -- compromised-password lists, composition rules, recovery, protected transmission -- are an authentication system's. A federal system also needs the function from a validated module.",
+        },
+        algorithms: &["pbkdf2-hmac-sha2-256"],
+        standards: &["SP 800-132"],
+    },
+    Control {
+        id: "IA-7",
+        framework: Framework::Sp80053,
+        title: "Cryptographic Module Authentication",
+        description: "Implement mechanisms for authentication to a cryptographic module that meet applicable requirements for such authentication. In NIST's High baseline.",
+        bearing: "FIPS 140-3 requires operator authentication from security level 2. A software module at level 1 has none, and IronCrypto has no operators, roles or authentication of its own.",
+        compliance: Compliance::NotApplicable {
+            why: "IronCrypto authenticates no operator: it is a library called by the process that links it, with no roles or services gated by identity. The control is met by the validated module a federal system uses, and by the host's access control around it.",
+        },
+        algorithms: &[],
+        standards: &["FIPS 140-3"],
+    },
+    Control {
+        id: "SI-7(6)",
+        framework: Framework::Sp80053,
+        title: "Cryptographic Protection",
+        description: "Implement cryptographic mechanisms to detect unauthorized changes to software, firmware, and information. An enhancement of SI-7; not in NIST's High baseline.",
+        bearing: "Hashes, MACs and signatures are those mechanisms. The library also checks itself, with a keyed hash over its self-test table rather than over its executable image.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-fips/src/selftest.rs",
+            symbol: "integrity_check",
+            gap: "The mechanisms are provided for a system to apply. The library's own integrity check covers its self-test table, not the binary a platform loads, and a federal system needs the mechanism from a validated module.",
+        },
+        algorithms: &["sha2-384", "hmac-sha2-256", "ecdsa-p384-sha384", "ml-dsa-87"],
+        standards: &["FIPS 180-4", "FIPS 198-1", "FIPS 186-5", "FIPS 204"],
+    },
+    Control {
+        id: "SI-7(15)",
+        framework: Framework::Sp80053,
+        title: "Code Authentication",
+        description: "Implement cryptographic mechanisms to authenticate software or firmware components prior to installation. An enhancement of SI-7, in NIST's High baseline.",
+        bearing: "Signature verification is what authenticates a component. ECDSA, Ed25519, RSA and ML-DSA verification are here; the stateful hash-based signatures that CNSA 2.0 names for firmware, LMS and XMSS, are not.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-ec/src/nist/ecdsa.rs",
+            symbol: "pub fn verify",
+            gap: "Verification for ECDSA, RSA and ML-DSA is implemented. LMS and XMSS are not, the decision of which signers to trust is a system's, and a federal system needs the verification from a validated module.",
+        },
+        algorithms: &["ecdsa-p384-sha384", "ml-dsa-87"],
+        standards: &["FIPS 186-5", "FIPS 204"],
+    },
+    Control {
+        id: "CM-3(6)",
+        framework: Framework::Sp80053,
+        title: "Cryptography Management",
+        description: "Ensure that cryptographic mechanisms used to provide defined controls are under configuration management. An enhancement of CM-3, in NIST's High baseline.",
+        bearing: "Configuration management is an organization's process. What a library can contribute is an exact, machine-readable account of what it contains: every algorithm with its status, and a bill of materials.",
+        compliance: Compliance::Partial {
+            file: "crates/ic-cli/src/sbom.rs",
+            symbol: "pub fn cyclonedx",
+            gap: "The registry and the CycloneDX bill of materials say exactly which mechanisms a build contains. Placing them under an organization's change control, and recording which controls each provides in a given system, is that organization's work.",
+        },
+        algorithms: &[],
+        standards: &[],
+    },
 ];
 
 #[cfg(test)]
@@ -526,6 +699,22 @@ mod tests {
                 );
             }
             other => panic!("SC.L2-3.13.11 must be Unmet, found {}", other.id()),
+        }
+    }
+
+    /// SP 800-53's counterpart of the same entry: the two controls whose
+    /// federal assignment is validated cryptography stay unmet.
+    #[test]
+    fn the_sp_800_53_validation_controls_are_unmet() {
+        for id in ["SC-13", "SC-12(2)"] {
+            let c = control(id).expect("the control must be present");
+            match c.compliance {
+                Compliance::Unmet { why } => assert!(
+                    why.contains("not FIPS-validated"),
+                    "{id} must say plainly that it is not validated: {why}"
+                ),
+                other => panic!("{id} must be Unmet, found {}", other.id()),
+            }
         }
     }
 
@@ -649,8 +838,13 @@ mod tests {
 
     /// Every framework must actually be represented.
     #[test]
-    fn all_three_frameworks_are_covered() {
-        for f in [Framework::Cwe, Framework::Attack, Framework::Cmmc] {
+    fn every_framework_is_covered() {
+        for f in [
+            Framework::Cwe,
+            Framework::Attack,
+            Framework::Cmmc,
+            Framework::Sp80053,
+        ] {
             let n = by_framework(f).count();
             assert!(n >= 5, "{} has only {n} controls", f.name());
         }

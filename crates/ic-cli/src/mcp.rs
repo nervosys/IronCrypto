@@ -330,7 +330,7 @@ fn tools() -> Vec<Tool> {
                     vec![
                         (
                             "framework",
-                            enum_prop("Narrow to one framework.", "cwe, attack, cmmc"),
+                            enum_prop("Narrow to one framework.", "cwe, attack, cmmc, sp800-53"),
                         ),
                         (
                             "algorithm",

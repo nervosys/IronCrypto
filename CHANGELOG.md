@@ -3,6 +3,23 @@
 All nineteen crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **NIST SP 800-53 Revision 5 controls in the frameworks knowledgebase**,
+  beside CWE, ATT&CK and CMMC: the twelve that name a cryptographic mechanism
+  -- SC-8(1), SC-12, SC-12(2), SC-13, SC-17, SC-23, SC-28(1), IA-5(1), IA-7,
+  SI-7(6), SI-7(15) and CM-3(6). Titles and statements are the catalogue's,
+  release 5.2.0, read from NIST's OSCAL content, and each says whether NIST's
+  High baseline includes it. SC-13 and SC-12(2) are unmet, for the reason
+  CMMC's SC.L2-3.13.11 is: no CMVP certificate. The rest are partial, with
+  the mechanism pointed at and the gap named, or not applicable to a library.
+  `ic ontology controls --framework sp800-53` and the MCP `crypto_controls`
+  tool return them. FedRAMP's own baseline is not mapped: its published
+  sources were being restructured, and a list from memory is not one to
+  attest against.
+
 ## 0.2.15
 
 ### Added

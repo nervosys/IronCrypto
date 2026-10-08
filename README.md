@@ -429,6 +429,7 @@ The same machinery, applied to the frameworks people are audited against:
 ic ontology controls --framework cwe      # weakness classes
 ic ontology controls --framework attack   # MITRE ATT&CK techniques
 ic ontology controls --framework cmmc     # CMMC 2.0 practices
+ic ontology controls --framework sp800-53 # NIST SP 800-53 Rev. 5 controls
 ic ontology control SC.L2-3.13.11
 ```
 
