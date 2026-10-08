@@ -325,6 +325,27 @@ not yanked, `ic-sig` among them. The first upload was `ic-core` at 2026-10-08
 UTC. The published source commit is `d54aebf`; all twenty packages identified
 that clean commit in their VCS metadata.
 
+## 0.2.17 release authorization
+
+0.2.17 adds a twenty-first package, `ic-lms`
+(https://crates.io/crates/ic-lms), which is a new location, and with it a new
+algorithm: verification of HSS/LMS stateful hash-based signatures (RFC 8554,
+RFC 9858, NIST SP 800-208). It verifies signatures and does not create them;
+it performs no encryption.
+
+On 2026-10-08 this agent told the maintainer that the release adds an
+algorithm and a package, that it needs an updated notice naming `ic-lms`,
+that the notice would be printed before any publish command, and that it
+still did not know whether the notice naming `ic-sig` for 0.2.16 had been
+sent. The maintainer replied "Proceed". This agent then printed one notice
+addressed to `crypt@bis.doc.gov` and `enc@nsa.gov`, naming the GitHub
+repository and all twenty-one crates.io package names and identifying both
+`ic-sig` (new with 0.2.16) and `ic-lms` (new with 0.2.17), for the maintainer
+to send before publishing. Publication proceeds on the maintainer's
+instruction; this records that instruction and that the notice was printed,
+not that it or the 0.2.16 notice was sent, neither of which has been reported
+here.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not

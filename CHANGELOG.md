@@ -1,9 +1,9 @@
 # Changelog
 
-All twenty crates share a version and are released together, so this covers
+All twenty-one crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.2.17
 
 ### Added
 
