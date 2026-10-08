@@ -111,6 +111,7 @@ pub use ic_mlkem as mlkem;
 pub use ic_ontology as ontology;
 pub use ic_pkix as pkix;
 pub use ic_rsa as rsa;
+pub use ic_sig as sig;
 
 /// Everything needed for ordinary use, in one import.
 pub mod prelude {

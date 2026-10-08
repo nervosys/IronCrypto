@@ -20,6 +20,7 @@ members = [
     "crates/ic-cli",
     "crates/ic-rustls",
     "crates/ic-hpke",
+    "crates/ic-sig",
 ]
 
 # Not a workspace member, and deliberately so. `bench/` compares this library
@@ -76,6 +77,7 @@ ic-pkix = { path = "crates/ic-pkix", version = "0.2.15", default-features = fals
 ic-mlkem = { path = "crates/ic-mlkem", version = "0.2.15", default-features = false }
 ic-mldsa = { path = "crates/ic-mldsa", version = "0.2.15", default-features = false }
 ic-hpke = { path = "crates/ic-hpke", version = "0.2.15", default-features = false }
+ic-sig = { path = "crates/ic-sig", version = "0.2.15", default-features = false }
 ic-json = { path = "crates/ic-json", version = "0.2.15" }
 ic-vectors = { path = "crates/ic-vectors", version = "0.2.15" }
 ic-fips = { path = "crates/ic-fips", version = "0.2.15", default-features = false }

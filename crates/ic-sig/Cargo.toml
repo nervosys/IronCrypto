@@ -1,0 +1,28 @@
+[package]
+name = "ic-sig"
+description = "Signature verification by algorithm over X.509 public keys, for IronCrypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[features]
+default = ["std"]
+std = ["ic-core/std", "ic-pkix/std", "ic-ec/std", "ic-rsa/std", "ic-mldsa/std"]
+
+[dependencies]
+ic-core = { workspace = true }
+ic-pkix = { workspace = true }
+ic-ec = { workspace = true }
+ic-rsa = { workspace = true }
+ic-mldsa = { workspace = true }
+
+# For signing the messages the tests verify.
+[dev-dependencies]
+ic-drbg = { workspace = true, features = ["std"] }

@@ -99,7 +99,13 @@ const COMPONENTS: &[Component] = &[
     },
     Component {
         name: "ic-hpke",
-        description: "HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256).",
+        description:
+            "HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) and DHKEM(P-384, HKDF-SHA384).",
+    },
+    Component {
+        name: "ic-sig",
+        description:
+            "Signature verification by algorithm over X.509 public keys, dispatching to the schemes above.",
     },
     Component {
         name: "ic-json",

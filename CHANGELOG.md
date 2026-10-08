@@ -7,6 +7,24 @@ all of them.
 
 ### Added
 
+- **A new crate, `ic-sig`: one `verify` for every signature algorithm**, over
+  a public key parsed from a `SubjectPublicKeyInfo` and a signature in the
+  encoding X.509 and TLS 1.3 carry. It is what a certificate validator or a
+  handshake calls, and it existed twice outside this library --
+  IronSocketLayer and IronPrivacyGuard each dispatched to IronCrypto's
+  schemes themselves. It implements no algorithm: ECDSA on P-256, P-384 and
+  P-521, Ed25519, RSA PKCS#1 v1.5 and PSS, and ML-DSA-44, -65 and -87 are
+  `ic-ec`'s, `ic-rsa`'s and `ic-mldsa`'s. A signature that does not verify is
+  one failure whether malformed, mis-sized or wrong; a key that cannot serve
+  the algorithm named is the caller's error. RSA exponents above 2^32 - 1
+  are refused, since the cost of verification is otherwise the peer's to
+  set. Checked against signatures and certificates OpenSSL made. Re-exported
+  as `ironcrypto::sig`. Twenty crates now.
+- **`ic_core::sig::Signer`, an interface for a private key that can sign
+  wherever it is held**, with `SignatureAlgorithm` and `Custody`. A TLS
+  handshake or a certificate issuer written against it serves a key in an
+  HSM, a TPM or a key service as it does one in memory. The interface is
+  blocking and allocation-free; nothing implements it in this release.
 - **NIST SP 800-53 Revision 5 controls in the frameworks knowledgebase**,
   beside CWE, ATT&CK and CMMC: the twelve that name a cryptographic mechanism
   -- SC-8(1), SC-12, SC-12(2), SC-13, SC-17, SC-23, SC-28(1), IA-5(1), IA-7,
