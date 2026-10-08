@@ -618,6 +618,50 @@ const RFC9180_REQS: [Requirement; 3] = [
     },
 ];
 
+const FIPS205_REQS: [Requirement; 3] = [
+    Requirement {
+        id: "fips-205-signature-length",
+        section: "9.3",
+        obligation: Obligation::Shall,
+        statement: "Verification shall return false for a signature whose length is not \
+                    (1 + k(1 + a) + h + d * len) * n bytes.",
+        rationale: "Every field of a signature is found by offset; one of another length has \
+                    no defined reading.",
+        applies_to: &["slh-dsa"],
+        compliance: Compliance::Met {
+            file: "crates/ic-slhdsa/src/lib.rs",
+            symbol: "fast_sets_sign_and_verify",
+        },
+    },
+    Requirement {
+        id: "fips-205-context-length",
+        section: "10.2.1",
+        obligation: Obligation::Shall,
+        statement: "Signing shall return an error if the context string is longer than 255 \
+                    bytes.",
+        rationale: "The context's length is encoded in one byte of the message that is signed.",
+        applies_to: &["slh-dsa"],
+        compliance: Compliance::Met {
+            file: "crates/ic-slhdsa/src/lib.rs",
+            symbol: "wrong_lengths_are_refused_before_any_work",
+        },
+    },
+    Requirement {
+        id: "fips-205-hedged-default",
+        section: "9.2",
+        obligation: Obligation::Should,
+        statement: "The hedged variant should be used where side-channel attacks are a \
+                    concern, with n fresh random bytes as the additional randomness.",
+        rationale: "Randomising the message hash makes fault and side-channel attacks on the \
+                    signer harder than they are against a deterministic one.",
+        applies_to: &["slh-dsa"],
+        compliance: Compliance::Met {
+            file: "crates/ic-slhdsa/src/lib.rs",
+            symbol: "pub fn sign<R: RandomSource + ?Sized>",
+        },
+    },
+];
+
 const RFC8554_REQS: [Requirement; 2] = [
     Requirement {
         id: "rfc-8554-one-time-keys",
@@ -820,8 +864,10 @@ pub static STANDARDS: &[Standard] = &[
         status: StandardStatus::Current,
         superseded_by: &[],
         url: "https://doi.org/10.6028/NIST.FIPS.205",
-        summary: "SLH-DSA, the standardized form of SPHINCS+. Not implemented here.",
-        requirements: &[],
+        summary: "SLH-DSA, the standardized form of SPHINCS+: WOTS+ one-time signatures, \
+                  XMSS trees of them stacked into a hypertree, and FORS for the message, with \
+                  no state for the signer to keep.",
+        requirements: &FIPS205_REQS,
     },
     Standard {
         id: "SP 800-38A",

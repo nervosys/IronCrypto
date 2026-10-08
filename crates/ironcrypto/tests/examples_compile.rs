@@ -1085,6 +1085,26 @@ fn hpke_p384_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// SLH-DSA: generate, sign and verify, at the cheapest parameter set.
+#[test]
+fn slh_dsa_example_compiles_and_matches() -> Result<()> {
+    let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x5du8; 32], b"example").unwrap();
+    let (msg, ctx): (&[u8], &[u8]) = (b"message", b"");
+    let mut sk = [0u8; 64];
+    let mut pk = [0u8; 32];
+    let mut sig = vec![0u8; 17088];
+
+    let set = ic_slhdsa::ParameterSet::Sha2_128f;
+    ic_slhdsa::keygen(set, &mut rng, &mut sk, &mut pk)?;
+    ic_slhdsa::sign(set, &sk, msg, ctx, &mut rng, &mut sig)?;
+    ic_slhdsa::verify(set, &pk, msg, ctx, &sig)?;
+    check_example(
+        "slh-dsa",
+        "let set = ic_slhdsa::ParameterSet::Sha2_128f;\nic_slhdsa::keygen(set, &mut rng, &mut sk, &mut pk)?;\nic_slhdsa::sign(set, &sk, msg, ctx, &mut rng, &mut sig)?;\nic_slhdsa::verify(set, &pk, msg, ctx, &sig)?;",
+    );
+    Ok(())
+}
+
 /// HSS/LMS: the example verifies RFC 9858 appendix A.1.
 #[test]
 fn hss_lms_example_compiles_and_matches() -> Result<()> {

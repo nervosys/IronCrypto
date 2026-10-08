@@ -40,6 +40,7 @@ const CRYPTO_CRATES: &[&str] = &[
     "ic-hpke",
     "ic-sig",
     "ic-lms",
+    "ic-slhdsa",
 ];
 
 fn workspace_root() -> PathBuf {

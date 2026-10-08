@@ -108,6 +108,11 @@ const COMPONENTS: &[Component] = &[
             "HSS/LMS hash-based signature verification (RFC 8554, RFC 9858, SP 800-208).",
     },
     Component {
+        name: "ic-slhdsa",
+        description:
+            "SLH-DSA (FIPS 205), all twelve parameter sets, checked against NIST ACVP vectors.",
+    },
+    Component {
         name: "ic-sig",
         description:
             "Signature verification by algorithm over X.509 public keys, dispatching to the schemes above.",

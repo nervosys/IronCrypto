@@ -581,6 +581,7 @@ fn hammered_here() -> Vec<&'static str> {
         "hpke-x25519-sha256",
         "hpke-p384-sha384",
         "hss-lms",
+        "slh-dsa",
     ]);
     ids
 }
@@ -952,4 +953,56 @@ fn hss_lms_is_total_on_keys_and_signatures() {
         assert!(lms::verify(&k, &message, &s).is_err(), "{levels} levels");
     }
     lms::verify(&key, &message, &signature).unwrap();
+}
+
+/// SLH-DSA verification is total on keys and signatures.
+///
+/// A signature has no internal lengths or typecodes: every field is at a
+/// fixed offset for its parameter set. So what an attacker controls is the
+/// length, which must be exact, and the bytes, which only have to fail. For
+/// each fast-signing set of both hash families: hostile strings of the right
+/// length and of lengths around it, as signature and as public key, are
+/// refused without a panic; so is a genuine signature under every other
+/// parameter set, including the one of the same size and the other hash.
+#[test]
+fn slh_dsa_is_total_on_keys_and_signatures() {
+    use ironcrypto::slhdsa::{self, ParameterSet};
+    let mut rng = Rng::new(0x51d5a);
+    for set in [ParameterSet::Sha2_128f, ParameterSet::Shake_128f] {
+        let seed = [0x5du8; 16];
+        let mut sk = [0u8; 64];
+        let mut pk = [0u8; 32];
+        slhdsa::keygen_internal(set, &seed, &seed, &seed, &mut sk, &mut pk).unwrap();
+        let mut signature = vec![0u8; set.signature_len()];
+        slhdsa::sign_deterministic(set, &sk, b"message", b"", &mut signature).unwrap();
+        slhdsa::verify(set, &pk, b"message", b"", &signature).unwrap();
+
+        let len = set.signature_len();
+        for l in [0, 1, len - 1, len, len + 1, 7856] {
+            for input in hostile_inputs(&mut rng, l, 4) {
+                assert!(slhdsa::verify(set, &pk, b"message", b"", &input).is_err());
+            }
+        }
+        for l in [0usize, 16, 31, 32, 33, 48, 64] {
+            for input in hostile_inputs(&mut rng, l, 4) {
+                assert!(slhdsa::verify(set, &input, b"message", b"", &signature).is_err());
+            }
+        }
+        for other in ParameterSet::ALL.iter().filter(|s| **s != set) {
+            assert!(
+                slhdsa::verify(*other, &pk, b"message", b"", &signature).is_err(),
+                "a {} signature verified as {}",
+                set.id(),
+                other.id()
+            );
+        }
+        // And signing is total on its inputs: wrong-length keys, buffers and
+        // randomness are refused, not indexed.
+        let mut out = vec![0u8; len];
+        for l in [0usize, 63, 65, 128] {
+            let key = vec![1u8; l];
+            assert!(slhdsa::sign_deterministic(set, &key, b"m", b"", &mut out).is_err());
+        }
+        assert!(slhdsa::sign_deterministic(set, &sk, b"m", b"", &mut out[..len - 1]).is_err());
+    }
 }

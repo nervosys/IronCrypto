@@ -301,6 +301,34 @@ const HPKE_P: [Param; 4] = [
     },
 ];
 
+const SLH_DSA_P: [Param; 3] = [
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 32,
+        max: 64,
+        recommended: 32,
+        note: "2n bytes: 32, 48 or 64 at categories 1, 3 and 5.",
+    },
+    Param {
+        name: "secret-key",
+        unit: Unit::Bytes,
+        min: 64,
+        max: 128,
+        recommended: 64,
+        note: "4n bytes; it contains the public key.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 7856,
+        max: 49856,
+        recommended: 17088,
+        note: "Fixed by the parameter set: 7,856 (128s) to 49,856 (256f). The f sets are about \
+               twice the s sets and sign far faster.",
+    },
+];
+
 const HSS_LMS_P: [Param; 2] = [
     Param {
         name: "public-key",
@@ -2958,35 +2986,65 @@ pub static REGISTRY: &[Entry] = &[
     Entry {
         id: "slh-dsa",
         name: "SLH-DSA",
-        aliases: &["sphincs+", "sphincs"],
-        summary: "Post-quantum signatures from hashes alone. Standardised, not implemented here.",
+        aliases: &["sphincs+", "sphincs", "stateless-hash-based-signature"],
+        summary: "Post-quantum signatures from hashes alone, with no state to keep: FIPS 205. \
+                  Large and slow, and resting on the weakest assumption of any signature here.",
         class: Class::Signature,
         family: "SLH-DSA",
         purposes: &[Purpose::Authentication, Purpose::NonRepudiation],
-        // The parameter sets range from 128 to 256 bits; the floor is quoted,
-        // since nothing here picks a set.
+        // The parameter sets range from category 1 to 5; the floor is quoted,
+        // since the caller picks the set.
         strength: Strength { classical: 128, quantum: 128 },
         fips: FipsStatus::Approved,
-        status: ImplStatus::Planned,
+        status: ImplStatus::Available,
         standards: &["FIPS 205"],
-        params: &NO_PARAMS,
-        constraints: &[],
+        params: &SLH_DSA_P,
+        constraints: &[
+            Constraint {
+                id: "slh-dsa-prefer-hedged",
+                requirement: "Sign with ic_slhdsa::sign, which draws fresh randomness; use \
+                              sign_deterministic only where no random bit generator exists.",
+                consequence: "FIPS 205 makes hedged signing the default because it blunts fault \
+                              and side-channel attacks on the signer that deterministic signing \
+                              leaves open.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "slh-dsa-fix-the-parameter-set",
+                requirement: "Verify under the parameter set the key was made for, known from \
+                              the key's identifier, never inferred from a signature's length.",
+                consequence: "The SHA-2 and SHAKE sets of one size have identical key and \
+                              signature lengths; a verifier that guesses can be steered.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "slh-dsa-signature-limit",
+                requirement: "Sign at most 2^64 messages with one key.",
+                consequence: "The security claim of FIPS 205 holds up to that many signatures; \
+                              no real signer reaches it.",
+                severity: Severity::Advisory,
+            },
+        ],
         edges: &[
             Edge { relation: Relation::PairsWith, target: "ml-dsa-65" },
             Edge { relation: Relation::BuiltOn, target: "shake256" },
+            Edge { relation: Relation::BuiltOn, target: "sha2-256" },
         ],
         performance: Performance::Slow,
-        rust_path: "",
-        example: "",
-        notes: "Listed so that asking for it resolves to an absence rather than to nothing \
-                at all. FIPS 205 is approved and this library does not implement it; the \
-                post-quantum signature here is ML-DSA-65. The two rest on different \
-                assumptions on purpose — SLH-DSA needs only that its hash is sound, where \
-                ML-DSA needs a lattice problem to stay hard — which is the reason to want it \
-                and the reason it is worth saying it is missing. Signatures run to kilobytes \
-                and signing is slow; that is the price of the weaker assumption, not a \
-                defect. A deployment that cannot accept a lattice assumption needs a \
-                validated module, not this one.",
+        rust_path: "ic_slhdsa::SlhDsa",
+        example: "let set = ic_slhdsa::ParameterSet::Sha2_128f;\n\
+                  ic_slhdsa::keygen(set, &mut rng, &mut sk, &mut pk)?;\n\
+                  ic_slhdsa::sign(set, &sk, msg, ctx, &mut rng, &mut sig)?;\n\
+                  ic_slhdsa::verify(set, &pk, msg, ctx, &sig)?;",
+        notes: "All twelve parameter sets of FIPS 205: SHA-2 and SHAKE at categories 1, 3 and \
+                5, small-signature and fast-signing. Pure signing with a context string, hedged \
+                or deterministic; HashSLH-DSA and SP 800-230's sets are not implemented. It \
+                rests on a different assumption from ML-DSA on purpose -- only that its hash is \
+                sound, where ML-DSA needs a lattice problem to stay hard -- which is the reason \
+                to want it. Signatures are 7,856 to 49,856 bytes and signing takes from \
+                thousands to millions of hash calls; that is the price of the weaker \
+                assumption, not a defect. Not in CNSA 2.0, which names LMS and XMSS for \
+                hash-based signatures. Checked against NIST's ACVP vectors for every set.",
     },
     Entry {
         id: "ml-dsa-65",

@@ -3,6 +3,28 @@
 All twenty-one crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **SLH-DSA, FIPS 205, in a new crate `ic-slhdsa`.** The stateless hash-based
+  signature standard: all twelve parameter sets -- SHA-2 and SHAKE, at
+  security categories 1, 3 and 5, small-signature and fast-signing -- with key
+  generation, signing and verification for the pure interface and its
+  context string. Signing is hedged by default, as the standard recommends,
+  and deterministic on request. Nothing allocates: keys and signatures of
+  7,856 to 49,856 bytes are written into the caller's buffers, and a long
+  message is hashed in place. The ontology entry, `slh-dsa`, moves from
+  planned to available. HashSLH-DSA and SP 800-230's parameter sets are not
+  implemented.
+- **Checked against NIST's ACVP vectors for every parameter set.** Bundled:
+  all 120 key-generation cases, 48 signing cases and 30 verification cases,
+  including NIST's invalid signatures. The complete files -- 336 signing
+  cases compared byte for byte and 336 verification cases -- were run once
+  and all pass; `scripts/gen_slh_dsa_vectors.py --full` and
+  `IC_SLH_DSA_FULL` repeat that. A known-answer self-test joins the table
+  (75). Twenty-two crates now.
+
 ## 0.2.18
 
 ### Added

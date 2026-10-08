@@ -113,6 +113,7 @@ pub use ic_ontology as ontology;
 pub use ic_pkix as pkix;
 pub use ic_rsa as rsa;
 pub use ic_sig as sig;
+pub use ic_slhdsa as slhdsa;
 
 /// Everything needed for ordinary use, in one import.
 pub mod prelude {

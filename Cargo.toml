@@ -22,6 +22,7 @@ members = [
     "crates/ic-hpke",
     "crates/ic-sig",
     "crates/ic-lms",
+    "crates/ic-slhdsa",
 ]
 
 # Not a workspace member, and deliberately so. `bench/` compares this library
@@ -80,6 +81,7 @@ ic-mldsa = { path = "crates/ic-mldsa", version = "0.2.18", default-features = fa
 ic-hpke = { path = "crates/ic-hpke", version = "0.2.18", default-features = false }
 ic-sig = { path = "crates/ic-sig", version = "0.2.18", default-features = false }
 ic-lms = { path = "crates/ic-lms", version = "0.2.18", default-features = false }
+ic-slhdsa = { path = "crates/ic-slhdsa", version = "0.2.18", default-features = false }
 ic-json = { path = "crates/ic-json", version = "0.2.18" }
 ic-vectors = { path = "crates/ic-vectors", version = "0.2.18" }
 ic-fips = { path = "crates/ic-fips", version = "0.2.18", default-features = false }

@@ -14,7 +14,7 @@ publish.workspace = true
 
 [features]
 default = ["std"]
-std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-pkix/std", "ic-mlkem/std", "ic-mldsa/std", "ic-fips/std", "ic-ontology/std", "ic-hpke/std", "ic-sig/std", "ic-lms/std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-pkix/std", "ic-mlkem/std", "ic-mldsa/std", "ic-fips/std", "ic-ontology/std", "ic-hpke/std", "ic-sig/std", "ic-lms/std", "ic-slhdsa/std"]
 # The ARMv8 AES backend, forwarded so that a caller who depends on this facade
 # can reach it. Without this line the feature exists in ic-cipher and nobody
 # depending on ironcrypto can turn it on, which defeats the point of a facade.
@@ -35,6 +35,7 @@ ic-mldsa = { workspace = true }
 ic-hpke = { workspace = true }
 ic-sig = { workspace = true }
 ic-lms = { workspace = true }
+ic-slhdsa = { workspace = true }
 ic-fips = { workspace = true }
 ic-ontology = { workspace = true }
 

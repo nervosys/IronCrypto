@@ -132,6 +132,7 @@ static CASTS: &[Cast] = &[
     ("hpke-x25519-sha256", ic_hpke::Hpke::self_test),
     ("hpke-p384-sha384", ic_hpke::p384::HpkeP384::self_test),
     ("hss-lms", ic_lms::HssLms::self_test),
+    ("slh-dsa", ic_slhdsa::SlhDsa::self_test),
     ("shamir-gf256", ic_cipher::shamir::Shamir::self_test),
     // RSA
     //
@@ -654,7 +655,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 74;
+pub const TEST_COUNT: usize = 75;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -752,7 +753,7 @@ pub fn integrity_check() -> Result<()> {
 const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "adeacf340a7f5b0798bbc0e5922790677bda354960ab32e77be3b96a424e72af";
+const INTEGRITY_TAG: &str = "74815e7f74e4d6173132f18d5e532ff6708088a0ce84e76fdca9bc3a7d48beb1";
 
 #[cfg(test)]
 mod tests {
