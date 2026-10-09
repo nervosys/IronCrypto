@@ -473,6 +473,7 @@ const FIPS140_REQS: [Requirement; 6] = [
             "ml-dsa-65",
             "hpke-x25519-sha256",
             "hpke-p384-sha384",
+            "slh-dsa",
         ],
         compliance: Compliance::Met {
             file: "crates/ic-mlkem/src/kem.rs",

@@ -314,9 +314,13 @@ In rough order of effort:
    section 5.6.2.1.4 and was not re-read for this change. Three things are
    still untested. The ephemeral key `setup_sender` makes for each message is
    not, by decision: it would add a third scalar multiplication to the two a
-   sender performs. SLH-DSA's `keygen` is not: its test is a signature and a
-   verification, and for the small-signature sets signing costs several times
-   what generating the key did. And the curve crates have no key generation
+   sender performs. SLH-DSA's `keygen_internal`, the interface that takes its
+   seeds as arguments, is not; `keygen` is, by a signature made and verified,
+   which is most of what it now costs. Measured here in an optimised build,
+   two to five runs a set, it takes nine to thirty-six times what generating
+   the key alone does: from about 10 ms for SLH-DSA-SHA2-128f to about 2 s
+   for the SHAKE small-signature sets. It also holds that signature on the
+   stack, 7,856 to 49,856 bytes. And the curve crates have no key generation
    to test -- a caller draws the scalar and asks for its public key. A failed
    test withholds the key, returns `SelfTestFailed` (or `false`, from ML-DSA),
    and puts the module into its error state: the test's input is the module's

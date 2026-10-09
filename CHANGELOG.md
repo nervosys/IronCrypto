@@ -63,8 +63,13 @@ all of them.
   X25519 and P-384: the public key is computed from the private key a second
   time and must match, or the key is withheld with `SelfTestFailed`. The
   ephemeral key `setup_sender` makes is not tested, so sending costs what it
-  did. SLH-DSA key generation still has no such test; `docs/FIPS.md` says
-  why.
+  did.
+- **SLH-DSA's `keygen` runs one too, and is much slower for it.** It signs
+  with the new key and verifies the signature, which takes nine to thirty-six
+  times what generating the key alone did: about 10 ms for the fastest
+  parameter set and about 2 s for the slowest. It also needs the stack for
+  one signature, up to 49,856 bytes. `keygen_internal` is unchanged, for a
+  caller that cannot afford either.
 
 ### Fixed
 

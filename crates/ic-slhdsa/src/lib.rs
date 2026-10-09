@@ -57,6 +57,11 @@
 //! is refused with `InvalidLength`. A message is hashed in the pieces it
 //! arrives in, so signing a long message copies nothing.
 //!
+//! [`keygen`] is the one function that needs room the caller did not give
+//! it: it signs with the new key to test it, and holds that signature on the
+//! stack -- 7,856 to 49,856 bytes, by parameter set. [`keygen_internal`]
+//! does not, for a caller that cannot spare it.
+//!
 //! # Secrets and timing
 //!
 //! The secret is `SK.seed` and `SK.prf`. Everything derived from them is
@@ -990,10 +995,53 @@ pub fn keygen_internal(
     Ok(())
 }
 
+/// The pairwise consistency test for a generated key pair: sign a fixed
+/// message with the secret key and verify it with the public one.
+///
+/// Deterministic signing, so the test draws no randomness and a failure
+/// reproduces. The signature is as long as the parameter set's, and is held
+/// on this function's stack, in a frame no larger than the set needs.
+fn pairwise_consistency(set: ParameterSet, secret_key: &[u8], public_key: &[u8]) -> Result<()> {
+    #[inline(never)]
+    fn probe<const N: usize>(set: ParameterSet, sk: &[u8], pk: &[u8]) -> Result<()> {
+        // Pure signing with an empty context: the prefix of algorithm 22.
+        let message: [&[u8]; 2] = [&[0, 0], b"ic-slhdsa/pairwise-consistency"];
+        let mut signature = [0u8; N];
+        sign_parts(set, sk, &message, None, &mut signature)?;
+        verify_parts(set, pk, &message, &signature)
+    }
+    let result = match set.signature_len() {
+        7856 => probe::<7856>(set, secret_key, public_key),
+        16224 => probe::<16224>(set, secret_key, public_key),
+        17088 => probe::<17088>(set, secret_key, public_key),
+        29792 => probe::<29792>(set, secret_key, public_key),
+        35664 => probe::<35664>(set, secret_key, public_key),
+        49856 => probe::<49856>(set, secret_key, public_key),
+        _ => Err(ic_core::Error::new(
+            ic_core::ErrorKind::Internal,
+            "slh-dsa signature length",
+        )),
+    };
+    result.map_err(|_| {
+        ic_core::Error::new(
+            ic_core::ErrorKind::SelfTestFailed,
+            "slh-dsa key pair failed its pairwise consistency test; the key is withheld",
+        )
+    })
+}
+
 /// `slh_keygen`, FIPS 205 algorithm 21: a fresh key pair.
 ///
 /// `secret_key` is `4n` bytes and `public_key` `2n`. On failure both are
 /// wiped.
+///
+/// The pair is given a pairwise consistency test before it is returned: a
+/// signature made and verified. That is most of what this function costs --
+/// signing takes ten to thirty times what generating the key did, from a
+/// hundredth of a second for the fastest set to about two seconds for the
+/// slowest -- and it needs the stack for one signature. A pair that fails is
+/// withheld with `SelfTestFailed`, and the module enters its error state.
+/// [`keygen_internal`] makes a key from given seeds with no test.
 pub fn keygen<R: RandomSource + ?Sized>(
     set: ParameterSet,
     rng: &mut R,
@@ -1013,6 +1061,11 @@ pub fn keygen<R: RandomSource + ?Sized>(
             secret_key,
             public_key,
         )
+    });
+    // A failure of the test means this module disagrees with itself, so it
+    // ends the module and not only this call.
+    let result = result.and_then(|()| {
+        ic_core::module::conditional_self_test(pairwise_consistency(set, secret_key, public_key))
     });
     if result.is_err() {
         secret_key.zeroize();
@@ -1669,6 +1722,52 @@ mod tests {
         adrs.set_type_and_clear(TREE);
         assert_eq!(adrs.0[20..32], [0u8; 12]);
         assert_eq!(adrs.key_pair(), 0);
+    }
+
+    /// The pairwise consistency test must actually reject a pair whose halves
+    /// do not correspond, at every signature length it has a frame for.
+    #[test]
+    fn the_pairwise_consistency_test_rejects_a_mismatched_pair() {
+        let mut lengths = std::collections::BTreeSet::new();
+        for set in [
+            ParameterSet::Sha2_128f,
+            ParameterSet::Shake_128f,
+            ParameterSet::Sha2_192f,
+            ParameterSet::Sha2_256f,
+        ] {
+            let n = set.n();
+            let pair = |seed: u8| {
+                let s = [seed; MAX_N];
+                let mut sk = vec![0u8; 4 * n];
+                let mut pk = vec![0u8; 2 * n];
+                keygen_internal(set, &s[..n], &s[..n], &s[..n], &mut sk, &mut pk).unwrap();
+                (sk, pk)
+            };
+            let (sk_a, pk_a) = pair(1);
+            let (_, pk_b) = pair(2);
+            pairwise_consistency(set, &sk_a, &pk_a).unwrap();
+            assert_eq!(
+                pairwise_consistency(set, &sk_a, &pk_b).unwrap_err().kind(),
+                ErrorKind::SelfTestFailed,
+                "{}",
+                set.id()
+            );
+            // One bit of the root is enough.
+            let mut flipped = pk_a.clone();
+            flipped[2 * n - 1] ^= 0x01;
+            assert!(pairwise_consistency(set, &sk_a, &flipped).is_err());
+            lengths.insert(set.signature_len());
+        }
+        // The small-signature sets take the same path at their own lengths;
+        // each has a frame, and no set is left to the fallback.
+        for set in ParameterSet::ALL {
+            assert!(
+                [7856, 16224, 17088, 29792, 35664, 49856].contains(&set.signature_len()),
+                "{}",
+                set.id()
+            );
+        }
+        assert_eq!(lengths.len(), 3);
     }
 
     /// The fast sets, both hash families, at each size: sign, verify, and
