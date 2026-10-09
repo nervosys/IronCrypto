@@ -618,7 +618,7 @@ const RFC9180_REQS: [Requirement; 3] = [
     },
 ];
 
-const FIPS205_REQS: [Requirement; 3] = [
+const FIPS205_REQS: [Requirement; 4] = [
     Requirement {
         id: "fips-205-signature-length",
         section: "9.3",
@@ -658,6 +658,25 @@ const FIPS205_REQS: [Requirement; 3] = [
         compliance: Compliance::Met {
             file: "crates/ic-slhdsa/src/lib.rs",
             symbol: "pub fn sign<R: RandomSource + ?Sized>",
+        },
+    },
+    Requirement {
+        id: "fips-205-prehash-strength",
+        section: "10.2",
+        obligation: Obligation::Should,
+        statement: "To keep the parameter set's security strength, the digest signed by \
+                    HashSLH-DSA needs to come from an approved hash function or XOF giving at \
+                    least 8n bits of strength against collisions, which takes a digest of at \
+                    least 2n bytes.",
+        rationale: "A signature over a digest is forged by a collision in the digest, so a \
+                    short pre-hash caps the strength below what the parameter set claims.",
+        applies_to: &["slh-dsa"],
+        compliance: Compliance::Partial {
+            file: "crates/ic-slhdsa/src/lib.rs",
+            symbol: "pub const fn suits",
+            gap: "PreHash::suits reports the rule and nothing enforces it: hash_sign and \
+                  hash_verify accept any of the twelve functions with any parameter set, as \
+                  NIST's vectors do. A caller that wants the rule held must ask.",
         },
     },
 ];

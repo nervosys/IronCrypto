@@ -1,10 +1,11 @@
 //! SLH-DSA against NIST's ACVP vectors for FIPS 205.
 //!
 //! `scripts/gen_slh_dsa_vectors.py` converts NIST's files and says which
-//! cases are bundled: every key-generation case, one signing case per
-//! parameter set, interface and variant with the expected signature as its
-//! SHA-256, and verification cases -- passing and failing -- for the six sets
-//! with the smallest signatures.
+//! cases are bundled: every key-generation case; signing cases for each
+//! parameter set, interface (pure, pre-hash, internal) and variant, with the
+//! expected signature as its SHA-256; and verification cases -- passing and
+//! failing -- for the sets with the smallest signatures. The pre-hash cases
+//! cover all twelve hash functions, in signing and in verification.
 //!
 //! Signing with an `s` parameter set takes a few million hash calls, which is
 //! seconds per signature in an unoptimised test build, and generating an `s`
@@ -13,7 +14,7 @@
 //! `f` sets, which exercise the same code at other parameters, always run in
 //! full, and NIST's `s`-set signatures are still verified. `IC_SLOW_SLH_DSA`
 //! runs everything bundled. `IC_SLH_DSA_FULL`
-//! names a directory holding the full conversion, every case of both
+//! names a directory holding the full conversion, every case of all three
 //! interfaces, which is run as well when it is present.
 
 use ic_core::traits::Digest;
@@ -25,6 +26,11 @@ type Case = std::collections::BTreeMap<String, String>;
 fn set_of(case: &Case) -> ParameterSet {
     ParameterSet::from_id(&case["parameter_set"])
         .unwrap_or_else(|| panic!("unknown parameter set {}", case["parameter_set"]))
+}
+
+fn pre_hash_of(case: &Case) -> slhdsa::PreHash {
+    slhdsa::PreHash::from_id(&case["hash"])
+        .unwrap_or_else(|| panic!("unknown pre-hash {}", case["hash"]))
 }
 
 fn is_small_signature_set(set: ParameterSet) -> bool {
@@ -92,6 +98,7 @@ fn signatures_match_the_acvp_cases() {
     let slow = std::env::var_os("IC_SLOW_SLH_DSA").is_some()
         || std::env::var_os("IC_SLH_DSA_FULL").is_some();
     let (mut ran, mut skipped) = (std::collections::BTreeSet::new(), 0);
+    let mut hashes = std::collections::BTreeSet::new();
     for file in files("slh-dsa-siggen") {
         for case in &file.cases {
             let set = set_of(case);
@@ -126,6 +133,23 @@ fn signatures_match_the_acvp_cases() {
                 ("internal", false) => {
                     slhdsa::sign_internal(set, &sk, &message, Some(&randomness), &mut signature)
                 }
+                ("prehash", true) => slhdsa::hash_sign_deterministic(
+                    set,
+                    &sk,
+                    &message,
+                    &context,
+                    pre_hash_of(case),
+                    &mut signature,
+                ),
+                ("prehash", false) => slhdsa::hash_sign_with_randomness(
+                    set,
+                    &sk,
+                    &message,
+                    &context,
+                    pre_hash_of(case),
+                    &randomness,
+                    &mut signature,
+                ),
                 (other, _) => panic!("unknown interface {other}"),
             }
             .unwrap();
@@ -157,6 +181,10 @@ fn signatures_match_the_acvp_cases() {
             let pk = &sk[sk.len() / 2..];
             match case["interface"].as_str() {
                 "external" => slhdsa::verify(set, pk, &message, &context, &signature),
+                "prehash" => {
+                    hashes.insert(case["hash"].clone());
+                    slhdsa::hash_verify(set, pk, &message, &context, pre_hash_of(case), &signature)
+                }
                 _ => slhdsa::verify_internal(set, pk, &message, &signature),
             }
             .unwrap_or_else(|e| panic!("{label}: its own signature did not verify: {e:?}"));
@@ -166,8 +194,10 @@ fn signatures_match_the_acvp_cases() {
     if ran.is_empty() && skipped == 0 {
         return;
     }
-    // Six f sets, two interfaces, two variants; and the s sets when asked.
-    assert_eq!(ran.len(), if slow { 48 } else { 24 }, "{ran:?}");
+    // Six f sets, three interfaces, two variants; and the s sets when asked.
+    assert_eq!(ran.len(), if slow { 72 } else { 36 }, "{ran:?}");
+    // The f sets alone sign under every pre-hash function.
+    assert_eq!(hashes.len(), 12, "{hashes:?}");
     if !slow {
         println!("{skipped} s-set signing cases skipped; set IC_SLOW_SLH_DSA to run them");
     }
@@ -177,6 +207,7 @@ fn signatures_match_the_acvp_cases() {
 fn verification_matches_the_acvp_cases() {
     let (mut valid, mut invalid) = (0, 0);
     let mut sets = std::collections::BTreeSet::new();
+    let mut hashes = std::collections::BTreeSet::new();
     for file in files("slh-dsa-sigver") {
         for case in &file.cases {
             let set = set_of(case);
@@ -189,6 +220,10 @@ fn verification_matches_the_acvp_cases() {
             let result = match case["interface"].as_str() {
                 "external" => slhdsa::verify(set, &pk, &message, &context, &signature),
                 "internal" => slhdsa::verify_internal(set, &pk, &message, &signature),
+                "prehash" => {
+                    hashes.insert(case["hash"].clone());
+                    slhdsa::hash_verify(set, &pk, &message, &context, pre_hash_of(case), &signature)
+                }
                 other => panic!("unknown interface {other}"),
             };
             let expected = case["valid"] == "true";
@@ -214,5 +249,6 @@ fn verification_matches_the_acvp_cases() {
             "{valid} valid, {invalid} invalid"
         );
         assert!(sets.len() >= 6, "{sets:?}");
+        assert_eq!(hashes.len(), 12, "{hashes:?}");
     }
 }

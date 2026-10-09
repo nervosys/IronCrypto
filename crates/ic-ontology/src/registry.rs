@@ -3038,7 +3038,10 @@ pub static REGISTRY: &[Entry] = &[
                   ic_slhdsa::verify(set, &pk, msg, ctx, &sig)?;",
         notes: "All twelve parameter sets of FIPS 205: SHA-2 and SHAKE at categories 1, 3 and \
                 5, small-signature and fast-signing. Pure signing with a context string, hedged \
-                or deterministic; HashSLH-DSA and SP 800-230's sets are not implemented. It \
+                or deterministic, and HashSLH-DSA (hash_sign, hash_verify) under twelve \
+                pre-hash functions; prefer pure signing, and check PreHash::suits before \
+                pairing a short digest with a strong set. SP 800-230's sets are not \
+                implemented. It \
                 rests on a different assumption from ML-DSA on purpose -- only that its hash is \
                 sound, where ML-DSA needs a lattice problem to stay hard -- which is the reason \
                 to want it. Signatures are 7,856 to 49,856 bytes and signing takes from \

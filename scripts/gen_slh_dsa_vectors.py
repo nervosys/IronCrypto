@@ -13,19 +13,20 @@ The originals are about 70 MB, almost all of it signatures of up to 49,856
 bytes, so the bundled files are a subset, chosen to lose as little as possible:
 
 - slh-dsa-keygen.json: every key-generation case, all 120.
-- slh-dsa-siggen.json: for each parameter set, signing interface (external
-  pure, internal) and variant (deterministic, hedged), the case with the
-  shortest message: 48 cases. The expected signature is stored as its SHA-256
-  and its length. Signing is a function of its inputs, so comparing digests
-  compares signatures.
-- slh-dsa-sigver.json: for the six parameter sets with the smallest
-  signatures, external pure interface, both passing cases and the first three
-  failing ones: 30 cases, with their signatures.
+- slh-dsa-siggen.json: for each parameter set and variant (deterministic,
+  hedged), the shortest-message case of the pure and internal interfaces and
+  two cases of the pre-hash interface, rotated so that all twelve hash
+  functions are covered: 96 cases. The expected signature is stored as its
+  SHA-256 and its length. Signing is a function of its inputs, so comparing
+  digests compares signatures.
+- slh-dsa-sigver.json: for the pure interface of the six parameter sets with
+  the smallest signatures, both passing cases and the first three failing
+  ones; for the pre-hash interface of the two smallest, all fourteen cases,
+  which name every hash function: 58 cases, with their signatures.
 
-`--full` writes every case of the pure and internal interfaces, with whole
-signatures, under the names slh-dsa-*-full.json. `ironcrypto/tests/slh_dsa.rs`
-runs them when IC_SLH_DSA_FULL names their directory. The pre-hash groups are
-not converted: HashSLH-DSA is not implemented.
+`--full` writes every case of all three interfaces, with whole signatures,
+under the names slh-dsa-*-full.json. `ironcrypto/tests/slh_dsa.rs` runs them
+when IC_SLH_DSA_FULL names their directory.
 
 Nothing here computes a cryptographic value except SHA-256 of NIST's
 signatures.
@@ -71,12 +72,26 @@ def set_id(name):
 
 
 def interface(group):
-    """`external` for the pure external interface, `internal`, or None to skip."""
+    """`external` (pure), `prehash` or `internal`."""
     if group.get("signatureInterface") == "internal":
         return "internal"
-    if group.get("signatureInterface") == "external" and group.get("preHash") == "pure":
+    if group.get("preHash") == "pure":
         return "external"
-    return None
+    if group.get("preHash") == "preHash":
+        return "prehash"
+    raise SystemExit(f"unknown interface in group {group['tgId']}")
+
+
+def bundled_signing(group, kind, rotate):
+    """The bundled signing cases of one group."""
+    tests = group["tests"]
+    if kind != "prehash":
+        return [min(tests, key=lambda t: len(t["message"]))]
+    # A pre-hash group has one case per hash function. Two per group, at a
+    # position that moves from group to group, cover every function several
+    # times over without signing 288 messages.
+    ordered = sorted(tests, key=lambda t: t["hashAlg"])
+    return [ordered[rotate % len(ordered)], ordered[(rotate + 6) % len(ordered)]]
 
 
 def write(directory, name, algorithm, source, cases):
@@ -111,14 +126,16 @@ def main():
     # Signature generation.
     prompt, answers = load(acvp, "SLH-DSA-sigGen-FIPS205")
     cases = []
+    rotate = 0
     for group in prompt["testGroups"]:
         kind = interface(group)
-        if kind is None:
-            continue
-        tests = group["tests"] if full else [min(group["tests"], key=lambda t: len(t["message"]))]
+        tests = group["tests"] if full else bundled_signing(group, kind, rotate)
+        if kind == "prehash":
+            rotate += 1
         for test in tests:
             signature = bytes.fromhex(answers[(group["tgId"], test["tcId"])]["signature"])
             case = {"parameter_set": set_id(group["parameterSet"]), "interface": kind,
+                    "hash": test.get("hashAlg", ""),
                     "deterministic": "true" if group["deterministic"] else "false",
                     "sk": test["sk"].lower(), "message": test["message"].lower(),
                     "context": test.get("context", "").lower(),
@@ -130,28 +147,32 @@ def main():
             cases.append(case)
     write(out, "slh-dsa-siggen" + suffix, "SLH-DSA signature generation (FIPS 205)",
           SOURCE.format(name="SLH-DSA-sigGen-FIPS205")
-          + ("Every case of the pure external and internal interfaces." if full else
-             "For each parameter set, interface (external pure, internal) and variant "
-             "(deterministic, hedged), the case with the shortest message; the expected "
-             "signature is given as its SHA-256 and length.")
-          + " The pre-hash groups are not converted.", cases)
+          + ("Every case of the pure, pre-hash and internal interfaces." if full else
+             "For each parameter set and variant (deterministic, hedged): the "
+             "shortest-message case of the pure and internal interfaces, and two cases of "
+             "the pre-hash interface, chosen so that every hash function is covered. The "
+             "expected signature is given as its SHA-256 and length."), cases)
 
     # Signature verification.
     prompt, answers = load(acvp, "SLH-DSA-sigVer-FIPS205")
     cases = []
     for group in prompt["testGroups"]:
         kind = interface(group)
-        if kind is None:
-            continue
-        if not full and (kind != "external" or group["parameterSet"] not in SMALL):
-            continue
-        tests = group["tests"]
         if not full:
+            # Pure for the six smallest sets; pre-hash for the two smallest.
+            wanted = SMALL if kind == "external" else SMALL[:2] if kind == "prehash" else []
+            if group["parameterSet"] not in wanted:
+                continue
+        tests = group["tests"]
+        # A pre-hash group is kept whole: its fourteen cases name all twelve
+        # hash functions between them.
+        if not full and kind != "prehash":
             passing = [t for t in tests if answers[(group["tgId"], t["tcId"])]["testPassed"]]
             failing = [t for t in tests if not answers[(group["tgId"], t["tcId"])]["testPassed"]]
             tests = passing + failing[:3]
         for test in tests:
             cases.append({"parameter_set": set_id(group["parameterSet"]), "interface": kind,
+                          "hash": test.get("hashAlg", ""),
                           "pk": test["pk"].lower(), "message": test["message"].lower(),
                           "context": test.get("context", "").lower(),
                           "signature": test["signature"].lower(),
@@ -159,10 +180,10 @@ def main():
                           else "false"})
     write(out, "slh-dsa-sigver" + suffix, "SLH-DSA signature verification (FIPS 205)",
           SOURCE.format(name="SLH-DSA-sigVer-FIPS205")
-          + ("Every case of the pure external and internal interfaces." if full else
-             "The pure external interface for the six parameter sets with the smallest "
-             "signatures: each group's passing cases and its first three failing ones.")
-          + " The pre-hash groups are not converted.", cases)
+          + ("Every case of the pure, pre-hash and internal interfaces." if full else
+             "The pure interface of the six parameter sets with the smallest signatures: "
+             "each group's passing cases and its first three failing ones. The pre-hash "
+             "interface of the two smallest: every case."), cases)
 
 
 if __name__ == "__main__":

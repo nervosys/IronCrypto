@@ -31,11 +31,17 @@
 //! All twelve parameter sets of FIPS 205 table 2, in [`ParameterSet`]: SHA-2
 //! and SHAKE, at security categories 1, 3 and 5, each in a small-signature
 //! (`s`) and a fast-signing (`f`) form. Key generation, signing -- hedged by
-//! default, deterministic on request -- and verification, for the pure
-//! interface of FIPS 205 section 10 with its context string.
+//! default, deterministic on request -- and verification, for both interfaces
+//! of FIPS 205 section 10: pure SLH-DSA, which signs the message, and
+//! HashSLH-DSA, which signs a digest of it under one of twelve hash functions
+//! ([`PreHash`]). Both take a context string.
 //!
-//! HashSLH-DSA, the pre-hash interface, is not implemented. The parameter sets
-//! of SP 800-230, which trade the signature limit for size, are not either.
+//! Prefer the pure interface, as the standard does. HashSLH-DSA is for a
+//! signer that cannot hold the message, and a pure signature and a pre-hash
+//! one never verify as each other.
+//!
+//! The parameter sets of SP 800-230, which trade the signature limit for
+//! size, are not implemented.
 //!
 //! # Choosing a parameter set
 //!
@@ -74,7 +80,10 @@
 
 use ic_core::traits::{Algorithm, Digest, Mac, RandomSource, SelfTest, Xof};
 use ic_core::{ensure, Result, Zeroize, Zeroizing};
-use ic_hash::{Sha256, Sha512, Shake256};
+use ic_hash::{
+    Sha224, Sha256, Sha384, Sha3_224, Sha3_256, Sha3_384, Sha3_512, Sha512, Sha512_224, Sha512_256,
+    Shake128, Shake256,
+};
 use ic_mac::{HmacSha256, HmacSha512};
 
 /// The longest security parameter `n`, in bytes.
@@ -1109,6 +1118,278 @@ fn verify_parts(
     Ok(())
 }
 
+/// A pre-hash function for HashSLH-DSA: FIPS 205 section 10.2.2.
+///
+/// FIPS 205 algorithm 23 lists SHA-256, SHA-512, SHAKE128 and SHAKE256 and
+/// allows other approved hash functions and XOFs; these twelve are the ones
+/// NIST's validation vectors exercise. Each is named in the signed message by
+/// its object identifier, so a signature made under one does not verify under
+/// another.
+///
+/// To keep the parameter set's strength, the digest must offer `8n` bits
+/// against collisions, which needs `2n` bytes of output. FIPS 205 says SHA-256
+/// and SHAKE128 suit category 1 only; [`PreHash::suits`] is that rule for all
+/// twelve, and nothing here enforces it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum PreHash {
+    /// SHA-224.
+    Sha224,
+    /// SHA-256.
+    Sha256,
+    /// SHA-384.
+    Sha384,
+    /// SHA-512.
+    Sha512,
+    /// SHA-512/224.
+    Sha512_224,
+    /// SHA-512/256.
+    Sha512_256,
+    /// SHA3-224.
+    Sha3_224,
+    /// SHA3-256.
+    Sha3_256,
+    /// SHA3-384.
+    Sha3_384,
+    /// SHA3-512.
+    Sha3_512,
+    /// SHAKE128 with 256 bits of output.
+    Shake128,
+    /// SHAKE256 with 512 bits of output.
+    Shake256,
+}
+
+impl PreHash {
+    /// Every pre-hash function.
+    pub const ALL: &'static [PreHash] = &[
+        Self::Sha224,
+        Self::Sha256,
+        Self::Sha384,
+        Self::Sha512,
+        Self::Sha512_224,
+        Self::Sha512_256,
+        Self::Sha3_224,
+        Self::Sha3_256,
+        Self::Sha3_384,
+        Self::Sha3_512,
+        Self::Shake128,
+        Self::Shake256,
+    ];
+
+    /// The name NIST's test vectors use: `SHA2-256`, `SHA3-384`, `SHAKE-128`.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Sha224 => "SHA2-224",
+            Self::Sha256 => "SHA2-256",
+            Self::Sha384 => "SHA2-384",
+            Self::Sha512 => "SHA2-512",
+            Self::Sha512_224 => "SHA2-512/224",
+            Self::Sha512_256 => "SHA2-512/256",
+            Self::Sha3_224 => "SHA3-224",
+            Self::Sha3_256 => "SHA3-256",
+            Self::Sha3_384 => "SHA3-384",
+            Self::Sha3_512 => "SHA3-512",
+            Self::Shake128 => "SHAKE-128",
+            Self::Shake256 => "SHAKE-256",
+        }
+    }
+
+    /// The pre-hash function a name denotes, if it is one of these.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|h| h.id() == id)
+    }
+
+    /// The last arc of the function's object identifier under
+    /// `2.16.840.1.101.3.4.2`, NIST's hash algorithm arc.
+    const fn arc(self) -> u8 {
+        match self {
+            Self::Sha256 => 1,
+            Self::Sha384 => 2,
+            Self::Sha512 => 3,
+            Self::Sha224 => 4,
+            Self::Sha512_224 => 5,
+            Self::Sha512_256 => 6,
+            Self::Sha3_224 => 7,
+            Self::Sha3_256 => 8,
+            Self::Sha3_384 => 9,
+            Self::Sha3_512 => 10,
+            Self::Shake128 => 11,
+            Self::Shake256 => 12,
+        }
+    }
+
+    /// The DER encoding of the object identifier, tag and length included,
+    /// as it goes into the signed message.
+    pub const fn oid_der(self) -> [u8; 11] {
+        [
+            0x06,
+            0x09,
+            0x60,
+            0x86,
+            0x48,
+            0x01,
+            0x65,
+            0x03,
+            0x04,
+            0x02,
+            self.arc(),
+        ]
+    }
+
+    /// Digest length in bytes.
+    pub const fn digest_len(self) -> usize {
+        match self {
+            Self::Sha224 | Self::Sha512_224 | Self::Sha3_224 => 28,
+            Self::Sha256 | Self::Sha512_256 | Self::Sha3_256 | Self::Shake128 => 32,
+            Self::Sha384 | Self::Sha3_384 => 48,
+            Self::Sha512 | Self::Sha3_512 | Self::Shake256 => 64,
+        }
+    }
+
+    /// Whether this function keeps `set`'s strength: its digest is at least
+    /// `2n` bytes, FIPS 205 section 10.2.
+    #[must_use = "whether the pre-hash is strong enough; discarding it checks nothing"]
+    pub const fn suits(self, set: ParameterSet) -> bool {
+        self.digest_len() >= 2 * set.n()
+    }
+
+    /// Hash `message` into the front of `out`, returning the digest's length.
+    fn digest(self, message: &[u8], out: &mut [u8; 64]) -> usize {
+        macro_rules! fixed {
+            ($hash:ty) => {{
+                let d = <$hash as Digest>::digest(message);
+                let d = d.as_ref();
+                out[..d.len()].copy_from_slice(d);
+            }};
+        }
+        match self {
+            Self::Sha224 => fixed!(Sha224),
+            Self::Sha256 => fixed!(Sha256),
+            Self::Sha384 => fixed!(Sha384),
+            Self::Sha512 => fixed!(Sha512),
+            Self::Sha512_224 => fixed!(Sha512_224),
+            Self::Sha512_256 => fixed!(Sha512_256),
+            Self::Sha3_224 => fixed!(Sha3_224),
+            Self::Sha3_256 => fixed!(Sha3_256),
+            Self::Sha3_384 => fixed!(Sha3_384),
+            Self::Sha3_512 => fixed!(Sha3_512),
+            Self::Shake128 => {
+                let mut h = Shake128::default();
+                h.update(message);
+                h.finalize_xof(&mut out[..32]);
+            }
+            Self::Shake256 => {
+                let mut h = Shake256::default();
+                h.update(message);
+                h.finalize_xof(&mut out[..64]);
+            }
+        }
+        self.digest_len()
+    }
+}
+
+/// The pre-hash message `M' = 1 || |ctx| || ctx || OID || PH(M)`, FIPS 205
+/// algorithm 23 line 24, signed or verified by `then`.
+fn with_prehash_message<T>(
+    context: &[u8],
+    message: &[u8],
+    pre_hash: PreHash,
+    then: impl FnOnce(&[&[u8]]) -> Result<T>,
+) -> Result<T> {
+    ensure!(
+        context.len() <= 255,
+        InvalidLength,
+        "slh-dsa context string is at most 255 bytes"
+    );
+    let prefix = [1u8, context.len() as u8];
+    let oid = pre_hash.oid_der();
+    let mut digest = [0u8; 64];
+    let len = pre_hash.digest(message, &mut digest);
+    then(&[&prefix, context, &oid, &digest[..len]])
+}
+
+/// Sign a digest of `message` under `context`, hedged: `hash_slh_sign`, FIPS
+/// 205 algorithm 23.
+///
+/// The pre-hash counterpart of [`sign`], for a signer that cannot hold the
+/// whole message. The verifier must be told which pre-hash function was used:
+/// the signature does not carry it, and names it only inside what is signed.
+pub fn hash_sign<R: RandomSource + ?Sized>(
+    set: ParameterSet,
+    secret_key: &[u8],
+    message: &[u8],
+    context: &[u8],
+    pre_hash: PreHash,
+    rng: &mut R,
+    signature: &mut [u8],
+) -> Result<usize> {
+    let n = set.n();
+    let mut additional = Zeroizing::new([0u8; MAX_N]);
+    rng.fill(&mut additional.get_mut()[..n])?;
+    with_prehash_message(context, message, pre_hash, |parts| {
+        sign_parts(
+            set,
+            secret_key,
+            parts,
+            Some(&additional.get()[..n]),
+            signature,
+        )
+    })
+}
+
+/// [`hash_sign`] with no additional randomness: the deterministic variant.
+pub fn hash_sign_deterministic(
+    set: ParameterSet,
+    secret_key: &[u8],
+    message: &[u8],
+    context: &[u8],
+    pre_hash: PreHash,
+    signature: &mut [u8],
+) -> Result<usize> {
+    with_prehash_message(context, message, pre_hash, |parts| {
+        sign_parts(set, secret_key, parts, None, signature)
+    })
+}
+
+/// [`hash_sign`] with the additional randomness given rather than drawn, for
+/// reproducing NIST's hedged test cases.
+pub fn hash_sign_with_randomness(
+    set: ParameterSet,
+    secret_key: &[u8],
+    message: &[u8],
+    context: &[u8],
+    pre_hash: PreHash,
+    additional_randomness: &[u8],
+    signature: &mut [u8],
+) -> Result<usize> {
+    with_prehash_message(context, message, pre_hash, |parts| {
+        sign_parts(
+            set,
+            secret_key,
+            parts,
+            Some(additional_randomness),
+            signature,
+        )
+    })
+}
+
+/// Verify a HashSLH-DSA signature: `hash_slh_verify`, FIPS 205 algorithm 25.
+///
+/// `pre_hash` is the function the signer used, known from the signature's
+/// identifier. Naming another fails, as does a pure signature presented here.
+pub fn hash_verify(
+    set: ParameterSet,
+    public_key: &[u8],
+    message: &[u8],
+    context: &[u8],
+    pre_hash: PreHash,
+    signature: &[u8],
+) -> Result<()> {
+    with_prehash_message(context, message, pre_hash, |parts| {
+        verify_parts(set, public_key, parts, signature)
+    })
+}
+
 /// The pure-signing message `M' = 0 || |ctx| || ctx || M`, FIPS 205 algorithm
 /// 22 line 8, as the parts it is hashed in.
 fn pure_message<'a>(
@@ -1449,6 +1730,73 @@ mod tests {
             assert_ne!(sig, again);
             verify(set, &pk, b"message", b"ctx", &again).unwrap();
         }
+    }
+
+    /// FIPS 205 algorithms 23 and 25 print four of the object identifiers.
+    #[test]
+    fn prehash_identifiers_are_the_standards() {
+        let printed = [
+            (PreHash::Sha256, 0x01, 32),
+            (PreHash::Sha512, 0x03, 64),
+            (PreHash::Shake128, 0x0b, 32),
+            (PreHash::Shake256, 0x0c, 64),
+        ];
+        for (hash, last, len) in printed {
+            let mut want = [
+                0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0,
+            ];
+            want[10] = last;
+            assert_eq!(hash.oid_der(), want, "{}", hash.id());
+            assert_eq!(hash.digest_len(), len);
+        }
+        // Twelve distinct identifiers, and names that round-trip.
+        for (i, h) in PreHash::ALL.iter().enumerate() {
+            assert_eq!(PreHash::from_id(h.id()), Some(*h));
+            assert!(PreHash::ALL[..i].iter().all(|o| o.oid_der() != h.oid_der()));
+            let mut out = [0u8; 64];
+            assert_eq!(h.digest(b"abc", &mut out), h.digest_len());
+        }
+        // A digest of 2n bytes keeps the strength: FIPS 205 section 10.2.
+        assert!(PreHash::Sha256.suits(ParameterSet::Sha2_128f));
+        assert!(!PreHash::Sha256.suits(ParameterSet::Sha2_192f));
+        assert!(!PreHash::Sha224.suits(ParameterSet::Sha2_128f));
+        assert!(PreHash::Sha512.suits(ParameterSet::Sha2_256f));
+        assert!(!PreHash::Sha384.suits(ParameterSet::Sha2_256f));
+    }
+
+    /// A pre-hash signature is bound to its hash function and to being a
+    /// pre-hash signature: it verifies under neither another function nor the
+    /// pure interface, and a pure signature does not verify here.
+    #[test]
+    fn prehash_and_pure_signatures_do_not_cross() {
+        let set = ParameterSet::Shake_128f;
+        let seed = [4u8; 16];
+        let mut sk = [0u8; 64];
+        let mut pk = [0u8; 32];
+        keygen_internal(set, &seed, &seed, &seed, &mut sk, &mut pk).unwrap();
+        let mut sig = vec![0u8; set.signature_len()];
+        hash_sign_deterministic(set, &sk, b"message", b"ctx", PreHash::Sha256, &mut sig).unwrap();
+        hash_verify(set, &pk, b"message", b"ctx", PreHash::Sha256, &sig).unwrap();
+        for other in PreHash::ALL.iter().filter(|h| **h != PreHash::Sha256) {
+            assert!(
+                hash_verify(set, &pk, b"message", b"ctx", *other, &sig).is_err(),
+                "verified as {}",
+                other.id()
+            );
+        }
+        assert!(hash_verify(set, &pk, b"massage", b"ctx", PreHash::Sha256, &sig).is_err());
+        assert!(hash_verify(set, &pk, b"message", b"", PreHash::Sha256, &sig).is_err());
+        assert!(verify(set, &pk, b"message", b"ctx", &sig).is_err());
+
+        let mut pure = vec![0u8; set.signature_len()];
+        sign_deterministic(set, &sk, b"message", b"ctx", &mut pure).unwrap();
+        assert!(hash_verify(set, &pk, b"message", b"ctx", PreHash::Sha256, &pure).is_err());
+        assert_eq!(
+            hash_sign_deterministic(set, &sk, b"m", &[0u8; 256], PreHash::Sha256, &mut sig)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::InvalidLength
+        );
     }
 
     #[test]

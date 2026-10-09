@@ -3,6 +3,28 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **HashSLH-DSA, the pre-hash interface of FIPS 205**, in `ic-slhdsa`:
+  `hash_sign`, `hash_sign_deterministic`, `hash_sign_with_randomness` and
+  `hash_verify`, with a `PreHash` of the twelve functions NIST's vectors
+  exercise -- SHA-2, SHA-3, SHAKE128 and SHAKE256. A pure signature and a
+  pre-hash one never verify as each other, nor does a pre-hash signature
+  under another function. `PreHash::suits` says whether a function keeps a
+  parameter set's strength; nothing enforces it, and the ontology records
+  that as a partial requirement. Pure signing is still the one to prefer.
+- **Checked against NIST's ACVP pre-hash vectors.** Bundled: 48 signing
+  cases covering every function and 28 verification cases. The complete
+  files -- now 624 signing and 504 verification cases across all three
+  interfaces -- were run once and all pass.
+
+### Fixed
+
+- The README's algorithm table still said SLH-DSA was not implemented. It
+  has been since 0.2.19.
+
 ## 0.2.19
 
 ### Added

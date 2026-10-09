@@ -338,7 +338,7 @@ leaving the stronger claim to stand for all of them.
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV |
-| Post-quantum | ML-KEM-512, -768 and -1024 (FIPS 203), ML-DSA-44, -65 and -87 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205) is **not** implemented; `ic ontology show slh-dsa` says so and why |
+| Post-quantum | ML-KEM-512, -768 and -1024 (FIPS 203), ML-DSA-44, -65 and -87 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205), all twelve parameter sets, pure and pre-hash, ACVP-checked |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
