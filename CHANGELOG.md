@@ -30,6 +30,7 @@ all of them.
   Found by running Project Wycheproof's ChaCha20-Poly1305 cases; the test
   that should have caught it compared the two paths only on evenly spread
   bytes, and now compares them on the largest ones too.
+  Advisory: [GHSA-xr22-8pqp-gwfh](https://github.com/nervosys/IronCrypto/security/advisories/GHSA-xr22-8pqp-gwfh).
 
 ### Added
 
