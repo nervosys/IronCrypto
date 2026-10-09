@@ -322,9 +322,10 @@ refused, and for TLS 1.2 the content type and version bound into the header.
 
 Most of what is below is checked against published test vectors — FIPS 180-4,
 FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC
-2104/4231/5869/7748/8032/8439/8452/9001/9106. Not all of it: RSA-PSS has no published vector wired in, cSHAKE has five, and PBKDF2 is
-reconstructed from its own definition because RFC 6070 publishes HMAC-SHA1
-only. Those rows are checked against independent reconstructions instead, and
+2104/4231/5869/7748/8032/8439/8452/9001/9106. Not all of it: RSA signing has no published vector wired in, cSHAKE has five, and RSA-PSS
+verification, PBKDF2 and ECDH on P-384 and P-521 are held by Project
+Wycheproof's test cases, which are not a standard's. Those rows are also
+checked against independent reconstructions, and
 [`docs/FIPS.md`](docs/FIPS.md) says which is which per algorithm rather than
 leaving the stronger claim to stand for all of them.
 

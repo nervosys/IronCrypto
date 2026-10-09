@@ -93,6 +93,12 @@ all of them.
   all 400 TupleHash cases, and the 13 ParallelHash cases that are whole
   bytes. KMAC gains one published value, for KMAC128; NIST's other KMAC
   cases are bit-oriented. Everything passed with no change to the code.
+- **RSA verification, ECDH, KMAC and PBKDF2 are checked against Project
+  Wycheproof**: 4,437 cases, among them 1,523 forged or malformed RSA
+  signatures and 70 invalid ECDH public keys. Every verdict is honoured
+  with no change to the code. These are the first outside values for
+  RSA-PSS verification, KMAC256, PBKDF2, and ECDH on P-384 and P-521. RSA
+  signing is still held only by this library's own verifier.
 - **The DRBG self-tests are known-answer tests now.** Each runs a NIST case
   through instantiate, reseed and generate. CTR_DRBG's used to check only
   that its output was reproducible and not constant, and HMAC_DRBG's
