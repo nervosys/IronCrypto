@@ -70,6 +70,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.16 | 2026-10-08 18:49:40 | all twenty crates published from `d54aebf` by the maintainer, after replying "then release it" when asked whether to send an updated notice first; adds `ic-sig`, a new location, for which a notice was printed before the publish commands and has not been reported sent |
 | 0.2.17 | 2026-10-08 20:05:34 | all twenty-one crates published from `0792efb` by the maintainer, after replying "Proceed" when told the release needed an updated notice; adds `ic-lms`, a new location and a new algorithm (HSS/LMS verification), for which a notice naming it and `ic-sig` was printed before the publish commands and has not been reported sent |
 | 0.2.18 | 2026-10-08 22:36:28 | all twenty-one crates published from `eb790c3` by the maintainer, after replying "Proceed" when asked whether to release a data-and-documentation change; CNSA 2.0 profile, no new algorithm or package |
+| 0.2.19 | 2026-10-09 01:26:22 | all twenty-two crates published from `8329898` by the maintainer, after replying "Proceed" when told the release needed an updated notice; adds `ic-slhdsa`, a new location and a new algorithm (SLH-DSA, FIPS 205), for which a notice naming it, `ic-sig` and `ic-lms` was printed before the publish commands and has not been reported sent |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -401,6 +402,18 @@ the maintainer to send before publishing. Publication proceeds on the
 maintainer's instruction; this records that instruction and that the notice
 was printed, not that it or either earlier notice was sent, none of which has
 been reported here.
+
+The maintainer pushed `master` and the `v0.2.19` tag and ran `cargo publish
+--workspace` themselves. The first push of `master` passed its checks and
+failed in transfer with a connection reset, leaving the remote unchanged; a
+second succeeded. This agent reminded them, after that push and again before
+the publish command, that the notice could still be sent first; no report
+that it was sent came before publication. The crates.io API confirmed all
+twenty-two 0.2.19 packages live and not yanked, `ic-slhdsa` among them. The
+first upload was `ic-core` at 2026-10-09 01:26:22 UTC; `ic-slhdsa` at
+01:26:50 UTC; the last was `ic-cli` at 01:27:00 UTC. The published source
+commit is `8329898`; all twenty-two packages identified that clean commit in
+their VCS metadata.
 
 ## Determination
 
