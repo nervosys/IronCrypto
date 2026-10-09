@@ -28,7 +28,8 @@ use ironcrypto::ec::p384::EcdhP384;
 use ironcrypto::ec::p521::EcdhP521;
 use ironcrypto::mac::{HmacSha256, HmacSha512, Kmac128, Kmac256};
 use ironcrypto::rsa::{
-    Pkcs1Sha256, Pkcs1Sha384, Pkcs1Sha512, PssSha256, PssSha384, PssSha512, RsaPublicKey,
+    Pkcs1Sha256, Pkcs1Sha384, Pkcs1Sha512, PssSha256, PssSha384, PssSha512, RsaPrivateKey,
+    RsaPublicKey,
 };
 
 /// Count one outcome, and fail on one the verdict does not allow.
@@ -122,6 +123,89 @@ fn rsa_verification_matches_wycheproof() {
     assert!(total("pss sha512 valid accepted") > 100);
     assert!(total("pss sha256 invalid refused") > 100);
     assert!(total("pkcs1 sha384 invalid refused") > 200);
+}
+
+/// PKCS#1 v1.5 signing is deterministic, so a private key and a message have
+/// one signature, and Wycheproof publishes it.
+///
+/// These are the only values from outside this library that either RSA
+/// signer is held to. They reach the private-key operation without the CRT,
+/// since Wycheproof gives exponents and no primes; the CRT path is held to
+/// this one by the library's own tests, not by anything here. PSS signing
+/// is randomized and has no such case.
+#[test]
+fn rsa_pkcs1_signing_matches_wycheproof() {
+    let Some(file) = VectorFile::load_or_report("wycheproof-rsa-sign") else {
+        return;
+    };
+    let strip = |bytes: Vec<u8>| -> Vec<u8> { bytes.into_iter().skip_while(|b| *b == 0).collect() };
+    let mut keys = BTreeMap::new();
+    let mut tally = BTreeMap::new();
+    for case in &file.cases {
+        if case["kind"] == "key" {
+            // A key this library will not load -- an exponent of 3 is not
+            // refused, but a modulus it cannot hold would be -- is recorded
+            // and its cases counted as such.
+            let key = RsaPrivateKey::from_components(
+                &strip(hex_field(case, "n")),
+                small_integer(&hex_field(case, "e")),
+                &strip(hex_field(case, "d")),
+            );
+            keys.insert(
+                case["key"].clone(),
+                (key, small_integer(&hex_field(case, "e"))),
+            );
+            continue;
+        }
+        let (key, exponent) = &keys[&case["key"]];
+        let label = format!("{} e={exponent} {}", case["hash"], case["result"]);
+        let key = match key {
+            Ok(key) => key,
+            Err(e) => {
+                assert_ne!(
+                    case["result"], "valid",
+                    "a key for a valid case was refused: {e:?}"
+                );
+                *tally
+                    .entry(format!("{label}: key refused"))
+                    .or_insert(0usize) += 1;
+                continue;
+            }
+        };
+        let (message, expected) = (hex_field(case, "message"), hex_field(case, "signature"));
+        let mut signature = vec![0u8; key.size()];
+        match case["hash"].as_str() {
+            "sha256" => Pkcs1Sha256::sign(key, &message, &mut signature),
+            "sha384" => Pkcs1Sha384::sign(key, &message, &mut signature),
+            "sha512" => Pkcs1Sha512::sign(key, &message, &mut signature),
+            other => panic!("no such hash here: {other}"),
+        }
+        .unwrap_or_else(|e| panic!("{label}: {} : {e:?}", case["comment"]));
+        // The signature is the modulus's length, with leading zeros kept.
+        assert_eq!(
+            hex(&signature),
+            case["signature"],
+            "{label}: {}",
+            case["comment"]
+        );
+        assert_eq!(expected.len(), key.size());
+        // And what was signed verifies, under the public half.
+        let verified = match case["hash"].as_str() {
+            "sha256" => Pkcs1Sha256::verify(key.public_key(), &message, &signature),
+            "sha384" => Pkcs1Sha384::verify(key.public_key(), &message, &signature),
+            _ => Pkcs1Sha512::verify(key.public_key(), &message, &signature),
+        };
+        verified.unwrap();
+        *tally.entry(format!("{label}: matched")).or_insert(0usize) += 1;
+    }
+    println!("{tally:#?}");
+    let matched: usize = tally
+        .iter()
+        .filter(|(k, _)| k.ends_with("matched"))
+        .map(|(_, n)| *n)
+        .sum();
+    // Eight messages for each hash at each of three sizes are marked valid.
+    assert!(matched >= 72, "{tally:?}");
 }
 
 #[test]

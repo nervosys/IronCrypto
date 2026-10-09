@@ -12,7 +12,7 @@ the arithmetic -- each marked `valid`, `invalid` or `acceptable`, the last for
 inputs a correct implementation may take either way. Those verdicts are kept
 as they are.
 
-Four files are written, for what NIST's sample vectors do not reach here:
+Five files are written, for what NIST's sample vectors do not reach here:
 
 - wycheproof-rsa.json: RSASSA-PSS verification with MGF1 over the same hash
   and a salt as long as the hash, which is the only PSS this library has --
@@ -21,6 +21,12 @@ Four files are written, for what NIST's sample vectors do not reach here:
   v1.5 files, SHA-384 and SHA-512 at the two larger sizes, repeat the same
   malformations and are left out for size. A `key` case gives a modulus and
   exponent once; the `verify` cases after it name it.
+- wycheproof-rsa-sign.json: PKCS#1 v1.5 signing with SHA-256, SHA-384 and
+  SHA-512 at 2048, 3072 and 4096 bits: a private key as modulus and
+  exponents, a message, and the one signature it has, since PKCS#1 v1.5 is
+  deterministic. The SHA-1 and SHA-224 groups are left out; this library
+  has neither as a signature hash. Wycheproof gives no primes, so these
+  reach the signer without the CRT and not with it.
 - wycheproof-ecdh.json: ECDH over P-256, P-384 and P-521 with the peer's key
   as an encoded point, every case.
 - wycheproof-kmac.json: KMAC128 and KMAC256 with no customization string,
@@ -38,6 +44,9 @@ import sys
 
 COMMIT = "12fd3aaf33eb"
 PINNED = {
+    "rsa_pkcs1_2048_sig_gen_test.json": "587b3d27d3429f2118cb02818da4d08eb3f36f50",
+    "rsa_pkcs1_3072_sig_gen_test.json": "45153219d486fd135d35aa968a957a0c015c7829",
+    "rsa_pkcs1_4096_sig_gen_test.json": "f13eadbec6c45291cb33e6b2fa0a0c2b862d0bd2",
     "ecdh_secp256r1_ecpoint_test.json": "648f16d077caf2400d02331ca51f44744c72c799",
     "ecdh_secp384r1_ecpoint_test.json": "ffa7835fe1de359dff762c8f1272b98acebd5578",
     "ecdh_secp521r1_ecpoint_test.json": "87aba8739c96de2bde8c75b60ffea09d0493192c",
@@ -71,6 +80,7 @@ PKCS1 = ["rsa_signature_2048_sha256", "rsa_signature_2048_sha384", "rsa_signatur
 ECDH = ["ecdh_secp256r1_ecpoint", "ecdh_secp384r1_ecpoint", "ecdh_secp521r1_ecpoint"]
 KMAC = ["kmac128_no_customization", "kmac256_no_customization"]
 PBKDF2 = ["pbkdf2_hmacsha256", "pbkdf2_hmacsha512"]
+SIGN = ["rsa_pkcs1_2048_sig_gen", "rsa_pkcs1_3072_sig_gen", "rsa_pkcs1_4096_sig_gen"]
 
 
 def load(directory, name):
@@ -129,6 +139,31 @@ def rsa(directory, out):
           "a leading zero byte; the `verify` cases that follow name it.", cases)
 
 
+def rsa_sign(directory, out):
+    cases, keys = [], 0
+    for name in SIGN:
+        doc = load(directory, name)
+        for group in doc["testGroups"]:
+            sha = group["sha"].lower().replace("-", "")
+            if sha not in ("sha256", "sha384", "sha512"):
+                continue
+            keys += 1
+            key = f"k{keys}"
+            private = group["privateKey"]
+            cases.append({"kind": "key", "key": key, "hash": "", "n": private["modulus"],
+                          "e": private["publicExponent"], "d": private["privateExponent"],
+                          "message": "", "signature": "", "comment": "", "flags": "",
+                          "result": ""})
+            for test in group["tests"]:
+                cases.append({"kind": "sign", "key": key, "hash": sha, "n": "", "e": "", "d": "",
+                              "message": test["msg"], "signature": test["sig"], **common(test)})
+    write(out, "wycheproof-rsa-sign", "RSASSA-PKCS1-v1_5 signing",
+          SOURCE.format(names="rsa_pkcs1_*_sig_gen_test.json")
+          + "SHA-256, SHA-384 and SHA-512 at 2048, 3072 and 4096 bits. A `key` case gives the "
+          "modulus and both exponents; the `sign` cases that follow name it and give the "
+          "signature PKCS#1 v1.5 must produce.", cases)
+
+
 def ecdh(directory, out):
     cases = []
     for name in ECDH:
@@ -181,6 +216,7 @@ def pbkdf2(directory, out):
 def main():
     directory, out = sys.argv[1], sys.argv[2]
     rsa(directory, out)
+    rsa_sign(directory, out)
     ecdh(directory, out)
     kmac(directory, out)
     pbkdf2(directory, out)

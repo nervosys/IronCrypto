@@ -97,8 +97,12 @@ all of them.
   Wycheproof**: 4,437 cases, among them 1,523 forged or malformed RSA
   signatures and 70 invalid ECDH public keys. Every verdict is honoured
   with no change to the code. These are the first outside values for
-  RSA-PSS verification, KMAC256, PBKDF2, and ECDH on P-384 and P-521. RSA
-  signing is still held only by this library's own verifier.
+  RSA-PSS verification, KMAC256, PBKDF2, and ECDH on P-384 and P-521.
+- **RSA PKCS#1 v1.5 signing is checked against Wycheproof's signatures**:
+  77 of them, compared byte for byte, at three modulus sizes and three
+  hashes. These reach the private-key operation without the CRT. RSA-PSS
+  signing, which is randomized, is still held only by this library's own
+  verifier.
 - **The DRBG self-tests are known-answer tests now.** Each runs a NIST case
   through instantiate, reseed and generate. CTR_DRBG's used to check only
   that its output was reproducible and not constant, and HMAC_DRBG's
