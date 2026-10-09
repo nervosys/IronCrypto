@@ -513,7 +513,9 @@ macro_rules! ml_kem {
                 // FIPS 140-3 requires a pairwise consistency test on a generated key
                 // pair. It runs here, inside generation, rather than being a function a
                 // caller has to know to call.
-                Self::pairwise_consistency(ek, dk)
+                // A failure means this module disagrees with itself, so it ends the
+                // module and not only this call.
+                ic_core::module::conditional_self_test(Self::pairwise_consistency(ek, dk))
             }
 
             /// The pairwise consistency test for a generated key pair.

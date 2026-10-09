@@ -57,6 +57,26 @@ pub fn enter_error_state() {
     FAILED.store(true, Ordering::SeqCst);
 }
 
+/// Pass on the result of a conditional self-test, entering the error state
+/// if it failed.
+///
+/// A conditional self-test is one a module runs on its own work as it goes:
+/// the pairwise consistency test on a key pair it has just generated. Its
+/// input is the module's own output, never a caller's, so a failure is not
+/// something a peer can cause -- it means this module computed two things
+/// that should agree and do not, and nothing it computes afterwards can be
+/// vouched for.
+///
+/// Key generation wraps its test in this. The test functions themselves do
+/// not enter the state, so that they can be shown rejecting a mismatched
+/// pair without ending the process that shows it.
+pub fn conditional_self_test(result: Result<()>) -> Result<()> {
+    if result.is_err() {
+        enter_error_state();
+    }
+    result
+}
+
 /// Whether the module is in its error state.
 #[inline]
 #[must_use = "whether the module has failed; discarding it gates nothing"]

@@ -448,6 +448,9 @@ macro_rules! ml_dsa {
             if !ok {
                 pk.fill(0);
                 sk.fill(0);
+                // The module disagrees with itself: that ends the module, not
+                // only this call.
+                ic_core::module::enter_error_state();
             }
             ok
         }

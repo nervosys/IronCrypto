@@ -104,11 +104,14 @@ impl KeyPair {
     /// is for correctness, not for anything a caller will see.
     ///
     /// The pair is given a pairwise consistency test before it is returned,
-    /// and withheld with `SelfTestFailed` if it fails.
+    /// and withheld with `SelfTestFailed` if it fails -- which also puts the
+    /// module into its error state.
     pub fn generate<R: RandomSource + ?Sized>(rng: &mut R) -> Result<Self> {
         ic_core::module::operational()?;
         let key = Self::generate_untested(rng)?;
-        key.pairwise_consistency()?;
+        // A failure means this module disagrees with itself, so it ends the
+        // module and not only this call.
+        ic_core::module::conditional_self_test(key.pairwise_consistency())?;
         Ok(key)
     }
 

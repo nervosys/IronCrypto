@@ -318,8 +318,14 @@ In rough order of effort:
    verification, and for the small-signature sets signing costs several times
    what generating the key did. And the curve crates have no key generation
    to test -- a caller draws the scalar and asks for its public key. A failed
-   test withholds the key and returns `SelfTestFailed`; it does not put the
-   module into its error state, which a validated module would.
+   test withholds the key, returns `SelfTestFailed` (or `false`, from ML-DSA),
+   and puts the module into its error state: the test's input is the module's
+   own output, so a failure is the module disagreeing with itself and not
+   something a peer can cause. Each test function is shown rejecting a
+   mismatched pair, and `ic_core::module::conditional_self_test` is shown
+   entering the state on a failure; that each key generator passes its test
+   through it is by reading, since making a real key generation fail would
+   need a fault injected into it.
 
 ECDSA and ECDH are already implemented and vector-tested over P-256, P-384
 and P-521. Algorithm coverage does not replace any of the work above.

@@ -661,7 +661,11 @@ pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<Rs
             // FIPS 140-3 requires a pairwise consistency test on a generated
             // key pair before it is used. It runs here rather than being
             // offered as a separate function a caller has to know to invoke.
-            return key.and_then(|k| pairwise_consistency(&k).map(|()| k));
+            // A failure means this module disagrees with itself, so it ends
+            // the module and not only this call.
+            return key.and_then(|k| {
+                ic_core::module::conditional_self_test(pairwise_consistency(&k)).map(|()| k)
+            });
         }
     }
 

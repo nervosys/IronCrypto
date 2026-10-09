@@ -46,6 +46,10 @@ all of them.
   `bool` interfaces return `false`. Keys and generators made before the
   failure are refused too. Nothing changes for a module that has not failed:
   the cost is one byte load per operation, and no signature changed.
+- **A failed pairwise consistency test now puts the module into its error
+  state**, for ML-KEM, ML-DSA, RSA and HPKE key generation. Until now it
+  withheld the key and the module went on. The test's input is the module's
+  own output, so a failure cannot be caused from outside.
 - What cannot refuse is documented rather than implied: hash functions and
   XOFs, KMAC other than `verify`, a MAC object's `update` and `finalize`, and
   ML-KEM's deterministic interfaces have no error to return, and a block
