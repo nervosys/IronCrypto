@@ -20,10 +20,25 @@ all of them.
   files -- now 624 signing and 504 verification cases across all three
   interfaces -- were run once and all pass.
 
+- **`ic_sig::verify` verifies SLH-DSA and HSS/LMS.** `SignatureAlgorithm`
+  gains `HssLms` and one algorithm for each of SLH-DSA's twelve parameter
+  sets, and `PublicKey::from_spki` reads their keys: SLH-DSA per RFC 9909,
+  pure with an empty context, and HSS/LMS per RFC 9708. Certificate and
+  firmware-signing code now reaches both through the call it already uses.
+  An HSS/LMS key names its own parameters, so `classical_bits` reads its
+  strength from the key. RFC 9909's pre-hash key types are not read; such a
+  key is `Unsupported`. Both enums are `non_exhaustive`, so this breaks no
+  caller that compiled before.
+- **Checked against OpenSSL for every SLH-DSA parameter set**, with a key and
+  a signature OpenSSL 3.5.7 made for each, and against the RFCs' own test
+  cases for HSS/LMS.
+
 ### Fixed
 
 - The README's algorithm table still said SLH-DSA was not implemented. It
   has been since 0.2.19.
+- The ontology gave the longest HSS/LMS signature as 74,984 bytes. It is
+  74,988: the count of signed public keys at its front was left out.
 
 ## 0.2.19
 

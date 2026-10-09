@@ -34,9 +34,19 @@
 //! # Encodings
 //!
 //! Signatures are in the form X.509 and TLS 1.3 carry: a DER
-//! `Ecdsa-Sig-Value` for ECDSA, and the algorithm's own bytes for Ed25519, RSA
-//! and ML-DSA. ML-DSA is the pure variant with an empty context, as RFC 9881
-//! specifies for certificates.
+//! `Ecdsa-Sig-Value` for ECDSA, and the algorithm's own bytes for Ed25519,
+//! RSA, ML-DSA, SLH-DSA and HSS/LMS. ML-DSA and SLH-DSA are the pure variants
+//! with an empty context, as RFC 9881 and RFC 9909 specify for certificates.
+//!
+//! # Hash-based signatures
+//!
+//! An HSS/LMS key is read per RFC 9708 and an SLH-DSA key per RFC 9909. Two
+//! things about them differ from every other key here. An HSS/LMS key names
+//! its own parameter set, so one algorithm covers them all and
+//! [`PublicKey::classical_bits`] reads the strength from the key. And RFC
+//! 9909's twelve pre-hash key types, `id-hash-slh-dsa-*`, are not read: a key
+//! of one is `Unsupported`. `ic_slhdsa::hash_verify` verifies such a
+//! signature for a caller that has the key bytes.
 //!
 //! # What the result tells an attacker
 //!
@@ -95,6 +105,51 @@ pub enum PublicKey<'a> {
     MlDsa65(&'a [u8]),
     /// ML-DSA-87, 2592 bytes.
     MlDsa87(&'a [u8]),
+    /// HSS/LMS: `u32(L) || lms_public_key`, 52 or 60 bytes.
+    HssLms(&'a [u8]),
+    /// SLH-DSA: the parameter set, and `PK.seed || PK.root`, 32 to 64 bytes.
+    SlhDsa(ic_slhdsa::ParameterSet, &'a [u8]),
+}
+
+/// The SLH-DSA parameter set an algorithm names, if it names one.
+const fn slh_dsa_set(algorithm: SignatureAlgorithm) -> Option<ic_slhdsa::ParameterSet> {
+    use ic_slhdsa::ParameterSet as P;
+    use SignatureAlgorithm as A;
+    Some(match algorithm {
+        A::SlhDsaSha2_128s => P::Sha2_128s,
+        A::SlhDsaSha2_128f => P::Sha2_128f,
+        A::SlhDsaSha2_192s => P::Sha2_192s,
+        A::SlhDsaSha2_192f => P::Sha2_192f,
+        A::SlhDsaSha2_256s => P::Sha2_256s,
+        A::SlhDsaSha2_256f => P::Sha2_256f,
+        A::SlhDsaShake_128s => P::Shake_128s,
+        A::SlhDsaShake_128f => P::Shake_128f,
+        A::SlhDsaShake_192s => P::Shake_192s,
+        A::SlhDsaShake_192f => P::Shake_192f,
+        A::SlhDsaShake_256s => P::Shake_256s,
+        A::SlhDsaShake_256f => P::Shake_256f,
+        _ => return None,
+    })
+}
+
+/// The SLH-DSA parameter set an object identifier names: RFC 9909 section 3.
+fn slh_dsa_set_of_oid(id: &[u8]) -> Option<ic_slhdsa::ParameterSet> {
+    use ic_slhdsa::ParameterSet as P;
+    const TABLE: [(&[u8], P); 12] = [
+        (oid::SLH_DSA_SHA2_128S, P::Sha2_128s),
+        (oid::SLH_DSA_SHA2_128F, P::Sha2_128f),
+        (oid::SLH_DSA_SHA2_192S, P::Sha2_192s),
+        (oid::SLH_DSA_SHA2_192F, P::Sha2_192f),
+        (oid::SLH_DSA_SHA2_256S, P::Sha2_256s),
+        (oid::SLH_DSA_SHA2_256F, P::Sha2_256f),
+        (oid::SLH_DSA_SHAKE_128S, P::Shake_128s),
+        (oid::SLH_DSA_SHAKE_128F, P::Shake_128f),
+        (oid::SLH_DSA_SHAKE_192S, P::Shake_192s),
+        (oid::SLH_DSA_SHAKE_192F, P::Shake_192f),
+        (oid::SLH_DSA_SHAKE_256S, P::Shake_256s),
+        (oid::SLH_DSA_SHAKE_256F, P::Shake_256f),
+    ];
+    TABLE.iter().find(|(o, _)| *o == id).map(|(_, set)| *set)
 }
 
 impl<'a> PublicKey<'a> {
@@ -104,8 +159,9 @@ impl<'a> PublicKey<'a> {
     /// parameters present and `NULL`, an EC point uncompressed and of its
     /// curve's length. ML-DSA, which `ic_pkix::PublicKeyInfo` does not name,
     /// is read here per RFC 9881: no parameters, and a key of exactly the
-    /// parameter set's length. A key `ic_pkix` refuses is not given a second
-    /// reading.
+    /// parameter set's length. SLH-DSA is read per RFC 9909 the same way, and
+    /// HSS/LMS per RFC 9708: no parameters, and a key whose own typecodes
+    /// `ic_lms` knows. A key `ic_pkix` refuses is not given a second reading.
     ///
     /// Two failures, kept apart because a protocol answers them differently: a
     /// structure that is not a valid `SubjectPublicKeyInfo` is
@@ -122,22 +178,49 @@ impl<'a> PublicKey<'a> {
                 _ => Err(err!(Unsupported, "public key on an unsupported curve")),
             },
             PublicKeyInfo::Ed25519(key) => Ok(Self::Ed25519(key)),
-            PublicKeyInfo::Unsupported { .. } => Self::ml_dsa_from_spki(spki),
+            PublicKeyInfo::Unsupported { .. } => Self::post_quantum_from_spki(spki),
             _ => Err(err!(Unsupported, "not a signature verification key")),
         }
     }
 
-    /// The ML-DSA reading of a `SubjectPublicKeyInfo` `ic_pkix` did not name.
-    fn ml_dsa_from_spki(spki: &'a [u8]) -> Result<Self> {
+    /// The ML-DSA, SLH-DSA or HSS/LMS reading of a `SubjectPublicKeyInfo`
+    /// `ic_pkix` did not name.
+    fn post_quantum_from_spki(spki: &'a [u8]) -> Result<Self> {
         let mut outer = Reader::new(spki);
         let mut body = outer.sequence()?;
         outer.finish()?;
         let mut algorithm = body.sequence()?;
         let id = algorithm.oid()?;
-        // RFC 9881 section 2: the parameters field is absent.
+        // RFC 9881 section 2, RFC 9909 section 3 and RFC 9708 section 4: the
+        // parameters field is absent.
         let parameters_absent = algorithm.finish().is_ok();
         let key = body.bit_string()?;
         body.finish()?;
+
+        if let Some(set) = slh_dsa_set_of_oid(id) {
+            ensure!(
+                parameters_absent,
+                MalformedEncoding,
+                "slh-dsa public key with parameters"
+            );
+            ensure!(
+                key.len() == set.public_key_len(),
+                MalformedEncoding,
+                "slh-dsa public key length"
+            );
+            return Ok(Self::SlhDsa(set, key));
+        }
+        if id == oid::HSS_LMS {
+            ensure!(
+                parameters_absent,
+                MalformedEncoding,
+                "hss/lms public key with parameters"
+            );
+            // Malformed, or of a parameter set that is not implemented: each
+            // is reported as `ic_lms` reports it.
+            ic_lms::parameters(key)?;
+            return Ok(Self::HssLms(key));
+        }
 
         let (len, make): (usize, fn(&'a [u8]) -> Self) = if id == oid::ML_DSA_44 {
             (ic_mldsa::sign44::PUBLIC_KEY_LEN, Self::MlDsa44)
@@ -162,7 +245,8 @@ impl<'a> PublicKey<'a> {
     }
 
     /// The kind of key: `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,
-    /// `rsa`, `ml-dsa-44`, `ml-dsa-65` or `ml-dsa-87`. For reports.
+    /// `rsa`, `ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87`, `hss-lms`, or an SLH-DSA
+    /// parameter set such as `slh-dsa-sha2-128s`. For reports.
     #[must_use = "the key's kind; discarding it reports nothing"]
     pub const fn kind_id(&self) -> &'static str {
         match self {
@@ -174,6 +258,8 @@ impl<'a> PublicKey<'a> {
             Self::MlDsa44(_) => "ml-dsa-44",
             Self::MlDsa65(_) => "ml-dsa-65",
             Self::MlDsa87(_) => "ml-dsa-87",
+            Self::HssLms(_) => "hss-lms",
+            Self::SlhDsa(set, _) => set.id(),
         }
     }
 
@@ -194,13 +280,24 @@ impl<'a> PublicKey<'a> {
     ///
     /// RSA's depends on the modulus, by SP 800-57 Part 1 table 2: 112 from
     /// 2048 bits, 128 from 3072, 192 from 7680, 256 from 15360, and 0 below
-    /// 2048, which nothing here verifies with.
+    /// 2048, which nothing here verifies with. SLH-DSA's is its parameter
+    /// set's category, and HSS/LMS's the output length of the hash its key
+    /// names -- 192 or 256 -- or 0 for a key `ic_lms` cannot read.
     #[must_use = "the key's strength; discarding it enforces no minimum"]
     pub fn classical_bits(&self) -> u16 {
         match self {
             Self::EcP256(_) | Self::Ed25519(_) | Self::MlDsa44(_) => 128,
             Self::EcP384(_) | Self::MlDsa65(_) => 192,
             Self::EcP521(_) | Self::MlDsa87(_) => 256,
+            Self::SlhDsa(set, _) => match set.category() {
+                1 => 128,
+                3 => 192,
+                _ => 256,
+            },
+            Self::HssLms(key) => match ic_lms::parameters(key) {
+                Ok(p) => 8 * p.hash.output_len() as u16,
+                Err(_) => 0,
+            },
             Self::Rsa { .. } => match self.rsa_bits().unwrap_or(0) {
                 0..=2047 => 0,
                 2048..=3071 => 112,
@@ -214,10 +311,14 @@ impl<'a> PublicKey<'a> {
     /// Whether this key can verify a signature made with `algorithm`.
     ///
     /// An RSA key serves all six RSA algorithms; every other key serves the
-    /// one algorithm of its type.
+    /// one algorithm of its type, and an SLH-DSA key that of its parameter
+    /// set.
     #[must_use = "whether the key serves the algorithm; discarding it checks nothing"]
     pub fn supports(&self, algorithm: SignatureAlgorithm) -> bool {
         use SignatureAlgorithm as A;
+        if let Self::SlhDsa(set, _) = self {
+            return slh_dsa_set(algorithm) == Some(*set);
+        }
         matches!(
             (self, algorithm),
             (Self::EcP256(_), A::EcdsaP256Sha256)
@@ -227,6 +328,7 @@ impl<'a> PublicKey<'a> {
                 | (Self::MlDsa44(_), A::MlDsa44)
                 | (Self::MlDsa65(_), A::MlDsa65)
                 | (Self::MlDsa87(_), A::MlDsa87)
+                | (Self::HssLms(_), A::HssLms)
                 | (
                     Self::Rsa { .. },
                     A::RsaPkcs1Sha256
@@ -246,7 +348,8 @@ impl<'a> PublicKey<'a> {
 /// not, for any reason to do with the signature. `InvalidParameter` means
 /// `key` is not a key for `algorithm`, and `Unsupported` that an RSA key is
 /// one this library does not accept -- outside its sizes, or with an exponent
-/// above [`MAX_RSA_EXPONENT`].
+/// above [`MAX_RSA_EXPONENT`] -- or an HSS/LMS key of a parameter set it does
+/// not implement.
 pub fn verify(
     algorithm: SignatureAlgorithm,
     key: &PublicKey<'_>,
@@ -270,6 +373,8 @@ pub fn verify(
         (PublicKey::MlDsa44(pk), _) => verify_ml_dsa_44(pk, message, signature),
         (PublicKey::MlDsa65(pk), _) => verify_ml_dsa_65(pk, message, signature),
         (PublicKey::MlDsa87(pk), _) => verify_ml_dsa_87(pk, message, signature),
+        (PublicKey::HssLms(pk), _) => verify_hss_lms(pk, message, signature),
+        (PublicKey::SlhDsa(set, pk), _) => verify_slh_dsa(set, pk, message, signature),
         (PublicKey::Rsa { modulus, exponent }, a) => {
             debug_assert!(matches!(
                 a,
@@ -352,6 +457,32 @@ macro_rules! ml_dsa_verifier {
 ml_dsa_verifier!(verify_ml_dsa_44, sign44);
 ml_dsa_verifier!(verify_ml_dsa_65, sign);
 ml_dsa_verifier!(verify_ml_dsa_87, sign87);
+
+#[inline(never)]
+fn verify_hss_lms(pk: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+    // What is wrong with the key is the key's fault and is reported as
+    // `ic_lms` reports it; everything after that is the signature's.
+    ic_lms::parameters(pk)?;
+    rejected(ic_lms::verify(pk, message, signature))
+}
+
+#[inline(never)]
+fn verify_slh_dsa(
+    set: ic_slhdsa::ParameterSet,
+    pk: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    // The key's length was checked when it was parsed; a mismatch here would
+    // be this crate's error, not the peer's.
+    ensure!(
+        pk.len() == set.public_key_len(),
+        Internal,
+        "slh-dsa public key length"
+    );
+    // Pure SLH-DSA with an empty context: RFC 9909 section 1.
+    rejected(ic_slhdsa::verify(set, pk, message, b"", signature))
+}
 
 #[inline(never)]
 fn verify_rsa(
@@ -460,6 +591,144 @@ mod tests {
         w.finish()
     }
 
+    /// SLH-DSA through its `SubjectPublicKeyInfo`, for the six sets that sign
+    /// quickly. OpenSSL's signatures for all twelve are checked in
+    /// `ironcrypto/tests/sig.rs`.
+    #[test]
+    fn slh_dsa_verifies_through_its_spki() {
+        use ic_slhdsa::ParameterSet as P;
+        let fast = [
+            (P::Sha2_128f, oid::SLH_DSA_SHA2_128F),
+            (P::Sha2_192f, oid::SLH_DSA_SHA2_192F),
+            (P::Sha2_256f, oid::SLH_DSA_SHA2_256F),
+            (P::Shake_128f, oid::SLH_DSA_SHAKE_128F),
+            (P::Shake_192f, oid::SLH_DSA_SHAKE_192F),
+            (P::Shake_256f, oid::SLH_DSA_SHAKE_256F),
+        ];
+        for (set, id) in fast {
+            let n = set.n();
+            let seed = [5u8; 32];
+            let (mut sk, mut pk) = ([0u8; 128], [0u8; 64]);
+            let (sk, pk) = (&mut sk[..4 * n], &mut pk[..2 * n]);
+            ic_slhdsa::keygen_internal(set, &seed[..n], &seed[..n], &seed[..n], sk, pk).unwrap();
+            let mut sig = vec![0u8; set.signature_len()];
+            ic_slhdsa::sign_deterministic(set, sk, b"message", b"", &mut sig).unwrap();
+
+            let alg = SignatureAlgorithm::from_id(set.id()).unwrap();
+            let mut buf = [0u8; 128];
+            let len = spki(id, false, pk, &mut buf);
+            let key = PublicKey::from_spki(&buf[..len]).unwrap();
+            assert_eq!(key, PublicKey::SlhDsa(set, pk));
+            verify(alg, &key, b"message", &sig).unwrap();
+            assert_eq!(
+                kind(verify(alg, &key, b"massage", &sig)),
+                ErrorKind::AuthenticationFailed
+            );
+            assert_eq!(
+                kind(verify(alg, &key, b"message", &sig[1..])),
+                ErrorKind::AuthenticationFailed
+            );
+            // A signature under a context is not one under none, and a
+            // pre-hash signature is not a pure one.
+            ic_slhdsa::sign_deterministic(set, sk, b"message", b"ctx", &mut sig).unwrap();
+            assert_eq!(
+                kind(verify(alg, &key, b"message", &sig)),
+                ErrorKind::AuthenticationFailed
+            );
+            ic_slhdsa::hash_sign_deterministic(
+                set,
+                sk,
+                b"message",
+                b"",
+                ic_slhdsa::PreHash::Sha512,
+                &mut sig,
+            )
+            .unwrap();
+            assert_eq!(
+                kind(verify(alg, &key, b"message", &sig)),
+                ErrorKind::AuthenticationFailed
+            );
+
+            // RFC 9909 section 3: parameters are absent, and the key is the
+            // set's length.
+            let len = spki(id, true, pk, &mut buf);
+            assert_eq!(
+                kind(PublicKey::from_spki(&buf[..len])),
+                ErrorKind::MalformedEncoding
+            );
+            let len = spki(id, false, &pk[1..], &mut buf);
+            assert_eq!(
+                kind(PublicKey::from_spki(&buf[..len])),
+                ErrorKind::MalformedEncoding
+            );
+            // A key made by hand at the wrong length is not the peer's error.
+            assert_eq!(
+                kind(verify(alg, &PublicKey::SlhDsa(set, &pk[1..]), b"m", &sig)),
+                ErrorKind::Internal
+            );
+        }
+        // RFC 9909's pre-hash key types are not read.
+        let id = [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 35];
+        let mut buf = [0u8; 128];
+        let len = spki(&id, false, &[0u8; 32], &mut buf);
+        assert_eq!(
+            kind(PublicKey::from_spki(&buf[..len])),
+            ErrorKind::Unsupported
+        );
+    }
+
+    /// HSS/LMS through its `SubjectPublicKeyInfo`, with RFC 9858's A.1 case.
+    #[test]
+    fn hss_lms_verifies_through_its_spki() {
+        let (pk, message, signature) = ic_lms::example();
+        let alg = SignatureAlgorithm::HssLms;
+        let mut buf = [0u8; 128];
+        let len = spki(oid::HSS_LMS, false, &pk, &mut buf);
+        let key = PublicKey::from_spki(&buf[..len]).unwrap();
+        assert_eq!(key, PublicKey::HssLms(&pk));
+        verify(alg, &key, &message, &signature).unwrap();
+        assert!(signature.len() <= alg.max_signature_len());
+        assert_eq!(
+            kind(verify(alg, &key, &message[1..], &signature)),
+            ErrorKind::AuthenticationFailed
+        );
+        for len in [0, 3, signature.len() - 1] {
+            assert_eq!(
+                kind(verify(alg, &key, &message, &signature[..len])),
+                ErrorKind::AuthenticationFailed
+            );
+        }
+        // The longest signature RFC 8554 allows: u32(L - 1), seven signed
+        // public keys, and eight LMS signatures at height 25, width 1 and a
+        // 256-bit hash.
+        let lms_signature = 4 + (4 + 32 + 265 * 32) + 4 + 25 * 32;
+        let lms_public_key = 4 + 4 + 16 + 32;
+        assert_eq!(
+            alg.max_signature_len(),
+            4 + 7 * (lms_signature + lms_public_key) + lms_signature
+        );
+
+        // RFC 9708 section 4: parameters are absent.
+        let len = spki(oid::HSS_LMS, true, &pk, &mut buf);
+        assert_eq!(
+            kind(PublicKey::from_spki(&buf[..len])),
+            ErrorKind::MalformedEncoding
+        );
+        // A key that is not an HSS key is refused when it is read, and one
+        // made by hand is refused as a key, not as a signature.
+        let len = spki(oid::HSS_LMS, false, &pk[1..], &mut buf);
+        assert!(PublicKey::from_spki(&buf[..len]).is_err());
+        assert_ne!(
+            kind(verify(
+                alg,
+                &PublicKey::HssLms(&pk[1..]),
+                &message,
+                &signature
+            )),
+            ErrorKind::AuthenticationFailed
+        );
+    }
+
     #[test]
     fn keys_that_cannot_verify_are_refused_as_what_they_are() {
         let mut buf = [0u8; 2700];
@@ -531,9 +800,27 @@ mod tests {
             PublicKey::MlDsa44(&[]),
             PublicKey::MlDsa65(&[]),
             PublicKey::MlDsa87(&[]),
+            PublicKey::HssLms(&[]),
         ] {
             assert_eq!(served(&key), 1, "{key:?}");
         }
+        // Each SLH-DSA set serves its own algorithm and no other set's, and
+        // every SLH-DSA algorithm is some set's.
+        for &set in ic_slhdsa::ParameterSet::ALL {
+            let key = PublicKey::SlhDsa(set, &[]);
+            assert_eq!(served(&key), 1, "{key:?}");
+            let alg = SignatureAlgorithm::from_id(set.id()).expect("an algorithm per set");
+            assert!(key.supports(alg));
+            assert_eq!(key.kind_id(), alg.id());
+            assert_eq!(alg.max_signature_len(), set.signature_len());
+        }
+        assert_eq!(
+            SignatureAlgorithm::ALL
+                .iter()
+                .filter(|a| slh_dsa_set(**a).is_some())
+                .count(),
+            12
+        );
         assert_eq!(
             kind(verify(
                 SignatureAlgorithm::Ed25519,
@@ -564,6 +851,27 @@ mod tests {
             let strength = ic_ontology::get(entry).expect("registered").strength;
             assert_eq!(key.classical_bits(), strength.classical, "{entry}");
         }
+
+        // SLH-DSA's entry quotes the floor of its sets, which are category 1,
+        // 3 and 5.
+        let floor = ic_ontology::get("slh-dsa").unwrap().strength.classical;
+        let strengths: Vec<u16> = ic_slhdsa::ParameterSet::ALL
+            .iter()
+            .map(|set| PublicKey::SlhDsa(*set, &[]).classical_bits())
+            .collect();
+        assert_eq!(strengths.iter().min(), Some(&floor));
+        for (set, bits) in ic_slhdsa::ParameterSet::ALL.iter().zip(&strengths) {
+            // A set's name carries its strength: `slh-dsa-shake-192f`.
+            assert!(set.id().contains(&bits.to_string()), "{}", set.id());
+        }
+        // HSS/LMS's is its hash's output, read from the key; the entry quotes
+        // the smaller of the two, and a key that cannot be read has none.
+        let (lms_key, _, _) = ic_lms::example();
+        assert_eq!(ic_lms::parameters(&lms_key).unwrap().hash.output_len(), 24);
+        assert_eq!(PublicKey::HssLms(&lms_key).classical_bits(), 192);
+        assert_eq!(ic_ontology::get("hss-lms").unwrap().strength.classical, 192);
+        assert_eq!(PublicKey::HssLms(&[]).classical_bits(), 0);
+        assert_eq!(PublicKey::HssLms(&lms_key).kind_id(), "hss-lms");
 
         let rsa = |modulus: &'static [u8]| PublicKey::Rsa {
             modulus,

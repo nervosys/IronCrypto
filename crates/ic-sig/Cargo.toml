@@ -14,7 +14,7 @@ publish.workspace = true
 
 [features]
 default = ["std"]
-std = ["ic-core/std", "ic-pkix/std", "ic-ec/std", "ic-rsa/std", "ic-mldsa/std"]
+std = ["ic-core/std", "ic-pkix/std", "ic-ec/std", "ic-rsa/std", "ic-mldsa/std", "ic-lms/std", "ic-slhdsa/std"]
 
 [dependencies]
 ic-core = { workspace = true }
@@ -22,6 +22,8 @@ ic-pkix = { workspace = true }
 ic-ec = { workspace = true }
 ic-rsa = { workspace = true }
 ic-mldsa = { workspace = true }
+ic-lms = { workspace = true }
+ic-slhdsa = { workspace = true }
 
 # For signing the messages the tests verify.
 [dev-dependencies]

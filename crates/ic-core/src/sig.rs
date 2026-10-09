@@ -16,7 +16,8 @@
 //!
 //! Public keys are DER `SubjectPublicKeyInfo`. Signatures are in the form
 //! X.509 and TLS 1.3 both carry: an ASN.1 `Ecdsa-Sig-Value` for ECDSA, and the
-//! algorithm's own bytes for Ed25519, RSA and ML-DSA. One encoding at the
+//! algorithm's own bytes for Ed25519, RSA, ML-DSA, SLH-DSA and HSS/LMS. One
+//! encoding at the
 //! interface means a signer written for certificates serves a handshake
 //! unchanged.
 
@@ -25,10 +26,13 @@ use crate::Result;
 
 /// A signature algorithm: the key type and everything that goes with it.
 ///
-/// Each names one entry in the ontology, by [`SignatureAlgorithm::id`]. RSA
-/// keys serve several of these; every other key serves exactly one.
+/// Each names one entry in the ontology, by [`SignatureAlgorithm::id`] --
+/// except the twelve SLH-DSA parameter sets, which share the entry `slh-dsa`
+/// and are named as its sets are. RSA keys serve several of these; every other
+/// key serves exactly one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[allow(non_camel_case_types)]
 pub enum SignatureAlgorithm {
     /// ECDSA over P-256 with SHA-256.
     EcdsaP256Sha256,
@@ -56,6 +60,33 @@ pub enum SignatureAlgorithm {
     MlDsa65,
     /// ML-DSA-87 (FIPS 204), pure, with an empty context.
     MlDsa87,
+    /// HSS/LMS (RFC 8554, SP 800-208). The key names its own parameters, and
+    /// the hash function with them.
+    HssLms,
+    /// SLH-DSA-SHA2-128s (FIPS 205), pure, with an empty context.
+    SlhDsaSha2_128s,
+    /// SLH-DSA-SHA2-128f (FIPS 205), pure, with an empty context.
+    SlhDsaSha2_128f,
+    /// SLH-DSA-SHA2-192s (FIPS 205), pure, with an empty context.
+    SlhDsaSha2_192s,
+    /// SLH-DSA-SHA2-192f (FIPS 205), pure, with an empty context.
+    SlhDsaSha2_192f,
+    /// SLH-DSA-SHA2-256s (FIPS 205), pure, with an empty context.
+    SlhDsaSha2_256s,
+    /// SLH-DSA-SHA2-256f (FIPS 205), pure, with an empty context.
+    SlhDsaSha2_256f,
+    /// SLH-DSA-SHAKE-128s (FIPS 205), pure, with an empty context.
+    SlhDsaShake_128s,
+    /// SLH-DSA-SHAKE-128f (FIPS 205), pure, with an empty context.
+    SlhDsaShake_128f,
+    /// SLH-DSA-SHAKE-192s (FIPS 205), pure, with an empty context.
+    SlhDsaShake_192s,
+    /// SLH-DSA-SHAKE-192f (FIPS 205), pure, with an empty context.
+    SlhDsaShake_192f,
+    /// SLH-DSA-SHAKE-256s (FIPS 205), pure, with an empty context.
+    SlhDsaShake_256s,
+    /// SLH-DSA-SHAKE-256f (FIPS 205), pure, with an empty context.
+    SlhDsaShake_256f,
 }
 
 impl SignatureAlgorithm {
@@ -74,6 +105,19 @@ impl SignatureAlgorithm {
         Self::MlDsa44,
         Self::MlDsa65,
         Self::MlDsa87,
+        Self::HssLms,
+        Self::SlhDsaSha2_128s,
+        Self::SlhDsaSha2_128f,
+        Self::SlhDsaSha2_192s,
+        Self::SlhDsaSha2_192f,
+        Self::SlhDsaSha2_256s,
+        Self::SlhDsaSha2_256f,
+        Self::SlhDsaShake_128s,
+        Self::SlhDsaShake_128f,
+        Self::SlhDsaShake_192s,
+        Self::SlhDsaShake_192f,
+        Self::SlhDsaShake_256s,
+        Self::SlhDsaShake_256f,
     ];
 
     /// The ontology identifier of the algorithm.
@@ -92,6 +136,19 @@ impl SignatureAlgorithm {
             Self::MlDsa44 => "ml-dsa-44",
             Self::MlDsa65 => "ml-dsa-65",
             Self::MlDsa87 => "ml-dsa-87",
+            Self::HssLms => "hss-lms",
+            Self::SlhDsaSha2_128s => "slh-dsa-sha2-128s",
+            Self::SlhDsaSha2_128f => "slh-dsa-sha2-128f",
+            Self::SlhDsaSha2_192s => "slh-dsa-sha2-192s",
+            Self::SlhDsaSha2_192f => "slh-dsa-sha2-192f",
+            Self::SlhDsaSha2_256s => "slh-dsa-sha2-256s",
+            Self::SlhDsaSha2_256f => "slh-dsa-sha2-256f",
+            Self::SlhDsaShake_128s => "slh-dsa-shake-128s",
+            Self::SlhDsaShake_128f => "slh-dsa-shake-128f",
+            Self::SlhDsaShake_192s => "slh-dsa-shake-192s",
+            Self::SlhDsaShake_192f => "slh-dsa-shake-192f",
+            Self::SlhDsaShake_256s => "slh-dsa-shake-256s",
+            Self::SlhDsaShake_256f => "slh-dsa-shake-256f",
         }
     }
 
@@ -105,7 +162,10 @@ impl SignatureAlgorithm {
     ///
     /// ECDSA is the DER `Ecdsa-Sig-Value`, whose length varies with the
     /// leading bits of `r` and `s`. RSA is for the largest modulus this
-    /// library accepts, 4096 bits.
+    /// library accepts, 4096 bits. HSS/LMS is for the largest parameters RFC
+    /// 8554 allows -- eight levels, each a tree of height 25 at Winternitz
+    /// width 1 with a 256-bit hash -- and most signatures are a small fraction
+    /// of it.
     pub const fn max_signature_len(self) -> usize {
         match self {
             // SEQUENCE { INTEGER, INTEGER }, each integer one byte longer
@@ -123,6 +183,16 @@ impl SignatureAlgorithm {
             Self::MlDsa44 => 2420,
             Self::MlDsa65 => 3309,
             Self::MlDsa87 => 4627,
+            // u32(L - 1), then seven signed public keys of 56 bytes, then
+            // eight LMS signatures of 12 + 32 + 265 * 32 + 25 * 32 bytes.
+            Self::HssLms => 74988,
+            // FIPS 205 table 2.
+            Self::SlhDsaSha2_128s | Self::SlhDsaShake_128s => 7856,
+            Self::SlhDsaSha2_128f | Self::SlhDsaShake_128f => 17088,
+            Self::SlhDsaSha2_192s | Self::SlhDsaShake_192s => 16224,
+            Self::SlhDsaSha2_192f | Self::SlhDsaShake_192f => 35664,
+            Self::SlhDsaSha2_256s | Self::SlhDsaShake_256s => 29792,
+            Self::SlhDsaSha2_256f | Self::SlhDsaShake_256f => 49856,
         }
     }
 }

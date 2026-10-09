@@ -43,6 +43,34 @@ pub const ML_DSA_44: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0
 pub const ML_DSA_65: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12];
 /// `id-ml-dsa-87`, 2.16.840.1.101.3.4.3.19.
 pub const ML_DSA_87: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13];
+/// `id-alg-hss-lms-hashsig`, 1.2.840.113549.1.9.16.3.17 (RFC 9708).
+pub const HSS_LMS: &[u8] = &[
+    0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x10, 0x03, 0x11,
+];
+/// `id-slh-dsa-sha2-128s`, 2.16.840.1.101.3.4.3.20 (RFC 9909).
+pub const SLH_DSA_SHA2_128S: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x14];
+/// `id-slh-dsa-sha2-128f`, 2.16.840.1.101.3.4.3.21 (RFC 9909).
+pub const SLH_DSA_SHA2_128F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x15];
+/// `id-slh-dsa-sha2-192s`, 2.16.840.1.101.3.4.3.22 (RFC 9909).
+pub const SLH_DSA_SHA2_192S: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x16];
+/// `id-slh-dsa-sha2-192f`, 2.16.840.1.101.3.4.3.23 (RFC 9909).
+pub const SLH_DSA_SHA2_192F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x17];
+/// `id-slh-dsa-sha2-256s`, 2.16.840.1.101.3.4.3.24 (RFC 9909).
+pub const SLH_DSA_SHA2_256S: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x18];
+/// `id-slh-dsa-sha2-256f`, 2.16.840.1.101.3.4.3.25 (RFC 9909).
+pub const SLH_DSA_SHA2_256F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x19];
+/// `id-slh-dsa-shake-128s`, 2.16.840.1.101.3.4.3.26 (RFC 9909).
+pub const SLH_DSA_SHAKE_128S: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1a];
+/// `id-slh-dsa-shake-128f`, 2.16.840.1.101.3.4.3.27 (RFC 9909).
+pub const SLH_DSA_SHAKE_128F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1b];
+/// `id-slh-dsa-shake-192s`, 2.16.840.1.101.3.4.3.28 (RFC 9909).
+pub const SLH_DSA_SHAKE_192S: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1c];
+/// `id-slh-dsa-shake-192f`, 2.16.840.1.101.3.4.3.29 (RFC 9909).
+pub const SLH_DSA_SHAKE_192F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1d];
+/// `id-slh-dsa-shake-256s`, 2.16.840.1.101.3.4.3.30 (RFC 9909).
+pub const SLH_DSA_SHAKE_256S: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1e];
+/// `id-slh-dsa-shake-256f`, 2.16.840.1.101.3.4.3.31 (RFC 9909).
+pub const SLH_DSA_SHAKE_256F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1f];
 /// `id-at-commonName`, 2.5.4.3.
 pub const COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
 /// `id-ce-subjectKeyIdentifier`, 2.5.29.14.
@@ -232,6 +260,71 @@ mod tests {
                 ML_DSA_87,
                 &[2, 16, 840, 1, 101, 3, 4, 3, 19],
                 "id-ml-dsa-87",
+            ),
+            (
+                HSS_LMS,
+                &[1, 2, 840, 113549, 1, 9, 16, 3, 17],
+                "id-alg-hss-lms-hashsig",
+            ),
+            (
+                SLH_DSA_SHA2_128S,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 20],
+                "id-slh-dsa-sha2-128s",
+            ),
+            (
+                SLH_DSA_SHA2_128F,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 21],
+                "id-slh-dsa-sha2-128f",
+            ),
+            (
+                SLH_DSA_SHA2_192S,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 22],
+                "id-slh-dsa-sha2-192s",
+            ),
+            (
+                SLH_DSA_SHA2_192F,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 23],
+                "id-slh-dsa-sha2-192f",
+            ),
+            (
+                SLH_DSA_SHA2_256S,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 24],
+                "id-slh-dsa-sha2-256s",
+            ),
+            (
+                SLH_DSA_SHA2_256F,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 25],
+                "id-slh-dsa-sha2-256f",
+            ),
+            (
+                SLH_DSA_SHAKE_128S,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 26],
+                "id-slh-dsa-shake-128s",
+            ),
+            (
+                SLH_DSA_SHAKE_128F,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 27],
+                "id-slh-dsa-shake-128f",
+            ),
+            (
+                SLH_DSA_SHAKE_192S,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 28],
+                "id-slh-dsa-shake-192s",
+            ),
+            (
+                SLH_DSA_SHAKE_192F,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 29],
+                "id-slh-dsa-shake-192f",
+            ),
+            (
+                SLH_DSA_SHAKE_256S,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 30],
+                "id-slh-dsa-shake-256s",
+            ),
+            (
+                SLH_DSA_SHAKE_256F,
+                &[2, 16, 840, 1, 101, 3, 4, 3, 31],
+                "id-slh-dsa-shake-256f",
             ),
             (COMMON_NAME, &[2, 5, 4, 3], "id-at-commonName"),
             (

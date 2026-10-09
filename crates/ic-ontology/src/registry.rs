@@ -342,7 +342,7 @@ const HSS_LMS_P: [Param; 2] = [
         name: "signature",
         unit: Unit::Bytes,
         min: 784,
-        max: 74984,
+        max: 74988,
         recommended: 784,
         note: "From 784 bytes for one tree of height 5 at W=8 with a 192-bit hash, to eight \
                levels of height 25 at W=1 with a 256-bit one. The parameter sets fix it exactly.",
