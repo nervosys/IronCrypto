@@ -5,6 +5,32 @@ all of them.
 
 ## Unreleased
 
+### Security
+
+- **Poly1305 computed a wrong tag, or stopped the process, for messages a
+  peer can choose.** Every release from 0.2.5 to 0.2.19 is affected, in
+  `Poly1305` and so in ChaCha20-Poly1305 wherever it is used: the AEAD, the
+  `ic-rustls` TLS and QUIC suites, and HPKE with that cipher. The path that
+  absorbs four blocks at once summed four products before reducing them, and
+  the reduction kept its carries in 32 bits, which four products overflow.
+  It takes a message of 64 bytes or more whose bytes are large. By a model
+  of the old arithmetic over 2,000 random keys, a kilobyte of `0xff` bytes
+  reaches it under about one key in twenty, 64 such bytes under about one in
+  a thousand, and random data under none. ChaCha20-Poly1305 makes a new
+  Poly1305 key for every nonce, so a peer who sends such messages gets
+  there in a few dozen tries. What happens then depends on the build. With overflow checks on,
+  which is how this workspace builds and how any debug build does, the
+  process panics, and under `panic = "abort"` it ends: a peer who can send
+  such a ciphertext to be opened can stop the process, before
+  authentication and without the key. With overflow checks off, which is
+  Cargo's default for a release build of a crate that depends on this one,
+  the tag is computed wrong: the two ends of a connection still agree with
+  each other, since both make the same mistake, but they disagree with every
+  correct implementation on those messages. The carries are 64-bit now.
+  Found by running Project Wycheproof's ChaCha20-Poly1305 cases; the test
+  that should have caught it compared the two paths only on evenly spread
+  bytes, and now compares them on the largest ones too.
+
 ### Added
 
 - **HashSLH-DSA, the pre-hash interface of FIPS 205**, in `ic-slhdsa`:

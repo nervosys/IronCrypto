@@ -280,27 +280,42 @@ fn mul_unreduced(h: [u32; 5], r: [u32; 5], s: [u32; 4]) -> [u64; 5] {
 }
 
 /// Carry-propagate back into 26-bit limbs, folding `2^130` into `5`.
+///
+/// The carries are 64-bit, and have to be. One product's limbs are under
+/// `2^58` and its carries under `2^32`, which is what this function was
+/// first written for. `absorb4` hands it four products summed: limbs up to
+/// about `2^60`, a first carry up to about `2^34`, and a last carry whose
+/// five-fold is about `2^34` too. Held in a `u32`, the first could be cut
+/// short by its cast and the last could overflow its multiplication. That
+/// needs the message limbs to be large: for a kilobyte of `0xff` bytes it
+/// happened under about one key in twenty, and for random bytes never.
+///
+/// With 64-bit carries nothing here can wrap: a limb plus a carry is under
+/// `2^61`, and `c * 5` under `2^41`.
 fn reduce(d: [u64; 5]) -> [u32; 5] {
-    let mut acc = [0u32; 5];
-    let mut c = (d[0] >> 26) as u32;
-    acc[0] = d[0] as u32 & 0x3ff_ffff;
-    let d1 = d[1] + c as u64;
-    c = (d1 >> 26) as u32;
-    acc[1] = d1 as u32 & 0x3ff_ffff;
-    let d2 = d[2] + c as u64;
-    c = (d2 >> 26) as u32;
-    acc[2] = d2 as u32 & 0x3ff_ffff;
-    let d3 = d[3] + c as u64;
-    c = (d3 >> 26) as u32;
-    acc[3] = d3 as u32 & 0x3ff_ffff;
-    let d4 = d[4] + c as u64;
-    c = (d4 >> 26) as u32;
-    acc[4] = d4 as u32 & 0x3ff_ffff;
-    acc[0] += c * 5;
-    c = acc[0] >> 26;
-    acc[0] &= 0x3ff_ffff;
-    acc[1] += c;
-    acc
+    const MASK: u64 = 0x3ff_ffff;
+    let mut c = d[0] >> 26;
+    let a0 = d[0] & MASK;
+    let d1 = d[1] + c;
+    c = d1 >> 26;
+    let a1 = d1 & MASK;
+    let d2 = d[2] + c;
+    c = d2 >> 26;
+    let a2 = d2 & MASK;
+    let d3 = d[3] + c;
+    c = d3 >> 26;
+    let a3 = d3 & MASK;
+    let d4 = d[4] + c;
+    c = d4 >> 26;
+    let a4 = d4 & MASK;
+    // 2^130 = 5 mod p, so what carried out of the top comes back in at the
+    // bottom five times over.
+    let folded = a0 + c * 5;
+    let a0 = folded & MASK;
+    // Under 2^26 + 2^15: the one limb left a little over its width, as the
+    // multiplication expects.
+    let a1 = a1 + (folded >> 26);
+    [a0 as u32, a1 as u32, a2 as u32, a3 as u32, a4 as u32]
 }
 
 impl Mac for Poly1305 {
@@ -735,6 +750,66 @@ mod tests {
     /// `r` at construction, and a multiply that reduces wrongly, or passes the
     /// key addend where it wants five times `r`, produces powers that are
     /// self-consistent and wrong -- which every short vector still accepts.
+    /// The grouped path at the top of its range.
+    ///
+    /// Four products are summed before one reduction, so the reduction's
+    /// carries are four times what the one-block path gives it. With every
+    /// message limb at its largest -- a message of `0xff` bytes, which a
+    /// peer can simply send -- the last carry times five can exceed 32 bits,
+    /// and so can the first carry itself. For fifteen releases the reduction
+    /// held both in a `u32`: where they did not fit, a build with overflow
+    /// checks stopped, and one without them computed a wrong tag. The test
+    /// beside this one could not see it, because its message bytes are
+    /// spread evenly and such sums never come near the top.
+    ///
+    /// So this is the same comparison on the inputs that reach it: the
+    /// largest message limbs, under keys whose `r` is as large as clamping
+    /// allows and under ordinary ones.
+    #[test]
+    fn the_grouped_poly1305_agrees_with_the_serial_one_at_its_largest_carries() {
+        let mut keys = Vec::new();
+        // r with every bit that clamping leaves: 0x0ffffffc0ffffffc0ffffffc0fffffff.
+        let mut largest = [0xffu8; 32];
+        largest[..16].copy_from_slice(&[
+            0xff, 0xff, 0xff, 0x0f, 0xfc, 0xff, 0xff, 0x0f, 0xfc, 0xff, 0xff, 0x0f, 0xfc, 0xff,
+            0xff, 0x0f,
+        ]);
+        keys.push(largest);
+        keys.push([0xffu8; 32]);
+        for seed in 0u8..62 {
+            let mut key = [0u8; 32];
+            for (i, b) in key.iter_mut().enumerate() {
+                *b = (i as u8)
+                    .wrapping_mul(0x9d)
+                    .wrapping_add(seed.wrapping_mul(0x3b))
+                    ^ seed;
+            }
+            keys.push(key);
+        }
+
+        let mut checked = 0;
+        for key in &keys {
+            for fill in [0xffu8, 0xfe, 0x80] {
+                for len in [64usize, 128, 129, 192, 256, 1024] {
+                    let data = vec![fill; len];
+                    let grouped = Poly1305::mac(key, &data).unwrap();
+
+                    let mut serial = Poly1305::new(key).unwrap();
+                    for chunk in data.chunks(16) {
+                        serial.absorb_block(chunk);
+                    }
+                    assert_eq!(
+                        grouped,
+                        serial.finalize(),
+                        "grouped and serial Poly1305 differ: {len} bytes of {fill:#04x}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 64 * 3 * 6, "the comparison did not run");
+    }
+
     #[test]
     fn the_grouped_poly1305_agrees_with_the_serial_one() {
         let key = [0x8eu8; 32];
