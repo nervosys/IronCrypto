@@ -76,6 +76,11 @@ all of them.
   over AES-256, and HMAC_DRBG over six hashes, with and without prediction
   resistance -- each driving instantiate, reseed and generate. All passed
   with no change to either mechanism.
+- **`Rng` refuses entropy from a source that has stopped.** A seed from the
+  operating system with eight equal bytes in a row, or a second draw that
+  begins as the first did, is refused with `EntropyFailure` and puts the
+  module into its error state. This catches a source returning zeroes; it is
+  not an SP 800-90B health test and does not catch a weak or replayed one.
 - **The DRBG self-tests are known-answer tests now.** Each runs a NIST case
   through instantiate, reseed and generate. CTR_DRBG's used to check only
   that its output was reproducible and not constant, and HMAC_DRBG's

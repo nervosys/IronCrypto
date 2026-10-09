@@ -295,7 +295,13 @@ In rough order of effort:
    MAC or signature over the module image and patches it in.
 3. **SP 800-90B entropy source validation.** The OS entropy source must be
    characterized and justified, with health tests (repetition count, adaptive
-   proportion) on the raw noise source.
+   proportion) on the raw noise source. None of that is here, and none of it
+   can be from here: the raw samples are the operating system's. What `Rng`
+   does check is the one failure visible in what it is handed -- a seed with
+   eight equal bytes in a row, or a second draw that begins as the first did,
+   is refused and ends the module. The cutoff is this library's choice, made
+   so that a working source trips it about once in `2^50` seeds; it is not a
+   90B cutoff, and a weak or replayed source passes it.
 4. **Documentation package.** Security policy, finite state model, algorithm
    specification, and the vendor evidence the lab requires.
 5. **Laboratory testing and CMVP submission** against a specific binary on
