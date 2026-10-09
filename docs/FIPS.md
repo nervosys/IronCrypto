@@ -213,8 +213,9 @@ of unknown origin would conceal that gap rather than close it.
 | AES-GCM-SIV | RFC 8452 appendix C, all 50 published cases across C.1, C.2 and C.3, for both key lengths and in both directions. That includes the counter-wrap tests of C.3, which exist because an implementation can pass every other case and still get the block counter wrong. Registered `available` |
 | BLAKE2b | RFC 7693 Appendix A |
 | cSHAKE | checked against a Keccak written from FIPS 202 in-test and anchored to the published SHA3-256 answer, plus SP 800-185 section 3.3's identity with SHAKE. Five published values were wired in on 2026-10-09, from NIST ACVP `cSHAKE-128-1.0` and `cSHAKE-256-1.0` (usnistgov/ACVP-Server 975de31eb83d, converted by `scripts/gen_acvp_sig_vectors.py`): the cases whose message and output are whole bytes, five of two hundred, the rest being bit-oriented. Each has a function name and a customization string, and swapping the two fails them |
-| TupleHash, ParallelHash | rebuilt in-test from SP 800-185 sections 5.1 and 6.2 over cSHAKE, the same way KMAC is |
-| KMAC | rebuilt in-test from SP 800-185's own definition over cSHAKE, so the key encoding, padding width and trailing length are each checked against the specification rather than against a value this code produced |
+| TupleHash | NIST ACVP `TupleHash-128-1.0` and `TupleHash-256-1.0`, from the pinned commit (usnistgov/ACVP-Server 975de31eb83d), converted by `scripts/gen_acvp_sp800_185_vectors.py`, which checks each file against a pinned digest and keeps the cases whose every length is whole bytes: all 400 functional cases, fixed-length and XOF at both sizes, with tuples of up to ten elements, some of them empty. Encoding an element's length in bytes where the standard says bits, and leaving the output length out of a fixed-length digest, each fail them. Also rebuilt in-test from SP 800-185 section 5.1 over cSHAKE. Published NIST values |
+| ParallelHash | NIST ACVP `ParallelHash-128-1.0` and `ParallelHash-256-1.0`, from the pinned commit (usnistgov/ACVP-Server 975de31eb83d), converted by `scripts/gen_acvp_sp800_185_vectors.py`, which checks each file against a pinned digest and keeps the cases whose every length is whole bytes: 13 of 400, the rest being bit-oriented -- 3 for ParallelHash128 and 10 for ParallelHash256, fixed-length and XOF among each. Few, and enough to fail when the block size is encoded in bits, when the block count is off by one, and when the fixed-length and XOF endings are exchanged. Also rebuilt in-test from SP 800-185 section 6.2 over cSHAKE. Published NIST values |
+| KMAC | rebuilt in-test from SP 800-185's own definition over cSHAKE, so the key encoding, padding width and trailing length are each checked against the specification rather than against a value this code produced. **One published value**, for KMAC128: of the 1,600 cases in NIST ACVP `KMAC-128-1.0` and `KMAC-256-1.0` three are whole bytes, all verification cases, and only one of those gives a MAC that is right -- a 478-byte MAC under a 492-byte key, longer than the sponge's rate. The other two are MACs NIST says are wrong, which a wrong KMAC would disagree with too. KMAC256 has no published value here. The valid case at first failed, and so did a KMAC written out separately from the standard: the converter was reading an empty field where NIST keeps a hex customization string in another |
 | Argon2id, Argon2i, Argon2d | RFC 9106 §5.1–5.3, all three variants |
 | ECDSA P-256 | RFC 6979 A.2.5 (`sample` and `test`), including the published `k` and public key |
 | ECDSA P-384 | RFC 6979 A.2.6 (`sample` and `test`), including the published public key |
@@ -253,7 +254,9 @@ out as such rather than being papered over. The DRBG rows were among them
 until they were run against NIST's ACVP vectors, as were ECDSA P-521 and RSA
 PKCS#1 v1.5 verification. NIST's sample files do not reach the rest: its
 PBKDF cases are HMAC-SHA-224 and its RSA-PSS cases SHA-3 and SHAKE, none of
-which is implemented here. NIST's ACVP RSA vectors are not reproducible
+which is implemented here; its KMAC cases are bit-oriented but for three;
+its SP 800-108 cases fix the input in a form `kbkdf_counter` does not take;
+and its ECDH cases are on curves this library does not have. NIST's ACVP RSA vectors are not reproducible
 offline; the pinned signatures there catch regression rather than establishing
 correctness, which the rows above them do instead. Wiring in the CAVP `.rsp`
 response files is a pre-validation task (below).

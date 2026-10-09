@@ -89,6 +89,10 @@ all of them.
   of NIST's cases that are whole bytes. Everything passed with no change to
   the code. RSA-PSS and PBKDF2 are still not covered: NIST's samples use
   hashes this library does not pair with them.
+- **TupleHash and ParallelHash are checked against NIST's ACVP vectors**:
+  all 400 TupleHash cases, and the 13 ParallelHash cases that are whole
+  bytes. KMAC gains one published value, for KMAC128; NIST's other KMAC
+  cases are bit-oriented. Everything passed with no change to the code.
 - **The DRBG self-tests are known-answer tests now.** Each runs a NIST case
   through instantiate, reseed and generate. CTR_DRBG's used to check only
   that its output was reproducible and not constant, and HMAC_DRBG's
