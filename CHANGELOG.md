@@ -71,6 +71,16 @@ all of them.
   one signature, up to 49,856 bytes. `keygen_internal` is unchanged, for a
   caller that cannot afford either.
 
+- **The DRBGs are checked against NIST's ACVP vectors**, which neither was
+  before: CTR_DRBG had no known answer of any kind. 210 cases -- CTR_DRBG
+  over AES-256, and HMAC_DRBG over six hashes, with and without prediction
+  resistance -- each driving instantiate, reseed and generate. All passed
+  with no change to either mechanism.
+- **The DRBG self-tests are known-answer tests now.** Each runs a NIST case
+  through instantiate, reseed and generate. CTR_DRBG's used to check only
+  that its output was reproducible and not constant, and HMAC_DRBG's
+  compared against a value this implementation had produced.
+
 ### Fixed
 
 - The README's algorithm table still said SLH-DSA was not implemented. It

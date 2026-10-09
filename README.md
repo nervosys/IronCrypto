@@ -322,8 +322,8 @@ refused, and for TLS 1.2 the content type and version bound into the header.
 
 Most of what is below is checked against published test vectors — FIPS 180-4,
 FIPS 197, FIPS 202, SP 800-38A/B/D, SP 800-90A, RFC
-2104/4231/5869/7748/8032/8439/8452/9001/9106. Not all of it: cSHAKE, ECDSA
-P-521 and CTR_DRBG have no published vector wired in, and PBKDF2 is
+2104/4231/5869/7748/8032/8439/8452/9001/9106. Not all of it: cSHAKE and ECDSA
+P-521 have no published vector wired in, and PBKDF2 is
 reconstructed from its own definition because RFC 6070 publishes HMAC-SHA1
 only. Those rows are checked against independent reconstructions instead, and
 [`docs/FIPS.md`](docs/FIPS.md) says which is which per algorithm rather than

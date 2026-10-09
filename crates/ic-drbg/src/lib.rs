@@ -26,6 +26,9 @@
 
 mod ctr;
 mod hmac_drbg;
+// Generated; long lines of hex are its content.
+#[rustfmt::skip]
+mod kat;
 #[cfg(feature = "std")]
 mod rng;
 
@@ -51,3 +54,43 @@ pub const DRBG_IDS: &[&str] = &[
     "hmac-drbg-sha2-512",
     "ctr-drbg-aes-256",
 ];
+
+/// Run a known-answer case through all three functions of a DRBG:
+/// instantiate, reseed, generate, generate, comparing the second output.
+///
+/// This is what SP 800-90A section 11.3 asks a health test to cover. A value
+/// that only instantiated and generated would pass with a reseed that did
+/// nothing.
+fn known_answer_test<D: ic_core::traits::Drbg>(
+    kat: &kat::Kat,
+    id: &'static str,
+) -> ic_core::Result<()> {
+    fn decode<'a>(hex: &str, buf: &'a mut [u8; 160]) -> ic_core::Result<&'a [u8]> {
+        let out = buf.get_mut(..hex.len() / 2).ok_or(ic_core::Error::new(
+            ic_core::ErrorKind::Internal,
+            "drbg kat",
+        ))?;
+        ic_core::codec::hex_decode(hex.as_bytes(), out)?;
+        Ok(out)
+    }
+    let (mut a, mut b, mut c) = ([0u8; 160], [0u8; 160], [0u8; 160]);
+    let mut drbg = D::instantiate(
+        decode(kat.entropy, &mut a)?,
+        decode(kat.nonce, &mut b)?,
+        decode(kat.personalization, &mut c)?,
+    )?;
+    drbg.reseed(
+        decode(kat.reseed_entropy, &mut a)?,
+        decode(kat.reseed_additional, &mut b)?,
+    )?;
+    let mut got = [0u8; 512];
+    drbg.generate(decode(kat.generate1_additional, &mut a)?, &mut got)?;
+    drbg.generate(decode(kat.generate2_additional, &mut a)?, &mut got)?;
+
+    let mut want = [0u8; 512];
+    ic_core::codec::hex_decode(kat.returned.as_bytes(), &mut want)?;
+    if !ic_core::ct::verify(&want, &got) {
+        return Err(ic_core::Error::new(ic_core::ErrorKind::SelfTestFailed, id));
+    }
+    Ok(())
+}

@@ -169,26 +169,9 @@ impl Drbg for CtrDrbg {
 }
 
 impl SelfTest for CtrDrbg {
+    /// A NIST ACVP case through instantiate, reseed and generate.
     fn self_test() -> Result<()> {
-        let entropy = [0x01u8; SEED_LEN];
-        let mut d = <Self as Drbg>::instantiate(&entropy, &[], &[])?;
-        let mut a = [0u8; 64];
-        let mut b = [0u8; 64];
-        d.generate(&[], &mut a)?;
-        d.generate(&[], &mut b)?;
-        ensure!(a != [0u8; 64], SelfTestFailed, "ctr-drbg-aes-256");
-        ensure!(a != b, SelfTestFailed, "ctr-drbg-aes-256");
-
-        // The same seed must reproduce the same stream.
-        let mut e = <Self as Drbg>::instantiate(&entropy, &[], &[])?;
-        let mut c = [0u8; 64];
-        e.generate(&[], &mut c)?;
-        ensure!(
-            ic_core::ct::verify(&a, &c),
-            SelfTestFailed,
-            "ctr-drbg-aes-256"
-        );
-        Ok(())
+        crate::known_answer_test::<Self>(&crate::kat::CTR_AES_256, "ctr-drbg-aes-256")
     }
 }
 

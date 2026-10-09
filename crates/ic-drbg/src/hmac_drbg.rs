@@ -146,31 +146,11 @@ pub type HmacDrbgSha256 = HmacDrbg<ic_mac::HmacSha256>;
 pub type HmacDrbgSha512 = HmacDrbg<ic_mac::HmacSha512>;
 
 impl SelfTest for HmacDrbgSha256 {
+    /// A NIST ACVP case through instantiate, reseed and generate.
     fn self_test() -> Result<()> {
-        // Integrity KAT. This vector is produced by this implementation, whose
-        // correctness is established separately by the reference-comparison
-        // test in this module; its job here is to detect a corrupted binary or
-        // a broken build, which is what FIPS 140-3 asks a CAST to do. Wiring in
-        // the CAVP `HMAC_DRBG.rsp` files is tracked as a pre-validation task
-        // (see FIPS.md).
-        let mut d = <Self as Drbg>::instantiate(&[0x01u8; 32], &[0x02u8; 16], b"self-test")?;
-        let mut out = [0u8; 64];
-        d.generate(&[], &mut out)?;
-        d.generate(&[], &mut out)?;
-
-        let mut want = [0u8; 64];
-        ic_core::codec::hex_decode(SELF_TEST_KAT.as_bytes(), &mut want)?;
-        ensure!(
-            ic_core::ct::verify(&want, &out),
-            SelfTestFailed,
-            "hmac-drbg-sha2-256"
-        );
-        Ok(())
+        crate::known_answer_test::<Self>(&crate::kat::HMAC_SHA2_256, "hmac-drbg-sha2-256")
     }
 }
-
-/// Second generate block for the [`SelfTest`] inputs above.
-const SELF_TEST_KAT: &str = "c40444290d60816f7d35ad2b9e0d9dcdda9d5d04f7ce38c4ec6aa32fc03b4bbc7426b02830f065da0f45e2f26330ef0e97099f4b1c16a552a0a02532472ac11c";
 
 #[cfg(test)]
 mod tests {
