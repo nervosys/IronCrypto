@@ -71,6 +71,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.17 | 2026-10-08 20:05:34 | all twenty-one crates published from `0792efb` by the maintainer, after replying "Proceed" when told the release needed an updated notice; adds `ic-lms`, a new location and a new algorithm (HSS/LMS verification), for which a notice naming it and `ic-sig` was printed before the publish commands and has not been reported sent |
 | 0.2.18 | 2026-10-08 22:36:28 | all twenty-one crates published from `eb790c3` by the maintainer, after replying "Proceed" when asked whether to release a data-and-documentation change; CNSA 2.0 profile, no new algorithm or package |
 | 0.2.19 | 2026-10-09 01:26:22 | all twenty-two crates published from `8329898` by the maintainer, after replying "Proceed" when told the release needed an updated notice; adds `ic-slhdsa`, a new location and a new algorithm (SLH-DSA, FIPS 205), for which a notice naming it, `ic-sig` and `ic-lms` was printed before the publish commands and has not been reported sent |
+| 0.2.20 | 2026-10-09 21:25:24 | all twenty-two crates published from `016aa34` by the maintainer, after replying "Sent. Proceed" when the updated notice printed for them was in front of them; adds no location and no algorithm; corrects Poly1305 (see the CHANGELOG, Security) |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -459,6 +460,14 @@ it to be printed, and after it was printed replied "Sent. Proceed".
 This records that reply. It does not record the sent message, its completed
 fields, its sending time or its recipients, none of which have been supplied
 here. Publication proceeds on it.
+
+The maintainer ran `cargo publish --workspace` themselves. The crates.io API
+confirmed all twenty-two 0.2.20 packages live and not yanked. The first upload
+was `ic-core` at 2026-10-09 21:25:24 UTC and the last `ic-cli` at 21:26:05
+UTC. The published source commit is `016aa34`; all twenty-two packages
+identified that clean commit in their VCS metadata. At publication the commit
+had not been pushed to GitHub, by intent: it describes a defect that no
+published version yet corrected.
 
 ## Determination
 
