@@ -443,7 +443,7 @@ const FIPS140_REQS: [Requirement; 6] = [
         compliance: Compliance::Partial {
             file: "crates/ic-fips/src/selftest.rs",
             symbol: "tested_algorithms",
-            gap: "The self-tests and the error state are real, and they gate every service requested through ic_fips::check or guarded. They do not gate a primitive called directly: the primitive crates cannot depend on the policy crate, and the facade re-exports them, so a caller who skips the policy layer reaches the algorithms whatever the module's state. A validated module needs the boundary enforced, by routing every service through one gate.",
+            gap: "The self-tests are real, and no service requested through ic_fips::check or guarded is available before they have passed. A primitive called directly is not held to that: the primitive crates cannot depend on the policy crate, so nothing makes a caller who skips the policy layer run the tests first. Only a failure reaches them, through the error state in ic_core::module. A validated module needs every service behind one gate.",
         },
     },
     Requirement {
@@ -458,7 +458,7 @@ const FIPS140_REQS: [Requirement; 6] = [
         compliance: Compliance::Partial {
             file: "crates/ic-fips/src/lib.rs",
             symbol: "enter_error_state",
-            gap: "The self-tests and the error state are real, and they gate every service requested through ic_fips::check or guarded. They do not gate a primitive called directly: the primitive crates cannot depend on the policy crate, and the facade re-exports them, so a caller who skips the policy layer reaches the algorithms whatever the module's state. A validated module needs the boundary enforced, by routing every service through one gate.",
+            gap: "The error state latches and cannot be left, and it reaches the primitives: the flag is ic_core::module's, and every operation that can report an error refuses with ModuleErrorState once it is set, whether or not the caller came through ic_fips. What has no error to return cannot refuse and goes on working: hash functions and XOFs, KMAC other than its verification, a MAC object's update and finalize, and ML-KEM's deterministic interfaces. A block cipher object's per-block methods are left ungated by decision. A validated module would have to close those, which needs fallible constructors.",
         },
     },
     Requirement {

@@ -135,6 +135,7 @@ macro_rules! key_wrap {
             /// two of them. A single block is refused: RFC 3394's loop
             /// degenerates there, and RFC 5649 exists to cover it.
             pub fn wrap(kek: &[u8], plaintext: &[u8], out: &mut [u8]) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(kek.len() == $key_len, InvalidLength, "key-wrap kek");
                 ensure!(
                     plaintext.len() % 8 == 0,
@@ -178,6 +179,7 @@ macro_rules! key_wrap {
             /// Fails if the recovered check value is wrong, which is the only
             /// integrity signal the construction has.
             pub fn unwrap(kek: &[u8], ciphertext: &[u8], out: &mut [u8]) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(kek.len() == $key_len, InvalidLength, "key-wrap kek");
                 ensure!(
                     ciphertext.len() % 8 == 0 && ciphertext.len() >= 24,
@@ -249,6 +251,7 @@ macro_rules! key_wrap {
             /// it exactly. It is not hidden: an observer learns the length to
             /// within eight bytes from the ciphertext size alone.
             pub fn wrap(kek: &[u8], plaintext: &[u8], out: &mut [u8]) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(kek.len() == $key_len, InvalidLength, "key-wrap kek");
                 ensure!(
                     !plaintext.is_empty(),
@@ -304,6 +307,7 @@ macro_rules! key_wrap {
             /// `out` must be large enough for the padded data; the return value
             /// says how much of it is real.
             pub fn unwrap(kek: &[u8], ciphertext: &[u8], out: &mut [u8]) -> Result<usize> {
+                ic_core::module::operational()?;
                 ensure!(kek.len() == $key_len, InvalidLength, "key-wrap kek");
                 ensure!(
                     ciphertext.len() % 8 == 0 && ciphertext.len() >= 16,

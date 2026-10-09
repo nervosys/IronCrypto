@@ -98,6 +98,7 @@ impl Algorithm for CtrDrbg {
 
 impl Drbg for CtrDrbg {
     fn instantiate(entropy: &[u8], nonce: &[u8], personalization: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         // Without a derivation function the nonce is folded into the
         // personalization string; the spec requires the caller's entropy input
         // to already carry full entropy.
@@ -124,6 +125,7 @@ impl Drbg for CtrDrbg {
     }
 
     fn reseed(&mut self, entropy: &[u8], additional: &[u8]) -> Result<()> {
+        ic_core::module::operational()?;
         let mut material = Self::seed_material(entropy, additional)?;
         self.update(&material)?;
         material.zeroize();
@@ -132,6 +134,7 @@ impl Drbg for CtrDrbg {
     }
 
     fn generate(&mut self, additional: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(
             self.reseed_counter <= crate::RESEED_INTERVAL,
             CounterExhausted,

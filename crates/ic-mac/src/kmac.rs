@@ -105,6 +105,7 @@ macro_rules! kmac {
             /// leaks how many leading bytes matched, which is enough to recover
             /// a valid tag one byte at a time.
             pub fn verify(key: &[u8], custom: &[u8], data: &[u8], tag: &[u8]) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(
                     !tag.is_empty() && tag.len() <= MAX_TAG,
                     InvalidLength,

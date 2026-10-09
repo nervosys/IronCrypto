@@ -958,6 +958,7 @@ pub fn keygen_internal(
     secret_key: &mut [u8],
     public_key: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     let p = set.params();
     let n = p.n;
     check_len(sk_seed.len(), n, "slh-dsa SK.seed must be n bytes")?;
@@ -999,6 +1000,7 @@ pub fn keygen<R: RandomSource + ?Sized>(
     secret_key: &mut [u8],
     public_key: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     let n = set.n();
     let mut seeds = Zeroizing::new([0u8; 3 * MAX_N]);
     let result = rng.fill(&mut seeds.get_mut()[..3 * n]).and_then(|()| {
@@ -1030,6 +1032,7 @@ fn sign_parts(
     additional_randomness: Option<&[u8]>,
     signature: &mut [u8],
 ) -> Result<usize> {
+    ic_core::module::operational()?;
     let p = set.params();
     let n = p.n;
     check_len(
@@ -1080,6 +1083,7 @@ fn verify_parts(
     message: &[&[u8]],
     signature: &[u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     let p = set.params();
     let n = p.n;
     check_len(

@@ -22,6 +22,7 @@ impl Rng {
     /// SP 800-90A requirement of `3/2 * security_strength` bits of entropy for
     /// a 256-bit instantiation.
     pub fn from_os() -> Result<Self> {
+        ic_core::module::operational()?;
         let mut seed = [0u8; 48];
         let mut nonce = [0u8; 16];
         ic_core::entropy::fill(&mut seed)?;
@@ -41,6 +42,7 @@ impl Rng {
     /// hardware source the library does not know about. `entropy` must carry at
     /// least 256 bits of real entropy.
     pub fn from_entropy(entropy: &[u8], personalization: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         let drbg = HmacDrbgSha256::instantiate(entropy, &[], personalization)?;
         Ok(Self {
             drbg,
@@ -50,6 +52,7 @@ impl Rng {
 
     /// Fill `out` with random bytes, reseeding from the OS when due.
     pub fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         // Reseed well before the DRBG's own hard limit so the interval is a
         // maintenance event, not an error path.
         if self.calls_since_reseed >= crate::RESEED_INTERVAL / 2 {
@@ -68,6 +71,7 @@ impl Rng {
 
     /// Pull fresh entropy from the OS and reseed.
     pub fn reseed_from_os(&mut self) -> Result<()> {
+        ic_core::module::operational()?;
         let mut seed = [0u8; MIN_ENTROPY_LEN];
         ic_core::entropy::fill(&mut seed)?;
         let r = self.drbg.reseed(&seed, b"");
@@ -80,6 +84,7 @@ impl Rng {
 
 impl RandomSource for Rng {
     fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         Rng::fill(self, out)
     }
 }

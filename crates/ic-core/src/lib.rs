@@ -30,6 +30,7 @@ pub mod ct;
 // ask for it.
 #[allow(unsafe_code)]
 pub mod entropy;
+pub mod module;
 pub mod sig;
 pub mod traits;
 

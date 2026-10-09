@@ -84,6 +84,7 @@ fn avx2() -> bool {
 
 /// XOR `data` with the ChaCha20 keystream, starting at `counter`.
 pub fn chacha20_xor(key: &[u8], nonce: &[u8], counter: u32, data: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         key.len() == 32,
         InvalidLength,
@@ -307,6 +308,7 @@ impl Mac for Poly1305 {
     const TAG_LEN: usize = 16;
 
     fn new(key: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(
             key.len() == 32,
             InvalidLength,
@@ -513,6 +515,7 @@ impl Aead for ChaCha20Poly1305 {
     const TAG_LEN: usize = 16;
 
     fn new(key: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(key.len() == 32, InvalidLength, "chacha20-poly1305 key");
         let mut k = [0u8; 32];
         k.copy_from_slice(key);
@@ -526,6 +529,7 @@ impl Aead for ChaCha20Poly1305 {
         in_out: &mut [u8],
         tag: &mut [u8],
     ) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(
             tag.len() == 16,
             InvalidLength,
@@ -539,6 +543,7 @@ impl Aead for ChaCha20Poly1305 {
     }
 
     fn open_detached(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &[u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(tag.len() == 16, InvalidLength, "chacha20-poly1305 tag");
         let expected = self.tag(nonce, aad, in_out)?;
         if !ic_core::ct::verify(&expected, tag) {

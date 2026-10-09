@@ -59,6 +59,7 @@ pub fn split<R: RandomSource + ?Sized>(
     rng: &mut R,
     out: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(!secret.is_empty(), InvalidLength, "shamir secret is empty");
     ensure!(
         threshold >= 2,
@@ -111,6 +112,7 @@ pub fn split<R: RandomSource + ?Sized>(
 /// must be `out.len()` bytes, and indices must be nonzero and distinct; at
 /// least two shares are required.
 pub fn combine(shares: &[(u8, &[u8])], out: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         shares.len() >= 2,
         InvalidParameter,

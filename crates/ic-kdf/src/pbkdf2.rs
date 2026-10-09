@@ -38,6 +38,7 @@ pub const fn check_iterations(iterations: u32) -> IterationVerdict {
 /// shorter than the 128-bit minimum, so a misconfigured caller fails loudly
 /// rather than producing a weak key.
 pub fn pbkdf2<M: Mac>(password: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         !matches!(check_iterations(iterations), IterationVerdict::Unacceptable),
         InvalidParameter,

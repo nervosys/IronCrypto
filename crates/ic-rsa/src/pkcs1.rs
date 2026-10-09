@@ -119,6 +119,7 @@ pub trait Pkcs1Hash {
 
 /// Sign `message` with `key`, writing a signature of `key.size()` bytes.
 pub fn sign<S: Pkcs1Hash>(key: &RsaPrivateKey, message: &[u8], signature: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         signature.len() == key.size(),
         InvalidLength,
@@ -136,6 +137,7 @@ pub fn sign<S: Pkcs1Hash>(key: &RsaPrivateKey, message: &[u8], signature: &mut [
 /// Returns `Err(AuthenticationFailed)` on any mismatch, with no detail about
 /// which part failed.
 pub fn verify<S: Pkcs1Hash>(key: &RsaPublicKey, message: &[u8], signature: &[u8]) -> Result<()> {
+    ic_core::module::operational()?;
     let size = key.size();
     ensure!(
         signature.len() == size,

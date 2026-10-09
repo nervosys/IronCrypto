@@ -110,6 +110,7 @@ impl RsaPublicKey {
     /// Both the input and the output are big-endian and exactly [`Self::size`]
     /// bytes. Rejects `m >= n`, which has no valid representative.
     pub fn raw_public(&self, m: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         let size = self.size();
         ensure!(
             m.len() == size && out.len() == size,
@@ -368,6 +369,7 @@ impl RsaPrivateKey {
 
     /// The raw private operation, `c^d mod n`, constant-time in `d`.
     pub fn raw_private(&self, c: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         let size = self.size();
         ensure!(
             c.len() == size && out.len() == size,
@@ -586,6 +588,7 @@ fn random_candidate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Resul
 /// satisfy `m^(ed) = m mod n`, so signatures and ciphertexts interoperate
 /// either way, but a validator would want the `lambda` form.
 pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<RsaPrivateKey> {
+    ic_core::module::operational()?;
     ensure!(
         matches!(bits, 2048 | 3072 | 4096),
         InvalidParameter,

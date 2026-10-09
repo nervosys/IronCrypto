@@ -181,6 +181,7 @@ fn load_private_key<C: Curve>(bytes: &[u8]) -> Result<C::Scalar> {
 
 /// Compute the public key, SEC1 uncompressed.
 pub fn public_key<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         out.len() == 1 + 2 * C::FIELD_BYTES,
         InvalidLength,
@@ -202,6 +203,7 @@ pub fn public_key<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) -> Result<(
 
 /// Compute the public key, SEC1 compressed.
 pub fn public_key_compressed<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         out.len() == 1 + C::FIELD_BYTES,
         InvalidLength,
@@ -221,6 +223,7 @@ pub fn public_key_compressed<C: EcdsaCurve>(private_key: &[u8], out: &mut [u8]) 
 
 /// Sign `message`, writing fixed-width `r || s`.
 pub fn sign<C: EcdsaCurve>(private_key: &[u8], message: &[u8], signature: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     let n = C::SCALAR_BYTES;
     ensure!(
         signature.len() == 2 * n,
@@ -262,6 +265,7 @@ pub fn sign<C: EcdsaCurve>(private_key: &[u8], message: &[u8], signature: &mut [
 
 /// Verify a fixed-width `r || s` signature.
 pub fn verify<C: EcdsaCurve>(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+    ic_core::module::operational()?;
     let digest = C::Digest::digest(message);
     verify_digest::<C>(public_key, digest.as_ref(), signature)
 }
@@ -300,6 +304,7 @@ pub fn verify_prehash<C: EcdsaCurve>(
     digest: &[u8],
     signature: &[u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         PREHASH_LENS.contains(&digest.len()),
         InvalidLength,

@@ -151,6 +151,7 @@ macro_rules! gcm_siv {
             const TAG_LEN: usize = TAG_LEN;
 
             fn new(key: &[u8]) -> Result<Self> {
+                ic_core::module::operational()?;
                 ensure!(key.len() == $key_len, InvalidLength, "aes-gcm-siv key");
                 let mut k = [0u8; $key_len];
                 k.copy_from_slice(key);
@@ -164,6 +165,7 @@ macro_rules! gcm_siv {
                 in_out: &mut [u8],
                 tag: &mut [u8],
             ) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(nonce.len() == NONCE_LEN, InvalidLength, "aes-gcm-siv nonce");
                 ensure!(tag.len() == TAG_LEN, InvalidLength, "aes-gcm-siv tag");
 
@@ -201,6 +203,7 @@ macro_rules! gcm_siv {
                 in_out: &mut [u8],
                 tag: &[u8],
             ) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(nonce.len() == NONCE_LEN, InvalidLength, "aes-gcm-siv nonce");
                 ensure!(tag.len() == TAG_LEN, InvalidLength, "aes-gcm-siv tag");
 

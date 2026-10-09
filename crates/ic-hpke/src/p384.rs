@@ -103,6 +103,7 @@ impl KeyPair {
     /// A draw is out of range with probability below `2^-189`, so the loop
     /// is for correctness, not for anything a caller will see.
     pub fn generate<R: RandomSource + ?Sized>(rng: &mut R) -> Result<Self> {
+        ic_core::module::operational()?;
         let mut private = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
         for _ in 0..64 {
             rng.fill(private.get_mut())?;
@@ -122,6 +123,7 @@ impl KeyPair {
     /// Refuses a scalar of 0 or at least the group order with
     /// `InvalidParameter`, and any other length with `InvalidLength`.
     pub fn from_private(private: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(
             private.len() == PRIVATE_KEY_LEN,
             InvalidLength,
@@ -146,6 +148,7 @@ impl KeyPair {
     /// carry at least `Nsk` bytes of entropy, so shorter input is refused with
     /// `InvalidLength`.
     pub fn derive(ikm: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(
             ikm.len() >= PRIVATE_KEY_LEN,
             InvalidLength,
@@ -220,6 +223,7 @@ pub fn setup_sender<R: RandomSource + ?Sized>(
     aead: Aead,
     rng: &mut R,
 ) -> Result<([u8; ENC_LEN], Context)> {
+    ic_core::module::operational()?;
     let ephemeral = KeyPair::generate(rng)?;
     setup_sender_with_ephemeral(recipient_public, info, aead, &ephemeral)
 }
@@ -235,6 +239,7 @@ pub fn setup_sender_with_ephemeral(
     aead: Aead,
     ephemeral: &KeyPair,
 ) -> Result<([u8; ENC_LEN], Context)> {
+    ic_core::module::operational()?;
     check_public(
         recipient_public,
         "hpke p-384 public key must be 97 bytes, uncompressed",
@@ -258,6 +263,7 @@ pub fn setup_sender_with_ephemeral(
 /// Set up a recipient's context from the sender's encapsulated key.
 /// `SetupBaseR` in RFC 9180.
 pub fn setup_receiver(enc: &[u8], recipient: &KeyPair, info: &[u8], aead: Aead) -> Result<Context> {
+    ic_core::module::operational()?;
     check_public(enc, "hpke p-384 enc must be 97 bytes, uncompressed")?;
     let mut dh = Zeroizing::new([0u8; 48]);
     EcdhP384::agree(recipient.private.get(), enc, dh.get_mut())?;

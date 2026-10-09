@@ -131,6 +131,7 @@ pub fn sign<H: Digest, R: RandomSource + ?Sized>(
     rng: &mut R,
     signature: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     let mut salt = [0u8; MAX_HASH];
     let salt = &mut salt[..H::OUTPUT_LEN];
     rng.fill(salt)?;
@@ -173,6 +174,7 @@ pub(crate) fn sign_with_salt<H: Digest>(
 
 /// Verify a PSS signature over `message`.
 pub fn verify<H: Digest>(key: &RsaPublicKey, message: &[u8], signature: &[u8]) -> Result<()> {
+    ic_core::module::operational()?;
     let size = key.size();
     ensure!(
         signature.len() == size,

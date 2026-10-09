@@ -457,6 +457,7 @@ fn split_hss_key(public_key: &[u8]) -> Result<(u32, TreeKey<'_>)> {
 /// next level's public key followed by that key, then the LMS signature over
 /// `message`.
 pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+    ic_core::module::operational()?;
     let (levels, mut key) = split_hss_key(public_key)?;
     let signed_keys = u32_at(signature, 0).ok_or_else(rejected)?;
     ensure!(
@@ -487,6 +488,7 @@ pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()>
 /// Verify a bare LMS signature under a bare LMS public key: RFC 8554
 /// algorithm 6, without the HSS framing.
 pub fn verify_lms(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+    ic_core::module::operational()?;
     let key = TreeKey::parse(public_key).map_err(key_error)?;
     key.verify(message, signature).ok_or_else(rejected)
 }

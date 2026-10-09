@@ -502,6 +502,7 @@ macro_rules! ml_kem {
                 ek: &mut [u8; ENCAPS_KEY_LEN],
                 dk: &mut [u8; DECAPS_KEY_LEN],
             ) -> Result<()> {
+                ic_core::module::operational()?;
                 let mut d = [0u8; 32];
                 let mut z = [0u8; 32];
                 rng.fill(&mut d)?;
@@ -584,6 +585,7 @@ macro_rules! ml_kem {
                 ct: &mut [u8; CIPHERTEXT_LEN],
                 shared: &mut [u8; SHARED_SECRET_LEN],
             ) -> Result<()> {
+                ic_core::module::operational()?;
                 Self::validate_encapsulation_key(ek)?;
                 let mut m = [0u8; 32];
                 rng.fill(&mut m)?;
@@ -623,6 +625,7 @@ macro_rules! ml_kem {
                 ct: &[u8; CIPHERTEXT_LEN],
                 shared: &mut [u8; SHARED_SECRET_LEN],
             ) -> Result<()> {
+                ic_core::module::operational()?;
                 let dk_pke = &dk[..384 * K];
                 let ek: &[u8; ENCAPS_KEY_LEN] = dk[384 * K..384 * K + ENCAPS_KEY_LEN]
                     .try_into()

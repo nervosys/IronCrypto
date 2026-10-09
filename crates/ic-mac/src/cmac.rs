@@ -130,6 +130,7 @@ where
     const TAG_LEN: usize = BLOCK_LEN;
 
     fn new(key: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(
             C::BLOCK_LEN == BLOCK_LEN,
             InvalidParameter,

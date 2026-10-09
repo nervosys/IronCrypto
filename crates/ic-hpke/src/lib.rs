@@ -200,6 +200,7 @@ impl KeyPair {
     /// A fresh key pair, RFC 9180's `GenerateKeyPair`: 32 random bytes as the
     /// private key.
     pub fn generate<R: RandomSource + ?Sized>(rng: &mut R) -> Result<Self> {
+        ic_core::module::operational()?;
         let mut private = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
         rng.fill(private.get_mut())?;
         Self::from_private(private.get())
@@ -210,6 +211,7 @@ impl KeyPair {
     /// Any 32 bytes are a valid X25519 private key, since X25519 clamps them;
     /// anything else is refused with `InvalidLength`.
     pub fn from_private(private: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(
             private.len() == PRIVATE_KEY_LEN,
             InvalidLength,
@@ -235,6 +237,7 @@ impl KeyPair {
     /// is refused with `InvalidLength`; its length is the one thing here that
     /// can be checked.
     pub fn derive(ikm: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(
             ikm.len() >= PRIVATE_KEY_LEN,
             InvalidLength,
@@ -361,6 +364,7 @@ impl Context {
         in_out: &mut [u8],
         tag: &mut [u8; TAG_LEN],
     ) -> Result<()> {
+        ic_core::module::operational()?;
         let nonce = self.nonce()?;
         self.cipher.seal(&nonce, aad, in_out, tag)?;
         self.seq += 1;
@@ -377,6 +381,7 @@ impl Context {
         in_out: &mut [u8],
         tag: &[u8; TAG_LEN],
     ) -> Result<()> {
+        ic_core::module::operational()?;
         let nonce = self.nonce()?;
         self.cipher.open(&nonce, aad, in_out, tag)?;
         self.seq += 1;
@@ -421,6 +426,7 @@ impl Context {
     /// [`p384::MAX_EXPORT_LEN`] for P-384; longer is refused with
     /// `InvalidLength`.
     pub fn export(&self, exporter_context: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         labeled_expand(
             self.kdf,
             &self.suite,
@@ -442,6 +448,7 @@ pub fn setup_sender<R: RandomSource + ?Sized>(
     aead: Aead,
     rng: &mut R,
 ) -> Result<([u8; ENC_LEN], Context)> {
+    ic_core::module::operational()?;
     let ephemeral = KeyPair::generate(rng)?;
     setup_sender_with_ephemeral(recipient_public, info, aead, &ephemeral)
 }
@@ -457,6 +464,7 @@ pub fn setup_sender_with_ephemeral(
     aead: Aead,
     ephemeral: &KeyPair,
 ) -> Result<([u8; ENC_LEN], Context)> {
+    ic_core::module::operational()?;
     ensure!(
         recipient_public.len() == PUBLIC_KEY_LEN,
         InvalidLength,
@@ -474,6 +482,7 @@ pub fn setup_sender_with_ephemeral(
 ///
 /// `SetupBaseR` in RFC 9180.
 pub fn setup_receiver(enc: &[u8], recipient: &KeyPair, info: &[u8], aead: Aead) -> Result<Context> {
+    ic_core::module::operational()?;
     ensure!(
         enc.len() == ENC_LEN,
         InvalidLength,

@@ -374,6 +374,7 @@ macro_rules! aes_gcm {
             const TAG_LEN: usize = 16;
 
             fn new(key: &[u8]) -> Result<Self> {
+                ic_core::module::operational()?;
                 Ok(Self(<$inner as BlockCipher>::new(key)?))
             }
 
@@ -384,6 +385,7 @@ macro_rules! aes_gcm {
                 in_out: &mut [u8],
                 tag: &mut [u8],
             ) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(tag.len() == 16, InvalidLength, "gcm tag buffer");
                 let t = gcm_core(&self.0, nonce, aad, in_out, true)?;
                 tag.copy_from_slice(&t);
@@ -397,6 +399,7 @@ macro_rules! aes_gcm {
                 in_out: &mut [u8],
                 tag: &[u8],
             ) -> Result<()> {
+                ic_core::module::operational()?;
                 ensure!(tag.len() == 16, InvalidLength, "gcm tag");
                 let expected = gcm_core(&self.0, nonce, aad, in_out, false)?;
                 if ic_core::ct::verify(&expected, tag) {

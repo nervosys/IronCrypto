@@ -15,6 +15,7 @@ use ic_core::{ensure, Result, Zeroize};
 /// 128-bit big-endian value of `iv`, incremented per block, matching SP 800-38A
 /// Appendix B and the counter convention used by AES-GCM.
 pub fn ctr_xor<C: BlockCipher>(cipher: &C, iv: &[u8], data: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         iv.len() == BLOCK_LEN,
         InvalidLength,
@@ -73,6 +74,7 @@ pub fn increment_be32(counter: &mut [u8; BLOCK_LEN]) {
 ///
 /// Use [`pkcs7_pad`] first if your data is not block-aligned.
 pub fn cbc_encrypt<C: BlockCipher>(cipher: &C, iv: &[u8], data: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         iv.len() == BLOCK_LEN,
         InvalidLength,
@@ -97,6 +99,7 @@ pub fn cbc_encrypt<C: BlockCipher>(cipher: &C, iv: &[u8], data: &mut [u8]) -> Re
 
 /// CBC decryption over a block-aligned ciphertext.
 pub fn cbc_decrypt<C: BlockCipher>(cipher: &C, iv: &[u8], data: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         iv.len() == BLOCK_LEN,
         InvalidLength,

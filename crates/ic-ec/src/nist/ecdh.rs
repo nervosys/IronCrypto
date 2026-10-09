@@ -30,6 +30,7 @@ fn load_scalar<C: Curve>(bytes: &[u8]) -> Result<C::Scalar> {
 
 /// Compute the public key, SEC1 uncompressed.
 pub fn public_key<C: HasGeneratorTable>(private_key: &[u8], out: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         out.len() == 1 + 2 * C::FIELD_BYTES,
         InvalidLength,
@@ -55,6 +56,7 @@ pub fn public_key_compressed<C: HasGeneratorTable>(
     private_key: &[u8],
     out: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         out.len() == 1 + C::FIELD_BYTES,
         InvalidLength,
@@ -74,6 +76,7 @@ pub fn public_key_compressed<C: HasGeneratorTable>(
 
 /// Compute the shared secret: the x-coordinate of `[d]Q`.
 pub fn agree<C: Curve>(private_key: &[u8], peer_public_key: &[u8], out: &mut [u8]) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(
         out.len() == C::FIELD_BYTES,
         InvalidLength,

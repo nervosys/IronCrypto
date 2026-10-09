@@ -121,7 +121,13 @@ fn decode(raw: u8) -> State {
 }
 
 /// The module's current state.
+///
+/// The error state is `ic_core`'s to hold, since every primitive consults it;
+/// whatever set it, it is reported here.
 pub fn state() -> State {
+    if ic_core::module::in_error_state() {
+        return State::Error;
+    }
     decode(STATE.load(Ordering::SeqCst))
 }
 
@@ -160,7 +166,7 @@ pub fn initialize() -> Result<SelfTestReport> {
     let report = run_all_self_tests();
 
     if report.failed > 0 {
-        STATE.store(STATE_ERROR, Ordering::SeqCst);
+        enter_error_state();
         return Err(Error::new(
             ErrorKind::SelfTestFailed,
             "pre-operational self-test failed; module latched in error state",
@@ -203,8 +209,15 @@ pub fn set_mode(new_mode: Mode) -> Result<()> {
 /// Exposed so an application that detects corruption elsewhere can bring the
 /// module down with it. There is no way back short of restarting the process,
 /// by design.
+///
+/// This reaches past the policy layer. The flag it sets is
+/// [`ic_core::module`]'s, which every primitive crate reads, so a cipher, a
+/// signature or a key derivation called directly refuses from here on as
+/// `check` does. Hash functions do not: see that module for what cannot
+/// refuse and why.
 pub fn enter_error_state() {
     STATE.store(STATE_ERROR, Ordering::SeqCst);
+    ic_core::module::enter_error_state();
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +328,8 @@ mod tests {
     use super::*;
 
     /// The module state is process-global, so the state-machine assertions run
-    /// as one test rather than racing each other across threads.
+    /// as one test rather than racing each other across threads. None of them
+    /// enters the error state, which would fail every other test here.
     #[test]
     fn module_lifecycle_and_policy() {
         assert_eq!(state(), State::Uninitialized);
@@ -408,23 +422,9 @@ mod tests {
         set_mode(Mode::Unrestricted).unwrap();
         assert!(check("chacha20-poly1305").is_ok());
 
-        // The error state latches: nothing works after it, including
-        // initialize() and set_mode().
-        enter_error_state();
-        assert_eq!(state(), State::Error);
-        assert_eq!(
-            check("sha2-256").unwrap_err().kind(),
-            ErrorKind::ModuleErrorState
-        );
-        assert_eq!(
-            initialize().unwrap_err().kind(),
-            ErrorKind::ModuleErrorState
-        );
-        assert_eq!(
-            set_mode(Mode::Unrestricted).unwrap_err().kind(),
-            ErrorKind::ModuleErrorState
-        );
-        assert_eq!(mode(), None);
+        // The error state latches, and takes every primitive in the process
+        // with it, so it is entered in a process of its own:
+        // `tests/error_state.rs`.
     }
 
     #[test]

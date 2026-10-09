@@ -15,6 +15,7 @@ impl<M: Mac> Hkdf<M> {
     ///
     /// An empty salt is replaced by `HashLen` zero bytes, as RFC 5869 requires.
     pub fn extract(salt: &[u8], ikm: &[u8], prk: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(prk.len() == M::TAG_LEN, InvalidLength, "hkdf prk buffer");
         let zeros = [0u8; MAX_PRK_LEN];
         let salt = if salt.is_empty() {
@@ -34,6 +35,7 @@ impl<M: Mac> Hkdf<M> {
     /// from each traffic secret -- is cheaper through [`Self::expand_from`],
     /// which keys once.
     pub fn expand(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(prk.len() >= M::TAG_LEN, InvalidLength, "hkdf prk too short");
         Self::expand_with(|| M::new(prk), info, out)
     }
@@ -53,6 +55,7 @@ impl<M: Mac> Hkdf<M> {
     where
         M: Clone,
     {
+        ic_core::module::operational()?;
         Self::expand_with(|| Ok(keyed.clone()), info, out)
     }
 
@@ -99,6 +102,7 @@ impl<M: Mac> Algorithm for Hkdf<M> {
 impl<M: Mac> Kdf for Hkdf<M> {
     /// One-shot extract-then-expand.
     fn derive(secret: &[u8], salt: &[u8], info: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         let mut prk = [0u8; MAX_PRK_LEN];
         Self::extract(salt, secret, &mut prk[..M::TAG_LEN])?;
         let r = Self::expand(&prk[..M::TAG_LEN], info, out);

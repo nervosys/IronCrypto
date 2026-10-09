@@ -81,6 +81,7 @@ impl<M: Mac> Algorithm for HmacDrbg<M> {
 
 impl<M: Mac> Drbg for HmacDrbg<M> {
     fn instantiate(entropy: &[u8], nonce: &[u8], personalization: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(M::TAG_LEN <= MAX_LEN, InvalidParameter, "mac tag too wide");
         ensure!(
             entropy.len() >= crate::MIN_ENTROPY_LEN,
@@ -102,6 +103,7 @@ impl<M: Mac> Drbg for HmacDrbg<M> {
     }
 
     fn reseed(&mut self, entropy: &[u8], additional: &[u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(
             entropy.len() >= crate::MIN_ENTROPY_LEN,
             EntropyFailure,
@@ -113,6 +115,7 @@ impl<M: Mac> Drbg for HmacDrbg<M> {
     }
 
     fn generate(&mut self, additional: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(
             self.reseed_counter <= crate::RESEED_INTERVAL,
             CounterExhausted,

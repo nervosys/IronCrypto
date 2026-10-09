@@ -300,6 +300,7 @@ macro_rules! aes_variant {
             /// Exists so the accelerated path can be differentially tested
             /// against the portable one in the same process.
             pub fn new_portable(key: &[u8]) -> Result<Self> {
+                ic_core::module::operational()?;
                 ensure!(key.len() == $keylen, InvalidLength, $id);
                 Ok(Self(Keys::Portable(portable::Schedule::expand(key)?)))
             }
@@ -315,6 +316,7 @@ macro_rules! aes_variant {
             const KEY_LEN: usize = $keylen;
 
             fn new(key: &[u8]) -> Result<Self> {
+                ic_core::module::operational()?;
                 ensure!(key.len() == $keylen, InvalidLength, $id);
                 Ok(Self(expand(key)?))
             }

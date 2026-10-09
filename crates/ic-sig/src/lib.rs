@@ -356,6 +356,7 @@ pub fn verify(
     message: &[u8],
     signature: &[u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     use SignatureAlgorithm as A;
     ensure!(
         key.supports(algorithm),

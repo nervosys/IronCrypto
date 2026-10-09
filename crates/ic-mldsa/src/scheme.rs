@@ -432,6 +432,9 @@ macro_rules! ml_dsa {
             pk: &mut [u8; PUBLIC_KEY_LEN],
             sk: &mut [u8; SECRET_KEY_LEN],
         ) -> bool {
+            if ic_core::module::in_error_state() {
+                return false;
+            }
             keygen_inner(xi, pk, sk);
 
             // Sign a fixed message and verify it. For a signature scheme that is the
@@ -685,6 +688,9 @@ macro_rules! ml_dsa {
             rnd: &[u8; 32],
             sig: &mut [u8; SIGNATURE_LEN],
         ) -> bool {
+            if ic_core::module::in_error_state() {
+                return false;
+            }
             let (prefix, ok) = message_prefix(domain, ctx);
             if !ok {
                 return false;
@@ -990,6 +996,9 @@ macro_rules! ml_dsa {
             ctx: &[u8],
             sig: &[u8; SIGNATURE_LEN],
         ) -> bool {
+            if ic_core::module::in_error_state() {
+                return false;
+            }
             let (prefix, ok) = message_prefix(domain, ctx);
             if !ok {
                 return false;

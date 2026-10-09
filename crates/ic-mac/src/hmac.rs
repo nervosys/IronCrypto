@@ -139,6 +139,7 @@ impl<D: HmacDigest> Mac for Hmac<D> {
     const TAG_LEN: usize = D::OUTPUT_LEN;
 
     fn new(key: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(
             D::BLOCK_LEN <= MAX_BLOCK_LEN,
             InvalidParameter,

@@ -33,6 +33,28 @@ all of them.
   a signature OpenSSL 3.5.7 made for each, and against the RFCs' own test
   cases for HSS/LMS.
 
+### Changed
+
+- **The module's error state now stops the primitives, not only the policy
+  layer.** Until now `ic_fips::enter_error_state` and a failed self-test
+  stopped services requested through `ic_fips::check`, and a cipher or a
+  signature called directly went on working. The state is now a flag in
+  `ic_core::module` that every primitive crate reads. Once it is set, every
+  operation that returns a `Result` returns `ModuleErrorState` -- sealing and
+  opening, signing and verifying, key generation and agreement, key
+  derivation, random generation, making a MAC or a cipher key -- and ML-DSA's
+  `bool` interfaces return `false`. Keys and generators made before the
+  failure are refused too. Nothing changes for a module that has not failed:
+  the cost is one byte load per operation, and no signature changed.
+- What cannot refuse is documented rather than implied: hash functions and
+  XOFs, KMAC other than `verify`, a MAC object's `update` and `finalize`, and
+  ML-KEM's deterministic interfaces have no error to return, and a block
+  cipher object's per-block methods are left ungated by decision.
+  `docs/FIPS.md` and `ic_core::module` say so, and a test enters the error
+  state and requires every implemented algorithm in the ontology to be shown
+  refusing. Running the self-tests before first use is still enforced only
+  through `ic_fips::check`.
+
 ### Fixed
 
 - The README's algorithm table still said SLH-DSA was not implemented. It

@@ -80,6 +80,7 @@ impl KeyAgreement for X25519 {
     const SHARED_SECRET_LEN: usize = 32;
 
     fn public_key(private_key: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(private_key.len() == 32, InvalidLength, "x25519 private key");
         ensure!(out.len() == 32, InvalidLength, "x25519 public key buffer");
         let mut k = [0u8; 32];
@@ -89,6 +90,7 @@ impl KeyAgreement for X25519 {
     }
 
     fn agree(private_key: &[u8], peer_public_key: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(private_key.len() == 32, InvalidLength, "x25519 private key");
         ensure!(
             peer_public_key.len() == 32,

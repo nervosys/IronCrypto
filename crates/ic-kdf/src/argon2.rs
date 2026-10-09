@@ -319,6 +319,7 @@ pub fn argon2(
     salt: &[u8],
     out: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     argon2_full(variant, params, password, salt, &[], &[], out)
 }
 
@@ -336,6 +337,7 @@ pub fn argon2_full(
     associated_data: &[u8],
     out: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     params.validate()?;
     ensure!(
         out.len() >= 4,

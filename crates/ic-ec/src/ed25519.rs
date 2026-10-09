@@ -997,6 +997,7 @@ impl Drop for Ed25519Key {
 impl Ed25519Key {
     /// Expand a 32-byte seed and derive its public key.
     pub fn from_seed(seed: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
         ensure!(seed.len() == 32, InvalidLength, "ed25519 seed");
         let (scalar, prefix) = expand_seed(seed);
         let public = mul_basepoint(&scalar).compress();
@@ -1014,6 +1015,7 @@ impl Ed25519Key {
 
     /// Sign `message`, performing one basepoint multiplication rather than two.
     pub fn sign(&self, message: &[u8], signature: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(
             signature.len() == 64,
             InvalidLength,
@@ -1041,6 +1043,7 @@ impl SignatureScheme for Ed25519 {
     const SIGNATURE_LEN: usize = 64;
 
     fn public_key(private_key: &[u8], out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(private_key.len() == 32, InvalidLength, "ed25519 seed");
         ensure!(out.len() == 32, InvalidLength, "ed25519 public key buffer");
         let (mut a, mut prefix) = expand_seed(private_key);
@@ -1051,6 +1054,7 @@ impl SignatureScheme for Ed25519 {
     }
 
     fn sign(private_key: &[u8], message: &[u8], signature: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(private_key.len() == 32, InvalidLength, "ed25519 seed");
         ensure!(
             signature.len() == 64,
@@ -1065,6 +1069,7 @@ impl SignatureScheme for Ed25519 {
     }
 
     fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+        ic_core::module::operational()?;
         // One shot: recover the point, verify, discard. A caller verifying
         // more than once against the same key should hold an
         // `Ed25519VerifyKey` and pay the decompression once.
@@ -1115,6 +1120,7 @@ impl Ed25519VerifyKey {
 
     /// Verify `signature` over `message`.
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(signature.len() == 64, InvalidLength, "ed25519 signature");
 
         let mut big_r = [0u8; 32];

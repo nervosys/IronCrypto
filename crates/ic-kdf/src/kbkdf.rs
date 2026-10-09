@@ -21,6 +21,7 @@ pub fn kbkdf_counter<M: Mac>(
     context: &[u8],
     out: &mut [u8],
 ) -> Result<()> {
+    ic_core::module::operational()?;
     ensure!(!out.is_empty(), InvalidLength, "kbkdf output");
     ensure!(
         M::TAG_LEN <= MAX_TAG_LEN,

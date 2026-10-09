@@ -41,13 +41,55 @@ No service requested through `ic_fips::check` or `guarded` is available before
 `initialize`, and `set_mode` all fail with `ModuleErrorState` until the process
 restarts. There is deliberately no API to clear it.
 
-**The gate is opt-in.** The primitive crates cannot depend on `ic-fips`, which
-depends on them, and the facade re-exports them, so a caller who calls a
-primitive directly -- `ic_cipher::Aes256Gcm::new`, `ic_hpke::setup_sender` --
-reaches it whatever the module's state and mode. The state machine, the
-self-tests before first use and the latched error state hold for services
-requested through the policy layer, and only for those. A validated module
-would have to enforce that boundary; see the list below.
+**The error state reaches the primitives; the rest of the gate is opt-in.**
+The primitive crates cannot depend on `ic-fips`, which depends on them, so
+the one fact they all need is held below them: `ic_core::module` keeps a flag
+that can be set and never cleared, and `ic_fips::enter_error_state` and a
+failed `initialize()` set it. Every operation that can report an error
+consults it first. Once it is set, a caller who goes straight to
+`ic_cipher::Aes256Gcm::new`, `ic_hpke::setup_sender` or `ic_sig::verify` gets
+`ModuleErrorState`, as one who goes through `ic_fips::check` does; the
+interfaces that answer with a `bool` answer `false`. A key or a generator
+made before the failure is refused the same way.
+
+What that leaves:
+
+- **Nothing makes a direct caller run the self-tests.** A primitive called
+  before `initialize()` works. Self-tests before first use, and approved mode,
+  hold only for services requested through `ic_fips::check` or `guarded`.
+- **What has no error to return cannot refuse.** Hash functions and XOFs
+  (`Sha256::new`, `update`, `finalize`, and BLAKE2 with or without a key);
+  KMAC, other than its `verify`; a MAC object's `update` and `finalize`, once
+  it exists; and ML-KEM's `keygen_deterministic` and
+  `encapsulate_deterministic`. These go on working in the error state.
+- **A block cipher object's per-block methods are left ungated by decision.**
+  They are the inner loop of every mode, each of which refuses at its own
+  entry, as does making the key.
+
+`crates/ironcrypto/tests/error_state.rs` holds this to the ontology rather
+than to a list: it enters the error state and requires every algorithm the
+registry marks implemented to be shown refusing, except the hash functions
+and XOFs, which it names. An algorithm added without the check fails that
+test.
+
+The checks themselves were tested two ways, and the first is recorded because
+of what it failed to show. Removing each of the 95 checks in turn failed the
+test for 35 of them and passed for 60. That is not sixty untested checks: most
+gated functions sit inside or outside another that refuses too -- an AEAD
+around its stream cipher, HKDF around HMAC, a signature around its key
+operation -- so removing one alone changes nothing a caller can see, and
+removal cannot tell a redundant check from one nothing calls. So each check
+was instead turned into a panic that fires only in the error state, which
+asks the question that matters: does the test reach it while the module has
+failed? After direct calls were added for the functions that first run showed
+it had never called, it reached 94 of 95; the last, `Rng`'s
+`RandomSource::fill`, was called only through its inherent twin, and has a
+call of its own now and is reached. Both runs were done by scripts that are
+not in the repository and are not part of the suite; a check added later is
+held by the ontology test above and not by them.
+
+A validated module would have to close the three gaps above, which needs
+fallible constructors; see the list below.
 
 The module comes up *unrestricted*. Entering approved mode is an explicit
 operator decision, never a default a caller might not have noticed.
@@ -257,10 +299,12 @@ In rough order of effort:
    specification, and the vendor evidence the lab requires.
 5. **Laboratory testing and CMVP submission** against a specific binary on
    specific operational environments.
-6. **An enforced module boundary.** Today the self-tests, the error state and
-   approved mode gate only services requested through `ic_fips::check` or
-   `guarded`; a primitive called directly bypasses them. Validation needs every
-   service behind one gate.
+6. **An enforced module boundary.** The error state now reaches every
+   operation that can report an error, however it is called. The self-tests
+   before first use and approved mode still gate only services requested
+   through `ic_fips::check` or `guarded`, and what cannot report an error --
+   hashing above all -- cannot refuse at all. Validation needs every service
+   behind one gate, which means constructors that can fail.
 7. **Continuous health tests on the DRBGs** and pairwise-consistency tests on
    every generated key pair. ML-KEM, ML-DSA and RSA key generation check their
    pairs; HPKE's `KeyPair::generate` and the curve key derivations do not.
