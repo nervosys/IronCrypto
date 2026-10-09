@@ -381,6 +381,27 @@ upload was `ic-core` at 2026-10-08 22:36:28 UTC; the last was `ic-cli` at
 22:37:03 UTC. The published source commit is `eb790c3`; all twenty-one
 packages identified that clean commit in their VCS metadata.
 
+## 0.2.19 release authorization
+
+0.2.19 adds a twenty-second package, `ic-slhdsa`
+(https://crates.io/crates/ic-slhdsa), which is a new location, and with it a
+new algorithm: SLH-DSA, the stateless hash-based digital signature standard
+of FIPS 205, with key generation, signing and verification. It performs no
+encryption.
+
+On 2026-10-08 this agent told the maintainer that the release adds an
+algorithm and a package, that it needs an updated notice, that the notice
+would be printed before any publish command, and that it had had no report
+that the notice naming `ic-sig` and `ic-lms` was sent. The maintainer replied
+"Proceed". This agent then printed one notice addressed to
+`crypt@bis.doc.gov` and `enc@nsa.gov`, naming the GitHub repository and all
+twenty-two crates.io package names and identifying `ic-sig` (new with
+0.2.16), `ic-lms` (new with 0.2.17) and `ic-slhdsa` (new with 0.2.19), for
+the maintainer to send before publishing. Publication proceeds on the
+maintainer's instruction; this records that instruction and that the notice
+was printed, not that it or either earlier notice was sent, none of which has
+been reported here.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
