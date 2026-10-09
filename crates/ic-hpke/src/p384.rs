@@ -102,8 +102,41 @@ impl KeyPair {
     ///
     /// A draw is out of range with probability below `2^-189`, so the loop
     /// is for correctness, not for anything a caller will see.
+    ///
+    /// The pair is given a pairwise consistency test before it is returned,
+    /// and withheld with `SelfTestFailed` if it fails.
     pub fn generate<R: RandomSource + ?Sized>(rng: &mut R) -> Result<Self> {
         ic_core::module::operational()?;
+        let key = Self::generate_untested(rng)?;
+        key.pairwise_consistency()?;
+        Ok(key)
+    }
+
+    /// The pairwise consistency test for a generated key pair: the public key
+    /// is computed from the private key a second time and must be the one
+    /// the pair holds.
+    ///
+    /// For a key-agreement key that recomputation is the test: there is no
+    /// second operation, as a signature has verification, to apply in turn.
+    /// It cannot catch a wrong scalar multiplication that is wrong the same
+    /// way twice -- the known-answer tests are for that -- and does catch a
+    /// fault between the first computation and the key's first use.
+    fn pairwise_consistency(&self) -> Result<()> {
+        let mut again = [0u8; PUBLIC_KEY_LEN];
+        EcdhP384::public_key(self.private.get(), &mut again)?;
+        ensure!(
+            ic_core::ct::verify(&again, &self.public),
+            SelfTestFailed,
+            "hpke key pair failed its pairwise consistency test; the key is withheld"
+        );
+        Ok(())
+    }
+
+    /// [`generate`](Self::generate) without the pairwise consistency test,
+    /// for the ephemeral key of [`setup_sender`]. That key is used once, in
+    /// the two scalar multiplications that follow, and testing it would add
+    /// a third to every message sent.
+    fn generate_untested<R: RandomSource + ?Sized>(rng: &mut R) -> Result<Self> {
         let mut private = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
         for _ in 0..64 {
             rng.fill(private.get_mut())?;
@@ -224,7 +257,7 @@ pub fn setup_sender<R: RandomSource + ?Sized>(
     rng: &mut R,
 ) -> Result<([u8; ENC_LEN], Context)> {
     ic_core::module::operational()?;
-    let ephemeral = KeyPair::generate(rng)?;
+    let ephemeral = KeyPair::generate_untested(rng)?;
     setup_sender_with_ephemeral(recipient_public, info, aead, &ephemeral)
 }
 
@@ -342,6 +375,27 @@ mod tests {
     #[test]
     fn self_test_passes() {
         HpkeP384::self_test().unwrap();
+    }
+
+    /// The pairwise consistency test must actually reject a pair whose halves
+    /// do not correspond.
+    #[test]
+    fn the_pairwise_consistency_test_rejects_a_mismatched_pair() {
+        let a = KeyPair::from_private(&[1u8; 48]).unwrap();
+        let b = KeyPair::from_private(&[2u8; 48]).unwrap();
+        a.pairwise_consistency().unwrap();
+        b.pairwise_consistency().unwrap();
+        let crossed = KeyPair {
+            private: Zeroizing::new(*a.private.get()),
+            public: b.public,
+        };
+        assert_eq!(
+            crossed.pairwise_consistency().unwrap_err().kind(),
+            ErrorKind::SelfTestFailed
+        );
+        let mut flipped = KeyPair::from_private(&[1u8; 48]).unwrap();
+        flipped.public[96] ^= 0x01;
+        assert!(flipped.pairwise_consistency().is_err());
     }
 
     /// The order of P-384, big-endian.

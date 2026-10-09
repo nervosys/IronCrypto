@@ -199,11 +199,44 @@ impl core::fmt::Debug for KeyPair {
 impl KeyPair {
     /// A fresh key pair, RFC 9180's `GenerateKeyPair`: 32 random bytes as the
     /// private key.
+    ///
+    /// The pair is given a pairwise consistency test before it is returned,
+    /// and withheld with `SelfTestFailed` if it fails.
     pub fn generate<R: RandomSource + ?Sized>(rng: &mut R) -> Result<Self> {
         ic_core::module::operational()?;
+        let key = Self::generate_untested(rng)?;
+        key.pairwise_consistency()?;
+        Ok(key)
+    }
+
+    /// [`generate`](Self::generate) without the pairwise consistency test,
+    /// for the ephemeral key of [`setup_sender`]. That key is used once, in
+    /// the two scalar multiplications that follow, and testing it would add
+    /// a third to every message sent.
+    fn generate_untested<R: RandomSource + ?Sized>(rng: &mut R) -> Result<Self> {
         let mut private = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
         rng.fill(private.get_mut())?;
         Self::from_private(private.get())
+    }
+
+    /// The pairwise consistency test for a generated key pair: the public key
+    /// is computed from the private key a second time and must be the one
+    /// the pair holds.
+    ///
+    /// For a key-agreement key that recomputation is the test: there is no
+    /// second operation, as a signature has verification, to apply in turn.
+    /// It cannot catch a wrong scalar multiplication that is wrong the same
+    /// way twice -- the known-answer tests are for that -- and does catch a
+    /// fault between the first computation and the key's first use.
+    fn pairwise_consistency(&self) -> Result<()> {
+        let mut again = [0u8; PUBLIC_KEY_LEN];
+        X25519::public_key(self.private.get(), &mut again)?;
+        ensure!(
+            ic_core::ct::verify(&again, &self.public),
+            SelfTestFailed,
+            "hpke key pair failed its pairwise consistency test; the key is withheld"
+        );
+        Ok(())
     }
 
     /// The key pair for a 32-byte X25519 private key, `DeserializePrivateKey`.
@@ -449,7 +482,7 @@ pub fn setup_sender<R: RandomSource + ?Sized>(
     rng: &mut R,
 ) -> Result<([u8; ENC_LEN], Context)> {
     ic_core::module::operational()?;
-    let ephemeral = KeyPair::generate(rng)?;
+    let ephemeral = KeyPair::generate_untested(rng)?;
     setup_sender_with_ephemeral(recipient_public, info, aead, &ephemeral)
 }
 
@@ -746,6 +779,50 @@ mod tests {
 
     fn pair(seed: u8) -> KeyPair {
         KeyPair::from_private(&[seed; 32]).unwrap()
+    }
+
+    /// The pairwise consistency test must actually reject a pair whose halves
+    /// do not correspond, and a generated pair must pass it.
+    #[test]
+    fn the_pairwise_consistency_test_rejects_a_mismatched_pair() {
+        let (a, b) = (pair(1), pair(2));
+        a.pairwise_consistency().unwrap();
+        b.pairwise_consistency().unwrap();
+        let crossed = KeyPair {
+            private: Zeroizing::new(*a.private.get()),
+            public: b.public,
+        };
+        assert_eq!(
+            crossed.pairwise_consistency().unwrap_err().kind(),
+            ic_core::ErrorKind::SelfTestFailed
+        );
+        // One bit of the public key is enough.
+        let mut flipped = pair(1);
+        flipped.public[31] ^= 0x01;
+        assert!(flipped.pairwise_consistency().is_err());
+
+        let mut rng = Counter(0);
+        let generated = KeyPair::generate(&mut rng).unwrap();
+        generated.pairwise_consistency().unwrap();
+        // The untested path makes the same key from the same randomness: the
+        // test adds a check and changes nothing else.
+        let mut rng = Counter(0);
+        assert_eq!(
+            KeyPair::generate_untested(&mut rng).unwrap().public,
+            generated.public
+        );
+    }
+
+    /// A source that counts, so two runs draw the same bytes.
+    struct Counter(u8);
+    impl RandomSource for Counter {
+        fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+            for b in out {
+                self.0 = self.0.wrapping_add(1);
+                *b = self.0;
+            }
+            Ok(())
+        }
     }
 
     #[test]

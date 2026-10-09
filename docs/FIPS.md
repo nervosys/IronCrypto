@@ -307,7 +307,19 @@ In rough order of effort:
    behind one gate, which means constructors that can fail.
 7. **Continuous health tests on the DRBGs** and pairwise-consistency tests on
    every generated key pair. ML-KEM, ML-DSA and RSA key generation check their
-   pairs; HPKE's `KeyPair::generate` and the curve key derivations do not.
+   pairs, and so does HPKE's `KeyPair::generate` for both KEMs, by computing
+   the public key from the private key a second time and comparing -- the
+   test for a key-agreement key, which has no second operation to apply in
+   turn. That description of the test is from memory of SP 800-56A Rev. 3
+   section 5.6.2.1.4 and was not re-read for this change. Three things are
+   still untested. The ephemeral key `setup_sender` makes for each message is
+   not, by decision: it would add a third scalar multiplication to the two a
+   sender performs. SLH-DSA's `keygen` is not: its test is a signature and a
+   verification, and for the small-signature sets signing costs several times
+   what generating the key did. And the curve crates have no key generation
+   to test -- a caller draws the scalar and asks for its public key. A failed
+   test withholds the key and returns `SelfTestFailed`; it does not put the
+   module into its error state, which a validated module would.
 
 ECDSA and ECDH are already implemented and vector-tested over P-256, P-384
 and P-521. Algorithm coverage does not replace any of the work above.

@@ -467,7 +467,13 @@ const FIPS140_REQS: [Requirement; 6] = [
         obligation: Obligation::Shall,
         statement: "A generated asymmetric key pair shall pass a pairwise consistency test before the key is used.",
         rationale: "Catches a key pair whose halves do not correspond: a faulted exponent, a mis-assembled CRT parameter, a bit flipped after the primality tests passed. Every structural check still passes on such a key, and only applying both operations in turn reveals it. Otherwise the failure appears at the far end, as signatures nobody can verify.",
-        applies_to: &["rsa-pkcs1-sha256", "ml-kem-768", "ml-dsa-65"],
+        applies_to: &[
+            "rsa-pkcs1-sha256",
+            "ml-kem-768",
+            "ml-dsa-65",
+            "hpke-x25519-sha256",
+            "hpke-p384-sha384",
+        ],
         compliance: Compliance::Met {
             file: "crates/ic-mlkem/src/kem.rs",
             symbol: "the_pairwise_consistency_test_rejects_a_mismatched_pair",

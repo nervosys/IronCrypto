@@ -55,6 +55,13 @@ all of them.
   refusing. Running the self-tests before first use is still enforced only
   through `ic_fips::check`.
 
+- **HPKE's `KeyPair::generate` runs a pairwise consistency test**, for
+  X25519 and P-384: the public key is computed from the private key a second
+  time and must match, or the key is withheld with `SelfTestFailed`. The
+  ephemeral key `setup_sender` makes is not tested, so sending costs what it
+  did. SLH-DSA key generation still has no such test; `docs/FIPS.md` says
+  why.
+
 ### Fixed
 
 - The README's algorithm table still said SLH-DSA was not implemented. It
