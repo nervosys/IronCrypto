@@ -81,6 +81,14 @@ all of them.
   begins as the first did, is refused with `EntropyFailure` and puts the
   module into its error state. This catches a source returning zeroes; it is
   not an SP 800-90B health test and does not catch a weak or replayed one.
+- **ECDSA, RSA PKCS#1 v1.5 verification and cSHAKE are checked against
+  NIST's ACVP vectors.** ECDSA: 206 cases over P-256, P-384 and P-521,
+  signing compared byte for byte and verification against NIST's verdicts
+  -- the first published values P-521 has been held to. RSA: 108
+  verification cases with SHA-256 at three modulus sizes. cSHAKE: the five
+  of NIST's cases that are whole bytes. Everything passed with no change to
+  the code. RSA-PSS and PBKDF2 are still not covered: NIST's samples use
+  hashes this library does not pair with them.
 - **The DRBG self-tests are known-answer tests now.** Each runs a NIST case
   through instantiate, reseed and generate. CTR_DRBG's used to check only
   that its output was reproducible and not constant, and HMAC_DRBG's
