@@ -129,6 +129,11 @@ all of them.
   hashes. These reach the private-key operation without the CRT. RSA-PSS
   signing, which is randomized, is still held only by this library's own
   verifier.
+- **Signatures, key agreement, AEADs, MACs, HKDF and key wrap are run
+  against Project Wycheproof's malformed and edge-case inputs**: 4,546
+  cases, among them 930 ECDSA signatures made wrong in their DER encoding
+  or their values, all refused through `ic_sig::verify`. This is what
+  found the Poly1305 defect above; nothing else in it needed a change.
 - **The DRBG self-tests are known-answer tests now.** Each runs a NIST case
   through instantiate, reseed and generate. CTR_DRBG's used to check only
   that its output was reproducible and not constant, and HMAC_DRBG's
