@@ -415,6 +415,26 @@ first upload was `ic-core` at 2026-10-09 01:26:22 UTC; `ic-slhdsa` at
 commit is `8329898`; all twenty-two packages identified that clean commit in
 their VCS metadata.
 
+## Notification submission for `ic-sig`, `ic-lms` and `ic-slhdsa`
+
+On 2026-10-09 (UTC) this agent asked the maintainer whether the export notice
+naming `ic-sig`, `ic-lms` and `ic-slhdsa` had been sent to BIS and NSA. The
+maintainer answered "Yes, sent".
+
+The notice in question is the one this agent printed for 0.2.19, addressed to
+`crypt@bis.doc.gov` and `enc@nsa.gov`, naming the GitHub repository and all
+twenty-two crates.io package names and identifying `ic-sig` (new with
+0.2.16), `ic-lms` (new with 0.2.17) and `ic-slhdsa` (new with 0.2.19). Earlier
+versions of it, naming one and then two of those packages, were printed for
+0.2.16 and 0.2.17.
+
+This records the maintainer's report, not the sent message, its completed
+contact fields or its sending time, none of which have been supplied here.
+Nor does it say which of the three printed texts was sent, or when relative
+to each publication: the report came after all three packages were public,
+and the release entries above record that no report had come before each was
+published.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
