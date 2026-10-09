@@ -1,10 +1,11 @@
-# Updated notification for 0.2.20: DRAFT, NOT SENT
+# Updated notification for 0.2.20: the text printed, reported sent
 
-A draft of an updated notification under 15 CFR §742.15(b), for the
-maintainer to review and send if they decide one is needed for 0.2.20.
-**Nothing in this file has been sent, and 0.2.20 has not been released.** If
-it is sent, record what was actually sent in `docs/export/notification.md`,
-and either delete this file or rename it to say it is the text that was sent.
+The text of an updated notification under 15 CFR §742.15(b) that this agent
+printed for the maintainer on 2026-10-09. The maintainer then replied "Sent".
+**This is the text as printed, with its blanks, not the message as sent**: the
+completed contact fields, the date given for the previous notification, the
+sending time and the recipients have not been supplied here.
+`docs/export/notification.md` records the exchange.
 
 `docs/EXPORT.md` is left as it was.
 

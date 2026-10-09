@@ -435,6 +435,31 @@ to each publication: the report came after all three packages were public,
 and the release entries above record that no report had come before each was
 published.
 
+## 0.2.20 release authorization
+
+0.2.20 adds no package: the locations are the twenty-two already named. It
+adds no algorithm. It adds HashSLH-DSA, the pre-hash interface of FIPS 205, to
+`ic-slhdsa`, and verification of SLH-DSA and HSS/LMS signatures to `ic-sig`;
+both algorithms were already in `ic-slhdsa` and `ic-lms`. It corrects
+Poly1305, which was computed wrong for some inputs from 0.2.5 to 0.2.19; the
+CHANGELOG has that under Security. The rest is self-tests, an error state and
+test vectors.
+
+On 2026-10-09 this agent told the maintainer of the Poly1305 defect and that
+a release needed their word and their decision on the notice. The maintainer
+replied "Message the other sessions, then prepare the advisory and email for
+the release." This agent wrote `docs/export/update-0.2.20-draft.md` (since
+renamed `update-0.2.20-as-printed.md`), a
+complete updated notice addressed to `crypt@bis.doc.gov` and `enc@nsa.gov`
+with the contact fields and the date of the previous notification left
+blank, and said that whether to send it was the maintainer's determination,
+since the release adds no location and no algorithm. The maintainer asked for
+it to be printed, and after it was printed replied "Sent. Proceed".
+
+This records that reply. It does not record the sent message, its completed
+fields, its sending time or its recipients, none of which have been supplied
+here. Publication proceeds on it.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
