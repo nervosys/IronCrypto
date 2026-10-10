@@ -494,6 +494,24 @@ was `ic-core` at 2026-10-10 01:20:52 UTC and the last `ic-cli` at 01:23:38
 UTC. The published source commit is `62ed788`; all twenty-two packages
 identified that clean commit in their VCS metadata.
 
+## 0.2.22 release authorization
+
+0.2.22 adds no package: the locations are the twenty-two already named. It
+adds no algorithm and no cryptographic functionality. Its one change is to
+the command-line tool: `ic rand`, which already wrote random bytes as hex,
+also writes them as base64, and the MCP tool `crypto_random` does the same.
+
+On 2026-10-10 this agent told the maintainer that the change was pushed and
+not published, and that a release needed their word and whether the earlier
+notice sufficed again. The maintainer wrote "release 0.2.22". Asked then
+"what about the notice?", having been told the release adds no package and
+no algorithm, they answered "Earlier notice suffices", against the option
+described as: "You judge the notice you sent for 0.2.20 covers this release
+too. I record that as your determination."
+
+This records that instruction and that determination. No notice was printed
+or sent for this release. Publication proceeds on it.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
