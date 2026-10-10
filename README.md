@@ -116,33 +116,34 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.2.22"
+ironcrypto = "0.2.23"
 ```
 
-The current release is **0.2.22**, published for all twenty-two crates on
-crates.io. It gives the `ic` tool `ic rand <bytes>`, with hex or base64
-output, for what `openssl rand` is for. 0.2.21 added `ic_sig::SoftwareSigner`,
-which signs with a PKCS#8 key held in memory through the same `Signer`
-interface a key in an HSM or a key service uses. **0.2.20 was a security
-release**: from 0.2.5 to 0.2.19, Poly1305 -- and so ChaCha20-Poly1305 -- could
-stop the process or compute a wrong tag on a message a peer chooses. Use
-0.2.20 or later if you use that cipher. See [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.2.23**, published for all twenty-two crates on
+crates.io. It names the shape of the controls export, `ironcrypto-controls/1`,
+for tools that build compliance evidence from it. 0.2.22 gave the `ic` tool
+`ic rand <bytes>`, with hex or base64 output, and 0.2.21 added
+`ic_sig::SoftwareSigner`, which signs with a PKCS#8 key held in memory
+through the same `Signer` interface a key in an HSM or a key service uses.
+**0.2.20 was a security release**: from 0.2.5 to 0.2.19, Poly1305 -- and so
+ChaCha20-Poly1305 -- could stop the process or compute a wrong tag on a
+message a peer chooses. Use 0.2.20 or later if you use that cipher. See [CHANGELOG.md](CHANGELOG.md).
 `ironcrypto` is the facade and re-exports the rest; depend on the primitives
 directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2.22"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.22"     # SHA-2, SHA-3, SHAKE, BLAKE2
-ic-ec = "0.2.22"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.2.22"     # HPKE, RFC 9180
-ic-sig = "0.2.22"      # verify any signature over an X.509 public key
-ic-lms = "0.2.22"      # verify HSS/LMS hash-based signatures
-ic-slhdsa = "0.2.22"   # SLH-DSA, FIPS 205
+ic-cipher = "0.2.23"   # AES, ChaCha20, the AEADs
+ic-hash = "0.2.23"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-ec = "0.2.23"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.2.23"     # HPKE, RFC 9180
+ic-sig = "0.2.23"      # verify any signature over an X.509 public key
+ic-lms = "0.2.23"      # verify HSS/LMS hash-based signatures
+ic-slhdsa = "0.2.23"   # SLH-DSA, FIPS 205
 ```
 
 ```console
-$ cargo install ic-cli --version 0.2.22   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.2.23   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -153,7 +154,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.2.22 publication.
+submission and the 0.2.23 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
@@ -584,7 +585,7 @@ with clocks, load and build profile — orders of magnitude, not benchmarks.
 
 These are historical developer-machine comparisons from `bench/` against
 RustCrypto and dalek, using the same buffers and the best of nine runs. They
-have not been rerun for 0.2.22 and are not performance guarantees. Shared-machine
+have not been rerun for 0.2.23 and are not performance guarantees. Shared-machine
 interference caused substantial variation between runs.
 
 | operation | historical comparison against RustCrypto/dalek |
