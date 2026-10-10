@@ -3,6 +3,20 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Changed
+
+- **`SoftwareSigner::from_pkcs8` uses much less stack for most keys.** Its
+  loaders for each key family were inlined into one function, which then had
+  the largest family's frame for every key: 16 KB on `thumbv7em-none-eabihf`
+  whatever was being loaded, plus 10 KB more for ML-DSA. Each family now
+  loads in a function of its own. Measured there at `opt-level = "s"`: about
+  3 KB for an EC, Ed25519 or SLH-DSA key, down from 16; about 10 KB for
+  ML-DSA, down from 26; and about 18 KB for RSA, up from 16, since RSA no
+  longer shares a frame. No behaviour changed. Prompted by IronSocketLayer,
+  which found the same effect in its own signer.
+
 ## 0.2.22
 
 ### Added

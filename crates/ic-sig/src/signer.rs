@@ -58,6 +58,15 @@
 //! Nothing here allocates, so the key and its `SubjectPublicKeyInfo` are in
 //! the value itself: about eight kilobytes, whatever the algorithm. Box it,
 //! or keep it in a static, where the stack is small.
+//!
+//! Loading a key takes stack of its own, beyond the value it returns and
+//! beyond what the algorithm's key derivation uses. Measured on
+//! `thumbv7em-none-eabihf` at `opt-level = "s"`, the loader's frame is about
+//! 3 KB for an EC, Ed25519 or SLH-DSA key, 10 KB for ML-DSA, which holds a
+//! public and an expanded private key at once, and 18 KB for RSA, whose key
+//! is five kilobytes and is moved twice on the way in. Each family is loaded
+//! by a function of its own, kept out of line: inlined into one, they shared
+//! the largest frame, and every key paid for RSA's.
 
 use ic_core::sig::{Custody, SignatureAlgorithm, Signer};
 use ic_core::traits::{RandomSource, SignatureScheme};
@@ -156,6 +165,7 @@ impl SoftwareSigner {
         }
     }
 
+    #[inline(never)]
     fn rsa(n: &[u8], e: u64, d: &[u8], p: &[u8], q: &[u8]) -> Result<Self> {
         // From the primes where the file has them: the CRT values are then
         // derived here and cannot disagree with the primes, which is what the
@@ -186,20 +196,23 @@ impl SoftwareSigner {
             "rsa primes do not give the modulus in the key"
         );
 
-        let mut spki = [0u8; MAX_SPKI];
-        let len = PublicKeyInfo::Rsa {
+        // Written straight into the value being returned: with the key at
+        // five kilobytes, a buffer of its own for this was measurable.
+        let mut signer = Self::new(
+            Key::Rsa(key),
+            SignatureAlgorithm::RsaPssSha256,
+            [0u8; MAX_SPKI],
+            0,
+        );
+        signer.spki_len = PublicKeyInfo::Rsa {
             modulus: &modulus[..size],
             exponent: e,
         }
-        .to_der(&mut spki)?;
-        Ok(Self::new(
-            Key::Rsa(key),
-            SignatureAlgorithm::RsaPssSha256,
-            spki,
-            len,
-        ))
+        .to_der(&mut signer.spki)?;
+        Ok(signer)
     }
 
+    #[inline(never)]
     fn ec(algorithm: KeyAlgorithm, private: &[u8], stated: Option<&[u8]>) -> Result<Self> {
         macro_rules! curve {
             ($scheme:ty, $variant:ident, $alg:ident, $n:literal, $point:literal) => {{
@@ -246,6 +259,7 @@ impl SoftwareSigner {
         }
     }
 
+    #[inline(never)]
     fn ed25519(seed: &[u8]) -> Result<Self> {
         ensure!(seed.len() == 32, InvalidLength, "ed25519 seed length");
         let mut public = [0u8; 32];
@@ -264,6 +278,7 @@ impl SoftwareSigner {
 
     /// The ML-DSA or SLH-DSA reading of a key `ic_pkix::PrivateKeyInfo` did
     /// not name.
+    #[inline(never)]
     fn post_quantum(der: &[u8]) -> Result<Self> {
         // The algorithm identifier, to tell the two families apart.
         let mut outer = Reader::new(der);
@@ -289,6 +304,7 @@ impl SoftwareSigner {
         Err(err!(Unsupported, "private key algorithm not implemented"))
     }
 
+    #[inline(never)]
     fn ml_dsa(key: &MlDsaPrivateKey<'_>) -> Result<Self> {
         let seed = key.seed().ok_or(err!(
             Unsupported,
@@ -332,6 +348,7 @@ impl SoftwareSigner {
         }
     }
 
+    #[inline(never)]
     fn slh_dsa(set: ParameterSet, id: &[u8], secret: &[u8]) -> Result<Self> {
         let n = set.n();
         ensure!(
