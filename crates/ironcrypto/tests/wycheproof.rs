@@ -128,11 +128,11 @@ fn rsa_verification_matches_wycheproof() {
 /// PKCS#1 v1.5 signing is deterministic, so a private key and a message have
 /// one signature, and Wycheproof publishes it.
 ///
-/// These are the only values from outside this library that either RSA
-/// signer is held to. They reach the private-key operation without the CRT,
-/// since Wycheproof gives exponents and no primes; the CRT path is held to
-/// this one by the library's own tests, not by anything here. PSS signing
-/// is randomized and has no such case.
+/// They reach the private-key operation without the CRT, since Wycheproof
+/// gives exponents and no primes; the CRT path is held to this one by the
+/// library's own tests, and by OpenSSL's signatures in `signer.rs`. PSS
+/// signing is randomized and has no case here; `cavp_rsa_pss.rs` has the
+/// ones NIST published with their salts.
 #[test]
 fn rsa_pkcs1_signing_matches_wycheproof() {
     let Some(file) = VectorFile::load_or_report("wycheproof-rsa-sign") else {

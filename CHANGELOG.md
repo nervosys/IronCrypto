@@ -7,6 +7,14 @@ all of them.
 
 ### Added
 
+- **RSA-PSS signing is checked against NIST's values.** It was the one
+  algorithm here with no outside vector, because a PSS signature is
+  randomized. NIST's CAVP file `SigGenPSS_186-3.txt` publishes the salt, and
+  its twenty signatures with a salt as long as the hash -- SHA-256 and
+  SHA-384 at 3072 bits -- are now reproduced byte for byte through the
+  public `sign`. Its other forty, made with salts of other lengths, are
+  refused by the verifier, as a PSS this library does not have. No change
+  to the code.
 - **Certificate signatures PyCA made, as a test of `ic_sig::verify`.** 22
   self-signed certificates that IronPrivacyGuard generated to test code it
   has since replaced with this function: sixteen that verify, two whose key
