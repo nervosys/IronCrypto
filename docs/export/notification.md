@@ -469,6 +469,24 @@ identified that clean commit in their VCS metadata. At publication the commit
 had not been pushed to GitHub, by intent: it describes a defect that no
 published version yet corrected.
 
+## 0.2.21 release authorization
+
+0.2.21 adds no package: the locations are the twenty-two already named. It
+adds no algorithm. It adds `ic_sig::SoftwareSigner`, which signs with a
+private key held in memory through the `ic_core::sig::Signer` interface,
+using signature algorithms this library already had; and it corrects the
+value `ic_pkix::ecdsa_signature::max_der_len` gives for P-521.
+
+On 2026-10-09 this agent asked the maintainer two questions. To "Shall I
+prepare it for you to publish?", for 0.2.21, they answered "Release 0.2.21
+(Recommended)". To "What about the export notice?", having been told the
+release adds no package and no algorithm, they answered "Earlier notice
+suffices", against the option described as: "You judge the notice you sent
+for 0.2.20 covers this release. I record that as your determination."
+
+This records those answers as the maintainer's instruction and determination.
+No notice was printed or sent for this release. Publication proceeds on it.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
