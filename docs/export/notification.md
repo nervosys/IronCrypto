@@ -73,6 +73,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.19 | 2026-10-09 01:26:22 | all twenty-two crates published from `8329898` by the maintainer, after replying "Proceed" when told the release needed an updated notice; adds `ic-slhdsa`, a new location and a new algorithm (SLH-DSA, FIPS 205), for which a notice naming it, `ic-sig` and `ic-lms` was printed before the publish commands and has not been reported sent |
 | 0.2.20 | 2026-10-09 21:25:24 | all twenty-two crates published from `016aa34` by the maintainer, after replying "Sent. Proceed" when the updated notice printed for them was in front of them; adds no location and no algorithm; corrects Poly1305 (see the CHANGELOG, Security) |
 | 0.2.21 | 2026-10-10 01:20:52 | all twenty-two crates published from `62ed788` by the maintainer, after answering "Release 0.2.21 (Recommended)" and, on the notice, "Earlier notice suffices"; adds no location and no algorithm |
+| 0.2.22 | 2026-10-10 04:08:14 | all twenty-two crates published from `a119889` by the maintainer, after writing "release 0.2.22" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -511,6 +512,12 @@ too. I record that as your determination."
 
 This records that instruction and that determination. No notice was printed
 or sent for this release. Publication proceeds on it.
+
+The maintainer ran `cargo publish --workspace` themselves. The crates.io API
+confirmed all twenty-two 0.2.22 packages live and not yanked. The first upload
+was `ic-core` at 2026-10-10 04:08:14 UTC and the last `ic-cli` at 04:09:00
+UTC. The published source commit is `a119889`; all twenty-two packages
+identified that clean commit in their VCS metadata.
 
 ## Determination
 
