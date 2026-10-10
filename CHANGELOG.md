@@ -3,6 +3,17 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **`ic rand <bytes>`, for what `openssl rand` is for.** The command was
+  already there as `ic random`, hex only. It now answers to `rand` as well and
+  writes `--hex` (the default) or `--base64`; OpenSSL's one-dash spellings,
+  `-hex` and `-base64`, are taken too. `--json` names the encoding and carries
+  the value under that name. The MCP tool `crypto_random` takes the same
+  `encoding`. One to 1024 bytes, from the OS-seeded DRBG as before.
+
 ## 0.2.21
 
 ### Added

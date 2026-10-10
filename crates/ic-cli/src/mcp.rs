@@ -663,18 +663,41 @@ fn tools() -> Vec<Tool> {
         Tool {
             name: "crypto_random",
             description:
-                "Generate random bytes from the OS-seeded SP 800-90A DRBG, returned as hex.",
+                "Generate random bytes from the OS-seeded SP 800-90A DRBG, as hex or base64. \
+                 Use this for a key, nonce, salt or token instead of inventing one: it is what \
+                 `openssl rand` is for.",
             schema: || {
                 schema(
-                    vec![(
-                        "bytes",
-                        Json::object([
-                            ("type", Json::str("integer")),
-                            ("minimum", Json::num(1)),
-                            ("maximum", Json::num(1024)),
-                            ("description", Json::str("How many bytes to generate.")),
-                        ]),
-                    )],
+                    vec![
+                        (
+                            "bytes",
+                            Json::object([
+                                ("type", Json::str("integer")),
+                                ("minimum", Json::num(1)),
+                                ("maximum", Json::num(1024)),
+                                ("description", Json::str("How many bytes to generate.")),
+                            ]),
+                        ),
+                        (
+                            "encoding",
+                            Json::object([
+                                ("type", Json::str("string")),
+                                (
+                                    "enum",
+                                    Json::Array(
+                                        ops::RANDOM_ENCODINGS.iter().map(|e| Json::str(*e)).collect(),
+                                    ),
+                                ),
+                                (
+                                    "description",
+                                    Json::str(
+                                        "How to write the bytes. Optional; hex if omitted. The \
+                                         result carries them under the encoding's name.",
+                                    ),
+                                ),
+                            ]),
+                        ),
+                    ],
                     &["bytes"],
                 )
             },
@@ -683,8 +706,16 @@ fn tools() -> Vec<Tool> {
                     .get("bytes")
                     .and_then(|v| v.as_i64())
                     .ok_or("missing required argument 'bytes'")?;
-                let hex = ops::random_hex(n.max(0) as usize)?;
-                Ok(Json::object([("hex", Json::str(hex))]))
+                let encoding = match args.get("encoding") {
+                    None => "hex",
+                    Some(v) => v.as_str().ok_or("'encoding' must be a string")?,
+                };
+                let text = ops::random_encoded(n.max(0) as usize, encoding)?;
+                Ok(Json::object([
+                    ("bytes", Json::num(n as f64)),
+                    ("encoding", Json::str(encoding)),
+                    (encoding, Json::str(text)),
+                ]))
             },
         },
     ]
@@ -1523,6 +1554,21 @@ mod tests {
 
         let r = call("crypto_random", Json::object([("bytes", Json::num(16))]));
         assert_eq!(body(&r).get("hex").unwrap().as_str().unwrap().len(), 32);
+        assert_eq!(body(&r).get("encoding").unwrap().as_str(), Some("hex"));
+
+        // Base64 on request, under its own name, so it cannot be read as hex.
+        let r = call(
+            "crypto_random",
+            Json::object([("bytes", Json::num(16)), ("encoding", Json::str("base64"))]),
+        );
+        assert_eq!(body(&r).get("base64").unwrap().as_str().unwrap().len(), 24);
+        assert!(body(&r).get("hex").is_none());
+        // An encoding it does not have is refused, not defaulted.
+        let r = call(
+            "crypto_random",
+            Json::object([("bytes", Json::num(16)), ("encoding", Json::str("base32"))]),
+        );
+        assert!(is_error(&r));
     }
 
     #[test]

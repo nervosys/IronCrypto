@@ -48,7 +48,10 @@ OPERATIONS
     seal <algorithm> <hexkey> <hexnonce|random>
                                 Encrypt stdin, print ciphertext, tag and nonce;
                                 'random' draws the nonce (prefer it)
-    random <bytes>              Random bytes from the DRBG, as hex
+    rand <bytes>                Random bytes from the DRBG, 1 to 1024 of them;
+                                `random` is the same command
+        --hex                       As hex (the default)
+        --base64                    As base64
 
 KEYS
     key inspect                 Identify a DER or PEM key on stdin
@@ -641,18 +644,33 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             })
         }
 
-        "random" => {
+        // `openssl rand`, for an agent: the count, then how to write it.
+        // OpenSSL spells its flags with one dash, so those are taken too.
+        "rand" | "random" => {
             let n: usize = pos
                 .get(1)
                 .copied()
-                .ok_or("random needs a byte count")?
+                .ok_or("rand needs a byte count")?
                 .parse()
                 .map_err(|_| "byte count must be a number".to_string())?;
-            let hex = ops::random_hex(n)?;
+            let hex = has_flag(args, "--hex") || has_flag(args, "-hex");
+            let base64 = has_flag(args, "--base64") || has_flag(args, "-base64");
+            if hex && base64 {
+                return Err("choose one of --hex and --base64".to_string());
+            }
+            let encoding = if base64 { "base64" } else { "hex" };
+            let text = ops::random_encoded(n, encoding)?;
             Ok(if want_json {
-                Json::object([("bytes", Json::num(n as f64)), ("hex", Json::str(hex))]).to_string()
+                // The value is under the name of its encoding, so a reader
+                // cannot take base64 for hex.
+                Json::object([
+                    ("bytes", Json::num(n as f64)),
+                    ("encoding", Json::str(encoding)),
+                    (encoding, Json::str(text)),
+                ])
+                .to_string()
             } else {
-                hex
+                text
             })
         }
 
@@ -1407,6 +1425,35 @@ mod tests {
         assert_eq!(out.len(), 32);
         assert!(run(&["random", "abc"]).is_err());
         assert!(run(&["random"]).is_err());
+
+        // `rand` is the same command, with openssl's two encodings.
+        assert_eq!(run(&["rand", "16"]).unwrap().len(), 32);
+        assert_eq!(run(&["rand", "16", "--hex"]).unwrap().len(), 32);
+        for flag in ["--base64", "-base64"] {
+            let text = run(&["rand", "16", flag]).unwrap();
+            assert_eq!(text.len(), 24, "{flag}");
+            assert!(text.ends_with("=="), "{flag}: {text}");
+        }
+        assert!(run(&["rand", "16", "--hex", "--base64"]).is_err());
+        assert!(run(&["rand", "0"]).is_err());
+        assert!(run(&["rand", "1025"]).is_err());
+
+        // JSON names the encoding and carries the value under that name.
+        let json = ic_json::parse(&run(&["rand", "8", "--base64", "--json"]).unwrap()).unwrap();
+        assert_eq!(
+            json.get("encoding").and_then(|v| v.as_str()),
+            Some("base64")
+        );
+        assert_eq!(
+            json.get("base64").and_then(|v| v.as_str()).map(str::len),
+            Some(12)
+        );
+        assert!(json.get("hex").is_none());
+        let json = ic_json::parse(&run(&["rand", "8", "--json"]).unwrap()).unwrap();
+        assert_eq!(
+            json.get("hex").and_then(|v| v.as_str()).map(str::len),
+            Some(16)
+        );
     }
 
     /// Every flag read with `opt` must be listed as value-taking.

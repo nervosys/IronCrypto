@@ -1044,14 +1044,36 @@ fn ontology_entry(algorithm: ic_pkix::KeyAlgorithm) -> Option<&'static str> {
     }
 }
 
-pub fn random_hex(n: usize) -> Result<String, String> {
+/// The encodings `random` writes: what `openssl rand -hex` and `-base64` do.
+pub const RANDOM_ENCODINGS: [&str; 2] = ["hex", "base64"];
+
+/// Generate `n` random bytes from the OS-seeded DRBG, in `encoding`.
+///
+/// One to 1024 bytes: enough for any key, nonce, salt or token, and small
+/// enough that a caller cannot use this to drain the generator. The bytes
+/// come from `ic_drbg::Rng::from_os`, never from the operating system
+/// directly.
+pub fn random_encoded(n: usize, encoding: &str) -> Result<String, String> {
     if n == 0 || n > 1024 {
         return Err("request between 1 and 1024 bytes".to_string());
+    }
+    if !RANDOM_ENCODINGS.contains(&encoding) {
+        return Err(format!(
+            "encoding must be one of: {}",
+            RANDOM_ENCODINGS.join(", ")
+        ));
     }
     let mut rng = ic_drbg::Rng::from_os().map_err(|e| e.to_string())?;
     let mut out = vec![0u8; n];
     rng.fill(&mut out).map_err(|e| e.to_string())?;
-    Ok(ic_core::codec::hex(&out))
+    Ok(match encoding {
+        "base64" => {
+            let mut text = vec![0u8; n.div_ceil(3) * 4];
+            ic_core::codec::base64_encode(&out, &mut text).map_err(|e| e.to_string())?;
+            String::from_utf8(text).map_err(|e| e.to_string())?
+        }
+        _ => ic_core::codec::hex(&out),
+    })
 }
 
 #[cfg(test)]
@@ -1183,10 +1205,27 @@ mod tests {
 
     #[test]
     fn random_respects_its_bounds() {
-        assert_eq!(random_hex(16).unwrap().len(), 32);
-        assert!(random_hex(0).is_err());
-        assert!(random_hex(4096).is_err());
-        assert_ne!(random_hex(32).unwrap(), random_hex(32).unwrap());
+        assert_eq!(random_encoded(16, "hex").unwrap().len(), 32);
+        assert!(random_encoded(0, "hex").is_err());
+        assert!(random_encoded(4096, "hex").is_err());
+        assert_ne!(
+            random_encoded(32, "hex").unwrap(),
+            random_encoded(32, "hex").unwrap()
+        );
+
+        // Base64 is the same request in another alphabet: it decodes to the
+        // length asked for, at every remainder of three, with its padding.
+        for n in [1usize, 2, 3, 16, 31, 32, 1024] {
+            let text = random_encoded(n, "base64").unwrap();
+            assert_eq!(text.len(), n.div_ceil(3) * 4, "{n} bytes");
+            let mut back = vec![0u8; text.len()];
+            let len = ic_core::codec::base64_decode(text.as_bytes(), &mut back).unwrap();
+            assert_eq!(len, n);
+            assert_eq!(random_encoded(n, "hex").unwrap().len(), 2 * n);
+        }
+        assert!(random_encoded(16, "base32").is_err());
+        assert!(random_encoded(0, "base64").is_err());
+        assert!(random_encoded(1025, "base64").is_err());
     }
 
     #[test]
