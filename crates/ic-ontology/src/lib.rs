@@ -161,6 +161,20 @@ pub mod errors {
             "Fix the encoding. A non-canonical encoding is often an attack, not a bug.",
         ),
         (
+            ErrorKind::ProviderUnavailable,
+            "Whatever holds the key -- a token, a TPM, a key service -- could not be reached or \
+             could not answer. The inputs were not at fault.",
+            "Retry, with a delay and a limit. If it persists, the device or the service needs \
+             attention; changing the inputs will not help.",
+        ),
+        (
+            ErrorKind::ProviderRefused,
+            "Whatever holds the key answered, and refused: a PIN expired or locked, a policy, a \
+             missing permission. The inputs were not at fault.",
+            "Do not retry: a repeated attempt can lock a token. Report it to whoever administers \
+             the key.",
+        ),
+        (
             ErrorKind::Internal,
             "A library invariant was violated.",
             "This is a bug in IronCrypto. Report it with the context string.",
@@ -235,8 +249,11 @@ pub mod errors {
         }
 
         #[test]
-        fn entropy_failure_is_the_retryable_one() {
+        fn what_is_retryable_is_what_may_pass_next_time() {
             assert!(get("entropy-failure").unwrap().retryable);
+            assert!(get("provider-unavailable").unwrap().retryable);
+            // A refusal retried is how a token gets locked.
+            assert!(!get("provider-refused").unwrap().retryable);
             assert!(!get("internal").unwrap().retryable);
         }
     }

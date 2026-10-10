@@ -275,6 +275,11 @@ pub trait Signer: Send + Sync {
     /// [`SignatureAlgorithm::max_signature_len`] is always long enough. An
     /// algorithm not in [`algorithms`](Signer::algorithms) is refused with
     /// `InvalidParameter`.
+    ///
+    /// A key held elsewhere fails in two ways a key in memory does not, and
+    /// each has a kind: `ProviderUnavailable` when its holder could not be
+    /// reached or could not answer, and `ProviderRefused` when it answered
+    /// no. They differ in whether a retry is safe.
     fn sign(
         &self,
         algorithm: SignatureAlgorithm,

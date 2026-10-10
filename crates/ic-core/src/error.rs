@@ -33,6 +33,24 @@ pub enum ErrorKind {
     CounterExhausted,
     /// Input could not be decoded (hex, base64, DER, point encoding).
     MalformedEncoding,
+    /// Whatever holds the key -- a token, a TPM, a key service -- could not
+    /// be reached or could not answer, and the inputs were not at fault: a
+    /// device error, a lost session, a network failure. The same call may
+    /// succeed later.
+    ///
+    /// Nothing in this library returns it. It is for implementations of
+    /// [`Signer`](crate::sig::Signer) and the like over keys held elsewhere,
+    /// which otherwise have no honest kind to report.
+    ProviderUnavailable,
+    /// Whatever holds the key answered, and the answer was no: a PIN expired
+    /// or locked out, a policy that forbids the operation, a credential
+    /// without the permission. The inputs were not at fault and the same
+    /// call will be refused again until someone changes that.
+    ///
+    /// A provider that cannot tell this from
+    /// [`ProviderUnavailable`](Self::ProviderUnavailable) reports this one,
+    /// so that nothing retries into a lockout.
+    ProviderRefused,
     /// An internal invariant was violated — always a library bug.
     Internal,
 }
@@ -57,6 +75,8 @@ impl ErrorKind {
         ErrorKind::ModuleErrorState,
         ErrorKind::EntropyFailure,
         ErrorKind::CounterExhausted,
+        ErrorKind::ProviderUnavailable,
+        ErrorKind::ProviderRefused,
         ErrorKind::Internal,
     ];
 
@@ -73,6 +93,8 @@ impl ErrorKind {
             Self::EntropyFailure => "entropy-failure",
             Self::CounterExhausted => "counter-exhausted",
             Self::MalformedEncoding => "malformed-encoding",
+            Self::ProviderUnavailable => "provider-unavailable",
+            Self::ProviderRefused => "provider-refused",
             Self::Internal => "internal",
         }
     }
@@ -82,7 +104,7 @@ impl ErrorKind {
     /// Agents use this to decide between *retry*, *re-parameterize*, and *abort*.
     #[must_use]
     pub const fn retryable(self) -> bool {
-        matches!(self, Self::EntropyFailure)
+        matches!(self, Self::EntropyFailure | Self::ProviderUnavailable)
     }
 
     /// Whether the caller should change inputs and try again.
@@ -185,6 +207,8 @@ mod tests {
                 ErrorKind::ModuleErrorState => ErrorKind::ModuleErrorState,
                 ErrorKind::EntropyFailure => ErrorKind::EntropyFailure,
                 ErrorKind::CounterExhausted => ErrorKind::CounterExhausted,
+                ErrorKind::ProviderUnavailable => ErrorKind::ProviderUnavailable,
+                ErrorKind::ProviderRefused => ErrorKind::ProviderRefused,
                 ErrorKind::Internal => ErrorKind::Internal,
             }
         }
@@ -194,7 +218,7 @@ mod tests {
         // there. It does not catch one being dropped from `ALL`, because a
         // shorter list still maps each of its members to itself. This count
         // sits beside the match so the two are edited together.
-        assert_eq!(ErrorKind::ALL.len(), 11);
+        assert_eq!(ErrorKind::ALL.len(), 13);
 
         for kind in ErrorKind::ALL {
             assert_eq!(identify(*kind), *kind);
@@ -208,6 +232,28 @@ mod tests {
                 assert_ne!(a.id(), b.id(), "two kinds share an identifier");
             }
             assert!(!a.id().is_empty());
+        }
+    }
+
+    /// What a caller is told to do when a key's holder fails.
+    ///
+    /// The two kinds differ in exactly this, and a retry loop reads it: one
+    /// that retried a refusal would walk a token into its PIN lockout.
+    /// Neither is the caller's to correct by changing what it passed.
+    #[test]
+    fn only_an_unavailable_provider_is_worth_retrying() {
+        assert!(ErrorKind::ProviderUnavailable.retryable());
+        assert!(!ErrorKind::ProviderRefused.retryable());
+        assert!(!ErrorKind::ProviderUnavailable.caller_correctable());
+        assert!(!ErrorKind::ProviderRefused.caller_correctable());
+        // And the rest are as they were: only these two and a failed entropy
+        // source say a retry may help.
+        for kind in ErrorKind::ALL {
+            let expected = matches!(
+                kind,
+                ErrorKind::EntropyFailure | ErrorKind::ProviderUnavailable
+            );
+            assert_eq!(kind.retryable(), expected, "{}", kind.id());
         }
     }
 }

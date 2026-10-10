@@ -7,6 +7,14 @@ all of them.
 
 ### Added
 
+- **Two error kinds for keys held elsewhere:** `ErrorKind::ProviderUnavailable`
+  and `ErrorKind::ProviderRefused`. An implementation of `Signer` over a
+  token, a TPM or a key service had no kind for "the device failed" or "the
+  device said no" -- `Internal` means a bug in this library, and
+  `InvalidParameter` blames the caller. The first is retryable and the
+  second is not, which matters: retrying a refused PIN locks a token.
+  Nothing in this library returns either. `ErrorKind` is `non_exhaustive`,
+  so this breaks no caller. Found by IronKeys' PKCS#11 provider.
 - **RSA-PSS signing is checked against NIST's values.** It was the one
   algorithm here with no outside vector, because a PSS signature is
   randomized. NIST's CAVP file `SigGenPSS_186-3.txt` publishes the salt, and
