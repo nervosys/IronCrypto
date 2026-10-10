@@ -3,6 +3,17 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **Certificate signatures PyCA made, as a test of `ic_sig::verify`.** 22
+  self-signed certificates that IronPrivacyGuard generated to test code it
+  has since replaced with this function: sixteen that verify, two whose key
+  is not one for the algorithm the certificate names, and four RSA-PSS
+  signatures with the wrong salt length or mask function. All are judged as
+  they should be, with no change to the code.
+
 ## 0.2.23
 
 ### Added

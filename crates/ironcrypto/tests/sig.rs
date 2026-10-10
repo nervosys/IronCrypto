@@ -187,6 +187,82 @@ fn openssl_issued_certificates_verify_under_their_issuer() {
     assert_eq!(seen, ["ed25519", "ml-dsa-65", "ml-dsa-87"]);
 }
 
+/// Certificates PyCA signed, each verified as the algorithm it names.
+///
+/// `scripts/import_x509_signature_vectors.py` says where these come from: 22
+/// self-signed certificates IronPrivacyGuard made to test certificate
+/// signature code it has since replaced with this function. Sixteen are sound.
+/// The six that are not are the reason to keep them: a certificate naming an
+/// ECDSA hash its key's curve does not go with, and RSA-PSS signatures whose
+/// salt or mask function is not the one the algorithm fixes. Each must be
+/// refused, and refused as what it is -- a key that is not the algorithm's,
+/// or a signature that does not verify.
+#[test]
+fn pyca_certificate_signatures_are_judged_as_the_algorithm_they_name() {
+    let Some(file) = VectorFile::load_or_report("pyca-x509-signatures") else {
+        return;
+    };
+    let mut tally = std::collections::BTreeMap::new();
+    for case in &file.cases {
+        let alg = algorithm(&case["algorithm"]);
+        let (certificate, issuer_spki) = (
+            hex_field(case, "certificate"),
+            hex_field(case, "issuer_spki"),
+        );
+        let (tbs, spki, signature) = certificate_parts(&certificate);
+        // Self-signed: the key in the certificate is the key that signed it.
+        assert_eq!(spki, &issuer_spki[..], "{}", case["name"]);
+        let result = verify_spki(alg, &issuer_spki, tbs, signature);
+        match case["expected"].as_str() {
+            "valid" => {
+                result.unwrap_or_else(|e| panic!("{}: {e:?}", case["name"]));
+                // And not with one byte of what was signed changed.
+                let mut altered = tbs.to_vec();
+                *altered.last_mut().unwrap() ^= 1;
+                assert_eq!(
+                    kind(verify_spki(alg, &issuer_spki, &altered, signature)),
+                    ErrorKind::AuthenticationFailed,
+                    "{}",
+                    case["name"]
+                );
+            }
+            "key-mismatch" => assert_eq!(
+                kind(result),
+                ErrorKind::InvalidParameter,
+                "{}",
+                case["name"]
+            ),
+            "invalid-signature" => {
+                assert_eq!(
+                    kind(result),
+                    ErrorKind::AuthenticationFailed,
+                    "{}",
+                    case["name"]
+                );
+                // Nor as PSS over either other hash: the salt and the mask
+                // function are fixed by the algorithm, not searched for.
+                for other in [
+                    SignatureAlgorithm::RsaPssSha384,
+                    SignatureAlgorithm::RsaPssSha512,
+                ] {
+                    assert_eq!(
+                        kind(verify_spki(other, &issuer_spki, tbs, signature)),
+                        ErrorKind::AuthenticationFailed,
+                        "{} as {}",
+                        case["name"],
+                        other.id()
+                    );
+                }
+            }
+            other => panic!("unknown expectation {other}"),
+        }
+        *tally.entry(case["expected"].clone()).or_insert(0usize) += 1;
+    }
+    assert_eq!(tally["valid"], 16, "{tally:?}");
+    assert_eq!(tally["key-mismatch"], 2, "{tally:?}");
+    assert_eq!(tally["invalid-signature"], 4, "{tally:?}");
+}
+
 /// Every SLH-DSA parameter set, by the key and signature OpenSSL made for it.
 #[test]
 fn openssl_slh_dsa_signatures_verify_for_every_parameter_set() {
