@@ -80,20 +80,62 @@ pub fn from_der(input: &[u8], out: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-/// The largest DER encoding a fixed-width signature of `signature_len` bytes
-/// can produce.
+/// The largest DER encoding that `signature_len` bytes of fixed-width
+/// signature can produce, whatever those bytes are.
 ///
 /// Two integers, each at most `signature_len / 2 + 1` content bytes with the
-/// sign byte, each with a two-byte header, inside a `SEQUENCE` with a two-byte
-/// header. Use it to size a buffer without guessing.
+/// sign byte and each with a two-byte header, inside a `SEQUENCE` whose
+/// header is two bytes while the content is under 128 and three from there.
+/// A buffer this long always suffices for [`to_der`].
+///
+/// It is a bound on the encoding, not on signatures. For P-256 and P-384 the
+/// two are the same, 72 and 104. For P-521 they are not: this gives 141, but
+/// `r` and `s` are below a 521-bit order, so their 66-byte forms never have
+/// the top bit set and never take a sign byte, and a real signature is at
+/// most 139. `ic_core::sig::SignatureAlgorithm::max_signature_len` gives
+/// that figure. A signer deciding whether its caller's buffer is long enough
+/// should encode first and compare lengths, not compare against this.
 pub const fn max_der_len(signature_len: usize) -> usize {
     let half = signature_len / 2;
-    2 + 2 * (2 + half + 1)
+    let content = 2 * (2 + half + 1);
+    let header = if content < 128 { 2 } else { 3 };
+    header + content
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `max_der_len` is reached exactly by the input that needs the most, and
+    /// a real P-521 signature stays under it.
+    ///
+    /// For 132 bytes it used to say 140, which is neither: the worst input
+    /// needs 141, because 138 bytes of content take a three-byte header, and
+    /// a signature whose integers are below the 521-bit order needs at most
+    /// 139. A signer that compared its caller's buffer with 140 refused the
+    /// 139-byte buffer `max_signature_len` promises is enough.
+    #[test]
+    fn max_der_len_is_the_encodings_bound_and_p521_signatures_stay_under_it() {
+        for len in [64usize, 96, 132] {
+            // Every byte 0xff: both integers take a sign byte.
+            let worst = [0xffu8; 132];
+            let mut out = [0u8; 160];
+            let n = to_der(&worst[..len], &mut out).unwrap();
+            assert_eq!(n, max_der_len(len), "{len} bytes");
+            // And one byte less is not enough.
+            assert!(to_der(&worst[..len], &mut out[..n - 1]).is_err());
+        }
+        assert_eq!(max_der_len(64), 72);
+        assert_eq!(max_der_len(96), 104);
+        assert_eq!(max_der_len(132), 141);
+
+        // The largest P-521 integers: 0x01 then 65 bytes of 0xff, top bit clear.
+        let mut largest = [0xffu8; 132];
+        largest[0] = 0x01;
+        largest[66] = 0x01;
+        let mut out = [0u8; 160];
+        assert_eq!(to_der(&largest, &mut out).unwrap(), 139);
+    }
 
     /// Both halves of the sign-byte rule, with values chosen so that one `r`
     /// needs the byte and the other does not.

@@ -22,6 +22,18 @@ all of them.
   equal OpenSSL's, which is also the first outside value the RSA
   private-key operation with the CRT has been held to.
 
+### Fixed
+
+- **`ic_pkix::ecdsa_signature::max_der_len(132)` was 140, which is not a
+  bound on anything.** The worst 132 bytes encode to 141, since 138 bytes of
+  content take a three-byte header, and a real P-521 signature needs at most
+  139. It returns 141 now and its documentation says which figure is which.
+  Nothing overflowed: `to_der` checks its buffer. But a signer that compared
+  its caller's buffer with 140 refused the 139-byte buffer that
+  `SignatureAlgorithm::max_signature_len` says always suffices. The values
+  for P-256 and P-384, 72 and 104, were right and are unchanged. Reported by
+  IronSocketLayer.
+
 ## 0.2.20
 
 ### Security
