@@ -519,6 +519,24 @@ was `ic-core` at 2026-10-10 04:08:14 UTC and the last `ic-cli` at 04:09:00
 UTC. The published source commit is `a119889`; all twenty-two packages
 identified that clean commit in their VCS metadata.
 
+## 0.2.23 release authorization
+
+0.2.23 adds no package: the locations are the twenty-two already named. It
+adds no algorithm and no cryptographic functionality. It gives the output of
+`ic ontology controls --json` a schema name and the library's version, and
+it reduces the stack `ic_sig::SoftwareSigner` uses when it loads a key.
+
+On 2026-10-10 this agent told the maintainer that those two changes were not
+on crates.io and that a release needed their word and whether the earlier
+notice sufficed again. The maintainer wrote "release 0.2.23". Asked then
+"what about the notice?", having been told the release adds no package and
+no algorithm, they answered "Earlier notice suffices", against the option
+described as: "You judge the notice you sent for 0.2.20 covers this release
+too. I record that as your determination."
+
+This records that instruction and that determination. No notice was printed
+or sent for this release. Publication proceeds on them.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
