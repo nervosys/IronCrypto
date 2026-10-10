@@ -1080,6 +1080,85 @@ pub fn random_encoded(n: usize, encoding: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// The controls export's shape, held to its schema number.
+    ///
+    /// Another project reads this to write compliance evidence. If a field
+    /// here is removed or renamed, this fails, and the right fix is a new
+    /// schema number and a note to that project, not a change to this list.
+    #[test]
+    fn the_controls_export_has_the_shape_its_schema_names() {
+        fn keys(v: &Json) -> Vec<String> {
+            // The map is ordered, so the keys come out sorted.
+            match v {
+                Json::Object(map) => map.keys().cloned().collect(),
+                other => panic!("not an object: {other:?}"),
+            }
+        }
+        let all = controls_json(None, None, None).unwrap();
+        assert_eq!(
+            all.get("schema").and_then(|v| v.as_str()),
+            Some("ironcrypto-controls/1")
+        );
+        assert_eq!(
+            all.get("version").and_then(|v| v.as_str()),
+            Some(ironcrypto::VERSION)
+        );
+        assert_eq!(
+            keys(&all),
+            [
+                "controls",
+                "count",
+                "cvePosture",
+                "fipsValidated",
+                "schema",
+                "totals",
+                "unmet",
+                "version"
+            ]
+        );
+        assert_eq!(
+            keys(all.get("totals").unwrap()),
+            ["met", "notApplicable", "partial", "unmet"]
+        );
+        // Never validated until a certificate exists.
+        assert_eq!(all.get("fipsValidated"), Some(&Json::Bool(false)));
+
+        let controls = all.get("controls").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(controls.len(), frameworks::CONTROLS.len());
+        let mut states = std::collections::BTreeMap::new();
+        for control in controls {
+            assert_eq!(
+                keys(control),
+                [
+                    "algorithms",
+                    "bearing",
+                    "compliance",
+                    "description",
+                    "framework",
+                    "frameworkName",
+                    "id",
+                    "standards",
+                    "title"
+                ]
+            );
+            let compliance = control.get("compliance").unwrap();
+            let state = compliance
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .to_string();
+            states.entry(state).or_insert_with(|| keys(compliance));
+        }
+        // Each state carries what a reader needs to state it honestly: the
+        // evidence for what is met, the gap for what is partial, the reason
+        // for the rest.
+        assert_eq!(states["met"], ["evidence", "file", "state"]);
+        assert_eq!(states["partial"], ["evidence", "file", "gap", "state"]);
+        assert_eq!(states["unmet"], ["reason", "state"]);
+        assert_eq!(states["not-applicable"], ["reason", "state"]);
+        assert_eq!(states.len(), 4, "every state appears in the table");
+    }
+
     #[test]
     fn entry_json_round_trips_through_the_parser() {
         for e in ic_ontology::all() {
@@ -1725,6 +1804,15 @@ pub fn control_json(c: &Control) -> Json {
     ])
 }
 
+/// The name and number of the controls export's shape.
+///
+/// Another tool reads this export to build compliance evidence, so its shape
+/// is a promise. Within one number, fields are only ever added: a reader that
+/// ignores what it does not know keeps working. Removing or renaming a field,
+/// or changing what one means, takes a new number. `docs/ONTOLOGY.md` lists
+/// the fields, and a test fails if they change without this changing.
+pub const CONTROLS_SCHEMA: &str = "ironcrypto-controls/1";
+
 /// Controls, optionally narrowed by framework, algorithm or compliance state.
 ///
 /// The totals come back alongside the list, and the `unmet` list is named
@@ -1805,6 +1893,10 @@ pub fn controls_json(
             ]),
         ),
         ("unmet", Json::Array(unmet)),
+        ("schema", Json::str(CONTROLS_SCHEMA)),
+        // The evidence pointers are checked at this version and are only
+        // true for it, so a reader should record it with what it reads.
+        ("version", Json::str(ironcrypto::VERSION)),
         ("cvePosture", Json::str(frameworks::cve_posture())),
         (
             "fipsValidated",

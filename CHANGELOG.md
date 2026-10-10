@@ -5,6 +5,16 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **The controls export has a named, kept shape.** `ic ontology controls
+  --json` and its MCP tool now carry `"schema": "ironcrypto-controls/1"` and
+  the IronCrypto `version` the mappings were read from. Within one schema
+  number fields are only added. `docs/ONTOLOGY.md` lists them and what a
+  reader must carry over to avoid overstating them, and a test fails if they
+  change without the number changing. For tools that build compliance
+  evidence from these mappings, IronEvidence first among them.
+
 ### Changed
 
 - **`SoftwareSigner::from_pkcs8` uses much less stack for most keys.** Its

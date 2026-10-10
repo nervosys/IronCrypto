@@ -147,6 +147,48 @@ The writers are hand-rolled, which keeps the workspace dependency-free, and are
 tested for well-formedness against every entry — including the entries whose
 examples contain newlines and quotes.
 
+## The controls export
+
+`ic ontology controls --json`, and the MCP tool that returns the same thing,
+is read by other tools to build compliance evidence, so its shape is named
+and kept: `"schema": "ironcrypto-controls/1"`. Within one number, fields are
+only added; a reader that ignores what it does not know keeps working.
+Removing or renaming a field, or changing what one means, takes a new number.
+`the_controls_export_has_the_shape_its_schema_names` in `ic-cli` fails if the
+fields below change without it.
+
+| Field | What it is |
+|---|---|
+| `schema` | `ironcrypto-controls/1` |
+| `version` | the IronCrypto version the mappings were read from |
+| `count` | how many controls are in `controls`, after any filter |
+| `totals` | `met`, `partial`, `unmet`, `notApplicable`, counted before the state filter |
+| `unmet` | the ids of the unmet controls, named so they are not one filter away from being missed |
+| `cvePosture` | a sentence on how CVEs bear on this library |
+| `fipsValidated` | `false`, until a CMVP certificate exists |
+| `controls` | the list |
+
+Each control has `id`, `framework`, `frameworkName`, `title`, `description`,
+`bearing`, `algorithms`, `standards` and `compliance`. `compliance.state` is
+one of four, and the other fields follow from it:
+
+| `state` | Also present |
+|---|---|
+| `met` | `file`, `evidence` |
+| `partial` | `file`, `evidence`, `gap` |
+| `unmet` | `reason` |
+| `not-applicable` | `reason` |
+
+Three things a reader must carry over, or it will say more than this does:
+
+- **`met` is about this library's part**, with a file and a symbol a test
+  checks exist. It never says a system satisfies the control. `bearing` says
+  how the control bears on a library at all, and belongs beside the state
+  wherever the state is shown.
+- **`partial` without its `gap` is a false statement.**
+- **`file` and `evidence` are true for `version` and no other.** They are
+  checked at the commit they ship in.
+
 ## Keeping it honest
 
 An ontology that drifts from the code is worse than none: it lies with
