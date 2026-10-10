@@ -3,6 +3,25 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Added
+
+- **`ic_sig::SoftwareSigner`, a `Signer` for a private key held in memory.**
+  `ic_core::sig::Signer` has been the interface for keys in an HSM, a TPM or
+  a key service since 0.2.16, and nothing in this library implemented it.
+  `SoftwareSigner::from_pkcs8` reads RSA, ECDSA over P-256, P-384 and P-521,
+  Ed25519, ML-DSA and SLH-DSA keys and signs in the encodings `ic_sig::verify`
+  accepts. The public half is always computed from the private one; a file
+  whose stated public key, modulus, expanded key or root disagrees with it
+  is refused. An ML-DSA key must carry its seed. HSS/LMS is not offered:
+  this library verifies it and does not sign with it.
+- **Checked against OpenSSL-made private keys**, one per algorithm, 21 in
+  all: each is read, gives the public key OpenSSL derived byte for byte, and
+  signs what `verify` accepts. Its Ed25519 and RSA PKCS#1 v1.5 signatures
+  equal OpenSSL's, which is also the first outside value the RSA
+  private-key operation with the CRT has been held to.
+
 ## 0.2.20
 
 ### Security

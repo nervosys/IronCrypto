@@ -8,9 +8,10 @@
 //! not know or care where the key lives; [`Signer::custody`] is there for the
 //! callers that must.
 //!
-//! This crate defines the interface and nothing that implements it. Software
-//! keys and the hardware backends are other crates'; verification, which needs
-//! no private key, is `ic_sig::verify`.
+//! This crate defines the interface and nothing that implements it. A key
+//! held in memory signs through `ic_sig::SoftwareSigner`; the hardware and
+//! service backends are other crates'; verification, which needs no private
+//! key, is `ic_sig::verify`.
 //!
 //! # Encodings
 //!

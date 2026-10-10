@@ -243,6 +243,13 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     let mut shares = [0u8; 5 * 16];
     cipher::shamir::split(&[6u8; 16], 3, 5, &mut rng, &mut shares).unwrap();
 
+    // A software signer, made while the module works.
+    let mut pkcs8 = [0u8; 64];
+    let pkcs8_len = ironcrypto::pkix::PrivateKeyInfo::Ed25519(&ed.0)
+        .to_der(&mut pkcs8)
+        .unwrap();
+    let software_signer = sig::SoftwareSigner::from_pkcs8(&pkcs8[..pkcs8_len]).unwrap();
+
     // A digest, to compare with the one computed afterwards.
     let digest_before = ironcrypto::hash::Sha256::digest(message);
 
@@ -737,6 +744,21 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         .kind(),
         ErrorKind::ModuleErrorState
     );
+
+    // The software signer: a key loaded before signs nothing, and none loads.
+    {
+        use ironcrypto::core_types::sig::Signer;
+        seen.refused(
+            "ed25519",
+            "software signer",
+            software_signer.sign(SignatureAlgorithm::Ed25519, message, &mut rng, &mut out),
+        );
+        seen.refused(
+            "ed25519",
+            "software signer from_pkcs8",
+            sig::SoftwareSigner::from_pkcs8(&pkcs8[..pkcs8_len]),
+        );
+    }
 
     // HPKE: no key pair, no new context, and an open one seals nothing.
     seen.refused(

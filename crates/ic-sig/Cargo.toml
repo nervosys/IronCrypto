@@ -1,6 +1,6 @@
 [package]
 name = "ic-sig"
-description = "Signature verification by algorithm over X.509 public keys, for IronCrypto"
+description = "Signature verification by algorithm over X.509 public keys, and a software Signer, for IronCrypto"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

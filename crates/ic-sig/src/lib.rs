@@ -31,6 +31,13 @@
 //! # }
 //! ```
 //!
+//! # Signing
+//!
+//! [`SoftwareSigner`] is the other direction, for a private key held in
+//! memory: it reads a PKCS#8 key and implements [`ic_core::sig::Signer`], so
+//! code written against that interface runs on a software key as it does on
+//! one in a device. What it signs is what [`verify`] accepts.
+//!
 //! # Encodings
 //!
 //! Signatures are in the form X.509 and TLS 1.3 carry: a DER
@@ -66,6 +73,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
+
+pub mod signer;
+
+pub use signer::SoftwareSigner;
 
 use ic_core::sig::SignatureAlgorithm;
 use ic_core::traits::SignatureScheme;
