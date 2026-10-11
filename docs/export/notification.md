@@ -544,6 +544,28 @@ was `ic-core` at 2026-10-10 16:36:20 UTC and the last `ic-cli` at 16:36:57
 UTC. The published source commit is `2b0c328`; all twenty-two packages
 identified that clean commit in their VCS metadata.
 
+## 0.2.24 release authorization
+
+0.2.24 adds no package: the locations are the twenty-two already named. It
+adds no algorithm and no cryptographic functionality. It adds two error
+kinds, `ProviderUnavailable` and `ProviderRefused`, for implementations of
+`Signer` over keys held in a device or a service, and tests with their
+vectors: RSA-PSS signing against NIST's CAVP examples, and certificate
+signatures made with pyca/cryptography.
+
+On 2026-10-10 this agent told the maintainer that those changes were on
+GitHub and not on crates.io, and that a release needed their word and
+whether the earlier notice sufficed. The maintainer wrote "release 0.2.24".
+Asked then "What about the BIS/NSA notice for 0.2.24?", having been told the
+release "adds no package, no algorithm and no cryptographic functionality:
+two error kinds, and tests with their vectors", they answered "Earlier
+notice suffices", against the option described as: "You judge the notice you
+sent for 0.2.20 covers this release too. I record that as your
+determination."
+
+This records that instruction and that determination. No notice was printed
+or sent for this release. Publication proceeds on them.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
