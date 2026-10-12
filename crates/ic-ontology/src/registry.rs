@@ -62,6 +62,24 @@ const SALT_REQUIRED: Constraint = Constraint {
     severity: Severity::Critical,
 };
 
+const VERIFY_ONLY_MIGRATE: Constraint = Constraint {
+    id: "verify-then-rehash",
+    requirement: "Use only to check a hash made elsewhere, and on success rehash the password \
+                  with Argon2id and store that in its place.",
+    consequence: "Kept as the stored hash, it leaves the weaker scheme, and its cache-timing \
+                  exposure, in place for every later login.",
+    severity: Severity::Serious,
+};
+
+const PASSWORD_INDEXED_TABLES: Constraint = Constraint {
+    id: "password-indexed-lookups",
+    requirement: "Do not verify where another process on the same machine can observe this \
+                  one's cache, beyond the one check on the way to Argon2id.",
+    consequence: "Its tables and memory are read at indices derived from the password, by \
+                  design, so a co-resident attacker learns something about the access pattern.",
+    severity: Severity::Serious,
+};
+
 const NOT_FOR_PASSWORDS: Constraint = Constraint {
     id: "not-for-passwords",
     requirement: "Do not feed a low-entropy password into this function.",
@@ -1993,6 +2011,62 @@ pub static REGISTRY: &[Entry] = &[
                 the form the RustCrypto scrypt crate writes, with which they were checked both \
                 ways. Checked against all four of RFC 7914's vectors, the 1 GiB one in a release \
                 build, and eight of OpenSSL's over shapes the RFC does not vary.",
+    },
+    Entry {
+        id: "bcrypt",
+        name: "bcrypt (verification only)",
+        aliases: &["2b", "2y", "2a"],
+        summary: "Checks a password against a stored bcrypt hash, so that it can be \
+                  replaced with Argon2id. Makes no new bcrypt hashes.",
+        class: Class::PasswordKdf,
+        family: "bcrypt",
+        purposes: &[Purpose::PasswordHashing],
+        strength: Strength::symmetric(128),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["Provos-Mazieres 1999", "Schneier 1994"],
+        params: &NO_PARAMS,
+        constraints: &[VERIFY_ONLY_MIGRATE, PASSWORD_INDEXED_TABLES],
+        edges: &[Edge { relation: Relation::SupersededBy, target: "argon2id" }],
+        performance: Performance::DeliberatelySlow,
+        rust_path: "ic_kdf::bcrypt",
+        example: "ic_kdf::bcrypt::verify_password(password, stored)?;",
+        notes: "$2a$, $2b$ and $2y$ are verified alike; $2x$, which marks hashes made by a \
+                broken implementation, is refused as unsupported. Only the first 72 bytes of a \
+                password count, as in every bcrypt. A stored cost above 16 is refused, since 31 \
+                is days of work; verify_password_bounded takes another ceiling. Checked against 51 verdicts of pyca/bcrypt 4.2.1, built \
+                on the Rust bcrypt crate.",
+    },
+    Entry {
+        id: "yescrypt",
+        name: "yescrypt (verification only)",
+        aliases: &["$y$", "$7$"],
+        summary: "Checks a password against a stored yescrypt or $7$ scrypt hash, the \
+                  default crypt(3) of current Linux distributions, so that it can be replaced \
+                  with Argon2id. Makes no new yescrypt hashes.",
+        class: Class::PasswordKdf,
+        family: "scrypt",
+        purposes: &[Purpose::PasswordHashing],
+        strength: Strength::symmetric(256),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["yescrypt 1.1"],
+        params: &NO_PARAMS,
+        constraints: &[VERIFY_ONLY_MIGRATE, PASSWORD_INDEXED_TABLES],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "scrypt" },
+            Edge { relation: Relation::BuiltOn, target: "pbkdf2-hmac-sha2-256" },
+            Edge { relation: Relation::SupersededBy, target: "argon2id" },
+        ],
+        performance: Performance::DeliberatelySlow,
+        rust_path: "ic_kdf::yescrypt",
+        example: "ic_kdf::yescrypt::verify_password(password, stored)?;",
+        notes: "The default flavor (j, read-write with pwxform), WORM, classic scrypt in $y$ \
+                form, the p and t parameters, and $7$. A ROM and hash upgrades are refused as \
+                unsupported; libxcrypt writes neither. A hash naming more than 4 GiB, or \
+                more than eight passes through that, is refused before anything is \
+                allocated; verify_password_bounded takes another ceiling. Transcribed from Openwall's yescrypt-ref.c and checked against 34 \
+                verdicts of libxcrypt 4.4.38.",
     },
     Entry {
         id: "argon2id",

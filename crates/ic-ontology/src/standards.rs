@@ -76,6 +76,9 @@ pub enum Body {
     /// A peer-reviewed publication, for a construction no standards body
     /// defines. Located by DOI.
     Literature,
+    /// A construction whose only definition is its authors' reference
+    /// implementation: no standard, no paper. Located at the authors' release.
+    Reference,
 }
 
 impl Body {
@@ -85,6 +88,7 @@ impl Body {
             Self::Nist => "nist",
             Self::Ietf => "ietf",
             Self::Literature => "literature",
+            Self::Reference => "reference",
         }
     }
 }
@@ -1175,6 +1179,50 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "Schneier 1994",
+        title: "Description of a new variable-length key, 64-bit block cipher (Blowfish)",
+        body: Body::Literature,
+        scope: Scope::Algorithm,
+        year: 1994,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://doi.org/10.1007/3-540-58108-1_24",
+        summary: "Fast Software Encryption, LNCS 809. Blowfish, whose key schedule bcrypt \
+                  turns into its expensive step. Its 64-bit block makes it unfit for \
+                  encryption today; it is here only as bcrypt's foundation.",
+        requirements: &NO_REQS,
+    },
+    Standard {
+        id: "Provos-Mazieres 1999",
+        title: "A Future-Adaptable Password Scheme",
+        body: Body::Literature,
+        scope: Scope::Algorithm,
+        year: 1999,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.usenix.org/legacy/events/usenix99/provos/provos.pdf",
+        summary: "Provos and Mazieres, USENIX Annual Technical Conference, FREENIX track. \
+                  bcrypt: Blowfish's key schedule repeated 2^cost times. No standards body \
+                  defines it; the $2a$, $2b$ and $2y$ prefixes came later, from OpenBSD and \
+                  others, to mark bug fixes. It has no DOI; the link is to USENIX's copy.",
+        requirements: &NO_REQS,
+    },
+    Standard {
+        id: "yescrypt 1.1",
+        title: "yescrypt, a password-based key derivation function and password hashing scheme",
+        body: Body::Reference,
+        scope: Scope::Algorithm,
+        year: 2019,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.openwall.com/yescrypt/",
+        summary: "Openwall's scrypt derivative, recognised in the Password Hashing Competition \
+                  and the default crypt(3) hash of current Debian, Ubuntu and Fedora. It is \
+                  defined by its reference implementation, yescrypt-ref.c and \
+                  yescrypt-common.c; there is no specification apart from that code.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "Shamir 1979",
         title: "How to Share a Secret",
         body: Body::Literature,
@@ -1645,6 +1693,15 @@ mod tests {
                 Body::Literature => assert!(
                     s.url.starts_with("https://doi.org/10.") || s.summary.contains("It has no DOI"),
                     "{} does not use a DOI and does not say it has none: {}",
+                    s.id,
+                    s.url
+                ),
+                // Code is not a specification, and the entry has to admit it.
+                Body::Reference => assert!(
+                    s.url.starts_with("https://")
+                        && s.summary
+                            .contains("defined by its reference implementation"),
+                    "{} must link the release and say it has no specification: {}",
                     s.id,
                     s.url
                 ),

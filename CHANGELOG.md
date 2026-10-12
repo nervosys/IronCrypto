@@ -37,6 +37,17 @@ all of them.
   a release build -- eight of OpenSSL's, and the RustCrypto crate's PHC
   strings both ways. Its memory access depends on the password, by
   design, as Argon2d's does; the ontology says so.
+- **bcrypt and yescrypt verification**, as `ic_kdf::bcrypt` and
+  `ic_kdf::yescrypt`, for moving stored hashes to Argon2id: check the
+  password at the next login, then rehash. Neither makes new hashes.
+  bcrypt takes `$2a$`, `$2b$` and `$2y$` and refuses `$2x$`; yescrypt
+  takes `$y$` in the default, WORM and classic flavors with `p` and `t`,
+  and `$7$`, which is what libxcrypt writes for current Debian, Ubuntu
+  and Fedora. Both refuse a stored hash that would cost too much before
+  doing any work: bcrypt above cost 16, yescrypt above 4 GiB or eight
+  passes through it. Their table lookups depend on the password, by
+  design; the ontology marks both verify-only and says why. Checked
+  against 51 verdicts of pyca/bcrypt and 34 of libxcrypt.
 - **`needs_rehash`** for Argon2 and scrypt PHC strings: whether a stored
   hash falls short of current parameters and should be made again after
   the next successful login, which is how NIST SP 800-63B-4 and the IETF

@@ -4,7 +4,10 @@
 //! * [`pbkdf2()`] — SP 800-132 password-based derivation.
 //! * [`kbkdf`] — SP 800-108 counter-mode KDF over HMAC.
 //! * [`argon2()`] — RFC 9106 memory-hard password hashing.
+//! * [`bcrypt`] — verifying bcrypt hashes, to move them to Argon2id.
 //! * [`scrypt`] — RFC 7914 scrypt, the fallback where Argon2 is not available.
+//! * [`yescrypt`] — verifying yescrypt and `$7$` hashes, to move them to
+//!   Argon2id.
 //! * [`passphrase`] — a secret sealed under a passphrase: Argon2id and
 //!   XChaCha20-Poly1305 in one versioned container.
 //!
@@ -42,11 +45,13 @@
 extern crate alloc;
 
 pub mod argon2;
+pub mod bcrypt;
 pub mod hkdf;
 pub mod kbkdf;
 pub mod passphrase;
 pub mod pbkdf2;
 pub mod scrypt;
+pub mod yescrypt;
 
 pub use argon2::{argon2, Argon2Params, Variant};
 pub use hkdf::Hkdf;
@@ -56,6 +61,7 @@ pub use pbkdf2::pbkdf2;
 /// Ontology identifiers for the KDFs this crate provides.
 pub const KDF_IDS: &[&str] = &[
     "argon2id",
+    "bcrypt",
     "hkdf-sha2-256",
     "hkdf-sha2-384",
     "hkdf-sha2-512",
@@ -63,6 +69,7 @@ pub const KDF_IDS: &[&str] = &[
     "pbkdf2-hmac-sha2-512",
     "scrypt",
     "sp800-108-counter-hmac-sha2-256",
+    "yescrypt",
 ];
 
 /// The SP 800-132 floor for PBKDF2 iterations in new deployments.

@@ -595,6 +595,22 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         ),
     );
     seen.refused(
+        "bcrypt",
+        "verify_password",
+        kdf::bcrypt::verify_password(
+            b"U*U",
+            "$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW",
+        ),
+    );
+    seen.refused(
+        "yescrypt",
+        "verify_password",
+        kdf::yescrypt::verify_password(
+            b"",
+            "$y$j6.$k2XAnEHBqQ1Ct2aMXFKNa/$uRt0PX5XBXcPN8OMTEutejPUGqrWS8ZdIuU3wFAenN7",
+        ),
+    );
+    seen.refused(
         "argon2id",
         "derive",
         kdf::argon2(

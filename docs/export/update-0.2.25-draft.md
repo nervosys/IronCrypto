@@ -37,6 +37,14 @@ published, rather than relying on the earlier notice. What 0.2.25 changes:
   is built on. Both use only primitives already listed: P-256, SHA-256.
 - **scrypt** (RFC 7914), a published password-based key derivation
   function built from PBKDF2-HMAC-SHA256 and Salsa20/8.
+- **bcrypt and yescrypt, verification only**: checking a password against
+  a hash made elsewhere, so that it can be replaced. Neither encrypts
+  data or makes new hashes. bcrypt (Provos and Mazieres, USENIX 1999) is
+  built on the Blowfish block cipher's key schedule (Schneier, FSE 1993),
+  which is new to the library; Blowfish is used only inside bcrypt and is
+  not offered as a cipher. yescrypt is Openwall's published scrypt
+  derivative, the default password hash of current Linux distributions,
+  built from scrypt, PBKDF2-HMAC-SHA256 and HMAC-SHA256.
 - **Argon2 version 1.0**, the version the Password Hashing Competition
   selected, beside version 1.3 (RFC 9106), which was already listed. It
   differs from 1.3 in one step, and is there so that older password hashes
@@ -117,6 +125,11 @@ CHANGES SINCE THE PREVIOUS NOTIFICATION
       specifies. They use only P-256 and SHA-256, already listed.
     - scrypt, the password-based key derivation function of RFC 7914,
       built from PBKDF2 with HMAC-SHA-256 and the Salsa20/8 core.
+    - Verification of bcrypt and yescrypt password hashes made elsewhere,
+      so that they can be replaced; no new hashes are made. bcrypt uses
+      the Blowfish key schedule, which is used for nothing else and is not
+      offered as a cipher. yescrypt is built from scrypt, PBKDF2 and
+      HMAC-SHA-256, all already listed.
     - Argon2 version 1.0, the version selected by the Password Hashing
       Competition in 2015, beside version 1.3 (RFC 9106), which was already
       listed. It is supported so that password hashes made with it can be
@@ -144,7 +157,8 @@ CRYPTOGRAPHIC FUNCTIONALITY
     Key derivation           HKDF (RFC 5869); PBKDF2 (SP 800-132);
                              SP 800-108 counter mode; scrypt (RFC 7914);
                              Argon2 (RFC 9106, and version 1.0 of the
-                             Argon2 specification)
+                             Argon2 specification); verification of
+                             bcrypt and yescrypt password hashes
     Passphrase encryption    Argon2id with XChaCha20-Poly1305, in a
                              container format published in the source
     Random bit generation    HMAC_DRBG and CTR_DRBG (SP 800-90A)

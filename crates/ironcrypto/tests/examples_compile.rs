@@ -992,6 +992,32 @@ fn scrypt_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// bcrypt, verified on the way to Argon2id.
+#[test]
+fn bcrypt_example_compiles_and_matches() -> Result<()> {
+    let password: &[u8] = b"U*U";
+    let stored = "$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW";
+    kdf::bcrypt::verify_password(password, stored)?;
+    check_example(
+        "bcrypt",
+        "ic_kdf::bcrypt::verify_password(password, stored)?;",
+    );
+    Ok(())
+}
+
+/// yescrypt, verified on the way to Argon2id.
+#[test]
+fn yescrypt_example_compiles_and_matches() -> Result<()> {
+    let password: &[u8] = b"";
+    let stored = "$y$j6.$k2XAnEHBqQ1Ct2aMXFKNa/$uRt0PX5XBXcPN8OMTEutejPUGqrWS8ZdIuU3wFAenN7";
+    kdf::yescrypt::verify_password(password, stored)?;
+    check_example(
+        "yescrypt",
+        "ic_kdf::yescrypt::verify_password(password, stored)?;",
+    );
+    Ok(())
+}
+
 /// Passphrase sealing, whose parameters the caller chooses.
 #[test]
 fn passphrase_seal_example_compiles_and_matches() -> Result<()> {
