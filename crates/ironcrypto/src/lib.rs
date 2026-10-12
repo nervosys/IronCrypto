@@ -132,7 +132,7 @@ pub mod prelude {
     pub use ic_ec::p384::{EcdhP384, EcdsaP384Sha384};
     pub use ic_ec::p521::{EcdhP521, EcdsaP521Sha512};
     pub use ic_ec::{Ed25519, X25519};
-    pub use ic_hash::Blake2b;
+    pub use ic_hash::{Blake2b, Blake2s, Blake3};
     pub use ic_hash::{CShake128, CShake256};
     pub use ic_hash::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256};
     pub use ic_hash::{Sha256, Sha384, Sha3_256, Sha3_512, Sha512, Shake128, Shake256};

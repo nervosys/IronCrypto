@@ -136,7 +136,7 @@ directly if you want a smaller graph:
 ```toml
 [dependencies]
 ic-cipher = "0.2.24"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.24"     # SHA-2, SHA-3, SHAKE, BLAKE2
+ic-hash = "0.2.24"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
 ic-ec = "0.2.24"       # the NIST curves, X25519, Ed25519
 ic-hpke = "0.2.24"     # HPKE, RFC 9180
 ic-sig = "0.2.24"      # verify any signature over an X.509 public key
@@ -337,7 +337,7 @@ leaving the stronger claim to stand for all of them.
 
 | class | algorithms |
 |---|---|
-| Hashes | SHA-224/256/384/512, SHA-512/224, SHA-512/256, SHA3-224/256/384/512, BLAKE2b |
+| Hashes | SHA-224/256/384/512, SHA-512/224, SHA-512/256, SHA3-224/256/384/512, BLAKE2b, BLAKE2s, BLAKE3 (hash, keyed hash, key derivation, extendable output) |
 | SP 800-185 | cSHAKE128/256, KMAC128/256, TupleHash128/256, ParallelHash128/256 |
 | XOFs | SHAKE128, SHAKE256 |
 | MACs | HMAC (SHA-2 and SHA-3), CMAC-AES-128/192/256, KMAC128/256, Poly1305 |
@@ -393,10 +393,6 @@ The ontology registers algorithms this library does **not** provide, marked
   signatures as legacy use. NIST has announced that it will withdraw SHA-1
   entirely by the end of 2030. A library begun now does not need it for the
   years that remain.
-- **BLAKE2s and BLAKE3** — `planned`, with no date. BLAKE2b is here because
-  Argon2 needs it, and SHA-256 has hardware support on most targets, which
-  between them cover what either would add. A protocol that names one, such
-  as WireGuard with BLAKE2s, needs another implementation for now.
 - **RSA encryption** — not offered at all. RSAES-PKCS1-v1_5 is a Bleichenbacher
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.

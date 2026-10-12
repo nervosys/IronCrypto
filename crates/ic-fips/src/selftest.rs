@@ -84,6 +84,8 @@ static CASTS: &[Cast] = &[
     ("kmac256", ic_mac::Kmac256::self_test),
     ("poly1305", ic_cipher::Poly1305::self_test),
     ("blake2b", blake2b_self_test),
+    ("blake2s", blake2s_self_test),
+    ("blake3", blake3_self_test),
     // Block ciphers and AEADs
     ("aes-128", ic_cipher::Aes128::self_test),
     ("aes-192", ic_cipher::Aes192::self_test),
@@ -227,6 +229,32 @@ fn blake2b_self_test() -> Result<()> {
         &mut want,
     )?;
     ic_core::ensure!(ic_core::ct::verify(&want, &got), SelfTestFailed, "blake2b");
+    Ok(())
+}
+
+/// BLAKE2s known-answer test: RFC 7693 Appendix B, BLAKE2s-256 of "abc".
+fn blake2s_self_test() -> Result<()> {
+    let mut got = [0u8; 32];
+    ic_hash::Blake2s::hash(b"abc", &mut got)?;
+    let mut want = [0u8; 32];
+    ic_core::codec::hex_decode(
+        b"508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982",
+        &mut want,
+    )?;
+    ic_core::ensure!(ic_core::ct::verify(&want, &got), SelfTestFailed, "blake2s");
+    Ok(())
+}
+
+/// BLAKE3 known-answer test: the one-byte input 0x00 from the BLAKE3 team's
+/// `test_vectors.json`.
+fn blake3_self_test() -> Result<()> {
+    let got = ic_hash::Blake3::hash(&[0u8]);
+    let mut want = [0u8; 32];
+    ic_core::codec::hex_decode(
+        b"2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213",
+        &mut want,
+    )?;
+    ic_core::ensure!(ic_core::ct::verify(&want, &got), SelfTestFailed, "blake3");
     Ok(())
 }
 
@@ -686,7 +714,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 83;
+pub const TEST_COUNT: usize = 85;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -784,7 +812,7 @@ pub fn integrity_check() -> Result<()> {
 const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "065c0bb0137dac2ff44dbb3d96d08ce77ed197aae3c93ad4ee904ad7ea088d0f";
+const INTEGRITY_TAG: &str = "c9ee7b277499134385238fa0d406a4458a7b267d0cc07d0807c7b423e88f53ee";
 
 #[cfg(test)]
 mod tests {

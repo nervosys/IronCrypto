@@ -29,13 +29,15 @@
 #![warn(clippy::all)]
 
 pub mod blake2;
+pub mod blake3;
 // SHA-NI, behind runtime detection. See `sha2::x86`.
 #[allow(unsafe_code)]
 mod sha2;
 mod sha3;
 pub mod sp800_185;
 
-pub use blake2::{blake2b_long, Blake2b};
+pub use blake2::{blake2b_long, Blake2b, Blake2s};
+pub use blake3::{Blake3, Blake3Reader};
 pub use sha2::{Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
 pub use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256, XofReader};
 pub use sp800_185::{CShake128, CShake256};
@@ -45,6 +47,8 @@ pub use sp800_185::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256
 /// and the agent-facing dispatch layer.
 pub const DIGEST_IDS: &[&str] = &[
     "blake2b",
+    "blake2s",
+    "blake3",
     "sha2-224",
     "sha2-256",
     "sha2-384",

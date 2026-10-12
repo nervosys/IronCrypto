@@ -107,9 +107,15 @@ all of them.
   as certificates are. Reading a request is the CA's side and is not here.
   Both the request and a certificate with a URI name are checked byte for
   byte against OpenSSL's.
-- **Ontology entries for BLAKE2s and BLAKE3**, both `planned` with no date.
-  Asking for either, or for XChaCha20-Poly1305, used to answer "unknown
-  algorithm"; it now says what the library has and what to use instead.
+- **BLAKE2s (RFC 7693) and BLAKE3**, as `ic_hash::Blake2s` and
+  `ic_hash::Blake3`. BLAKE2s is BLAKE2b's 32-bit sibling, which WireGuard
+  and Noise use. BLAKE3 offers a hash, a keyed hash, a key derivation
+  function and an extendable output; this is the portable serial form,
+  the same tree as the SIMD implementations without their speed on large
+  inputs. Checked against the BLAKE2 team's 256 keyed BLAKE2s vectors,
+  RFC 7693's BLAKE2s vector and its Appendix E self-test -- now also run
+  for BLAKE2b -- and the BLAKE3 team's vectors: 35 input lengths to
+  100 KiB in all three modes, to 131 bytes of output.
 
 ### Changed
 
@@ -117,7 +123,9 @@ all of them.
   iteration check skipped nothing, so ic-kdf's crate-private
   `pbkdf2::derive`, which scrypt and yescrypt run once by definition, was
   reported as a password hashed at one iteration. Callers cannot reach that
-  form; the public `pbkdf2` at one iteration is still reported.
+  form; the public `pbkdf2` at one iteration is still reported. A zeroed
+  buffer bound to a key's name is no longer reported in widths other than
+  bytes either, as `let mut key_words = [0u32; 8];`.
 - **Ed25519 verification is strict.** It now refuses a public key or a
   signature R of small order, and a non-canonical encoding of either, as
   ed25519-dalek's `verify_strict` and libsodium do. RFC 8032's cofactorless

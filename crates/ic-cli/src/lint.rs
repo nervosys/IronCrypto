@@ -423,7 +423,15 @@ fn is_zero_buffer(value: &str) -> bool {
         .trim_start_matches("Zeroizing::new(")
         .trim_start_matches("ic_core::Zeroizing::new(")
         .trim_end_matches(')');
-    inner.starts_with("[0u8;") || inner.starts_with("[0; ") || inner.starts_with("[0u8 ;")
+    // A zero of any unsigned width: a key schedule in words starts empty too.
+    let Some(rest) = inner.strip_prefix("[0") else {
+        return false;
+    };
+    let rest = ["u8", "u16", "u32", "u64", "u128"]
+        .iter()
+        .find_map(|suffix| rest.strip_prefix(suffix))
+        .unwrap_or(rest);
+    rest.trim_start().starts_with(';')
 }
 
 fn severity_of(rule: &str) -> Severity {
@@ -640,6 +648,12 @@ fn session(shared: &[u8], our_pk: &[u8], their_pk: &[u8]) -> Result<()> {
         assert!(
             rules_hit("crate::pbkdf2::derive::<HmacSha256>(passwd, salt, 1, &mut b)?;").is_empty()
         );
+        // A zeroed buffer of words, filled on the next line, as BLAKE3's key.
+        assert!(rules_hit("let mut key_words = [0u32; 8];").is_empty());
+        assert!(rules_hit("let mut secret = [0u64 ; 4];").is_empty());
+        // A key of a non-zero literal is still reported, in any width.
+        assert!(!rules_hit("let key_words = [0x2au32; 8];").is_empty());
+        assert!(!rules_hit("let key = [01u8; 32];").is_empty());
         // The public form at one pass is still reported.
         assert!(!rules_hit("ic_kdf::pbkdf2::<HmacSha256>(pw, salt, 1, &mut b)?;").is_empty());
     }

@@ -35,6 +35,11 @@ published, rather than relying on the earlier notice. What 0.2.25 changes:
   keyed function on a client's blinded input, with P-256 and SHA-256, in
   its three modes; and **hashing to elliptic curves** (RFC 9380), which it
   is built on. Both use only primitives already listed: P-256, SHA-256.
+- **BLAKE2s** (RFC 7693) and **BLAKE3** (its authors' published
+  specification, 2020), hash functions. BLAKE2s is the 32-bit form of
+  BLAKE2b, which was already listed. BLAKE3 uses a reduced-round form of
+  the BLAKE2s compression function in a tree, and offers keyed hashing,
+  key derivation and an extendable output.
 - **scrypt** (RFC 7914), a published password-based key derivation
   function built from PBKDF2-HMAC-SHA256 and Salsa20/8.
 - **bcrypt and yescrypt, verification only**: checking a password against
@@ -123,6 +128,9 @@ CHANGES SINCE THE PREVIOUS NOTIFICATION
     - Oblivious pseudorandom functions (OPRF, VOPRF and POPRF) of RFC
       9497 over P-256 with SHA-256, and hashing to P-256 as RFC 9380
       specifies. They use only P-256 and SHA-256, already listed.
+    - The BLAKE2s hash function of RFC 7693, and BLAKE3, a hash function
+      with keyed, key-derivation and extendable-output modes, specified
+      by its authors in a public document (2020).
     - scrypt, the password-based key derivation function of RFC 7914,
       built from PBKDF2 with HMAC-SHA-256 and the Salsa20/8 core.
     - Verification of bcrypt and yescrypt password hashes made elsewhere,
@@ -140,9 +148,13 @@ CHANGES SINCE THE PREVIOUS NOTIFICATION
 
 CRYPTOGRAPHIC FUNCTIONALITY
   IronCrypto implements published algorithms only. It contains no
-  proprietary or unpublished cryptographic functionality. All but one are
-  specified in standards; XChaCha20-Poly1305 is specified in a public IETF
-  Internet-Draft.
+  proprietary or unpublished cryptographic functionality. Most are
+  specified in standards. The rest are specified in public documents:
+  XChaCha20-Poly1305 in an IETF Internet-Draft; BLAKE3 in its authors'
+  specification; bcrypt in a paper (USENIX, 1999), on the Blowfish cipher
+  of another (Fast Software Encryption, 1993); and yescrypt, used only to
+  verify existing password hashes, in its authors' published reference
+  implementation.
 
     Block cipher and modes   AES-128/192/256 (FIPS 197); CBC, CTR (SP 800-38A);
                              AES Key Wrap and KWP (RFC 3394, RFC 5649)
@@ -151,7 +163,8 @@ CRYPTOGRAPHIC FUNCTIONALITY
                              XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha-03)
     Hashes and XOFs          SHA-2 family (FIPS 180-4); SHA-3 and SHAKE
                              (FIPS 202); cSHAKE, KMAC, TupleHash,
-                             ParallelHash (SP 800-185); BLAKE2b (RFC 7693)
+                             ParallelHash (SP 800-185); BLAKE2b and
+                             BLAKE2s (RFC 7693); BLAKE3
     MACs                     HMAC (FIPS 198-1); CMAC (SP 800-38B);
                              KMAC (SP 800-185); Poly1305 (RFC 8439)
     Key derivation           HKDF (RFC 5869); PBKDF2 (SP 800-132);

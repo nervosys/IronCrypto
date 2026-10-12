@@ -2279,50 +2279,57 @@ pub static REGISTRY: &[Entry] = &[
         id: "blake2s",
         name: "BLAKE2s",
         aliases: &["blake2s-256"],
-        summary: "BLAKE2 for 32-bit platforms. Specified, not implemented here.",
+        summary: "BLAKE2 for 32-bit platforms, with a built-in keyed mode; what WireGuard and \
+                  Noise use.",
         class: Class::Hash,
         family: "BLAKE2",
         purposes: &[Purpose::Integrity, Purpose::Authentication],
         strength: Strength::symmetric(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Planned,
+        status: ImplStatus::Available,
         standards: &["RFC 7693"],
         params: &NO_PARAMS,
         constraints: &[NOT_FOR_PASSWORDS],
         edges: &[Edge { relation: Relation::PairsWith, target: "blake2b" }],
         performance: Performance::Fast,
-        rust_path: "",
-        example: "",
-        notes: "Listed so that asking for it resolves to an absence rather than to nothing. \
-                BLAKE2s is BLAKE2b's 32-bit sibling, with outputs up to 32 bytes; WireGuard uses \
-                it. This library has BLAKE2b and hardware-accelerated SHA-256, which cover the \
-                same ground, so there is no date. Interoperating with a protocol that names \
-                BLAKE2s needs another implementation until there is.",
+        rust_path: "ic_hash::Blake2s",
+        example: "let mut out = [0u8; 32];\nic_hash::Blake2s::hash(b\"message\", &mut out)?;",
+        notes: "BLAKE2b's 32-bit sibling: outputs of 1 to 32 bytes and keys up to 32, both \
+                bound into the hash, so a short output is not a prefix of a long one. For \
+                interoperating with a protocol that names it; otherwise BLAKE2b or SHA-256 \
+                with hardware support. Checked against the BLAKE2 team's 256 keyed vectors and \
+                RFC 7693's BLAKE2s vector and Appendix E self-test.",
     },
     Entry {
         id: "blake3",
         name: "BLAKE3",
         aliases: &[],
-        summary: "A fast tree hash with a keyed mode and an extendable output. Specified, not \
-                  implemented here.",
+        summary: "A tree hash with a keyed mode, a key derivation function and an extendable \
+                  output.",
         class: Class::Hash,
         family: "BLAKE3",
         purposes: &[Purpose::Integrity, Purpose::Authentication, Purpose::Commitment],
         strength: Strength::symmetric(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Planned,
+        status: ImplStatus::Available,
         standards: &["BLAKE3 2020"],
         params: &NO_PARAMS,
         constraints: &[NOT_FOR_PASSWORDS],
-        edges: &[Edge { relation: Relation::PairsWith, target: "blake2b" }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "blake2s" },
+            Edge { relation: Relation::PairsWith, target: "blake2b" },
+        ],
         performance: Performance::Fast,
-        rust_path: "",
-        example: "",
-        notes: "Listed so that asking for it resolves to an absence rather than to nothing. \
-                BLAKE3 is very fast on large inputs because its tree parallelises across cores \
-                and SIMD lanes. It has no standards-body specification and is not approved; \
-                under a FIPS policy use SHA-2 or SHA-3. No date. Until there is one, SHA-256 \
-                with hardware support or BLAKE2b is the choice here.",
+        rust_path: "ic_hash::Blake3",
+        example: "let digest = ic_hash::Blake3::hash(b\"message\");",
+        notes: "Blake3::hash, keyed_hash with a 32-byte key, and derive_key under a \
+                hard-coded context string, each with an extendable output through \
+                finalize_xof. This is the portable serial form, transcribed from the authors' \
+                reference implementation: the same tree as the SIMD and multi-threaded \
+                implementations, without their speed on large inputs. No standards body \
+                specifies it and it is not approved; under a FIPS policy use SHA-2 or SHA-3. \
+                Checked against the BLAKE3 team's vectors, 35 input lengths to 100 KiB in all \
+                three modes to 131 bytes of output.",
     },
     // -- DRBGs --------------------------------------------------------------
     Entry {

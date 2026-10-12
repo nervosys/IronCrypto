@@ -229,6 +229,205 @@ impl Blake2b {
     }
 }
 
+/// The BLAKE2s initialization vector, identical to SHA-256's.
+const IV_S: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
+
+/// The BLAKE2s mixing function: BLAKE2b's on 32-bit words, with the
+/// rotations of RFC 7693 §2.1.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn g_s(v: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, x: u32, y: u32) {
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
+    v[d] = (v[d] ^ v[a]).rotate_right(16);
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = (v[b] ^ v[c]).rotate_right(12);
+    v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
+    v[d] = (v[d] ^ v[a]).rotate_right(8);
+    v[c] = v[c].wrapping_add(v[d]);
+    v[b] = (v[b] ^ v[c]).rotate_right(7);
+}
+
+/// A BLAKE2s hasher with a caller-chosen output length: RFC 7693's 32-bit
+/// BLAKE2, as WireGuard and Noise use it.
+///
+/// Not FIPS-approved. Outputs are 1 to 32 bytes, keys up to 32; like
+/// [`Blake2b`], the output length is bound into the hash.
+#[derive(Clone)]
+pub struct Blake2s {
+    h: [u32; 8],
+    buf: [u8; 64],
+    buffered: usize,
+    counter: u64,
+    output_len: usize,
+}
+
+impl Drop for Blake2s {
+    fn drop(&mut self) {
+        self.h.zeroize();
+        self.buf.zeroize();
+    }
+}
+
+impl Blake2s {
+    /// Block size in bytes.
+    pub const BLOCK_LEN: usize = 64;
+    /// Largest digest this produces.
+    pub const MAX_OUTPUT_LEN: usize = 32;
+    /// Largest key accepted in keyed mode.
+    pub const MAX_KEY_LEN: usize = 32;
+
+    /// Create a hasher producing `output_len` bytes, between 1 and 32.
+    pub fn new(output_len: usize) -> Result<Self> {
+        Self::with_key(output_len, &[])
+    }
+
+    /// Create a keyed hasher: the key is absorbed as a zero-padded first
+    /// block, as RFC 7693 specifies.
+    pub fn with_key(output_len: usize, key: &[u8]) -> Result<Self> {
+        ensure!(
+            (1..=Self::MAX_OUTPUT_LEN).contains(&output_len),
+            InvalidLength,
+            "blake2s output must be 1..=32 bytes"
+        );
+        ensure!(
+            key.len() <= Self::MAX_KEY_LEN,
+            InvalidLength,
+            "blake2s key must be at most 32 bytes"
+        );
+        let mut h = IV_S;
+        h[0] ^= 0x0101_0000 ^ ((key.len() as u32) << 8) ^ (output_len as u32);
+        let mut state = Self {
+            h,
+            buf: [0u8; 64],
+            buffered: 0,
+            counter: 0,
+            output_len,
+        };
+        if !key.is_empty() {
+            let mut block = [0u8; 64];
+            block[..key.len()].copy_from_slice(key);
+            state.update(&block);
+            block.zeroize();
+        }
+        Ok(state)
+    }
+
+    fn compress(&mut self, block: &[u8; 64], last: bool) {
+        let mut m = [0u32; 16];
+        for (word, b) in m.iter_mut().zip(block.chunks_exact(4)) {
+            *word = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        }
+        let mut v = [0u32; 16];
+        v[..8].copy_from_slice(&self.h);
+        v[8..].copy_from_slice(&IV_S);
+        let [low, high] = counter_words(self.counter);
+        v[12] ^= low;
+        v[13] ^= high;
+        if last {
+            v[14] = !v[14];
+        }
+        for s in &SIGMA {
+            g_s(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
+            g_s(&mut v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
+            g_s(&mut v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
+            g_s(&mut v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
+            g_s(&mut v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
+            g_s(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
+            g_s(&mut v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
+            g_s(&mut v, 3, 4, 9, 14, m[s[14]], m[s[15]]);
+        }
+        for i in 0..8 {
+            self.h[i] ^= v[i] ^ v[i + 8];
+        }
+        m.zeroize();
+        v.zeroize();
+    }
+
+    /// Absorb more input. As in BLAKE2b, a full buffer is compressed only
+    /// once more input is known to follow, since the last block is flagged.
+    pub fn update(&mut self, mut data: &[u8]) {
+        if self.buffered > 0 {
+            let take = core::cmp::min(64 - self.buffered, data.len());
+            self.buf[self.buffered..self.buffered + take].copy_from_slice(&data[..take]);
+            self.buffered += take;
+            data = &data[take..];
+            if self.buffered < 64 || data.is_empty() {
+                return;
+            }
+            let block = self.buf;
+            self.counter = self.counter.wrapping_add(64);
+            self.compress(&block, false);
+            self.buffered = 0;
+        }
+        while data.len() > 64 {
+            let mut block = [0u8; 64];
+            block.copy_from_slice(&data[..64]);
+            self.counter = self.counter.wrapping_add(64);
+            self.compress(&block, false);
+            data = &data[64..];
+        }
+        self.buf[..data.len()].copy_from_slice(data);
+        self.buffered = data.len();
+    }
+
+    /// Finish and write the digest into `out`, which must be `output_len` long.
+    pub fn finalize_into(mut self, out: &mut [u8]) -> Result<()> {
+        ensure!(
+            out.len() == self.output_len,
+            InvalidLength,
+            "blake2s output buffer"
+        );
+        self.counter = self.counter.wrapping_add(self.buffered as u64);
+        let mut block = [0u8; 64];
+        block[..self.buffered].copy_from_slice(&self.buf[..self.buffered]);
+        self.compress(&block, true);
+        block.zeroize();
+        let mut full = [0u8; 32];
+        for (c, word) in full.chunks_exact_mut(4).zip(self.h.iter()) {
+            c.copy_from_slice(&word.to_le_bytes());
+        }
+        out.copy_from_slice(&full[..self.output_len]);
+        full.zeroize();
+        Ok(())
+    }
+
+    /// One-shot hash.
+    pub fn hash(data: &[u8], out: &mut [u8]) -> Result<()> {
+        let mut h = Self::new(out.len())?;
+        h.update(data);
+        h.finalize_into(out)
+    }
+
+    /// One-shot keyed hash.
+    pub fn keyed_hash(key: &[u8], data: &[u8], out: &mut [u8]) -> Result<()> {
+        let mut h = Self::with_key(out.len(), key)?;
+        h.update(data);
+        h.finalize_into(out)
+    }
+}
+
+/// A 64-bit byte counter as the two words BLAKE2s and BLAKE3 put in state
+/// words 12 and 13, low first. No vector reaches 2^32 bytes, so the high
+/// word is tested against this rule rather than against a value.
+pub(crate) fn counter_words(counter: u64) -> [u32; 2] {
+    [counter as u32, (counter >> 32) as u32]
+}
+
+/// RFC 7693 Appendix E's deterministic sequence, a Fibonacci generator.
+#[cfg(test)]
+fn selftest_seq(out: &mut [u8], seed: u32) {
+    let mut a = 0xDEAD_4BADu32.wrapping_mul(seed);
+    let mut b = 1u32;
+    for o in out.iter_mut() {
+        let t = a.wrapping_add(b);
+        a = b;
+        b = t;
+        *o = (t >> 24) as u8;
+    }
+}
+
 /// The Argon2 variable-length hash `H'`.
 ///
 /// For outputs up to 64 bytes this is just BLAKE2b with the length prefixed.
@@ -415,6 +614,116 @@ mod tests {
         let mut short = [0u8; 128];
         blake2b_long(&[b"input"], &mut short).unwrap();
         assert_ne!(&a[..128], &short[..]);
+    }
+
+    /// RFC 7693 Appendix B: BLAKE2s-256 of "abc".
+    #[test]
+    fn rfc7693_blake2s_abc_vector() {
+        let mut out = [0u8; 32];
+        Blake2s::hash(b"abc", &mut out).unwrap();
+        assert_eq!(
+            hex(&out),
+            "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982"
+        );
+    }
+
+    /// RFC 7693 Appendix E, `blake2s_selftest`: unkeyed and keyed hashes at
+    /// output lengths 16, 20, 28 and 32 over inputs of 0, 3, 64, 65, 255 and
+    /// 1024 bytes, hashed together. The expected value is `blake2s_res`.
+    #[test]
+    fn rfc7693_blake2s_selftest() {
+        let mut grand = Blake2s::new(32).unwrap();
+        let mut input = [0u8; 1024];
+        let mut key = [0u8; 32];
+        let mut md = [0u8; 32];
+        for outlen in [16usize, 20, 28, 32] {
+            for inlen in [0usize, 3, 64, 65, 255, 1024] {
+                selftest_seq(&mut input[..inlen], inlen as u32);
+                Blake2s::hash(&input[..inlen], &mut md[..outlen]).unwrap();
+                grand.update(&md[..outlen]);
+                selftest_seq(&mut key[..outlen], outlen as u32);
+                Blake2s::keyed_hash(&key[..outlen], &input[..inlen], &mut md[..outlen]).unwrap();
+                grand.update(&md[..outlen]);
+            }
+        }
+        let mut out = [0u8; 32];
+        grand.finalize_into(&mut out).unwrap();
+        assert_eq!(
+            hex(&out),
+            "6a411f08ce25adcdfb02aba641451cec53c598b24f4fc787fbdc88797f4c1dfe"
+        );
+    }
+
+    /// RFC 7693 Appendix E, `blake2b_selftest`, the same for BLAKE2b at
+    /// output lengths 20, 32, 48 and 64 over 0, 3, 128, 129, 255 and 1024
+    /// bytes. The expected value is `blake2b_res`.
+    #[test]
+    fn rfc7693_blake2b_selftest() {
+        let mut grand = Blake2b::new(32).unwrap();
+        let mut input = [0u8; 1024];
+        let mut key = [0u8; 64];
+        let mut md = [0u8; 64];
+        for outlen in [20usize, 32, 48, 64] {
+            for inlen in [0usize, 3, 128, 129, 255, 1024] {
+                selftest_seq(&mut input[..inlen], inlen as u32);
+                Blake2b::hash(&input[..inlen], &mut md[..outlen]).unwrap();
+                grand.update(&md[..outlen]);
+                selftest_seq(&mut key[..outlen], outlen as u32);
+                Blake2b::keyed_hash(&key[..outlen], &input[..inlen], &mut md[..outlen]).unwrap();
+                grand.update(&md[..outlen]);
+            }
+        }
+        let mut out = [0u8; 32];
+        grand.finalize_into(&mut out).unwrap();
+        assert_eq!(
+            hex(&out),
+            "c23a7800d98123bd10f506c61e29da5603d763b8bbad2e737f5e765a7bccd475"
+        );
+    }
+
+    #[test]
+    fn blake2s_streaming_matches_one_shot() {
+        let data: Vec<u8> = (0..300u32).map(|i| (i * 11) as u8).collect();
+        let mut expected = [0u8; 32];
+        Blake2s::hash(&data, &mut expected).unwrap();
+        for split in [0usize, 1, 63, 64, 65, 128, 129, 300] {
+            let mut h = Blake2s::new(32).unwrap();
+            h.update(&data[..split]);
+            h.update(&data[split..]);
+            let mut got = [0u8; 32];
+            h.finalize_into(&mut got).unwrap();
+            assert_eq!(got, expected, "split at {split}");
+        }
+        // One block fed a byte at a time: the full buffer is the last block.
+        let mut h = Blake2s::new(32).unwrap();
+        for b in &data[..64] {
+            h.update(&[*b]);
+        }
+        let mut got = [0u8; 32];
+        h.finalize_into(&mut got).unwrap();
+        Blake2s::hash(&data[..64], &mut expected).unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn the_counter_splits_low_word_first() {
+        assert_eq!(
+            counter_words(0x0123_4567_89ab_cdef),
+            [0x89ab_cdef, 0x0123_4567]
+        );
+        assert_eq!(counter_words(1 << 32), [0, 1]);
+        assert_eq!(counter_words(u64::MAX), [u32::MAX, u32::MAX]);
+    }
+
+    #[test]
+    fn blake2s_rejects_invalid_parameters() {
+        assert!(Blake2s::new(0).is_err());
+        assert!(Blake2s::new(33).is_err());
+        assert!(Blake2s::with_key(32, &[0u8; 33]).is_err());
+        assert!(Blake2s::new(32)
+            .unwrap()
+            .finalize_into(&mut [0u8; 31])
+            .is_err());
     }
 
     #[test]

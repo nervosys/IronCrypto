@@ -664,6 +664,29 @@ fn blake2b_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// `blake2s`, whose output length is a parameter, as BLAKE2b's is.
+#[test]
+fn blake2s_example_compiles_and_matches() -> Result<()> {
+    let mut out = [0u8; 32];
+    hash::Blake2s::hash(b"message", &mut out)?;
+    check_example(
+        "blake2s",
+        "let mut out = [0u8; 32];\nic_hash::Blake2s::hash(b\"message\", &mut out)?;",
+    );
+    Ok(())
+}
+
+/// `blake3`, which returns its 32-byte digest.
+#[test]
+fn blake3_example_compiles_and_matches() {
+    let digest = hash::Blake3::hash(b"message");
+    assert_eq!(digest.len(), 32);
+    check_example(
+        "blake3",
+        "let digest = ic_hash::Blake3::hash(b\"message\");",
+    );
+}
+
 /// The SP 800-185 functions: cSHAKE, TupleHash, ParallelHash and KMAC.
 #[test]
 fn sp800_185_examples_compile_and_match() -> Result<()> {
