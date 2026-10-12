@@ -16,7 +16,7 @@
 //!   how many CAs may follow it;
 //! - key usage, critical;
 //! - extended key usage, if any purpose is given: TLS server and client;
-//! - subject alternative names, if any: DNS names and IP addresses;
+//! - subject alternative names, if any: DNS names, IP addresses and URIs;
 //! - subject key identifier and authority key identifier, if given.
 //!
 //! That is what a private CA and the leaf certificates it signs need, and it is
@@ -53,6 +53,8 @@ const UTC_TIME: u8 = 0x17;
 const GENERALIZED_TIME: u8 = 0x18;
 /// `[2] IMPLICIT IA5String`: a `dNSName` in `GeneralName`.
 const DNS_NAME: u8 = 0x82;
+/// `[6] IMPLICIT IA5String`: a `uniformResourceIdentifier` in `GeneralName`.
+const URI: u8 = 0x86;
 /// `[7] IMPLICIT OCTET STRING`: an `iPAddress` in `GeneralName`.
 const IP_ADDRESS: u8 = 0x87;
 /// `[0] IMPLICIT OCTET STRING`: `keyIdentifier` in `AuthorityKeyIdentifier`.
@@ -103,7 +105,7 @@ impl SignatureAlgorithm {
         }
     }
 
-    fn push_identifier(self, w: &mut Writer) -> Result<()> {
+    pub(crate) fn push_identifier(self, w: &mut Writer) -> Result<()> {
         let start = w.len();
         w.push_oid(self.oid())?;
         w.push_wrapper(der::SEQUENCE, start)
@@ -190,6 +192,17 @@ pub enum SubjectAltName<'a> {
     Ipv4([u8; 4]),
     /// An IPv6 address, sixteen bytes.
     Ipv6([u8; 16]),
+    /// A URI, such as `spiffe://example.org/agent` or
+    /// `nanda:ed25519:node-7:worker`.
+    ///
+    /// RFC 5280 section 4.2.1.6 requires an absolute URI: a scheme, a colon,
+    /// and something after it. The scheme is checked against RFC 3986's
+    /// grammar -- a letter, then letters, digits, `+`, `-` or `.` -- and the
+    /// whole must be printable ASCII with no spaces, since the field is an
+    /// `IA5String` and a URI has no unescaped space. Nothing else about the
+    /// URI is parsed or normalised: it is written as given, and a verifier
+    /// compares it as written.
+    Uri(&'a str),
 }
 
 /// Whether the subject is a certificate authority.
@@ -290,6 +303,17 @@ pub fn write_certificate(
     signature: &[u8],
     out: &mut [u8],
 ) -> Result<usize> {
+    write_signed(tbs_certificate, algorithm, signature, out)
+}
+
+/// `SEQUENCE { signed, signatureAlgorithm, signature BIT STRING }`: the shape
+/// of a certificate and of a certification request alike.
+pub(crate) fn write_signed(
+    signed: &[u8],
+    algorithm: SignatureAlgorithm,
+    signature: &[u8],
+    out: &mut [u8],
+) -> Result<usize> {
     ensure!(
         signature.len() == algorithm.raw_signature_len(),
         InvalidLength,
@@ -305,7 +329,7 @@ pub fn write_certificate(
         _ => w.push_bit_string(signature)?,
     }
     algorithm.push_identifier(&mut w)?;
-    w.push(tbs_certificate)?;
+    w.push(signed)?;
     w.push_wrapper(der::SEQUENCE, 0)?;
     Ok(w.finish())
 }
@@ -345,15 +369,7 @@ fn validate(params: &CertificateParams) -> Result<()> {
         InvalidParameter,
         "key usage is empty"
     );
-    for san in params.subject_alt_names {
-        if let SubjectAltName::Dns(name) = san {
-            ensure!(
-                !name.is_empty() && name.bytes().all(|b| b.is_ascii_graphic()),
-                InvalidParameter,
-                "dns name must be non-empty printable ascii"
-            );
-        }
-    }
+    validate_alt_names(params.subject_alt_names)?;
     for id in [params.subject_key_id, params.authority_key_id]
         .into_iter()
         .flatten()
@@ -366,9 +382,43 @@ fn validate(params: &CertificateParams) -> Result<()> {
     r.finish()
 }
 
+/// The checks every alternative name passes before it is written, in a
+/// certificate or in a request.
+pub(crate) fn validate_alt_names(names: &[SubjectAltName]) -> Result<()> {
+    for san in names {
+        match san {
+            SubjectAltName::Dns(name) => ensure!(
+                !name.is_empty() && name.bytes().all(|b| b.is_ascii_graphic()),
+                InvalidParameter,
+                "dns name must be non-empty printable ascii"
+            ),
+            SubjectAltName::Uri(uri) => ensure!(
+                is_absolute_uri(uri),
+                InvalidParameter,
+                "uri must be absolute -- scheme, colon, the rest -- in printable ascii"
+            ),
+            SubjectAltName::Ipv4(_) | SubjectAltName::Ipv6(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// RFC 3986 section 3.1's scheme, a colon, and at least one more character,
+/// all printable ASCII with no space.
+fn is_absolute_uri(uri: &str) -> bool {
+    let Some((scheme, rest)) = uri.split_once(':') else {
+        return false;
+    };
+    let mut scheme = scheme.bytes();
+    scheme.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && scheme.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+        && !rest.is_empty()
+        && uri.bytes().all(|b| b.is_ascii_graphic())
+}
+
 /// `Name ::= SEQUENCE OF SET OF AttributeTypeAndValue`, with one
 /// attribute: the common name, as a `UTF8String`.
-fn push_name(w: &mut Writer, common_name: &str) -> Result<()> {
+pub(crate) fn push_name(w: &mut Writer, common_name: &str) -> Result<()> {
     let start = w.len();
     w.push_element(UTF8_STRING, common_name.as_bytes())?;
     w.push_oid(oid::COMMON_NAME)?;
@@ -441,13 +491,34 @@ fn civil(unix: u64) -> (u32, u32, u32, u32, u32, u32) {
 /// `Extension ::= SEQUENCE { extnID, critical BOOLEAN DEFAULT FALSE,
 /// extnValue OCTET STRING }`, with `value` already written and starting at
 /// `value_start`. DER omits `critical` when it is the default.
-fn wrap_extension(w: &mut Writer, value_start: usize, id: &[u8], critical: bool) -> Result<()> {
+pub(crate) fn wrap_extension(
+    w: &mut Writer,
+    value_start: usize,
+    id: &[u8],
+    critical: bool,
+) -> Result<()> {
     w.push_wrapper(der::OCTET_STRING, value_start)?;
     if critical {
         w.push_element(BOOLEAN, &[0xff])?;
     }
     w.push_oid(id)?;
     w.push_wrapper(der::SEQUENCE, value_start)
+}
+
+/// The subject alternative name extension, not critical: the subject has a
+/// name too.
+pub(crate) fn push_alt_names_extension(w: &mut Writer, names: &[SubjectAltName]) -> Result<()> {
+    let start = w.len();
+    for san in names.iter().rev() {
+        match san {
+            SubjectAltName::Dns(name) => w.push_element(DNS_NAME, name.as_bytes())?,
+            SubjectAltName::Ipv4(ip) => w.push_element(IP_ADDRESS, ip)?,
+            SubjectAltName::Ipv6(ip) => w.push_element(IP_ADDRESS, ip)?,
+            SubjectAltName::Uri(uri) => w.push_element(URI, uri.as_bytes())?,
+        }
+    }
+    w.push_wrapper(der::SEQUENCE, start)?;
+    wrap_extension(w, start, oid::SUBJECT_ALT_NAME, false)
 }
 
 fn push_extensions(w: &mut Writer, p: &CertificateParams) -> Result<()> {
@@ -465,16 +536,7 @@ fn push_extensions(w: &mut Writer, p: &CertificateParams) -> Result<()> {
         wrap_extension(w, start, oid::SUBJECT_KEY_IDENTIFIER, false)?;
     }
     if !p.subject_alt_names.is_empty() {
-        let start = w.len();
-        for san in p.subject_alt_names.iter().rev() {
-            match san {
-                SubjectAltName::Dns(name) => w.push_element(DNS_NAME, name.as_bytes())?,
-                SubjectAltName::Ipv4(ip) => w.push_element(IP_ADDRESS, ip)?,
-                SubjectAltName::Ipv6(ip) => w.push_element(IP_ADDRESS, ip)?,
-            }
-        }
-        w.push_wrapper(der::SEQUENCE, start)?;
-        wrap_extension(w, start, oid::SUBJECT_ALT_NAME, false)?;
+        push_alt_names_extension(w, p.subject_alt_names)?;
     }
     if !p.extended_key_usage.is_empty() {
         let start = w.len();
@@ -648,6 +710,42 @@ mod tests {
             subject_alt_names: &[SubjectAltName::Dns("has space")],
             ..params(&spki)
         }));
+        // A URI must be absolute, with a scheme RFC 3986 allows, and
+        // printable ASCII without spaces.
+        for uri in [
+            "",
+            "no-scheme",
+            ":empty-scheme",
+            "nanda:",
+            "1nanda:x",
+            "na_nda:x",
+            "nanda:has space",
+            "nanda:caf\u{e9}",
+        ] {
+            let names = [SubjectAltName::Uri(uri)];
+            assert!(
+                refused(CertificateParams {
+                    subject_alt_names: &names,
+                    ..params(&spki)
+                }),
+                "{uri:?} was accepted"
+            );
+        }
+        for uri in [
+            "nanda:ed25519:n:r",
+            "spiffe://example.org/a",
+            "urn:uuid:1",
+            "a+b-c.d:x",
+        ] {
+            let names = [SubjectAltName::Uri(uri)];
+            assert!(
+                !refused(CertificateParams {
+                    subject_alt_names: &names,
+                    ..params(&spki)
+                }),
+                "{uri:?} was refused"
+            );
+        }
         assert!(refused(CertificateParams {
             subject_public_key_info: &[0x30],
             ..params(&spki)

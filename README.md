@@ -409,9 +409,12 @@ The ontology registers algorithms this library does **not** provide, marked
   `SubjectPublicKeyInfo` from any X.509 parser to `ic_pkix::PublicKeyInfo`.
   *Issuing* certificates is in scope, for one profile -- a CA and the leaves it
   signs, with basic constraints, key usage, extended key usage, alternative
-  names and key identifiers -- in `ic_pkix::cert`. Writing only what it chooses
-  to is a small surface, and every certificate it writes for Ed25519 and
-  ML-DSA is checked byte for byte against OpenSSL's.
+  names (DNS names, IP addresses and URIs) and key identifiers -- in
+  `ic_pkix::cert`, and so is *writing* the PKCS#10 request a key holder sends
+  to ask for one, in `ic_pkix::csr`. Writing only what it chooses to is a
+  small surface, and every certificate and request it writes for Ed25519 and
+  ML-DSA is checked byte for byte against OpenSSL's. Reading a request, the
+  CA's side, is parsing, and is IronPKI's.
 ### Timing
 
 ```sh

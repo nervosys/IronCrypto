@@ -15,6 +15,15 @@ all of them.
   an RFC. Checked against the draft's HChaCha20, XChaCha20 and AEAD vectors
   and all 315 of Project Wycheproof's cases. Not FIPS-approved, and refused in
   approved mode. Also through `ic seal`, `ic open` and their MCP tools.
+- **URI alternative names in issued certificates**, as
+  `SubjectAltName::Uri`: an absolute URI, such as a SPIFFE ID or an agent
+  handle, written as given. Asked for by AgentMesh, which names each agent
+  by one.
+- **PKCS#10 certification requests**, written by `ic_pkix::csr`: the key
+  holder's half of asking a CA for a certificate, signed through any signer
+  as certificates are. Reading a request is the CA's side and is not here.
+  Both the request and a certificate with a URI name are checked byte for
+  byte against OpenSSL's.
 - **Ontology entries for BLAKE2s and BLAKE3**, both `planned` with no date.
   Asking for either, or for XChaCha20-Poly1305, used to answer "unknown
   algorithm"; it now says what the library has and what to use instead.

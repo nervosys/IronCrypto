@@ -20,6 +20,7 @@ use pkix::cert::{
     write_certificate, write_ml_dsa_public_key, write_tbs_certificate, BasicConstraints,
     CertificateParams, ExtendedKeyUsage, KeyUsage, SignatureAlgorithm, SubjectAltName,
 };
+use pkix::csr::{write_certification_request, write_certification_request_info, RequestParams};
 
 /// A key that can be embedded in a certificate and sign one.
 trait Issuer {
@@ -185,4 +186,93 @@ fn issued_certificates_are_byte_for_byte_openssl_s() {
         checked += 2;
     }
     assert_eq!(checked, 6, "a CA and a leaf for each of three algorithms");
+}
+
+/// A URI alternative name, and a PKCS#10 request, against OpenSSL's.
+///
+/// `testvectors/openssl-x509-uri-csr.json`, from
+/// `scripts/gen_x509_uri_csr_vectors.py`: OpenSSL 3.5.7 wrote a request for an
+/// Ed25519 key asking for a DNS name and a URI, and issued a leaf from it
+/// under an Ed25519 CA. Ed25519 is deterministic, so the request and both
+/// certificates must be OpenSSL's byte for byte.
+#[test]
+fn uri_names_and_requests_are_byte_for_byte_openssl_s() {
+    let Some(file) = VectorFile::load_or_report("openssl-x509-uri-csr") else {
+        return;
+    };
+    let case = &file.cases[0];
+    let ca = Ed(ec::Ed25519Key::from_seed(&hex_field(case, "ca_seed")).unwrap());
+    let leaf = Ed(ec::Ed25519Key::from_seed(&hex_field(case, "leaf_seed")).unwrap());
+    let dns = String::from_utf8(hex_field(case, "dns")).unwrap();
+    let uri = String::from_utf8(hex_field(case, "uri")).unwrap();
+    let names = [SubjectAltName::Dns(&dns), SubjectAltName::Uri(&uri)];
+    let not_before: u64 = case["not_before"].parse().unwrap();
+    let not_after: u64 = case["not_after"].parse().unwrap();
+    let ca_ski = hex_field(case, "ca_ski");
+    let leaf_ski = hex_field(case, "leaf_ski");
+
+    let mut leaf_spki = vec![0u8; 64];
+    let n = leaf.spki(&mut leaf_spki);
+    leaf_spki.truncate(n);
+
+    // The request, signed by the key it is for.
+    let mut info = vec![0u8; 1024];
+    let n = write_certification_request_info(
+        &RequestParams {
+            subject_common_name: &dns,
+            subject_public_key_info: &leaf_spki,
+            subject_alt_names: &names,
+        },
+        &mut info,
+    )
+    .unwrap();
+    let mut sig = [0u8; 64];
+    leaf.sign(&info[..n], &mut sig);
+    let mut csr = vec![0u8; 1024];
+    let c = write_certification_request(&info[..n], SignatureAlgorithm::Ed25519, &sig, &mut csr)
+        .unwrap();
+    assert_eq!(hex(&csr[..c]), case["csr_der"], "request");
+
+    let mut ca_spki = vec![0u8; 64];
+    let n = ca.spki(&mut ca_spki);
+    ca_spki.truncate(n);
+    let ca_cert = issue(
+        &CertificateParams {
+            serial: &hex_field(case, "ca_serial"),
+            issuer_common_name: "IronCrypto Test CA",
+            subject_common_name: "IronCrypto Test CA",
+            not_before,
+            not_after,
+            subject_public_key_info: &ca_spki,
+            basic_constraints: BasicConstraints::Ca { path_len: Some(0) },
+            key_usage: KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN,
+            extended_key_usage: &[],
+            subject_alt_names: &[],
+            subject_key_id: Some(&ca_ski),
+            authority_key_id: Some(&ca_ski),
+        },
+        SignatureAlgorithm::Ed25519,
+        &ca,
+    );
+    assert_eq!(hex(&ca_cert), case["ca_der"], "CA");
+
+    let leaf_cert = issue(
+        &CertificateParams {
+            serial: &hex_field(case, "leaf_serial"),
+            issuer_common_name: "IronCrypto Test CA",
+            subject_common_name: &dns,
+            not_before,
+            not_after,
+            subject_public_key_info: &leaf_spki,
+            basic_constraints: BasicConstraints::EndEntity,
+            key_usage: KeyUsage::DIGITAL_SIGNATURE,
+            extended_key_usage: &[ExtendedKeyUsage::ServerAuth, ExtendedKeyUsage::ClientAuth],
+            subject_alt_names: &names,
+            subject_key_id: Some(&leaf_ski),
+            authority_key_id: Some(&ca_ski),
+        },
+        SignatureAlgorithm::Ed25519,
+        &ca,
+    );
+    assert_eq!(hex(&leaf_cert), case["leaf_der"], "leaf with a URI name");
 }

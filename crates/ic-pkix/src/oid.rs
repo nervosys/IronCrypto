@@ -71,6 +71,8 @@ pub const SLH_DSA_SHAKE_192F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04
 pub const SLH_DSA_SHAKE_256S: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1e];
 /// `id-slh-dsa-shake-256f`, 2.16.840.1.101.3.4.3.31 (RFC 9909).
 pub const SLH_DSA_SHAKE_256F: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x1f];
+/// `pkcs-9-at-extensionRequest`, 1.2.840.113549.1.9.14 (RFC 2985).
+pub const EXTENSION_REQUEST: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x0e];
 /// `id-at-commonName`, 2.5.4.3.
 pub const COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
 /// `id-ce-subjectKeyIdentifier`, 2.5.29.14.
@@ -325,6 +327,11 @@ mod tests {
                 SLH_DSA_SHAKE_256F,
                 &[2, 16, 840, 1, 101, 3, 4, 3, 31],
                 "id-slh-dsa-shake-256f",
+            ),
+            (
+                EXTENSION_REQUEST,
+                &[1, 2, 840, 113549, 1, 9, 14],
+                "pkcs-9-at-extensionRequest",
             ),
             (COMMON_NAME, &[2, 5, 4, 3], "id-at-commonName"),
             (

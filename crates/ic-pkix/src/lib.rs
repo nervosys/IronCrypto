@@ -20,6 +20,9 @@
 //! - [`cert`]: X.509 certificate *issuance*, for one fixed profile: a CA and
 //!   the leaves it signs, under ECDSA, Ed25519 or ML-DSA. Certificates it
 //!   writes are checked byte for byte against OpenSSL's.
+//! - [`csr`]: PKCS#10 certification requests, *written*: the key holder's
+//!   side of asking that CA for a certificate. Checked byte for byte against
+//!   OpenSSL's too.
 //!
 //! # What it does not do
 //!
@@ -72,6 +75,7 @@
 #![warn(clippy::all)]
 
 pub mod cert;
+pub mod csr;
 pub mod der;
 pub mod ecdsa_signature;
 pub mod ml_dsa;
