@@ -345,7 +345,7 @@ leaving the stronger claim to stand for all of them.
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305, AES-128/256-GCM-SIV |
 | Post-quantum | ML-KEM-512, -768 and -1024 (FIPS 203), ML-DSA-44, -65 and -87 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205), all twelve parameter sets, pure and pre-hash, ACVP-checked |
-| KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
+| KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d at versions 1.3 and 1.0, with PHC strings for password storage, caller-provided memory, and lanes on threads -- what the `argon2` crate offers |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | Secret sharing | Shamir over GF(2^8), k of n, for backing up a key; constant time, in the AES field |

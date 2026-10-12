@@ -955,6 +955,51 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
             &mut out[..32],
         ),
     );
+    {
+        use kdf::argon2::{phc, Block, Version};
+        let mut memory = vec![Block::ZERO; small.block_count()];
+        seen.refused(
+            "argon2id",
+            "argon2_with_memory",
+            kdf::argon2::argon2_with_memory(
+                kdf::Variant::Argon2id,
+                Version::V0x13,
+                &small,
+                b"password",
+                &[1u8; 16],
+                b"",
+                b"",
+                &mut memory,
+                &mut out[..32],
+            ),
+        );
+        seen.refused(
+            "argon2id",
+            "fill_memory",
+            kdf::argon2::fill_memory(
+                kdf::Variant::Argon2id,
+                Version::V0x10,
+                &small,
+                b"password",
+                &[1u8; 16],
+                b"",
+                b"",
+                &mut memory,
+            ),
+        );
+        assert!(
+            memory.iter().all(|b| *b == Block::ZERO),
+            "a refused fill wrote nothing"
+        );
+        seen.refused(
+            "argon2id",
+            "phc::verify_password",
+            phc::verify_password(
+                b"password",
+                "$argon2id$v=19$m=64,t=1,p=1$AQEBAQEBAQEBAQEBAQEBAQ$AQEBAQEBAQEBAQEBAQEBAQ",
+            ),
+        );
+    }
     seen.refused(
         "ecdsa-p256-sha256",
         "public_key_compressed",

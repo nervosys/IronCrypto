@@ -7,6 +7,25 @@ all of them.
 
 ### Added
 
+- **Everything the `argon2` crate offers, in `ic_kdf::argon2`.** Version 1.0
+  beside 1.3, so hashes made before RFC 9106 verify (`argon2_versioned`);
+  Argon2 over memory the caller provides, for targets with no allocator
+  (`argon2_with_memory`, `fill_memory`, the public `Block`);
+  `Argon2Params::DEFAULT` (19 MiB, t=2, p=1) and `block_count`; and PHC
+  strings in `ic_kdf::argon2::phc` -- `hash_password` under a drawn salt,
+  `verify_password` in constant time, a secret and its `keyid`, associated
+  `data`, and `verify_password_bounded` for a hash from elsewhere, since a
+  hash's parameters decide what verifying it costs. Lanes run on threads
+  under `std`: four lanes are about 2.2 times faster than before. Checked
+  against libargon2 at both versions, libsodium's PHC strings, and
+  argon2 0.6.0's outputs. The `argon2` crate is still faster, about 1.3
+  times on one lane and twice on four: it vectorises the compression
+  function with AVX2, and it neither zero-fills its memory up front nor
+  wipes it afterwards unless asked. Two behaviours differ from it on
+  purpose: a PHC string with no `v=` field is read as version 1.0, as
+  libargon2 reads it, and parsing accepts only the canonical form. A
+  failed allocation for the memory is now an error rather than an abort,
+  since a stored hash chooses its size.
 - **XChaCha20-Poly1305**, as `ic_cipher::XChaCha20Poly1305`: ChaCha20-Poly1305
   with a 192-bit nonce, long enough to draw at random for every message, so
   nothing has to keep a counter. `seal_with_random_nonce` draws the nonce and
