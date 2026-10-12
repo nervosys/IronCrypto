@@ -1,0 +1,130 @@
+{
+ "algorithm": "Ed25519 point encodings a strict verifier refuses",
+ "source": "Derived by scripts/gen_ed25519_degenerate_points.py from the curve equation of RFC 8032 section 5.1, run on 2026-10-12: the 8 small-order points, each shown to have order dividing 8, and every encoding whose y field is p or more and names a curve point. Each is refused by libsodium's crypto_core_ed25519_is_valid_point (PyNaCl 1.5.0).",
+ "cases": [
+  {
+   "kind": "small-order",
+   "point": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "kind": "small-order",
+   "point": "0000000000000000000000000000000000000000000000000000000000000080"
+  },
+  {
+   "kind": "small-order",
+   "point": "0100000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+   "kind": "small-order",
+   "point": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"
+  },
+  {
+   "kind": "small-order",
+   "point": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85"
+  },
+  {
+   "kind": "small-order",
+   "point": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a"
+  },
+  {
+   "kind": "small-order",
+   "point": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa"
+  },
+  {
+   "kind": "small-order",
+   "point": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f2ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f6ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "f7ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "fbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "fbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "fcffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "fcffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "fdffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "fdffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+  },
+  {
+   "kind": "non-canonical",
+   "point": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  }
+ ]
+}

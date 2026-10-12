@@ -389,8 +389,6 @@ pub trait Field: Copy + Clone + core::fmt::Debug + PartialEq + Eq + Sized {
     const ZERO: Self;
     /// The multiplicative identity.
     const ONE: Self;
-    /// Width of [`Self::Bytes`].
-    const BYTE_LEN: usize;
 
     /// Ring addition.
     fn add(&self, rhs: &Self) -> Self;
@@ -545,7 +543,6 @@ macro_rules! mont_field {
                 },
                 Self::R2,
             ));
-            const BYTE_LEN: usize = $bytes;
 
             #[inline]
             fn add(&self, other: &Self) -> Self {

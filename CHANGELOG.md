@@ -40,6 +40,17 @@ all of them.
 
 ### Changed
 
+- **Ed25519 verification is strict.** It now refuses a public key or a
+  signature R of small order, and a non-canonical encoding of either, as
+  ed25519-dalek's `verify_strict` and libsodium do. RFC 8032's cofactorless
+  equation alone accepts a signature under the identity key for any
+  message, and this accepted an encoding whose y field is p or more, which
+  section 5.1.3 says must not decode. No key or signature a correct signer
+  makes is affected. The degenerate encodings are derived from the curve
+  equation and checked against libsodium. Reported by the TUNDRA session.
+- **A dead-code warning on Rust 1.90 is gone**: an associated constant
+  nothing read. A dependent that denies warnings can now build this.
+  Reported by the TUNDRA session.
 - **PBKDF2 is about 1.7 times faster.** It keyed its MAC again on every
   iteration; it now keys it once and clones it, which for HMAC removes two of
   the four compressions each iteration took. PBKDF2 applies one PRF under one

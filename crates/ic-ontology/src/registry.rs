@@ -2554,7 +2554,10 @@ pub static REGISTRY: &[Entry] = &[
         notes: "Signing needs no RNG, which removes the nonce-reuse failure that has broken ECDSA \
                 deployments. FIPS 186-5 approves EdDSA, but this implementation is not validated; \
                 the ontology reports it as not-approved so approved mode blocks it rather than \
-                implying a validation that does not exist.",
+                implying a validation that does not exist. Verification is strict, as \
+                ed25519-dalek's verify_strict and libsodium are: beyond RFC 8032's checks it \
+                refuses a public key or an R of small order, and a non-canonical encoding of \
+                either, so no signature verifies without a private key behind it.",
     },
     Entry {
         id: "aes-256-kw",

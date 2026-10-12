@@ -293,8 +293,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ontology_version_is_set() {
-        assert!(!ONTOLOGY_VERSION.is_empty());
-    }
+    // Checked when this compiles: an empty version is a build error, not a
+    // test failure, and a test of a constant is one clippy rightly calls
+    // always false.
+    const _: () = assert!(!ONTOLOGY_VERSION.is_empty());
 }

@@ -500,6 +500,15 @@ impl Point {
     ///
     /// `to_bytes` is used only to canonicalise the two sides before comparing,
     /// which costs a carry chain and no inversion.
+    /// Whether eight times this point is the identity: whether it lies in the
+    /// small subgroup the cofactor admits. Variable time; for public points.
+    fn has_small_order(&self) -> bool {
+        self.double()
+            .double()
+            .double()
+            .eq_projective(&Point::IDENTITY)
+    }
+
     fn eq_projective(&self, other: &Point) -> bool {
         self.x.mul(&other.z).to_bytes() == other.x.mul(&self.z).to_bytes()
             && self.y.mul(&other.z).to_bytes() == other.y.mul(&self.z).to_bytes()
@@ -516,12 +525,22 @@ impl Point {
         out
     }
 
-    /// Decompress a 32-byte encoding, rejecting non-curve points.
+    /// Decompress a 32-byte encoding, rejecting non-curve points and
+    /// non-canonical encodings.
+    ///
+    /// RFC 8032 section 5.1.3: a y field of p or more fails to decode. Read
+    /// modulo p it would name a curve point, under an encoding no correct
+    /// encoder produces; nineteen such aliases exist, and accepting them makes
+    /// one point answer to two encodings.
     pub fn decompress(bytes: &[u8; 32]) -> Option<Point> {
         let sign = Choice::from_u8(bytes[31] >> 7);
         let mut y_bytes = *bytes;
         y_bytes[31] &= 0x7f;
         let y = Fe::from_bytes(&y_bytes);
+        // The encoding is public, so comparing it in variable time is fine.
+        if y.to_bytes() != y_bytes {
+            return None;
+        }
 
         // Solve x^2 = (y^2 - 1) / (d*y^2 + 1).
         let y2 = y.square();
@@ -1098,15 +1117,29 @@ pub struct Ed25519VerifyKey {
 }
 
 impl Ed25519VerifyKey {
-    /// Decompress `public_key`, rejecting anything not on the curve.
+    /// Decompress `public_key`, rejecting anything not on the curve, not
+    /// canonically encoded, or of small order.
+    ///
+    /// The last is not in RFC 8032, and is the check `verify_strict` in
+    /// ed25519-dalek and libsodium's verifier also make. A key of order
+    /// dividing 8 has no secret behind it worth the name: a signature under
+    /// one can be made without any private key, for many messages at once,
+    /// and the same signature can verify under several such keys. No key a
+    /// correct signer derives has small order, so refusing them costs nothing
+    /// honest.
     pub fn from_bytes(public_key: &[u8]) -> Result<Self> {
         ensure!(public_key.len() == 32, InvalidLength, "ed25519 public key");
         let mut compressed = [0u8; 32];
         compressed.copy_from_slice(public_key);
         let a = Point::decompress(&compressed).ok_or(ic_core::err!(
             MalformedEncoding,
-            "ed25519 public key is not on the curve"
+            "ed25519 public key is not on the curve or not canonical"
         ))?;
+        ensure!(
+            !a.has_small_order(),
+            InvalidParameter,
+            "ed25519 public key has small order"
+        );
         Ok(Self {
             compressed,
             neg_a: a.negate(),
@@ -1139,8 +1172,16 @@ impl Ed25519VerifyKey {
 
         let r_point = Point::decompress(&big_r).ok_or(ic_core::err!(
             MalformedEncoding,
-            "ed25519 signature R is not on the curve"
+            "ed25519 signature R is not on the curve or not canonical"
         ))?;
+        // An R of small order is what a signature made without a private key
+        // looks like; a correct signer's R is a multiple of the basepoint and
+        // never has one. Refused as dalek's verify_strict and libsodium do.
+        ensure!(
+            !r_point.has_small_order(),
+            MalformedEncoding,
+            "ed25519 signature R has small order"
+        );
 
         let k = hash_to_scalar(&[&big_r, &self.compressed, message]);
 
@@ -1349,6 +1390,74 @@ mod tests {
             let c = p.compress();
             let d = Point::decompress(&c).expect("valid point");
             assert_eq!(hex(&d.compress()), hex(&c), "k = {k}");
+        }
+    }
+
+    /// The identity as a public key: under the cofactorless equation alone,
+    /// `[S]B + [k](-A) == R` holds with `R = [S]B` for every message and
+    /// every `S`, so anyone can sign anything. The equation is shown to hold,
+    /// and the key is refused before it is consulted.
+    #[test]
+    fn a_signature_under_the_identity_key_is_refused() {
+        let identity = Point::IDENTITY.compress();
+        let s = scalar::reduce(&[7u8; 32]);
+        let r = mul_basepoint(&s).compress();
+        let k = hash_to_scalar(&[&r, &identity, b"any message"]);
+        let neg_a = Point::IDENTITY.negate();
+        let lhs = double_scalar_mul_vartime(&neg_a, &k, &s);
+        assert!(
+            lhs.eq_projective(&Point::decompress(&r).unwrap()),
+            "the forgery satisfies the equation"
+        );
+
+        let err = Ed25519VerifyKey::from_bytes(&identity).err().unwrap();
+        assert_eq!(err.kind(), ic_core::ErrorKind::InvalidParameter);
+        let mut sig = [0u8; 64];
+        sig[..32].copy_from_slice(&r);
+        sig[32..].copy_from_slice(&s);
+        assert!(Ed25519::verify(&identity, b"any message", &sig).is_err());
+    }
+
+    /// A signature whose R is the identity, made with the real private key:
+    /// `S = k*a` satisfies the equation, since `[k*a]B - [k]A` is the identity.
+    /// A correct signer's R is never of small order; this one is refused.
+    #[test]
+    fn a_signature_with_an_identity_r_is_refused() {
+        let key = Ed25519Key::from_seed(&[0x42u8; 32]).unwrap();
+        let r = Point::IDENTITY.compress();
+        let message = b"identity R";
+        let k = hash_to_scalar(&[&r, &key.public, message]);
+        let s = scalar::mul_add(&k, &key.scalar, &[0u8; 32]);
+        let mut sig = [0u8; 64];
+        sig[..32].copy_from_slice(&r);
+        sig[32..].copy_from_slice(&s);
+
+        let vk = Ed25519VerifyKey::from_bytes(&key.public).unwrap();
+        let lhs = double_scalar_mul_vartime(&vk.neg_a, &k, &s);
+        assert!(
+            lhs.eq_projective(&Point::IDENTITY),
+            "the signature satisfies the equation"
+        );
+        let err = vk.verify(message, &sig).unwrap_err();
+        assert_eq!(err.kind(), ic_core::ErrorKind::MalformedEncoding);
+    }
+
+    /// RFC 8032 section 5.1.3: a y field of p or more fails to decode, even
+    /// where, reduced, it names a point of large order. y = 3 is one such:
+    /// its canonical encoding decodes and its alias y + p does not.
+    #[test]
+    fn non_canonical_encodings_do_not_decode() {
+        for sign in [0u8, 0x80] {
+            let mut canonical = [0u8; 32];
+            canonical[0] = 3;
+            canonical[31] |= sign;
+            let point = Point::decompress(&canonical).expect("y = 3 is on the curve");
+            assert!(!point.has_small_order());
+            // p + 3 = 2^255 - 16, little-endian.
+            let mut alias = [0xffu8; 32];
+            alias[0] = 0xf0;
+            alias[31] = 0x7f | sign;
+            assert!(Point::decompress(&alias).is_none(), "sign {sign:#x}");
         }
     }
 
