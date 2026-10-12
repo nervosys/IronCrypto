@@ -7,6 +7,19 @@ all of them.
 
 ### Added
 
+- **scrypt (RFC 7914)**, as `ic_kdf::scrypt`, with PHC strings in
+  `ic_kdf::scrypt::phc` in the form the RustCrypto `scrypt` crate writes.
+  The IETF's password-storage guidance recommends it where Argon2 is not
+  available; it is also what PBES2-scrypt keys, many wallets and yescrypt
+  use. Checked against all four of RFC 7914's vectors -- the 1 GiB one in
+  a release build -- eight of OpenSSL's, and the RustCrypto crate's PHC
+  strings both ways. Its memory access depends on the password, by
+  design, as Argon2d's does; the ontology says so.
+- **`needs_rehash`** for Argon2 and scrypt PHC strings: whether a stored
+  hash falls short of current parameters and should be made again after
+  the next successful login, which is how NIST SP 800-63B-4 and the IETF
+  guidance ask for costs to rise over time. The Argon2 form can also
+  require a given `keyid`, so a rotated pepper reaches every stored hash.
 - **Everything the `argon2` crate offers, in `ic_kdf::argon2`.** Version 1.0
   beside 1.3, so hashes made before RFC 9106 verify (`argon2_versioned`);
   Argon2 over memory the caller provides, for targets with no allocator

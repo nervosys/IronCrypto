@@ -357,6 +357,43 @@ pub fn verify_password_bounded(
     verify(password, &[], encoded, Some(ceiling))
 }
 
+/// Whether a stored hash falls short of the current policy, so that the
+/// caller should hash the password again, after it verifies, and store the
+/// new hash.
+///
+/// Short means: another variant or version than asked for, less memory or
+/// fewer passes or lanes than `params`, a salt under [`SALT_LEN`], or a hash
+/// under [`HASH_LEN`]. Parameters above the policy do not count; lowering a
+/// stored hash's cost is never a reason to rehash. Only the string is read,
+/// so this is cheap and needs no password.
+///
+/// Raising the cost of stored hashes over time is what NIST SP 800-63B-4 and
+/// the IETF password-storage guidance ask for, and this is how: check after
+/// every successful login.
+pub fn needs_rehash(encoded: &str, variant: Variant, params: &Argon2Params) -> Result<bool> {
+    needs_rehash_with_keyid(encoded, variant, params, None)
+}
+
+/// [`needs_rehash`], and also when the hash names another secret than
+/// `keyid`: how a rotated pepper reaches every stored hash, one login at a
+/// time. `None` ignores the `keyid`.
+pub fn needs_rehash_with_keyid(
+    encoded: &str,
+    variant: Variant,
+    params: &Argon2Params,
+    keyid: Option<&[u8]>,
+) -> Result<bool> {
+    let h = PasswordHash::parse(encoded)?;
+    Ok(h.variant != variant
+        || h.version != Version::V0x13
+        || h.params.memory_kib < params.memory_kib
+        || h.params.passes < params.passes
+        || h.params.lanes < params.lanes
+        || h.salt.len() < SALT_LEN
+        || h.hash.len() < HASH_LEN
+        || keyid.is_some_and(|k| k != h.keyid.as_slice()))
+}
+
 fn verify(
     password: &[u8],
     secret: &[u8],
@@ -392,7 +429,7 @@ fn verify(
 }
 
 /// A decimal with no sign, no leading zero, and no more than fits in a `u32`.
-fn decimal(s: &str) -> Result<u32> {
+pub(crate) fn decimal(s: &str) -> Result<u32> {
     ensure!(
         !s.is_empty()
             && s.len() <= 10
@@ -405,7 +442,7 @@ fn decimal(s: &str) -> Result<u32> {
         .map_err(|_| ic_core::err!(MalformedEncoding, "phc: decimal out of range"))
 }
 
-fn push_decimal(s: &mut String, n: u32) {
+pub(crate) fn push_decimal(s: &mut String, n: u32) {
     let mut digits = [0u8; 10];
     let mut i = digits.len();
     let mut n = n;
@@ -423,7 +460,7 @@ fn push_decimal(s: &mut String, n: u32) {
 }
 
 /// Standard-alphabet base64 without padding.
-fn b64_encode(bytes: &[u8]) -> String {
+pub(crate) fn b64_encode(bytes: &[u8]) -> String {
     let mut padded = alloc::vec![0u8; ic_core::codec::base64_encoded_len(bytes.len())];
     // The buffer is the exact length, so this cannot fail.
     let _ = ic_core::codec::base64_encode(bytes, &mut padded);
@@ -433,7 +470,7 @@ fn b64_encode(bytes: &[u8]) -> String {
 
 /// The inverse of [`b64_encode`], refusing padding, characters outside the
 /// alphabet, an impossible length, and unused bits that are not zero.
-fn b64_decode(s: &str) -> Result<Vec<u8>> {
+pub(crate) fn b64_decode(s: &str) -> Result<Vec<u8>> {
     ensure!(
         s.len() % 4 != 1 && !s.contains('='),
         MalformedEncoding,
@@ -603,6 +640,65 @@ mod tests {
                     assert_eq!(parsed.encode(), good, "{s}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn needs_rehash_names_every_shortfall_and_nothing_else() {
+        let current = hash_password_with(
+            Variant::Argon2id,
+            Version::V0x13,
+            &TINY,
+            b"pw",
+            &[9u8; 16],
+            b"s",
+            b"k2",
+            &[],
+            32,
+        )
+        .unwrap();
+        assert!(!needs_rehash(&current, Variant::Argon2id, &TINY).unwrap());
+        assert!(!needs_rehash_with_keyid(&current, Variant::Argon2id, &TINY, Some(b"k2")).unwrap());
+        assert!(needs_rehash_with_keyid(&current, Variant::Argon2id, &TINY, Some(b"k3")).unwrap());
+        assert!(needs_rehash(&current, Variant::Argon2i, &TINY).unwrap());
+        for stronger in [
+            Argon2Params {
+                memory_kib: 128,
+                ..TINY
+            },
+            Argon2Params { passes: 2, ..TINY },
+            Argon2Params { lanes: 2, ..TINY },
+        ] {
+            assert!(
+                needs_rehash(&current, Variant::Argon2id, &stronger).unwrap(),
+                "{stronger:?}"
+            );
+        }
+        // A weaker policy is not a reason to rehash.
+        let weaker = Argon2Params {
+            memory_kib: 32,
+            ..TINY
+        };
+        assert!(!needs_rehash(&current, Variant::Argon2id, &weaker).unwrap());
+        // Version 1.0, a short salt and a short hash each fall short.
+        for (version, salt, len) in [
+            (Version::V0x10, &[9u8; 16][..], 32),
+            (Version::V0x13, &[9u8; 8][..], 32),
+            (Version::V0x13, &[9u8; 16][..], 16),
+        ] {
+            let s = hash_password_with(
+                Variant::Argon2id,
+                version,
+                &TINY,
+                b"pw",
+                salt,
+                &[],
+                &[],
+                &[],
+                len,
+            )
+            .unwrap();
+            assert!(needs_rehash(&s, Variant::Argon2id, &TINY).unwrap(), "{s}");
         }
     }
 

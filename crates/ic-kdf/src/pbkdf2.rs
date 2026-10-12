@@ -49,6 +49,22 @@ pub fn pbkdf2<M: Mac>(password: &[u8], salt: &[u8], iterations: u32, out: &mut [
         InvalidParameter,
         "pbkdf2 salt must be >= 128 bits"
     );
+    derive::<M>(password, salt, iterations, out)
+}
+
+/// PBKDF2 itself, without the password-storage policy above.
+///
+/// scrypt runs PBKDF2 with one iteration, by definition, around its
+/// memory-hard core, and over whatever salt it is given; RFC 7914's own
+/// vectors use an empty one. That is PBKDF2 as a key-expansion step, not as
+/// a password hash, so the floor on iterations and salt does not apply.
+pub(crate) fn derive<M: Mac>(
+    password: &[u8],
+    salt: &[u8],
+    iterations: u32,
+    out: &mut [u8],
+) -> Result<()> {
+    ensure!(iterations >= 1, InvalidParameter, "pbkdf2 iterations");
     ensure!(!out.is_empty(), InvalidLength, "pbkdf2 output");
     ensure!(
         M::TAG_LEN <= MAX_TAG_LEN,

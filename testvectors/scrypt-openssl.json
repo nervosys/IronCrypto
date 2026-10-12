@@ -1,0 +1,70 @@
+{
+ "algorithm": "scrypt (RFC 7914)",
+ "source": "scripts/gen_scrypt_vectors.py, run on 2026-10-12: Python's hashlib.scrypt, which is OpenSSL 1.1.1t  7 Feb 2023's EVP_PBE_scrypt, after checking it against RFC 7914's first three vectors. Inputs are SHA-256 chains over labels.",
+ "cases": [
+  {
+   "log_n": "2",
+   "r": "1",
+   "p": "1",
+   "password": "",
+   "salt": "",
+   "out": "ef"
+  },
+  {
+   "log_n": "4",
+   "r": "1",
+   "p": "3",
+   "password": "e116840edf3f36",
+   "salt": "09",
+   "out": "e97d31ceac4e577501ae9592c6c8b48b"
+  },
+  {
+   "log_n": "8",
+   "r": "2",
+   "p": "1",
+   "password": "c8a189d7363428b31fcfec465f1185cc84e5d6c69c16327ad484ad3b4b0eaa2c",
+   "salt": "bc9ec0ee58f3ca92703d203dfd9cb767",
+   "out": "1cea795628ae00fc86a400d16e52066513fbe5f181c86ee8d988207a981122"
+  },
+  {
+   "log_n": "10",
+   "r": "3",
+   "p": "2",
+   "password": "be94a557ac55422314a1484a96",
+   "salt": "741ab1271c5dcca1",
+   "out": "7312d611f733105146b959a9b1b2401ae7564db24f0e8291e4ecf7ccb81dbeab"
+  },
+  {
+   "log_n": "12",
+   "r": "8",
+   "p": "1",
+   "password": "f0d065ac4e5f8ef30238790a2360a5682c9309eec44f39a24392f8ed3b2f2ba8447608d33bc041d71aa36d5d2cc5d36b549f57a13fcf863c87dcd006ff737a36",
+   "salt": "912997cef942fca1c51e2027623d9d78",
+   "out": "6d8ac09c40b67cefe40d4be9478e99d73b9e62245f176e6fdcf7cbcb217ccefe53"
+  },
+  {
+   "log_n": "6",
+   "r": "16",
+   "p": "4",
+   "password": "cb",
+   "salt": "7bd8e94f4bcac21e3e2374f2ccae558cb3e217ce82010c2efb6b0190f99a7134f36ea3a8cf94e190871eb2cb0294cbeae20b4cb980a4771403161bd8ec60f83b",
+   "out": "d9d78e44043b1fe101c4f3d448091a98a477dd3f374b8689499289142a1769238a0eaeed99c148bead43f86a5286e0ef3b2cb499983888c8267c5b35450b9277"
+  },
+  {
+   "log_n": "14",
+   "r": "1",
+   "p": "1",
+   "password": "757eafab321b5a8bcbc72d2ead7ad71e043dea911417ce0e228afd7ad6599815a71b0ffab4b6c395",
+   "salt": "ed2ed356be668bfa293ee656fb7a177d24311dfe",
+   "out": "05d9cc276cbdbb77f980326e07b22a171be21bef5769326a4c57747d3119605bc3aab9bca219465cddd5ddeb886aa760afdaa8fe7a513e233a52e179a89b0e83e7ced84ffda5bdb4baac2b582370ce4bc4883db842736c6f21d295b4c452db8bd802b727"
+  },
+  {
+   "log_n": "3",
+   "r": "5",
+   "p": "7",
+   "password": "426d",
+   "salt": "04ca3a",
+   "out": "e3dff13bcb6405"
+  }
+ ]
+}

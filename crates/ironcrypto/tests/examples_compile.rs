@@ -920,6 +920,26 @@ fn key_wrap_examples_compile_and_match() -> Result<()> {
     Ok(())
 }
 
+/// scrypt, stored as a PHC string.
+#[test]
+fn scrypt_example_compiles_and_matches() -> Result<()> {
+    let password: &[u8] = b"correct horse battery staple";
+    let mut rng = drbg::Rng::from_entropy(&[0x3eu8; 32], b"examples/scrypt")?;
+    // The example's parameters, at a size a test can afford.
+    let params = kdf::scrypt::ScryptParams {
+        log_n: 10,
+        r: 8,
+        p: 1,
+    };
+    let stored = kdf::scrypt::phc::hash_password(&params, password, &mut rng)?;
+    kdf::scrypt::phc::verify_password(password, &stored)?;
+    check_example(
+        "scrypt",
+        "let params = ic_kdf::scrypt::ScryptParams::RECOMMENDED;\nlet stored = ic_kdf::scrypt::phc::hash_password(&params, password, &mut rng)?;\nic_kdf::scrypt::phc::verify_password(password, &stored)?;",
+    );
+    Ok(())
+}
+
 /// Passphrase sealing, whose parameters the caller chooses.
 #[test]
 fn passphrase_seal_example_compiles_and_matches() -> Result<()> {

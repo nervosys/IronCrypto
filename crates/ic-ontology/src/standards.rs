@@ -1293,6 +1293,20 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "RFC 7914",
+        title: "The scrypt Password-Based Key Derivation Function",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2016,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc7914",
+        summary: "scrypt: PBKDF2-HMAC-SHA256 around ROMix, a sequential memory-hard mix over \
+                  Salsa20/8. Section 12 carries the four vectors this library is checked \
+                  against.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "RFC 8439",
         title: "ChaCha20 and Poly1305 for IETF Protocols",
         body: Body::Ietf,

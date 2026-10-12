@@ -1960,6 +1960,41 @@ pub static REGISTRY: &[Entry] = &[
         notes: "",
     },
     Entry {
+        id: "scrypt",
+        name: "scrypt",
+        aliases: &["rfc7914"],
+        summary: "Memory-hard password hashing; the fallback where Argon2 is not available.",
+        class: Class::PasswordKdf,
+        family: "scrypt",
+        purposes: &[Purpose::PasswordHashing, Purpose::KeyDerivation],
+        strength: Strength::symmetric(256),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 7914"],
+        params: &NO_PARAMS,
+        constraints: &[Constraint {
+            id: "scrypt-data-dependent-access",
+            requirement: "Prefer Argon2id where another process on the same machine can \
+                          observe this one's cache.",
+            consequence: "ROMix reads memory at password-dependent addresses, so a co-resident \
+                          attacker learns something about the access pattern.",
+            severity: Severity::Advisory,
+        }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "pbkdf2-hmac-sha2-256" },
+            Edge { relation: Relation::SupersededBy, target: "argon2id" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ic_kdf::scrypt",
+        example: "let params = ic_kdf::scrypt::ScryptParams::RECOMMENDED;\nlet stored = ic_kdf::scrypt::phc::hash_password(&params, password, &mut rng)?;\nic_kdf::scrypt::phc::verify_password(password, &stored)?;",
+        notes: "The IETF's password-storage guidance recommends it where Argon2 is not \
+                available, at N = 2^17, r = 8, p = 1 or more, the RECOMMENDED constant. Also for \
+                interoperating with what already uses it. PHC strings in ic_kdf::scrypt::phc, \
+                the form the RustCrypto scrypt crate writes, with which they were checked both \
+                ways. Checked against all four of RFC 7914's vectors, the 1 GiB one in a release \
+                build, and eight of OpenSSL's over shapes the RFC does not vary.",
+    },
+    Entry {
         id: "argon2id",
         name: "Argon2id",
         aliases: &["argon2"],

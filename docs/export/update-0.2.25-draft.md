@@ -27,6 +27,8 @@ published, rather than relying on the earlier notice. What 0.2.25 changes:
     XChaCha20-Poly1305. It composes published algorithms and adds no
     primitive. The format is described in the public source,
     `crates/ic-kdf/src/passphrase.rs`.
+- **scrypt** (RFC 7914), a published password-based key derivation
+  function built from PBKDF2-HMAC-SHA256 and Salsa20/8.
 - **Argon2 version 1.0**, the version the Password Hashing Competition
   selected, beside version 1.3 (RFC 9106), which was already listed. It
   differs from 1.3 in one step, and is there so that older password hashes
@@ -98,6 +100,8 @@ CHANGES SINCE THE PREVIOUS NOTIFICATION
       Argon2id (RFC 9106) encrypts with XChaCha20-Poly1305, in a container
       format whose specification is published in the source code. It adds
       no cryptographic primitive.
+    - scrypt, the password-based key derivation function of RFC 7914,
+      built from PBKDF2 with HMAC-SHA-256 and the Salsa20/8 core.
     - Argon2 version 1.0, the version selected by the Password Hashing
       Competition in 2015, beside version 1.3 (RFC 9106), which was already
       listed. It is supported so that password hashes made with it can be
@@ -123,8 +127,9 @@ CRYPTOGRAPHIC FUNCTIONALITY
     MACs                     HMAC (FIPS 198-1); CMAC (SP 800-38B);
                              KMAC (SP 800-185); Poly1305 (RFC 8439)
     Key derivation           HKDF (RFC 5869); PBKDF2 (SP 800-132);
-                             SP 800-108 counter mode; Argon2 (RFC 9106,
-                             and version 1.0 of the Argon2 specification)
+                             SP 800-108 counter mode; scrypt (RFC 7914);
+                             Argon2 (RFC 9106, and version 1.0 of the
+                             Argon2 specification)
     Passphrase encryption    Argon2id with XChaCha20-Poly1305, in a
                              container format published in the source
     Random bit generation    HMAC_DRBG and CTR_DRBG (SP 800-90A)

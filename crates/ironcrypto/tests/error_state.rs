@@ -535,6 +535,28 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         assert_eq!(back, [0xaau8; 8], "{id}: a refused open wrote nothing");
     }
     seen.refused(
+        "scrypt",
+        "derive",
+        kdf::scrypt::scrypt(
+            b"password",
+            b"salt",
+            &kdf::scrypt::ScryptParams {
+                log_n: 4,
+                r: 1,
+                p: 1,
+            },
+            &mut [0u8; 32],
+        ),
+    );
+    seen.refused(
+        "scrypt",
+        "phc::verify_password",
+        kdf::scrypt::phc::verify_password(
+            b"password",
+            "$scrypt$ln=4,r=1,p=1$AQEBAQEBAQEBAQEBAQEBAQ$AQEBAQEBAQEBAQEBAQEBAQ",
+        ),
+    );
+    seen.refused(
         "argon2id",
         "derive",
         kdf::argon2(
