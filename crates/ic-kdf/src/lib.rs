@@ -8,6 +8,8 @@
 //! * [`scrypt`] — RFC 7914 scrypt, the fallback where Argon2 is not available.
 //! * [`yescrypt`] — verifying yescrypt and `$7$` hashes, to move them to
 //!   Argon2id.
+//! * [`password`] — one door for stored hashes of any of those formats:
+//!   verify, and replace with Argon2id when they fall short.
 //! * [`passphrase`] — a secret sealed under a passphrase: Argon2id and
 //!   XChaCha20-Poly1305 in one versioned container.
 //!
@@ -49,6 +51,7 @@ pub mod bcrypt;
 pub mod hkdf;
 pub mod kbkdf;
 pub mod passphrase;
+pub mod password;
 pub mod pbkdf2;
 pub mod scrypt;
 pub mod yescrypt;

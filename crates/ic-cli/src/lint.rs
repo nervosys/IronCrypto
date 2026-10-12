@@ -336,7 +336,12 @@ pub fn lint_with(source: &str, tests: bool) -> Vec<Finding> {
                 "a password goes through a plain hash".to_string(),
             );
         }
-        if let Some(at) = code.find("pbkdf2") {
+        // `pbkdf2::derive` is ic-kdf's crate-private building block, which
+        // scrypt and yescrypt run once by definition; no caller can reach it.
+        if let Some(at) = code
+            .find("pbkdf2")
+            .filter(|&at| !code[at..].starts_with("pbkdf2::derive"))
+        {
             if let Some(open) = code[at..].find('(').map(|o| at + o) {
                 if let Some(args) = call_args(code, open) {
                     if let Some(n) = args.get(2).and_then(|a| integer_literal(a)) {
@@ -631,6 +636,12 @@ fn session(shared: &[u8], our_pk: &[u8], their_pk: &[u8]) -> Result<()> {
         assert!(rules_hit("pub fn ctr_xor<C>(c: &C, iv: &[u8], d: &mut [u8]) {}").is_empty());
         // Signatures are public.
         assert!(rules_hit("let c = Hmac::new(k)?; if bad == good_sig {}").is_empty());
+        // scrypt's and yescrypt's single pass, through the crate-private form.
+        assert!(
+            rules_hit("crate::pbkdf2::derive::<HmacSha256>(passwd, salt, 1, &mut b)?;").is_empty()
+        );
+        // The public form at one pass is still reported.
+        assert!(!rules_hit("ic_kdf::pbkdf2::<HmacSha256>(pw, salt, 1, &mut b)?;").is_empty());
     }
 
     #[test]

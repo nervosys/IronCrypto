@@ -2101,7 +2101,9 @@ pub static REGISTRY: &[Entry] = &[
                 ic_kdf::argon2::phc -- hash_password under a drawn salt, verify_password in \
                 constant time, keyid and data -- checked against libargon2, libsodium and \
                 argon2 0.6.0. A PHC string without v= is version 1.0, as libargon2 reads it; \
-                the argon2 crate reads it as 1.3.",
+                the argon2 crate reads it as 1.3. ic_kdf::password verifies a stored hash in \
+                any supported format -- Argon2, scrypt, bcrypt, yescrypt -- and returns its \
+                Argon2id replacement when one is due.",
     },
     Entry {
         id: "blake2b",

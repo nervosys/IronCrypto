@@ -48,6 +48,12 @@ all of them.
   passes through it. Their table lookups depend on the password, by
   design; the ontology marks both verify-only and says why. Checked
   against 51 verdicts of pyca/bcrypt and 34 of libxcrypt.
+- **`ic_kdf::password`**, one door for stored hashes of any of those
+  formats: `verify` reads the prefix, checks the password with the module
+  that owns the format, and says whether to replace it with Argon2id at
+  the caller's parameters; `verify_and_upgrade` also returns the new PHC
+  string. An Argon2 hash is replaced when it falls short of the
+  parameters; scrypt, bcrypt and yescrypt hashes always are.
 - **`needs_rehash`** for Argon2 and scrypt PHC strings: whether a stored
   hash falls short of current parameters and should be made again after
   the next successful login, which is how NIST SP 800-63B-4 and the IETF
@@ -107,6 +113,11 @@ all of them.
 
 ### Changed
 
+- **`ic lint` no longer reports scrypt's single PBKDF2 pass.** The
+  iteration check skipped nothing, so ic-kdf's crate-private
+  `pbkdf2::derive`, which scrypt and yescrypt run once by definition, was
+  reported as a password hashed at one iteration. Callers cannot reach that
+  form; the public `pbkdf2` at one iteration is still reported.
 - **Ed25519 verification is strict.** It now refuses a public key or a
   signature R of small order, and a non-canonical encoding of either, as
   ed25519-dalek's `verify_strict` and libsodium do. RFC 8032's cofactorless
