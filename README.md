@@ -360,6 +360,36 @@ leaving the stronger claim to stand for all of them.
 The ontology registers algorithms this library does **not** provide, marked
 `planned` or `excluded`, so that querying for them yields an honest answer:
 
+- **MD5, SHA-1 and Triple DES** — `excluded`, permanently. They are in the
+  registry only so that a request for one resolves to a refusal with a reason,
+  rather than to "unknown algorithm" and a search for some other crate.
+  - **MD5**: collisions take seconds on a laptop.
+  - **SHA-1**: chosen-prefix collisions are practical, so two different
+    certificates or documents can be made to share a hash, and a signature on
+    one is a signature on the other.
+  - **Triple DES**: its 64-bit block allows practical collision attacks on
+    long sessions (Sweet32), and SP 800-131A has disallowed it since 2024.
+
+  Each entry carries a `critical` constraint and names its replacement:
+  SHA-256 for the hashes, AES for the cipher. Offering a broken primitive mostly
+  helps it get chosen by mistake, and an agent choosing from a list is the
+  likeliest to make that mistake, so the list does not include them.
+
+  Leaving them out has a cost: some legacy uses need SHA-1, and none of them
+  work here. These are signatures on old `sha1WithRSAEncryption` certificates;
+  TOTP as most authenticator apps run it, since RFC 6238's default is
+  HMAC-SHA1; PBKDF2-HMAC-SHA1 in older key files; and SHA-1 as a name rather
+  than a defence, as in git object IDs. Only the first relies on collision
+  resistance. If one of these matters to you, keep it outside this library.
+  If a protocol requires SHA-1 for security, that protocol needs replacing,
+  not a SHA-1 implementation.
+
+  The registry marks SHA-1 `disallowed`, which is stricter than NIST is today.
+  SP 800-131A disallows SHA-1 for generating digital signatures but still
+  allows it for HMAC and key derivation, and for verifying existing
+  signatures as legacy use. NIST has announced that it will withdraw SHA-1
+  entirely by the end of 2030. A library begun now does not need it for the
+  years that remain.
 - **RSA encryption** — not offered at all. RSAES-PKCS1-v1_5 is a Bleichenbacher
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.
@@ -518,9 +548,6 @@ document.
 A met requirement means the code does what the document asks, as far as the
 tests can show. It does not mean a laboratory has agreed, and nothing here
 claims otherwise — see `has("fips-validated")`, which returns `false`.
-
-- **SHA-1, MD5, Triple DES** — `excluded`, permanently. They are in the registry
-  only so that a request for them resolves to a refusal with a reason.
 
 ```console
 $ ic capabilities
