@@ -11,7 +11,8 @@
 use ic_core::ErrorKind;
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::kdf::argon2::{
-    argon2_versioned, argon2_with_memory, fill_memory, phc, Argon2Params, Block, Variant, Version,
+    argon2_versioned, argon2_with_memory, fill_memory, phc, Argon2Params, Variant, Version,
+    ZERO_BLOCK,
 };
 
 fn variant(name: &str) -> Variant {
@@ -60,7 +61,7 @@ fn raw_tags_match_libargon2() {
 
         // The same through memory the caller provides, one block too many to
         // show only the count needed is used; and it is wiped afterwards.
-        let mut memory = vec![Block::ZERO; params.block_count() + 1];
+        let mut memory = vec![ZERO_BLOCK; params.block_count() + 1];
         let mut out = vec![0u8; want.len()];
         argon2_with_memory(
             v,
@@ -75,7 +76,7 @@ fn raw_tags_match_libargon2() {
         )
         .unwrap();
         assert_eq!(hex(&out), case["tag"], "{label}, caller's memory");
-        assert!(memory.iter().all(|b| *b == Block::ZERO), "{label}: wiped");
+        assert!(memory.iter().all(|b| *b == ZERO_BLOCK), "{label}: wiped");
 
         checked[usize::from(version == Version::V0x13)] += 1;
     }
@@ -167,7 +168,7 @@ fn fill_memory_fills_without_a_tag() {
         passes: 1,
         lanes: 1,
     };
-    let mut memory = vec![Block::ZERO; params.block_count()];
+    let mut memory = vec![ZERO_BLOCK; params.block_count()];
     fill_memory(
         Variant::Argon2id,
         Version::V0x13,
@@ -179,8 +180,8 @@ fn fill_memory_fills_without_a_tag() {
         &mut memory,
     )
     .unwrap();
-    assert!(memory.iter().all(|b| *b != Block::ZERO));
-    let short = &mut vec![Block::ZERO; params.block_count() - 1];
+    assert!(memory.iter().all(|b| *b != ZERO_BLOCK));
+    let short = &mut vec![ZERO_BLOCK; params.block_count() - 1];
     let err = fill_memory(
         Variant::Argon2id,
         Version::V0x13,

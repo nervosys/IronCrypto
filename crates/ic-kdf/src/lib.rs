@@ -27,7 +27,11 @@
 //! # Ok::<(), ic_core::Error>(())
 //! ```
 #![cfg_attr(not(feature = "std"), no_std)]
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid`, as in ic-hash: one module may use unsafe, the
+// AVX2 form of Argon2's compression function, and every other line in this
+// crate is a compile error if it tries. It is allowed where it is declared,
+// in `argon2`.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 

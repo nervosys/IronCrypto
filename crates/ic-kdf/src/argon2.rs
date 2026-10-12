@@ -38,6 +38,13 @@
 
 pub mod phc;
 
+// Argon2's compression function with AVX2, behind runtime detection. The
+// only unsafe code in this crate; see `avx2` for what it computes and how
+// it is checked.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[allow(unsafe_code)]
+mod avx2;
+
 use alloc::vec::Vec;
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::{blake2b_long, Blake2b};
@@ -205,59 +212,65 @@ impl Argon2Params {
 ///
 /// Public so that a caller can provide the memory itself, through
 /// [`argon2_with_memory`] and [`fill_memory`]: an array of these on the
-/// stack or in a static, where there is no allocator.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Block([u64; BLOCK_WORDS]);
+/// stack or in a static, where there is no allocator. A plain array rather
+/// than a type of its own, because an array of zeros can be allocated as
+/// pages the operating system has already zeroed, and filled lazily, where
+/// any other type is written out in full first: at 256 MiB that was 40 ms,
+/// a third of the hash.
+pub type Block = [u64; BLOCK_WORDS];
 
-impl core::fmt::Debug for Block {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // Its contents are password-derived; they are not printed.
-        f.write_str("Block(..)")
+/// A block of zeros.
+pub const ZERO_BLOCK: Block = [0u64; BLOCK_WORDS];
+
+/// Bytes in a block.
+pub const BLOCK_SIZE: usize = BLOCK_LEN;
+
+fn block_from_bytes(bytes: &[u8; BLOCK_LEN]) -> Block {
+    let mut b = ZERO_BLOCK;
+    for (i, word) in b.iter_mut().enumerate() {
+        let mut w = [0u8; 8];
+        w.copy_from_slice(&bytes[i * 8..i * 8 + 8]);
+        *word = u64::from_le_bytes(w);
     }
+    b
 }
 
-impl Default for Block {
-    fn default() -> Self {
-        Self::ZERO
+fn block_to_bytes(block: &Block) -> [u8; BLOCK_LEN] {
+    let mut out = [0u8; BLOCK_LEN];
+    for (chunk, word) in out.chunks_exact_mut(8).zip(block.iter()) {
+        chunk.copy_from_slice(&word.to_le_bytes());
     }
+    out
 }
 
-impl Block {
-    /// A block of zeros.
-    pub const ZERO: Block = Block([0u64; BLOCK_WORDS]);
-    /// Bytes in a block.
-    pub const SIZE: usize = BLOCK_LEN;
+/// Block `i` of a flat arena, as a reference to its 128 words.
+///
+/// The arena is held flat, as `u64`s, because a `Vec<u64>` of zeros is
+/// allocated zeroed by the operating system, lazily, and a vector of 128-word
+/// arrays is written out in full first. An index past the end, which the
+/// algorithm never produces, reads as zeros rather than panicking.
+#[inline(always)]
+fn chunk(memory: &[u64], i: usize) -> &Block {
+    memory
+        .get(i * BLOCK_WORDS..)
+        .and_then(|rest| rest.first_chunk::<BLOCK_WORDS>())
+        .unwrap_or(&ZERO_BLOCK)
+}
 
-    /// The block's 128 words, as Argon2 left them.
-    pub fn words(&self) -> &[u64; BLOCK_WORDS] {
-        &self.0
-    }
+/// Block `i` of a flat arena, mutably.
+#[inline(always)]
+fn chunk_mut(memory: &mut [u64], i: usize) -> Option<&mut Block> {
+    memory
+        .get_mut(i * BLOCK_WORDS..)
+        .and_then(|rest| rest.first_chunk_mut::<BLOCK_WORDS>())
+}
 
-    fn from_bytes(bytes: &[u8; BLOCK_LEN]) -> Block {
-        let mut b = [0u64; BLOCK_WORDS];
-        for (i, word) in b.iter_mut().enumerate() {
-            let mut w = [0u8; 8];
-            w.copy_from_slice(&bytes[i * 8..i * 8 + 8]);
-            *word = u64::from_le_bytes(w);
-        }
-        Block(b)
+fn block_xor(a: &Block, b: &Block) -> Block {
+    let mut out = ZERO_BLOCK;
+    for ((slot, x), y) in out.iter_mut().zip(a.iter()).zip(b.iter()) {
+        *slot = x ^ y;
     }
-
-    fn to_bytes(self) -> [u8; BLOCK_LEN] {
-        let mut out = [0u8; BLOCK_LEN];
-        for (chunk, word) in out.chunks_exact_mut(8).zip(self.0.iter()) {
-            chunk.copy_from_slice(&word.to_le_bytes());
-        }
-        out
-    }
-
-    fn xor(&self, other: &Block) -> Block {
-        let mut out = [0u64; BLOCK_WORDS];
-        for ((slot, a), b) in out.iter_mut().zip(self.0.iter()).zip(other.0.iter()) {
-            *slot = a ^ b;
-        }
-        Block(out)
-    }
+    out
 }
 
 /// Argon2's modified BLAKE2b mixing function.
@@ -299,38 +312,81 @@ fn permute(v: &mut [u64; 16]) {
     gb(v, 3, 4, 9, 14);
 }
 
-/// The compression function `G`.
+/// `G(x, y)` written to `out`, or XORed into it when `xor` is set: with
+/// AVX2 where the CPU has it, and the scalar definition otherwise.
+#[inline]
+fn compress_into(x: &Block, y: &Block, out: &mut Block, xor: bool) {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if have_avx2() {
+        // SAFETY: `have_avx2` confirmed the CPU supports AVX2.
+        #[allow(unsafe_code)]
+        unsafe {
+            avx2::compress(x, y, out, xor)
+        };
+        return;
+    }
+    let g = compress(x, y);
+    if xor {
+        for (o, m) in out.iter_mut().zip(g.iter()) {
+            *o ^= m;
+        }
+    } else {
+        *out = g;
+    }
+}
+
+/// Whether this CPU has AVX2, asked once. Tests can turn it off, to run the
+/// scalar form on a machine that has AVX2.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn have_avx2() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    if tests::scalar_only() {
+        return false;
+    }
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have = std::is_x86_feature_detected!("avx2");
+            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+            have
+        }
+    }
+}
+
+/// The compression function `G`, the definition the AVX2 form is held to.
 ///
 /// `R = X ^ Y`, then `P` over each row, then `P` over each column, then XOR
 /// with `R` again. The row-then-column structure is what makes every output
 /// word depend on every input word.
 fn compress(x: &Block, y: &Block) -> Block {
-    let r = x.xor(y);
+    let r = block_xor(x, y);
     let mut q = r;
 
     // Rows: eight groups of sixteen consecutive words.
     for row in 0..8 {
         let mut v = [0u64; 16];
-        v.copy_from_slice(&q.0[row * 16..row * 16 + 16]);
+        v.copy_from_slice(&q[row * 16..row * 16 + 16]);
         permute(&mut v);
-        q.0[row * 16..row * 16 + 16].copy_from_slice(&v);
+        q[row * 16..row * 16 + 16].copy_from_slice(&v);
     }
 
     // Columns: word pairs strided across the rows.
     for col in 0..8 {
         let mut v = [0u64; 16];
         for i in 0..8 {
-            v[i * 2] = q.0[i * 16 + col * 2];
-            v[i * 2 + 1] = q.0[i * 16 + col * 2 + 1];
+            v[i * 2] = q[i * 16 + col * 2];
+            v[i * 2 + 1] = q[i * 16 + col * 2 + 1];
         }
         permute(&mut v);
         for i in 0..8 {
-            q.0[i * 16 + col * 2] = v[i * 2];
-            q.0[i * 16 + col * 2 + 1] = v[i * 2 + 1];
+            q[i * 16 + col * 2] = v[i * 2];
+            q[i * 16 + col * 2 + 1] = v[i * 2 + 1];
         }
     }
 
-    q.xor(&r)
+    block_xor(&q, &r)
 }
 
 /// Map `(j1, j2)` onto a reference block, per RFC 9106 §3.4.1.2, as its
@@ -448,14 +504,22 @@ pub fn argon2_versioned(
     ic_core::module::operational()?;
     params.validate()?;
     // The parameters can come from a stored hash, so an allocation that
-    // fails is an error to return, not a reason to abort.
-    let blocks = params.block_count();
-    let mut memory = Vec::new();
-    memory
-        .try_reserve_exact(blocks)
+    // fails is an error to return, not a reason to abort. The reservation
+    // asks the allocator whether the size is possible and is given back
+    // untouched; the arena is then allocated zeroed, which for an array of
+    // zeros means pages the operating system zeroes when first written,
+    // across the lane threads, rather than here, on one.
+    let words = params
+        .block_count()
+        .checked_mul(BLOCK_WORDS)
+        .ok_or(ic_core::err!(InvalidParameter, "argon2 memory: too large"))?;
+    let mut probe: Vec<u64> = Vec::new();
+    probe
+        .try_reserve_exact(words)
         .map_err(|_| ic_core::err!(InvalidParameter, "argon2 memory: allocation failed"))?;
-    memory.resize(blocks, Block::ZERO);
-    argon2_with_memory(
+    drop(probe);
+    let mut memory: Vec<u64> = alloc::vec![0u64; words];
+    run(
         variant,
         version,
         params,
@@ -486,14 +550,40 @@ pub fn argon2_with_memory(
     memory: &mut [Block],
     out: &mut [u8],
 ) -> Result<()> {
+    run(
+        variant,
+        version,
+        params,
+        password,
+        salt,
+        secret,
+        associated_data,
+        memory.as_flattened_mut(),
+        out,
+    )
+}
+
+/// Hash, finalize and wipe, over a flat arena.
+#[allow(clippy::too_many_arguments)]
+fn run(
+    variant: Variant,
+    version: Version,
+    params: &Argon2Params,
+    password: &[u8],
+    salt: &[u8],
+    secret: &[u8],
+    associated_data: &[u8],
+    memory: &mut [u64],
+    out: &mut [u8],
+) -> Result<()> {
     ic_core::module::operational()?;
     ensure!(
         out.len() >= 4 && u32::try_from(out.len()).is_ok(),
         InvalidLength,
         "argon2 tag must be 4 bytes to 2^32 - 1"
     );
-    let geometry = Geometry::new(variant, version, params, memory.len())?;
-    let memory = &mut memory[..geometry.total];
+    let geometry = Geometry::new(variant, version, params, memory.len() / BLOCK_WORDS)?;
+    let memory = &mut memory[..geometry.total * BLOCK_WORDS];
     let result = fill(
         &geometry,
         params,
@@ -506,15 +596,17 @@ pub fn argon2_with_memory(
     )
     .and_then(|()| {
         // The final block is the XOR of the last block of every lane.
-        let mut final_block = memory[geometry.lane_len - 1];
+        let mut final_block = *chunk(memory, geometry.lane_len - 1);
         for lane in 1..geometry.lanes {
-            final_block =
-                final_block.xor(&memory[lane * geometry.lane_len + geometry.lane_len - 1]);
+            final_block = block_xor(
+                &final_block,
+                chunk(memory, lane * geometry.lane_len + geometry.lane_len - 1),
+            );
         }
-        let mut bytes = final_block.to_bytes();
+        let mut bytes = block_to_bytes(&final_block);
         let r = blake2b_long(&[&bytes], out);
         bytes.zeroize();
-        final_block.0.zeroize();
+        final_block.zeroize();
         r
     });
     // Wipe the arena whatever happened: it is full of password-derived material.
@@ -522,8 +614,8 @@ pub fn argon2_with_memory(
     result
 }
 
-/// Zero every block, a lane per thread where the fill used threads.
-fn wipe(memory: &mut [Block], lanes: usize) {
+/// Zero the arena, a share per thread where the fill used threads.
+fn wipe(memory: &mut [u64], lanes: usize) {
     #[cfg(feature = "std")]
     if lanes > 1 && !tests::sequential_only() {
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -531,20 +623,14 @@ fn wipe(memory: &mut [Block], lanes: usize) {
             let chunk = memory.len().div_ceil(threads.min(lanes)).max(1);
             std::thread::scope(|scope| {
                 for part in memory.chunks_mut(chunk) {
-                    scope.spawn(move || {
-                        for block in part.iter_mut() {
-                            block.0.zeroize();
-                        }
-                    });
+                    scope.spawn(move || part.zeroize());
                 }
             });
             return;
         }
     }
     let _ = lanes;
-    for block in memory.iter_mut() {
-        block.0.zeroize();
-    }
+    memory.zeroize();
 }
 
 /// Fill `memory` as Argon2 would, and stop before computing a tag.
@@ -576,7 +662,7 @@ pub fn fill_memory(
         secret,
         associated_data,
         0,
-        &mut memory[..geometry.total],
+        memory[..geometry.total].as_flattened_mut(),
     )
 }
 
@@ -629,7 +715,7 @@ fn fill(
     secret: &[u8],
     associated_data: &[u8],
     tag_len: u32,
-    memory: &mut [Block],
+    memory: &mut [u64],
 ) -> Result<()> {
     ensure!(
         salt.len() >= 8,
@@ -681,7 +767,9 @@ fn fill(
             h0[68..72].copy_from_slice(&(lane as u32).to_le_bytes());
             let mut block = [0u8; BLOCK_LEN];
             blake2b_long(&[&h0], &mut block)?;
-            memory[lane * g.lane_len + index as usize] = Block::from_bytes(&block);
+            if let Some(slot) = chunk_mut(memory, lane * g.lane_len + index as usize) {
+                *slot = block_from_bytes(&block);
+            }
             block.zeroize();
         }
     }
@@ -702,7 +790,7 @@ fn fill(
 /// segment is split off mutably and the rest of memory is read through a
 /// shared view. With `std` and more than one lane, the segments are filled
 /// on threads; otherwise one after another, through the same function.
-fn fill_slice(g: &Geometry, pass: u32, slice: usize, memory: &mut [Block]) {
+fn fill_slice(g: &Geometry, pass: u32, slice: usize, memory: &mut [u64]) {
     #[cfg(feature = "std")]
     if g.lanes > 1 && !tests::sequential_only() {
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -714,8 +802,8 @@ fn fill_slice(g: &Geometry, pass: u32, slice: usize, memory: &mut [Block]) {
     let start = slice * g.segment_len;
     for lane in 0..g.lanes {
         let at = lane * g.lane_len + start;
-        let (head, rest) = memory.split_at_mut(at);
-        let (segment, tail) = rest.split_at_mut(g.segment_len);
+        let (head, rest) = memory.split_at_mut(at * BLOCK_WORDS);
+        let (segment, tail) = rest.split_at_mut(g.segment_len * BLOCK_WORDS);
         let outside = Around {
             head,
             tail,
@@ -727,24 +815,18 @@ fn fill_slice(g: &Geometry, pass: u32, slice: usize, memory: &mut [Block]) {
 }
 
 #[cfg(feature = "std")]
-fn fill_slice_threaded(
-    g: &Geometry,
-    pass: u32,
-    slice: usize,
-    memory: &mut [Block],
-    threads: usize,
-) {
+fn fill_slice_threaded(g: &Geometry, pass: u32, slice: usize, memory: &mut [u64], threads: usize) {
     // Split memory into each lane's segment and the gaps between them:
     // gap[k] runs from the end of segment k-1 to the start of segment k.
     let start = slice * g.segment_len;
-    let mut segments: std::vec::Vec<&mut [Block]> = std::vec::Vec::with_capacity(g.lanes);
-    let mut gaps: std::vec::Vec<&[Block]> = std::vec::Vec::with_capacity(g.lanes + 1);
-    let mut rest: &mut [Block] = memory;
+    let mut segments: std::vec::Vec<&mut [u64]> = std::vec::Vec::with_capacity(g.lanes);
+    let mut gaps: std::vec::Vec<&[u64]> = std::vec::Vec::with_capacity(g.lanes + 1);
+    let mut rest: &mut [u64] = memory;
     let mut consumed = 0;
     for lane in 0..g.lanes {
         let at = lane * g.lane_len + start - consumed;
-        let (gap, after) = rest.split_at_mut(at);
-        let (segment, after) = after.split_at_mut(g.segment_len);
+        let (gap, after) = rest.split_at_mut(at * BLOCK_WORDS);
+        let (segment, after) = after.split_at_mut(g.segment_len * BLOCK_WORDS);
         gaps.push(gap);
         segments.push(segment);
         consumed += at + g.segment_len;
@@ -762,7 +844,7 @@ fn fill_slice_threaded(
         let mut lane = 0;
         let mut segments = segments.into_iter();
         loop {
-            let batch: std::vec::Vec<&mut [Block]> = segments.by_ref().take(per_thread).collect();
+            let batch: std::vec::Vec<&mut [u64]> = segments.by_ref().take(per_thread).collect();
             if batch.is_empty() {
                 break;
             }
@@ -787,8 +869,8 @@ trait Outside: Sync {
 
 /// One segment's surroundings, for one lane at a time.
 struct Around<'a> {
-    head: &'a [Block],
-    tail: &'a [Block],
+    head: &'a [u64],
+    tail: &'a [u64],
     tail_from: usize,
     lane_len: usize,
 }
@@ -796,12 +878,10 @@ struct Around<'a> {
 impl Outside for Around<'_> {
     fn block(&self, lane: usize, position: usize) -> &Block {
         let index = lane * self.lane_len + position;
-        if index < self.head.len() {
-            &self.head[index]
+        if index * BLOCK_WORDS < self.head.len() {
+            chunk(self.head, index)
         } else {
-            self.tail
-                .get(index.wrapping_sub(self.tail_from))
-                .unwrap_or(&Block::ZERO)
+            chunk(self.tail, index.wrapping_sub(self.tail_from))
         }
     }
 }
@@ -809,7 +889,7 @@ impl Outside for Around<'_> {
 /// Every lane's surroundings at once, for lanes filled in parallel.
 #[cfg(feature = "std")]
 struct Gaps<'a> {
-    gaps: &'a [&'a [Block]],
+    gaps: &'a [&'a [u64]],
     start: usize,
     end: usize,
 }
@@ -819,18 +899,16 @@ impl Outside for Gaps<'_> {
     fn block(&self, lane: usize, position: usize) -> &Block {
         let (gap, offset) = if position < self.start {
             // Gap `lane` ends where this lane's segment starts.
-            (lane, self.gaps[lane].len() - (self.start - position))
+            let len = self.gaps.get(lane).map_or(0, |g| g.len() / BLOCK_WORDS);
+            (lane, len.wrapping_sub(self.start - position))
         } else if position >= self.end {
             (lane + 1, position - self.end)
         } else {
             // Inside another lane's current segment, which the algorithm
             // never reads. Not reachable; answered without panicking.
-            return &Block::ZERO;
+            return &ZERO_BLOCK;
         };
-        self.gaps
-            .get(gap)
-            .and_then(|g| g.get(offset))
-            .unwrap_or(&Block::ZERO)
+        self.gaps.get(gap).map_or(&ZERO_BLOCK, |g| chunk(g, offset))
     }
 }
 
@@ -840,7 +918,7 @@ fn fill_segment<O: Outside>(
     pass: u32,
     slice: usize,
     lane: usize,
-    segment: &mut [Block],
+    segment: &mut [u64],
     outside: &O,
 ) {
     let seg_start = slice * g.segment_len;
@@ -853,7 +931,7 @@ fn fill_segment<O: Outside>(
     // the memory traffic, which is what bounds a large run.
     #[inline(always)]
     fn read<'s, O: Outside>(
-        segment: &'s [Block],
+        segment: &'s [u64],
         outside: &'s O,
         own: usize,
         seg_start: usize,
@@ -861,7 +939,7 @@ fn fill_segment<O: Outside>(
         position: usize,
     ) -> &'s Block {
         match position.checked_sub(seg_start) {
-            Some(i) if lane == own && i < segment.len() => &segment[i],
+            Some(i) if lane == own && i * BLOCK_WORDS < segment.len() => chunk(segment, i),
             _ => outside.block(lane, position),
         }
     }
@@ -878,23 +956,25 @@ fn fill_segment<O: Outside>(
             // Refresh the address block every 128 positions.
             if index % BLOCK_WORDS == 0 || address_counter == 0 {
                 address_counter += 1;
-                let mut input = Block::ZERO;
-                input.0[0] = pass as u64;
-                input.0[1] = lane as u64;
-                input.0[2] = slice as u64;
-                input.0[3] = g.total as u64;
-                input.0[4] = g.passes as u64;
-                input.0[5] = g.variant.type_id() as u64;
-                input.0[6] = address_counter;
-                let zero = Block::ZERO;
-                let tmp = compress(&zero, &input);
-                let block = compress(&zero, &tmp);
-                addresses.copy_from_slice(&block.0);
+                let mut input = ZERO_BLOCK;
+                input[0] = pass as u64;
+                input[1] = lane as u64;
+                input[2] = slice as u64;
+                input[3] = g.total as u64;
+                input[4] = g.passes as u64;
+                input[5] = g.variant.type_id() as u64;
+                input[6] = address_counter;
+                let zero = ZERO_BLOCK;
+                let mut tmp = ZERO_BLOCK;
+                compress_into(&zero, &input, &mut tmp, false);
+                let mut block = ZERO_BLOCK;
+                compress_into(&zero, &tmp, &mut block, false);
+                addresses.copy_from_slice(&block);
             }
             let word = addresses[index % BLOCK_WORDS];
             (word as u32, (word >> 32) as u32)
         } else {
-            let word = read(segment, outside, lane, seg_start, lane, previous).0[0];
+            let word = read(segment, outside, lane, seg_start, lane, previous)[0];
             (word as u32, (word >> 32) as u32)
         };
 
@@ -909,19 +989,22 @@ fn fill_segment<O: Outside>(
             g.lane_len,
             g.segment_len,
         );
-        let mixed = compress(
+        // Version 1.0 overwrote on every pass; 1.3 XORs into the block on
+        // every pass after the first, which is the one difference.
+        let xor = pass != 0 && g.version == Version::V0x13;
+        let mut mixed = if xor {
+            *chunk(segment, index)
+        } else {
+            ZERO_BLOCK
+        };
+        compress_into(
             read(segment, outside, lane, seg_start, lane, previous),
             read(segment, outside, lane, seg_start, ref_lane, ref_position),
+            &mut mixed,
+            xor,
         );
-        let slot = &mut segment[index];
-        if pass == 0 || g.version == Version::V0x10 {
-            // Version 1.0 overwrote on every pass; 1.3 XORs into the block
-            // on every pass after the first, which is the one difference.
+        if let Some(slot) = chunk_mut(segment, index) {
             *slot = mixed;
-        } else {
-            for (s, m) in slot.0.iter_mut().zip(mixed.0.iter()) {
-                *s ^= m;
-            }
         }
     }
 }
@@ -931,6 +1014,12 @@ mod tests {
     /// Outside tests, lanes run on threads whenever they can.
     #[cfg(feature = "std")]
     pub(super) fn sequential_only() -> bool {
+        false
+    }
+
+    /// Outside tests, AVX2 is used whenever the CPU has it.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    pub(super) fn scalar_only() -> bool {
         false
     }
 }
@@ -946,6 +1035,72 @@ mod tests {
 
     pub(super) fn sequential_only() -> bool {
         SEQUENTIAL.load(Ordering::Relaxed)
+    }
+
+    /// Set by a test to run the scalar compression on a CPU with AVX2.
+    static SCALAR: AtomicBool = AtomicBool::new(false);
+
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    pub(super) fn scalar_only() -> bool {
+        SCALAR.load(Ordering::Relaxed)
+    }
+
+    /// The AVX2 compression against the scalar definition, block for block,
+    /// in both modes, over inputs from a fixed generator. Skipped on a CPU
+    /// without AVX2, where nothing would run it.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn avx2_compression_matches_the_scalar_definition() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..200 {
+            let mut x = ZERO_BLOCK;
+            let mut y = ZERO_BLOCK;
+            let mut out = ZERO_BLOCK;
+            for w in 0..BLOCK_WORDS {
+                x[w] = next();
+                y[w] = next();
+                out[w] = next();
+            }
+            let want = compress(&x, &y);
+            let mut got = ZERO_BLOCK;
+            // SAFETY: AVX2 was detected above.
+            #[allow(unsafe_code)]
+            unsafe {
+                avx2::compress(&x, &y, &mut got, false)
+            };
+            assert_eq!(got, want);
+            let mut want_xor = out;
+            for (o, m) in want_xor.iter_mut().zip(want.iter()) {
+                *o ^= m;
+            }
+            #[allow(unsafe_code)]
+            unsafe {
+                avx2::compress(&x, &y, &mut out, true)
+            };
+            assert_eq!(out, want_xor);
+        }
+    }
+
+    /// RFC 9106's vectors through the scalar compression, which on this
+    /// machine nothing else would run.
+    #[test]
+    fn the_scalar_compression_matches_the_rfc() {
+        SCALAR.store(true, Ordering::Relaxed);
+        let got = rfc_tag(Variant::Argon2id);
+        SCALAR.store(false, Ordering::Relaxed);
+        assert_eq!(
+            got,
+            "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659"
+        );
     }
 
     /// The two paths must agree. RFC 9106's vectors have four lanes, so they

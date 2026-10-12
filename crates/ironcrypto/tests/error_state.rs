@@ -956,8 +956,8 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         ),
     );
     {
-        use kdf::argon2::{phc, Block, Version};
-        let mut memory = vec![Block::ZERO; small.block_count()];
+        use kdf::argon2::{phc, Version, ZERO_BLOCK};
+        let mut memory = vec![ZERO_BLOCK; small.block_count()];
         seen.refused(
             "argon2id",
             "argon2_with_memory",
@@ -988,7 +988,7 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
             ),
         );
         assert!(
-            memory.iter().all(|b| *b == Block::ZERO),
+            memory.iter().all(|b| *b == ZERO_BLOCK),
             "a refused fill wrote nothing"
         );
         seen.refused(

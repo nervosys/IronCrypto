@@ -1988,7 +1988,7 @@ pub static REGISTRY: &[Entry] = &[
                 The whole of what the argon2 crate offers is here: version 1.0 beside 1.3 \
                 for hashes made before RFC 9106, a secret and associated data, \
                 argon2_with_memory and fill_memory over caller-provided blocks for targets \
-                with no allocator, lanes on threads under std, and PHC strings in \
+                with no allocator, lanes on threads under std, an AVX2 compression function, and PHC strings in \
                 ic_kdf::argon2::phc -- hash_password under a drawn salt, verify_password in \
                 constant time, keyid and data -- checked against libargon2, libsodium and \
                 argon2 0.6.0. A PHC string without v= is version 1.0, as libargon2 reads it; \

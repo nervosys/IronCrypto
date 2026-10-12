@@ -16,12 +16,14 @@ all of them.
   `verify_password` in constant time, a secret and its `keyid`, associated
   `data`, and `verify_password_bounded` for a hash from elsewhere, since a
   hash's parameters decide what verifying it costs. Lanes run on threads
-  under `std`: four lanes are about 2.2 times faster than before. Checked
+  under `std`, the compression function uses AVX2 where the CPU has it, and
+  the arena is allocated as pages the operating system zeroes lazily.
+  Against argon2 0.6.0 with its `parallel` and `zeroize` features, on one
+  x86-64 machine: 19 MiB over two passes, 10.6 ms against 12.2; 64 MiB over
+  three passes and four lanes, 34 ms against 31; 256 MiB over one pass and
+  four lanes, 86 ms against 65 -- where this was 130 before. Checked
   against libargon2 at both versions, libsodium's PHC strings, and
-  argon2 0.6.0's outputs. The `argon2` crate is still faster, about 1.3
-  times on one lane and twice on four: it vectorises the compression
-  function with AVX2, and it neither zero-fills its memory up front nor
-  wipes it afterwards unless asked. Two behaviours differ from it on
+  argon2 0.6.0's outputs. Two behaviours differ from it on
   purpose: a PHC string with no `v=` field is read as version 1.0, as
   libargon2 reads it, and parsing accepts only the canonical form. A
   failed allocation for the memory is now an error rather than an abort,
