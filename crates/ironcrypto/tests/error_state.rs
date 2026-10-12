@@ -75,6 +75,14 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     let chacha = cipher::ChaCha20Poly1305::new(&key32).unwrap();
     let siv128 = cipher::Aes128GcmSiv::new(&key32[..16]).unwrap();
     let siv256 = cipher::Aes256GcmSiv::new(&key32).unwrap();
+    // XChaCha20-Poly1305 takes a 24-byte nonce, so it has its own message.
+    let xchacha = cipher::XChaCha20Poly1305::new(&key32).unwrap();
+    let xnonce = [3u8; 24];
+    let mut xsealed = [0u8; 16];
+    let mut xtag = [0u8; 16];
+    xchacha
+        .seal_detached(&xnonce, b"", &mut xsealed, &mut xtag)
+        .unwrap();
     // One sealed message per AEAD, so that opening is refused for a
     // ciphertext that would have opened.
     let mut sealed = [[0u8; 16]; 6];
@@ -361,6 +369,39 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         &key32[..16]
     );
     aead!("aes-256-gcm-siv", cipher::Aes256GcmSiv, siv256, 5, &key32);
+    {
+        let id = "xchacha20-poly1305";
+        seen.refused(id, "new", cipher::XChaCha20Poly1305::new(&key32));
+        let mut data = [0u8; 16];
+        seen.refused(
+            id,
+            "seal",
+            xchacha.seal_detached(&[9u8; 24], b"", &mut data, &mut tag),
+        );
+        assert_eq!(data, [0u8; 16], "{id}: a refused seal encrypted nothing");
+        // Refused before a nonce is drawn: the source is never asked.
+        struct Untouched;
+        impl ic_core::traits::RandomSource for Untouched {
+            fn fill(&mut self, _: &mut [u8]) -> ic_core::Result<()> {
+                panic!("a nonce was drawn in the error state")
+            }
+        }
+        seen.refused(
+            id,
+            "seal_with_random_nonce",
+            xchacha.seal_with_random_nonce(&mut Untouched, b"", &mut data, &mut tag),
+        );
+        let mut ciphertext = xsealed;
+        seen.refused(
+            id,
+            "open",
+            xchacha.open_detached(&xnonce, b"", &mut ciphertext, &xtag),
+        );
+        assert_eq!(
+            ciphertext, xsealed,
+            "{id}: a refused open released no plaintext"
+        );
+    }
     // The sealer is those AEADs behind a counter.
     assert_eq!(
         cipher::Sealer::<cipher::Aes256Gcm>::new(&key32, [0u8; 4])

@@ -168,6 +168,14 @@ const P_NONCE_12: Param = Param {
     recommended: 12,
     note: "96-bit nonce.",
 };
+const P_NONCE_24: Param = Param {
+    name: "nonce",
+    unit: Unit::Bytes,
+    min: 24,
+    max: 24,
+    recommended: 24,
+    note: "192-bit nonce, long enough to draw at random for every message.",
+};
 const P_IV_16: Param = Param {
     name: "iv",
     unit: Unit::Bytes,
@@ -1790,6 +1798,39 @@ pub static REGISTRY: &[Entry] = &[
         notes: "The right answer without AES hardware, and much faster than this build's portable \
                 AES. Blocked in FIPS approved mode.",
     },
+    Entry {
+        id: "xchacha20-poly1305",
+        name: "XChaCha20-Poly1305",
+        aliases: &["xchachapoly", "aead-xchacha20-poly1305"],
+        summary: "ChaCha20-Poly1305 with a 192-bit nonce, safe to draw at random for every \
+                  message.",
+        class: Class::Aead,
+        family: "ChaCha",
+        purposes: &[Purpose::Confidentiality, Purpose::Authentication, Purpose::Integrity],
+        strength: Strength::symmetric(256),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["draft-irtf-cfrg-xchacha-03", "RFC 8439"],
+        params: &[P_KEY_32, P_NONCE_24, P_TAG_16],
+        constraints: &[UNIQUE_NONCE],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "chacha20-poly1305" },
+            Edge { relation: Relation::BuiltOn, target: "poly1305" },
+        ],
+        performance: Performance::Fast,
+        rust_path: "ic_cipher::XChaCha20Poly1305",
+        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::XChaCha20Poly1305::new(key)?;\nlet nonce = c.seal_with_random_nonce(&mut rng, aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
+        notes: "For when nothing can keep a nonce counter: many senders under one key, or keys \
+                that outlive a process. A random 96-bit nonce collides often enough to matter \
+                after about 2^32 messages; a random 192-bit one does not in any realistic \
+                number. `seal_with_random_nonce` draws it; pass `ic_drbg::Rng`. HChaCha20 \
+                derives a subkey from the key and the nonce's first 16 bytes, and \
+                ChaCha20-Poly1305 runs under it with the last 8. Defined by an Internet-Draft \
+                that expired in 2020 without becoming an RFC; libsodium, Go and Tink implement \
+                the same construction. Checked against the draft's HChaCha20, XChaCha20 and AEAD \
+                vectors and all 315 of Project Wycheproof's cases. Not FIPS-approved, and \
+                blocked in approved mode.",
+    },
     // -- KDFs ---------------------------------------------------------------
     Entry {
         id: "hkdf-sha2-256",
@@ -1967,6 +2008,55 @@ pub static REGISTRY: &[Entry] = &[
                 hardware and keyed without needing HMAC, but not approved — under a FIPS policy \
                 use SHA-2 or SHA-3 instead. The output length is bound into the digest, so a short \
                 hash is not a prefix of a long one.",
+    },
+    Entry {
+        id: "blake2s",
+        name: "BLAKE2s",
+        aliases: &["blake2s-256"],
+        summary: "BLAKE2 for 32-bit platforms. Specified, not implemented here.",
+        class: Class::Hash,
+        family: "BLAKE2",
+        purposes: &[Purpose::Integrity, Purpose::Authentication],
+        strength: Strength::symmetric(128),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Planned,
+        standards: &["RFC 7693"],
+        params: &NO_PARAMS,
+        constraints: &[NOT_FOR_PASSWORDS],
+        edges: &[Edge { relation: Relation::PairsWith, target: "blake2b" }],
+        performance: Performance::Fast,
+        rust_path: "",
+        example: "",
+        notes: "Listed so that asking for it resolves to an absence rather than to nothing. \
+                BLAKE2s is BLAKE2b's 32-bit sibling, with outputs up to 32 bytes; WireGuard uses \
+                it. This library has BLAKE2b and hardware-accelerated SHA-256, which cover the \
+                same ground, so there is no date. Interoperating with a protocol that names \
+                BLAKE2s needs another implementation until there is.",
+    },
+    Entry {
+        id: "blake3",
+        name: "BLAKE3",
+        aliases: &[],
+        summary: "A fast tree hash with a keyed mode and an extendable output. Specified, not \
+                  implemented here.",
+        class: Class::Hash,
+        family: "BLAKE3",
+        purposes: &[Purpose::Integrity, Purpose::Authentication, Purpose::Commitment],
+        strength: Strength::symmetric(128),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Planned,
+        standards: &["BLAKE3 2020"],
+        params: &NO_PARAMS,
+        constraints: &[NOT_FOR_PASSWORDS],
+        edges: &[Edge { relation: Relation::PairsWith, target: "blake2b" }],
+        performance: Performance::Fast,
+        rust_path: "",
+        example: "",
+        notes: "Listed so that asking for it resolves to an absence rather than to nothing. \
+                BLAKE3 is very fast on large inputs because its tree parallelises across cores \
+                and SIMD lanes. It has no standards-body specification and is not approved; \
+                under a FIPS policy use SHA-2 or SHA-3. No date. Until there is one, SHA-256 \
+                with hardware support or BLAKE2b is the choice here.",
     },
     // -- DRBGs --------------------------------------------------------------
     Entry {

@@ -1,4 +1,5 @@
-//! RFC 8439 ChaCha20, Poly1305, and the ChaCha20-Poly1305 AEAD.
+//! RFC 8439 ChaCha20, Poly1305, and the ChaCha20-Poly1305 AEAD; and
+//! XChaCha20-Poly1305, the same AEAD with a 192-bit nonce.
 //!
 //! **Not FIPS-approved.** These are included because they are the right answer
 //! on hardware without AES acceleration, and because interoperating with TLS
@@ -6,7 +7,7 @@
 //! `fips_status: NotApproved`, and `ic-fips` refuses to construct them while
 //! the module is in approved mode.
 
-use ic_core::traits::{Aead, Algorithm, Mac, SelfTest};
+use ic_core::traits::{Aead, Algorithm, Mac, RandomSource, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 const SIGMA: [u32; 4] = [0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574];
@@ -21,6 +22,54 @@ fn quarter_round(s: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
     s[d] = (s[d] ^ s[a]).rotate_left(8);
     s[c] = s[c].wrapping_add(s[d]);
     s[b] = (s[b] ^ s[c]).rotate_left(7);
+}
+
+/// The twenty ChaCha rounds, in place, without adding the input back.
+#[inline(always)]
+fn rounds(working: &mut [u32; 16]) {
+    for _ in 0..10 {
+        // Column rounds.
+        quarter_round(working, 0, 4, 8, 12);
+        quarter_round(working, 1, 5, 9, 13);
+        quarter_round(working, 2, 6, 10, 14);
+        quarter_round(working, 3, 7, 11, 15);
+        // Diagonal rounds.
+        quarter_round(working, 0, 5, 10, 15);
+        quarter_round(working, 1, 6, 11, 12);
+        quarter_round(working, 2, 7, 8, 13);
+        quarter_round(working, 3, 4, 9, 14);
+    }
+}
+
+/// HChaCha20 (draft-irtf-cfrg-xchacha-03 section 2.2): a subkey from a key
+/// and a 128-bit nonce.
+///
+/// The state is ChaCha20's with the counter and nonce words replaced by the
+/// four words of `nonce`. After the rounds, and without adding the input
+/// back, the first row and the last are the subkey.
+fn hchacha20(key: &[u8; 32], nonce: &[u8; 16]) -> [u8; 32] {
+    let mut state = [0u32; 16];
+    state[..4].copy_from_slice(&SIGMA);
+    for i in 0..8 {
+        state[4 + i] =
+            u32::from_le_bytes([key[i * 4], key[i * 4 + 1], key[i * 4 + 2], key[i * 4 + 3]]);
+    }
+    for i in 0..4 {
+        state[12 + i] = u32::from_le_bytes([
+            nonce[i * 4],
+            nonce[i * 4 + 1],
+            nonce[i * 4 + 2],
+            nonce[i * 4 + 3],
+        ]);
+    }
+    rounds(&mut state);
+    let mut subkey = [0u8; 32];
+    for i in 0..4 {
+        subkey[i * 4..i * 4 + 4].copy_from_slice(&state[i].to_le_bytes());
+        subkey[16 + i * 4..16 + i * 4 + 4].copy_from_slice(&state[12 + i].to_le_bytes());
+    }
+    state.zeroize();
+    subkey
 }
 
 /// Produce one 64-byte ChaCha20 keystream block.
@@ -42,18 +91,7 @@ fn chacha20_block(key: &[u8; 32], counter: u32, nonce: &[u8; 12], out: &mut [u8;
     }
 
     let mut working = state;
-    for _ in 0..10 {
-        // Column rounds.
-        quarter_round(&mut working, 0, 4, 8, 12);
-        quarter_round(&mut working, 1, 5, 9, 13);
-        quarter_round(&mut working, 2, 6, 10, 14);
-        quarter_round(&mut working, 3, 7, 11, 15);
-        // Diagonal rounds.
-        quarter_round(&mut working, 0, 5, 10, 15);
-        quarter_round(&mut working, 1, 6, 11, 12);
-        quarter_round(&mut working, 2, 7, 8, 13);
-        quarter_round(&mut working, 3, 4, 9, 14);
-    }
+    rounds(&mut working);
     for i in 0..16 {
         let v = working[i].wrapping_add(state[i]);
         out[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
@@ -585,6 +623,160 @@ impl SelfTest for ChaCha20Poly1305 {
     }
 }
 
+/// XChaCha20-Poly1305: ChaCha20-Poly1305 with a 192-bit nonce
+/// (draft-irtf-cfrg-xchacha-03).
+///
+/// The first 16 bytes of the nonce and the key give a subkey through
+/// HChaCha20; the last 8, after four zero bytes, are the nonce
+/// ChaCha20-Poly1305 runs with under that subkey.
+///
+/// The point is the nonce's length. A 96-bit nonce drawn at random collides
+/// often enough that a long-lived key cannot use one; a 192-bit one does not,
+/// so [`seal_with_random_nonce`](Self::seal_with_random_nonce) draws each
+/// nonce and needs no counter kept anywhere. That is what to use. Passing a
+/// nonce by hand through [`Aead`] is for a protocol that dictates one, and
+/// carries the same rule as every AEAD: never twice under one key.
+///
+/// The specification is an Internet-Draft that expired in 2020 without
+/// becoming an RFC. The construction is what libsodium, Go and Tink implement,
+/// and it is checked here against the draft's vectors and Project
+/// Wycheproof's.
+pub struct XChaCha20Poly1305 {
+    key: [u8; 32],
+}
+
+impl Drop for XChaCha20Poly1305 {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl Algorithm for XChaCha20Poly1305 {
+    const ID: &'static str = "xchacha20-poly1305";
+    const NAME: &'static str = "XChaCha20-Poly1305";
+}
+
+impl XChaCha20Poly1305 {
+    /// The ChaCha20-Poly1305 instance and 96-bit nonce a 192-bit nonce names.
+    ///
+    /// The subkey lives only inside the returned cipher, which wipes it when
+    /// dropped.
+    fn inner(&self, nonce: &[u8]) -> Result<(ChaCha20Poly1305, [u8; 12])> {
+        ensure!(
+            nonce.len() == 24,
+            InvalidLength,
+            "xchacha20-poly1305 nonce must be 24 bytes"
+        );
+        let mut prefix = [0u8; 16];
+        prefix.copy_from_slice(&nonce[..16]);
+        let inner = ChaCha20Poly1305 {
+            key: hchacha20(&self.key, &prefix),
+        };
+        let mut n = [0u8; 12];
+        n[4..].copy_from_slice(&nonce[16..]);
+        Ok((inner, n))
+    }
+
+    /// Seal under a nonce drawn from `rng`, and return the nonce.
+    ///
+    /// The nonce is not secret; send it with the ciphertext. Pass
+    /// `ic_drbg::Rng`, not raw OS bytes.
+    pub fn seal_with_random_nonce<R: RandomSource + ?Sized>(
+        &self,
+        rng: &mut R,
+        aad: &[u8],
+        in_out: &mut [u8],
+        tag: &mut [u8],
+    ) -> Result<[u8; 24]> {
+        ic_core::module::operational()?;
+        ensure!(
+            tag.len() == 16,
+            InvalidLength,
+            "xchacha20-poly1305 tag buffer"
+        );
+        let mut nonce = [0u8; 24];
+        rng.fill(&mut nonce)?;
+        self.seal_detached(&nonce, aad, in_out, tag)?;
+        Ok(nonce)
+    }
+}
+
+impl Aead for XChaCha20Poly1305 {
+    const KEY_LEN: usize = 32;
+    const NONCE_LEN: usize = 24;
+    const TAG_LEN: usize = 16;
+
+    fn new(key: &[u8]) -> Result<Self> {
+        ic_core::module::operational()?;
+        ensure!(key.len() == 32, InvalidLength, "xchacha20-poly1305 key");
+        let mut k = [0u8; 32];
+        k.copy_from_slice(key);
+        Ok(Self { key: k })
+    }
+
+    fn seal_detached(
+        &self,
+        nonce: &[u8],
+        aad: &[u8],
+        in_out: &mut [u8],
+        tag: &mut [u8],
+    ) -> Result<()> {
+        ic_core::module::operational()?;
+        let (inner, n) = self.inner(nonce)?;
+        inner.seal_detached(&n, aad, in_out, tag)
+    }
+
+    fn open_detached(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &[u8]) -> Result<()> {
+        ic_core::module::operational()?;
+        let (inner, n) = self.inner(nonce)?;
+        inner.open_detached(&n, aad, in_out, tag)
+    }
+}
+
+impl SelfTest for XChaCha20Poly1305 {
+    /// The AEAD vector of draft-irtf-cfrg-xchacha-03 appendix A.3.1, sealed
+    /// and opened.
+    fn self_test() -> Result<()> {
+        let mut key = [0u8; 32];
+        for (i, k) in key.iter_mut().enumerate() {
+            *k = 0x80 + i as u8;
+        }
+        let mut nonce = [0u8; 24];
+        for (i, n) in nonce.iter_mut().enumerate() {
+            *n = 0x40 + i as u8;
+        }
+        let aad = [
+            0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+        ];
+        let plaintext: &[u8; 114] = b"Ladies and Gentlemen of the class of '99: If I could offer \
+you only one tip for the future, sunscreen would be it.";
+        let mut want = [0u8; 114];
+        ic_core::codec::hex_decode(
+            b"bd6d179d3e83d43b9576579493c0e939572a1700252bfaccbed2902c21396cbb\
+              731c7f1b0b4aa6440bf3a82f4eda7e39ae64c6708c54c216cb96b72e1213b452\
+              2f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff9\
+              21f9664c97637da9768812f615c68b13b52e",
+            &mut want,
+        )?;
+        let mut want_tag = [0u8; 16];
+        ic_core::codec::hex_decode(b"c0875924c1c7987947deafd8780acf49", &mut want_tag)?;
+
+        let c = <Self as Aead>::new(&key)?;
+        let mut buf = *plaintext;
+        let mut tag = [0u8; 16];
+        c.seal_detached(&nonce, &aad, &mut buf, &mut tag)?;
+        ensure!(buf == want, SelfTestFailed, "xchacha20-poly1305");
+        ensure!(
+            ic_core::ct::verify(&want_tag, &tag),
+            SelfTestFailed,
+            "xchacha20-poly1305"
+        );
+        c.open_detached(&nonce, &aad, &mut buf, &tag)?;
+        ensure!(&buf == plaintext, SelfTestFailed, "xchacha20-poly1305");
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,8 +1050,188 @@ mod tests {
         assert_ne!(m.powers[0], m.r);
     }
 
+    /// Hex with whitespace, as the draft prints it.
+    fn spaced_hex(s: &str) -> Vec<u8> {
+        let s: std::string::String = s.split_whitespace().collect();
+        let mut out = vec![0u8; s.len() / 2];
+        ic_core::codec::hex_decode(s.as_bytes(), &mut out).unwrap();
+        out
+    }
+
+    /// The key and nonce of draft-irtf-cfrg-xchacha-03's appendix A.3: the
+    /// bytes 0x80..0x9f and 0x40..0x57, with the keystream vectors' nonce
+    /// ending 0x58 instead.
+    fn draft_key() -> [u8; 32] {
+        core::array::from_fn(|i| 0x80 + i as u8)
+    }
+
+    /// draft-irtf-cfrg-xchacha-03 section 2.2.1.
+    #[test]
+    fn hchacha20_matches_the_draft() {
+        let key: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let nonce: [u8; 16] = spaced_hex("000000090000004a0000000031415927")
+            .try_into()
+            .unwrap();
+        let subkey = hchacha20(&key, &nonce);
+        assert_eq!(
+            subkey.to_vec(),
+            spaced_hex("82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc")
+        );
+    }
+
+    /// XChaCha20 as the draft's pseudocode in section 2.3.1 has it, built
+    /// from the same subkey and nonce the AEAD uses.
+    fn xchacha20_xor(key: &[u8; 32], nonce: &[u8; 24], counter: u32, data: &mut [u8]) {
+        let (inner, n) = XChaCha20Poly1305 { key: *key }.inner(nonce).unwrap();
+        chacha20_xor(&inner.key, &n, counter, data).unwrap();
+    }
+
+    /// draft-irtf-cfrg-xchacha-03 appendix A.3.2, at both block counters.
+    #[test]
+    fn xchacha20_keystream_matches_the_draft() {
+        let nonce: [u8; 24] = core::array::from_fn(|i| 0x40 + i as u8 + u8::from(i == 23));
+        let plaintext = spaced_hex(
+            "5468652064686f6c65202870726f6e6f756e6365642022646f6c652229206973
+             20616c736f206b6e6f776e2061732074686520417369617469632077696c6420
+             646f672c2072656420646f672c20616e642077686973746c696e6720646f672e
+             2049742069732061626f7574207468652073697a65206f662061204765726d61
+             6e20736865706865726420627574206c6f6f6b73206d6f7265206c696b652061
+             206c6f6e672d6c656767656420666f782e205468697320686967686c7920656c
+             757369766520616e6420736b696c6c6564206a756d70657220697320636c6173
+             736966696564207769746820776f6c7665732c20636f796f7465732c206a6163
+             6b616c732c20616e6420666f78657320696e20746865207461786f6e6f6d6963
+             2066616d696c792043616e696461652e",
+        );
+        let at_zero = spaced_hex(
+            "4559abba4e48c16102e8bb2c05e6947f50a786de162f9b0b7e592a9b53d0d4e9
+             8d8d6410d540a1a6375b26d80dace4fab52384c731acbf16a5923c0c48d3575d
+             4d0d2c673b666faa731061277701093a6bf7a158a8864292a41c48e3a9b4c0da
+             ece0f8d98d0d7e05b37a307bbb66333164ec9e1b24ea0d6c3ffddcec4f68e744
+             3056193a03c810e11344ca06d8ed8a2bfb1e8d48cfa6bc0eb4e2464b74814240
+             7c9f431aee769960e15ba8b96890466ef2457599852385c661f752ce20f9da0c
+             09ab6b19df74e76a95967446f8d0fd415e7bee2a12a114c20eb5292ae7a349ae
+             577820d5520a1f3fb62a17ce6a7e68fa7c79111d8860920bc048ef43fe84486c
+             cb87c25f0ae045f0cce1e7989a9aa220a28bdd4827e751a24a6d5c62d790a663
+             93b93111c1a55dd7421a10184974c7c5",
+        );
+        let at_one = spaced_hex(
+            "7d0a2e6b7f7c65a236542630294e063b7ab9b555a5d5149aa21e4ae1e4fbce87
+             ecc8e08a8b5e350abe622b2ffa617b202cfad72032a3037e76ffdcdc4376ee05
+             3a190d7e46ca1de04144850381b9cb29f051915386b8a710b8ac4d027b8b050f
+             7cba5854e028d564e453b8a968824173fc16488b8970cac828f11ae53cabd201
+             12f87107df24ee6183d2274fe4c8b1485534ef2c5fbc1ec24bfc3663efaa08bc
+             047d29d25043532db8391a8a3d776bf4372a6955827ccb0cdd4af403a7ce4c63
+             d595c75a43e045f0cce1f29c8b93bd65afc5974922f214a40b7c402cdb91ae73
+             c0b63615cdad0480680f16515a7ace9d39236464328a37743ffc28f4ddb324f4
+             d0f5bbdc270c65b1749a6efff1fbaa09536175ccd29fb9e6057b307320d31683
+             8a9c71f70b5b5907a66f7ea49aadc409",
+        );
+        for (counter, want) in [(0, at_zero), (1, at_one)] {
+            let mut buf = plaintext.clone();
+            xchacha20_xor(&draft_key(), &nonce, counter, &mut buf);
+            assert_eq!(buf, want, "block counter {counter}");
+        }
+    }
+
+    /// draft-irtf-cfrg-xchacha-03 appendix A.3.1 gives the one-time Poly1305
+    /// key as well as the ciphertext, which separates a wrong subkey or nonce
+    /// from a wrong tag.
+    #[test]
+    fn xchacha20_poly1305_derives_the_drafts_poly1305_key() {
+        let nonce: [u8; 24] = core::array::from_fn(|i| 0x40 + i as u8);
+        let (inner, n) = XChaCha20Poly1305 { key: draft_key() }
+            .inner(&nonce)
+            .unwrap();
+        assert_eq!(n[..4], [0u8; 4], "the 32-bit fixed-common part");
+        assert_eq!(
+            inner.poly_key(&n).unwrap().to_vec(),
+            spaced_hex("7b191f80f361f099094f6f4b8fb97df847cc6873a8f2b190dd73807183f907d5")
+        );
+    }
+
+    /// Each half of the nonce matters, and only a 24-byte one is taken.
+    ///
+    /// The draft's vectors vary every nonce byte at once, so they would also
+    /// pass against a construction that ignored some of them only if those
+    /// bytes happened not to matter; this changes one byte of each half and
+    /// requires the ciphertext to change.
+    #[test]
+    fn xchacha20_poly1305_uses_the_whole_nonce_and_refuses_other_lengths() {
+        let c = XChaCha20Poly1305::new(&draft_key()).unwrap();
+        let seal = |nonce: &[u8]| {
+            let mut buf = *b"sixteen bytes!!!";
+            let mut tag = [0u8; 16];
+            c.seal_detached(nonce, b"", &mut buf, &mut tag)
+                .map(|()| (buf, tag))
+        };
+        let base = [7u8; 24];
+        let reference = seal(&base).unwrap();
+        for at in [0, 15, 16, 23] {
+            let mut other = base;
+            other[at] ^= 1;
+            assert_ne!(seal(&other).unwrap().0, reference.0, "nonce byte {at}");
+        }
+        for len in [0, 12, 16, 23, 25] {
+            let err = seal(&vec![7u8; len]).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                ic_core::ErrorKind::InvalidLength,
+                "{len}-byte nonce"
+            );
+        }
+    }
+
+    /// A random nonce is drawn once, used, and returned; and a forged tag
+    /// wipes the buffer as the 96-bit AEAD's does.
+    #[test]
+    fn xchacha20_poly1305_seals_with_a_drawn_nonce_and_refuses_a_forgery() {
+        struct Counting(u8, usize);
+        impl RandomSource for Counting {
+            fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+                self.1 += 1;
+                for b in out.iter_mut() {
+                    self.0 = self.0.wrapping_add(1);
+                    *b = self.0;
+                }
+                Ok(())
+            }
+        }
+        let c = XChaCha20Poly1305::new(&draft_key()).unwrap();
+        let mut rng = Counting(0, 0);
+        let mut buf = *b"attack at dawn";
+        let mut tag = [0u8; 16];
+        let nonce = c
+            .seal_with_random_nonce(&mut rng, b"hdr", &mut buf, &mut tag)
+            .unwrap();
+        assert_eq!(rng.1, 1);
+        assert_eq!(nonce, core::array::from_fn::<u8, 24, _>(|i| i as u8 + 1));
+
+        let mut short = [0u8; 15];
+        assert!(c
+            .seal_with_random_nonce(&mut rng, b"hdr", &mut buf, &mut short)
+            .is_err());
+        assert_eq!(
+            rng.1, 1,
+            "nothing drawn for a buffer that cannot hold the tag"
+        );
+
+        let mut opened = buf;
+        c.open_detached(&nonce, b"hdr", &mut opened, &tag).unwrap();
+        assert_eq!(&opened, b"attack at dawn");
+
+        let mut forged = tag;
+        forged[0] ^= 1;
+        let mut attempt = buf;
+        let err = c
+            .open_detached(&nonce, b"hdr", &mut attempt, &forged)
+            .unwrap_err();
+        assert_eq!(err.kind(), ic_core::ErrorKind::AuthenticationFailed);
+        assert_eq!(attempt, [0u8; 14], "wiped");
+    }
+
     #[test]
     fn self_tests_pass() {
+        XChaCha20Poly1305::self_test().unwrap();
         Poly1305::self_test().unwrap();
         ChaCha20Poly1305::self_test().unwrap();
     }

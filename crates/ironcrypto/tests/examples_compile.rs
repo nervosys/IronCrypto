@@ -920,6 +920,25 @@ fn key_wrap_examples_compile_and_match() -> Result<()> {
     Ok(())
 }
 
+/// XChaCha20-Poly1305, which draws its own nonce rather than counting.
+#[test]
+fn xchacha20_poly1305_example_compiles_and_matches() -> Result<()> {
+    let key: &[u8] = &[0x44u8; 32];
+    let aad: &[u8] = b"aad";
+    let mut rng = drbg::Rng::from_entropy(&[0x3cu8; 32], b"examples/xchacha")?;
+    let mut buf = [0x55u8; 16];
+    let mut tag = [0u8; 16];
+    let c = cipher::XChaCha20Poly1305::new(key)?;
+    let nonce = c.seal_with_random_nonce(&mut rng, aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext
+    c.open_detached(&nonce, aad, &mut buf, &tag)?;
+    assert_eq!(buf, [0x55u8; 16]);
+    check_example(
+        "xchacha20-poly1305",
+        "let c = ic_cipher::XChaCha20Poly1305::new(key)?;\nlet nonce = c.seal_with_random_nonce(&mut rng, aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
+    );
+    Ok(())
+}
+
 /// The nonce-misuse-resistant AEAD, whose two entries differ in shape.
 #[test]
 fn gcm_siv_examples_compile_and_match() -> Result<()> {

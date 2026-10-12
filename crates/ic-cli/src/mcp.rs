@@ -533,7 +533,7 @@ fn tools() -> Vec<Tool> {
                 let nonce = match arg(args, "nonce") {
                     Some(text) if !text.is_empty() => ic_core::codec::unhex(text)
                         .map_err(|e| format!("'nonce' must be hex: {e}"))?,
-                    _ => ops::random_nonce()?.to_vec(),
+                    _ => ops::random_nonce(required(args, "algorithm")?)?,
                 };
                 ops::claim_nonce(&key, &nonce)?;
                 let aad = match arg(args, "aad") {
@@ -1651,6 +1651,42 @@ mod tests {
             ]),
         );
         assert!(is_error(&r));
+    }
+
+    /// A drawn nonce is as long as the algorithm's: 24 bytes for
+    /// XChaCha20-Poly1305, which a 12-byte one would make fail.
+    #[test]
+    fn seal_draws_a_nonce_of_the_algorithms_length() {
+        let key = "44".repeat(32);
+        for (algorithm, len) in [("chacha20-poly1305", 12), ("xchacha20-poly1305", 24)] {
+            let sealed = call(
+                "crypto_seal",
+                Json::object([
+                    ("algorithm", Json::str(algorithm)),
+                    ("key", Json::str(key.as_str())),
+                    ("plaintext", Json::str("long nonce")),
+                ]),
+            );
+            assert!(!is_error(&sealed), "{algorithm}");
+            let b = body(&sealed);
+            let field = |n: &str| b.get(n).unwrap().as_str().unwrap().to_string();
+            assert_eq!(field("nonce").len(), 2 * len, "{algorithm}");
+            let opened = call(
+                "crypto_open",
+                Json::object([
+                    ("algorithm", Json::str(algorithm)),
+                    ("key", Json::str(key.as_str())),
+                    ("nonce", Json::str(field("nonce"))),
+                    ("ciphertext", Json::str(field("ciphertext"))),
+                    ("tag", Json::str(field("tag"))),
+                ]),
+            );
+            assert_eq!(
+                body(&opened).get("plaintext").unwrap().as_str(),
+                Some("long nonce"),
+                "{algorithm}"
+            );
+        }
     }
 
     #[test]

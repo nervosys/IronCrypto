@@ -124,7 +124,7 @@ pub mod prelude {
     pub use ic_core::{Error, ErrorKind, Result, Zeroize, Zeroizing};
 
     pub use ic_cipher::{Aes128, Aes192, Aes256};
-    pub use ic_cipher::{Aes128Gcm, Aes192Gcm, Aes256Gcm, ChaCha20Poly1305};
+    pub use ic_cipher::{Aes128Gcm, Aes192Gcm, Aes256Gcm, ChaCha20Poly1305, XChaCha20Poly1305};
     pub use ic_cipher::{Aes128GcmSiv, Aes256GcmSiv};
     pub use ic_cipher::{Aes128Kw, Aes192Kwp, Aes256Kw, Aes256Kwp};
     pub use ic_cipher::{Opener, Sealer};

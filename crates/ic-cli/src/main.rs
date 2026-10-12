@@ -608,14 +608,15 @@ pub fn run(args: &[&str]) -> Result<String, String> {
             let algorithm = pos.get(1).copied().ok_or("seal needs an algorithm")?;
             let key = ic_core::codec::unhex(pos.get(2).copied().ok_or("seal needs a hex key")?)
                 .map_err(|e| format!("key must be hex: {e}"))?;
-            // `random` draws a fresh 96-bit nonce, which is printed with the
-            // output; a hex nonce is the caller's to keep unique.
+            // `random` draws a fresh nonce of the algorithm's length, which is
+            // printed with the output; a hex nonce is the caller's to keep
+            // unique.
             let nonce = match pos
                 .get(3)
                 .copied()
                 .ok_or("seal needs a hex nonce or 'random'")?
             {
-                "random" => ops::random_nonce()?.to_vec(),
+                "random" => ops::random_nonce(algorithm)?,
                 hex => ic_core::codec::unhex(hex).map_err(|e| format!("nonce must be hex: {e}"))?,
             };
             let aad = match pos.get(4).copied() {

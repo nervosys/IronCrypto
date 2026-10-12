@@ -381,6 +381,13 @@ static AEADS: &[Target] = &[
             12,
         )
     }),
+    ("xchacha20-poly1305", |rng| {
+        hammer_aead(
+            rng,
+            &cipher::XChaCha20Poly1305::new(&[0x22u8; 32]).unwrap(),
+            24,
+        )
+    }),
     ("aes-128-gcm-siv", |rng| {
         hammer_aead(rng, &cipher::Aes128GcmSiv::new(&[0x33u8; 16]).unwrap(), 12)
     }),

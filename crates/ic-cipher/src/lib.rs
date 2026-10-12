@@ -74,7 +74,7 @@ pub mod sealer;
 pub mod shamir;
 
 pub use aes::{Aes128, Aes192, Aes256};
-pub use chacha::{chacha20_xor, ChaCha20Poly1305, Poly1305};
+pub use chacha::{chacha20_xor, ChaCha20Poly1305, Poly1305, XChaCha20Poly1305};
 pub use gcm::{Aes128Gcm, Aes192Gcm, Aes256Gcm, GcmLimits};
 pub use gcm_siv::{Aes128GcmSiv, Aes256GcmSiv};
 pub use keywrap::{Aes128Kw, Aes128Kwp, Aes192Kw, Aes192Kwp, Aes256Kw, Aes256Kwp};
@@ -87,6 +87,7 @@ pub const AEAD_IDS: &[&str] = &[
     "aes-192-gcm",
     "aes-256-gcm",
     "chacha20-poly1305",
+    "xchacha20-poly1305",
 ];
 
 /// Ontology identifiers for the raw block ciphers this crate provides.

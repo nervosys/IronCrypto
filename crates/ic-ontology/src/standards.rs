@@ -1160,6 +1160,21 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "BLAKE3 2020",
+        title: "BLAKE3: one function, fast everywhere",
+        body: Body::Literature,
+        scope: Scope::Algorithm,
+        year: 2020,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf",
+        summary: "O'Connor, Aumasson, Neves and Wilcox-O'Hearn. The specification of BLAKE3, a \
+                  tree hash built on BLAKE2s's compression function with fewer rounds. No \
+                  standards body defines it, so its authors' document is cited. It has no DOI; \
+                  the link is to the authors' repository.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "Shamir 1979",
         title: "How to Share a Secret",
         body: Body::Literature,
@@ -1288,6 +1303,22 @@ pub static STANDARDS: &[Standard] = &[
         url: "https://www.rfc-editor.org/rfc/rfc8439",
         summary: "ChaCha20-Poly1305. Fast and constant-time in software without hardware \
                   support, which is why it is the right default where AES-NI is absent.",
+        requirements: &NO_REQS,
+    },
+    Standard {
+        id: "draft-irtf-cfrg-xchacha-03",
+        title: "XChaCha: eXtended-nonce ChaCha and AEAD_XChaCha20_Poly1305",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2020,
+        status: StandardStatus::Informational,
+        superseded_by: &[],
+        url: "https://datatracker.ietf.org/doc/draft-irtf-cfrg-xchacha/03/",
+        summary: "HChaCha20 and the 192-bit-nonce variant of ChaCha20-Poly1305. An Internet-Draft \
+                  of the CFRG that expired in July 2020 without becoming an RFC, so it is not \
+                  normative; it is cited because nothing else defines the construction that \
+                  libsodium, Go and Tink share. Sections 2.2.1 and A.3 carry the vectors this \
+                  library is checked against.",
         requirements: &NO_REQS,
     },
     Standard {
@@ -1529,15 +1560,35 @@ mod tests {
                     s.id,
                     s.url
                 ),
+                // An Internet-Draft never reached the RFC editor, so it is
+                // located on the datatracker by its own name and revision, and
+                // cannot claim to be in force.
+                Body::Ietf if s.id.starts_with("draft-") => {
+                    let (name, rev) = s.id.rsplit_once('-').expect("a draft names its revision");
+                    assert_eq!(
+                        s.url,
+                        format!("https://datatracker.ietf.org/doc/{name}/{rev}/"),
+                        "{} does not use the datatracker scheme",
+                        s.id
+                    );
+                    assert_eq!(
+                        s.status,
+                        StandardStatus::Informational,
+                        "{} is a draft, not a standard",
+                        s.id
+                    );
+                }
                 Body::Ietf => assert!(
                     s.url.starts_with("https://www.rfc-editor.org/rfc/rfc"),
                     "{} does not use the RFC editor scheme: {}",
                     s.id,
                     s.url
                 ),
+                // A paper with no DOI has to say so, so that the exception is
+                // stated in the entry rather than discovered here.
                 Body::Literature => assert!(
-                    s.url.starts_with("https://doi.org/10."),
-                    "{} does not use a DOI: {}",
+                    s.url.starts_with("https://doi.org/10.") || s.summary.contains("It has no DOI"),
+                    "{} does not use a DOI and does not say it has none: {}",
                     s.id,
                     s.url
                 ),

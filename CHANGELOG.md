@@ -5,6 +5,20 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **XChaCha20-Poly1305**, as `ic_cipher::XChaCha20Poly1305`: ChaCha20-Poly1305
+  with a 192-bit nonce, long enough to draw at random for every message, so
+  nothing has to keep a counter. `seal_with_random_nonce` draws the nonce and
+  returns it. It is the construction libsodium, Go and Tink implement, from
+  draft-irtf-cfrg-xchacha-03, an Internet-Draft that expired without becoming
+  an RFC. Checked against the draft's HChaCha20, XChaCha20 and AEAD vectors
+  and all 315 of Project Wycheproof's cases. Not FIPS-approved, and refused in
+  approved mode. Also through `ic seal`, `ic open` and their MCP tools.
+- **Ontology entries for BLAKE2s and BLAKE3**, both `planned` with no date.
+  Asking for either, or for XChaCha20-Poly1305, used to answer "unknown
+  algorithm"; it now says what the library has and what to use instead.
+
 ### Changed
 
 - **PBKDF2 is about 1.7 times faster.** It keyed its MAC again on every

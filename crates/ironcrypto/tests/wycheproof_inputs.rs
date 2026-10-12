@@ -22,7 +22,7 @@ use ic_core::ErrorKind;
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::cipher::{
     Aes128Gcm, Aes128GcmSiv, Aes128Kw, Aes128Kwp, Aes192Gcm, Aes192Kw, Aes192Kwp, Aes256Gcm,
-    Aes256GcmSiv, Aes256Kw, Aes256Kwp, ChaCha20Poly1305,
+    Aes256GcmSiv, Aes256Kw, Aes256Kwp, ChaCha20Poly1305, XChaCha20Poly1305,
 };
 use ironcrypto::kdf::Hkdf;
 use ironcrypto::mac::{CmacAes128, CmacAes192, CmacAes256, HmacSha256, HmacSha384, HmacSha512};
@@ -171,6 +171,7 @@ fn the_aeads_match_wycheproof() {
             ("aes-gcm", 24) => run!(Aes192Gcm),
             ("aes-gcm", 32) => run!(Aes256Gcm),
             ("chacha20-poly1305", 32) => run!(ChaCha20Poly1305),
+            ("xchacha20-poly1305", 32) => run!(XChaCha20Poly1305),
             ("aes-gcm-siv", 16) => run!(Aes128GcmSiv),
             ("aes-gcm-siv", 32) => run!(Aes256GcmSiv),
             // A key length this library has no type for.
@@ -183,14 +184,15 @@ fn the_aeads_match_wycheproof() {
             }
         };
         // The tag is sixteen bytes and nothing else. ChaCha20-Poly1305 and
-        // AES-GCM-SIV take a twelve-byte nonce and nothing else; AES-GCM
-        // takes any that is not empty, as SP 800-38D allows, so its cases
-        // with other nonce lengths are judged like the rest. A shape that
-        // is not taken is refused in both directions, whatever its verdict.
-        let nonce_taken = if cipher == "aes-gcm" {
-            !nonce.is_empty()
-        } else {
-            nonce.len() == 12
+        // AES-GCM-SIV take a twelve-byte nonce and nothing else, and
+        // XChaCha20-Poly1305 a twenty-four-byte one; AES-GCM takes any that
+        // is not empty, as SP 800-38D allows, so its cases with other nonce
+        // lengths are judged like the rest. A shape that is not taken is
+        // refused in both directions, whatever its verdict.
+        let nonce_taken = match cipher {
+            "aes-gcm" => !nonce.is_empty(),
+            "xchacha20-poly1305" => nonce.len() == 24,
+            _ => nonce.len() == 12,
         };
         if !nonce_taken || tag.len() != 16 {
             assert!(open.is_err(), "{cipher}: {}", what(case));
@@ -218,7 +220,12 @@ fn the_aeads_match_wycheproof() {
         judge(&mut tally, cipher, case, open.is_ok());
     }
     println!("{tally:#?}");
-    for cipher in ["aes-gcm", "chacha20-poly1305", "aes-gcm-siv"] {
+    for cipher in [
+        "aes-gcm",
+        "chacha20-poly1305",
+        "xchacha20-poly1305",
+        "aes-gcm-siv",
+    ] {
         assert!(tally[&format!("{cipher} valid accepted")] > 50, "{cipher}");
         assert!(tally[&format!("{cipher} invalid refused")] > 20, "{cipher}");
     }

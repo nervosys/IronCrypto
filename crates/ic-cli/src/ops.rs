@@ -620,6 +620,8 @@ pub fn seal_hex(
             .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
         "chacha20-poly1305" => ic_cipher::ChaCha20Poly1305::new(key)
             .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
+        "xchacha20-poly1305" => ic_cipher::XChaCha20Poly1305::new(key)
+            .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
         "aes-128-gcm-siv" => ic_cipher::Aes128GcmSiv::new(key)
             .and_then(|c| c.seal_detached(nonce, aad, &mut buf, &mut tag)),
         "aes-256-gcm-siv" => ic_cipher::Aes256GcmSiv::new(key)
@@ -655,6 +657,8 @@ pub fn open_bytes(
             ic_cipher::Aes256Gcm::new(key).and_then(|c| c.open_detached(nonce, aad, out, tag))
         }
         "chacha20-poly1305" => ic_cipher::ChaCha20Poly1305::new(key)
+            .and_then(|c| c.open_detached(nonce, aad, out, tag)),
+        "xchacha20-poly1305" => ic_cipher::XChaCha20Poly1305::new(key)
             .and_then(|c| c.open_detached(nonce, aad, out, tag)),
         "aes-128-gcm-siv" => {
             ic_cipher::Aes128GcmSiv::new(key).and_then(|c| c.open_detached(nonce, aad, out, tag))
@@ -805,14 +809,20 @@ pub fn hkdf_bytes(
     Ok(out)
 }
 
-/// A fresh random 96-bit nonce from the OS-seeded DRBG.
+/// A fresh random nonce for `algorithm`, from the OS-seeded DRBG.
 ///
-/// SP 800-38D section 8.2.2's random construction: safe for up to 2^32
-/// messages under one key, which `GcmLimits::MAX_RANDOM_NONCE_INVOCATIONS`
-/// records.
-pub fn random_nonce() -> Result<[u8; 12], String> {
+/// 96 bits for every AEAD but XChaCha20-Poly1305, whose nonce is 192. A
+/// random 96-bit nonce is SP 800-38D section 8.2.2's construction: safe for
+/// up to 2^32 messages under one key, which
+/// `GcmLimits::MAX_RANDOM_NONCE_INVOCATIONS` records. A random 192-bit one has
+/// no such limit in practice, which is what XChaCha20-Poly1305 is for.
+pub fn random_nonce(algorithm: &str) -> Result<Vec<u8>, String> {
+    let len = match algorithm {
+        "xchacha20-poly1305" => 24,
+        _ => 12,
+    };
     let mut rng = ic_drbg::Rng::from_os().map_err(|e| e.to_string())?;
-    let mut nonce = [0u8; 12];
+    let mut nonce = vec![0u8; len];
     rng.fill(&mut nonce).map_err(|e| e.to_string())?;
     Ok(nonce)
 }

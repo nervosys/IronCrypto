@@ -46,7 +46,8 @@ less the right answer than the refusal of a wrong one:
 - wycheproof-x25519.json: X25519, where half the cases are public keys a
   careful implementation may refuse -- points of low order, on the twist,
   or not reduced -- and are marked acceptable.
-- wycheproof-aead.json: AES-GCM, ChaCha20-Poly1305 and AES-GCM-SIV.
+- wycheproof-aead.json: AES-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305 and
+  AES-GCM-SIV.
 - wycheproof-mac.json: HMAC with SHA-256, SHA-384 and SHA-512, and AES-CMAC.
 - wycheproof-hkdf.json: HKDF with SHA-256, SHA-384 and SHA-512.
 - wycheproof-keywrap.json: AES Key Wrap, with and without padding.
@@ -99,6 +100,7 @@ PINNED = {
     "rsa_signature_3072_sha256_test.json": "0f5f18cabfaad3e2792e82f7e9882f8999049b45",
     "rsa_signature_4096_sha256_test.json": "957aca128e30bd02c8982f8ca482d6521d16683f",
     "x25519_test.json": "35c3f5231cf25cc640b524d403461deee9e49441",
+    "xchacha20_poly1305_test.json": "a79de072571b90eb40c3a63ce0c7f75dcb4b6232",
 }
 
 SOURCE = ("Project Wycheproof, https://github.com/C2SP/wycheproof commit " + COMMIT
@@ -115,7 +117,7 @@ ECDH = ["ecdh_secp256r1_ecpoint", "ecdh_secp384r1_ecpoint", "ecdh_secp521r1_ecpo
 KMAC = ["kmac128_no_customization", "kmac256_no_customization"]
 PBKDF2 = ["pbkdf2_hmacsha256", "pbkdf2_hmacsha512"]
 ECDSA = ["ecdsa_secp256r1_sha256", "ecdsa_secp384r1_sha384", "ecdsa_secp521r1_sha512"]
-AEAD = ["aes_gcm", "chacha20_poly1305", "aes_gcm_siv"]
+AEAD = ["aes_gcm", "chacha20_poly1305", "xchacha20_poly1305", "aes_gcm_siv"]
 MAC = ["hmac_sha256", "hmac_sha384", "hmac_sha512", "aes_cmac"]
 HKDF = ["hkdf_sha256", "hkdf_sha384", "hkdf_sha512"]
 KEYWRAP = ["aes_wrap", "aes_kwp"]
@@ -299,9 +301,9 @@ def aead(directory, out):
                 cases.append({"cipher": name.replace("_", "-"), "key": test["key"],
                               "nonce": test["iv"], "aad": test["aad"], "plaintext": test["msg"],
                               "ciphertext": test["ct"], "tag": test["tag"], **common(test)})
-    write(out, "wycheproof-aead", "AES-GCM, ChaCha20-Poly1305 and AES-GCM-SIV",
-          SOURCE.format(names="aes_gcm_test.json, chacha20_poly1305_test.json and "
-                        "aes_gcm_siv_test.json"), cases)
+    write(out, "wycheproof-aead", "AES-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305 and AES-GCM-SIV",
+          SOURCE.format(names="aes_gcm_test.json, chacha20_poly1305_test.json, "
+                        "xchacha20_poly1305_test.json and aes_gcm_siv_test.json"), cases)
 
 
 def mac(directory, out):

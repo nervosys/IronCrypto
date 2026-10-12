@@ -343,7 +343,7 @@ leaving the stronger claim to stand for all of them.
 | MACs | HMAC (SHA-2 and SHA-3), CMAC-AES-128/192/256, KMAC128/256, Poly1305 |
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
-| AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, AES-128/256-GCM-SIV |
+| AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305, AES-128/256-GCM-SIV |
 | Post-quantum | ML-KEM-512, -768 and -1024 (FIPS 203), ML-DSA-44, -65 and -87 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205), all twelve parameter sets, pure and pre-hash, ACVP-checked |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, Argon2id/i/d |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
@@ -390,6 +390,10 @@ The ontology registers algorithms this library does **not** provide, marked
   signatures as legacy use. NIST has announced that it will withdraw SHA-1
   entirely by the end of 2030. A library begun now does not need it for the
   years that remain.
+- **BLAKE2s and BLAKE3** — `planned`, with no date. BLAKE2b is here because
+  Argon2 needs it, and SHA-256 has hardware support on most targets, which
+  between them cover what either would add. A protocol that names one, such
+  as WireGuard with BLAKE2s, needs another implementation for now.
 - **RSA encryption** — not offered at all. RSAES-PKCS1-v1_5 is a Bleichenbacher
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.
