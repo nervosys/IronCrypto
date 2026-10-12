@@ -7,6 +7,18 @@ all of them.
 
 ### Added
 
+- **Oblivious pseudorandom functions (RFC 9497)**, as `ic_ec::oprf`, with
+  the P256-SHA256 suite, in all three modes: the base OPRF, the verifiable
+  VOPRF, whose server proves which key it used, and the partially
+  oblivious POPRF, which binds a public `info` -- how a password-hardening
+  service tweaks its key per user or per epoch. Batching, with the
+  batched proof. Elements are validated on receipt.
+- **Hashing to P-256 (RFC 9380)**, as `ic_ec::hash_to_curve`:
+  `expand_message_xmd` with SHA-256 and `P256_XMD:SHA-256_SSWU_RO_`, in
+  constant time, since the input is usually a password. Both are checked
+  against every P-256 vector in RFC 9380 appendices J.1.1 and K.1 and RFC
+  9497 appendix A.3, stage by stage, and six ways of getting them wrong
+  each fail.
 - **scrypt (RFC 7914)**, as `ic_kdf::scrypt`, with PHC strings in
   `ic_kdf::scrypt::phc` in the form the RustCrypto `scrypt` crate writes.
   The IETF's password-storage guidance recommends it where Argon2 is not

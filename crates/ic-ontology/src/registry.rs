@@ -2094,6 +2094,66 @@ pub static REGISTRY: &[Entry] = &[
                 parts, and this format does not offer them.",
     },
     Entry {
+        id: "hash-to-curve-p256",
+        name: "Hash to P-256 (P256_XMD:SHA-256_SSWU_RO_)",
+        aliases: &["p256-xmd-sha256-sswu-ro", "hash-to-curve"],
+        summary: "RFC 9380's hash onto P-256: a point no one knows the discrete logarithm of, \
+                  from any message.",
+        class: Class::HashToCurve,
+        family: "hash-to-curve",
+        purposes: &[Purpose::KeyEstablishment],
+        strength: Strength::classical_only(128),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 9380"],
+        params: &NO_PARAMS,
+        constraints: &[],
+        edges: &[Edge { relation: Relation::BuiltOn, target: "sha2-256" }],
+        performance: Performance::Fast,
+        rust_path: "ic_ec::hash_to_curve",
+        example: "let point = ic_ec::hash_to_curve::hash_to_curve(msg, b\"MYAPP-V1-P256_XMD:SHA-256_SSWU_RO_\")?;",
+        notes: "The building block of the OPRF and of OPAQUE. expand_message_xmd with SHA-256, \
+                hash_to_field with 48 bytes per element, and the simplified SWU map, which runs \
+                in constant time because the input is usually a password. Every domain \
+                separation tag must be unique to its application. Checked stage by stage \
+                against RFC 9380 appendix J.1.1 and, for expand_message_xmd, appendix K.1.",
+    },
+    Entry {
+        id: "oprf-p256-sha256",
+        name: "OPRF, VOPRF and POPRF with P-256 and SHA-256",
+        aliases: &["oprf", "voprf", "poprf", "rfc9497"],
+        summary: "A keyed function a client evaluates with a server's help, neither learning \
+                  the other's secret: the core of OPAQUE and of password hardening services.",
+        class: Class::Oprf,
+        family: "OPRF",
+        purposes: &[Purpose::KeyDerivation, Purpose::PasswordHashing],
+        strength: Strength::classical_only(128),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 9497", "RFC 9380"],
+        params: &NO_PARAMS,
+        constraints: &[Constraint {
+            id: "oprf-verify-in-verifiable-modes",
+            requirement: "Use the VOPRF or POPRF mode, and pin the server's public key, where \
+                          a client must know which key evaluated its input.",
+            consequence: "In the base OPRF mode a server can use a different key per client and \
+                          link or partition them, and the client cannot tell.",
+            severity: Severity::Advisory,
+        }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "hash-to-curve-p256" },
+            Edge { relation: Relation::BuiltOn, target: "sha2-256" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ic_ec::oprf",
+        example: "let (state, blinded) = ic_ec::oprf::blind(ic_ec::oprf::Mode::Oprf, input, b\"\", None, &mut rng)?;\nlet (evaluated, _) = server.blind_evaluate(&blinded, b\"\", &mut rng)?;\nlet output = ic_ec::oprf::finalize(input, b\"\", &state, &blinded, &evaluated, None)?;",
+        notes: "All three of RFC 9497's modes, with batching and the batched DLEQ proof. The \
+                POPRF's public info is how a pepper service tweaks its key per user or per \
+                epoch. Elements are validated on receipt: compressed, on the curve, never the \
+                identity. Checked against every P256-SHA256 vector in RFC 9497 appendix A.3: \
+                derived keys, blinded and evaluated elements, proofs, outputs.",
+    },
+    Entry {
         id: "blake2s",
         name: "BLAKE2s",
         aliases: &["blake2s-256"],

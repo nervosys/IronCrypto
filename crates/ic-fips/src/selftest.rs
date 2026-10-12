@@ -109,6 +109,8 @@ static CASTS: &[Cast] = &[
     ),
     ("argon2id", argon2id_self_test),
     ("scrypt", ic_kdf::scrypt::self_test),
+    ("oprf-p256-sha256", ic_ec::oprf::self_test),
+    ("hash-to-curve-p256", hash_to_curve_p256_self_test),
     ("passphrase-seal", ic_kdf::passphrase::self_test),
     ("pbkdf2-hmac-sha2-256", pbkdf2_hmac_sha2_256_self_test),
     (
@@ -222,6 +224,26 @@ fn blake2b_self_test() -> Result<()> {
         &mut want,
     )?;
     ic_core::ensure!(ic_core::ct::verify(&want, &got), SelfTestFailed, "blake2b");
+    Ok(())
+}
+
+/// Hash-to-curve known-answer test: RFC 9380 appendix J.1.1, the message
+/// "abc", the point's x-coordinate.
+fn hash_to_curve_p256_self_test() -> Result<()> {
+    let p = ic_ec::hash_to_curve::hash_to_curve(
+        b"abc",
+        b"QUUX-V01-CS02-with-P256_XMD:SHA-256_SSWU_RO_",
+    )?;
+    let mut want = [0u8; 32];
+    ic_core::codec::hex_decode(
+        b"0bb8b87485551aa43ed54f009230450b492fead5f1cc91658775dac4a3388a0f",
+        &mut want,
+    )?;
+    ic_core::ensure!(
+        ic_core::ct::verify(&want, &p[1..33]),
+        SelfTestFailed,
+        "hash-to-curve-p256"
+    );
     Ok(())
 }
 
@@ -661,7 +683,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 78;
+pub const TEST_COUNT: usize = 80;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -759,7 +781,7 @@ pub fn integrity_check() -> Result<()> {
 const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "84b120ed329efc4d561f8322aa59d16d0021c1cbb1474b2ab21d241d6189c0e4";
+const INTEGRITY_TAG: &str = "bdd8e11f9d50608fc3e9b201cbfa7bab94ee758ce0e86fbdce58d5a37b95558c";
 
 #[cfg(test)]
 mod tests {

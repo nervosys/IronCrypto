@@ -41,6 +41,8 @@
 #![warn(clippy::all)]
 
 pub mod ed25519;
+pub mod hash_to_curve;
+pub mod oprf;
 // GF(2^255 - 19). Five 51-bit limbs where a 64x64 multiply is cheap; ten limbs
 // of 26 and 25 bits on 32-bit RISC-V, where 128-bit arithmetic compiles to
 // branches on secret carries. `--cfg ic_limb32` selects the second anywhere, so

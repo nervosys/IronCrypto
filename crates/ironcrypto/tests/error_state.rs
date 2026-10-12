@@ -75,6 +75,8 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     let chacha = cipher::ChaCha20Poly1305::new(&key32).unwrap();
     let siv128 = cipher::Aes128GcmSiv::new(&key32[..16]).unwrap();
     let siv256 = cipher::Aes256GcmSiv::new(&key32).unwrap();
+    // An OPRF key, made while keys can be made.
+    let oprf_key = ec::oprf::ServerKey::derive(ec::oprf::Mode::Oprf, &[2u8; 32], b"").unwrap();
     // A passphrase container, sealed while sealing is allowed.
     let mut passphrase_sealed = [0u8; 8 + kdf::passphrase::OVERHEAD];
     kdf::passphrase::seal(
@@ -533,6 +535,29 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
             kdf::passphrase::open(b"pw", &passphrase_sealed, &mut back),
         );
         assert_eq!(back, [0xaau8; 8], "{id}: a refused open wrote nothing");
+    }
+    {
+        use ec::oprf::{blind, Mode, ServerKey};
+        seen.refused(
+            "oprf-p256-sha256",
+            "derive",
+            ServerKey::derive(Mode::Oprf, &[1u8; 32], b""),
+        );
+        seen.refused(
+            "oprf-p256-sha256",
+            "evaluate",
+            oprf_key.evaluate(b"input", b""),
+        );
+        seen.refused(
+            "oprf-p256-sha256",
+            "blind",
+            blind(Mode::Oprf, b"input", b"", None, &mut rng).map(|_| ()),
+        );
+        seen.refused(
+            "hash-to-curve-p256",
+            "hash_to_curve",
+            ec::hash_to_curve::hash_to_curve(b"m", b"dst"),
+        );
     }
     seen.refused(
         "scrypt",

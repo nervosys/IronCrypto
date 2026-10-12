@@ -920,6 +920,30 @@ fn key_wrap_examples_compile_and_match() -> Result<()> {
     Ok(())
 }
 
+/// Hash-to-curve and the OPRF.
+#[test]
+fn oprf_examples_compile_and_match() -> Result<()> {
+    let msg: &[u8] = b"message";
+    let point = ec::hash_to_curve::hash_to_curve(msg, b"MYAPP-V1-P256_XMD:SHA-256_SSWU_RO_")?;
+    assert_eq!(point[0], 4);
+    check_example(
+        "hash-to-curve-p256",
+        "let point = ic_ec::hash_to_curve::hash_to_curve(msg, b\"MYAPP-V1-P256_XMD:SHA-256_SSWU_RO_\")?;",
+    );
+    let mut rng = drbg::Rng::from_entropy(&[0x3fu8; 32], b"examples/oprf")?;
+    let server = ec::oprf::ServerKey::generate(ec::oprf::Mode::Oprf, &mut rng)?;
+    let input: &[u8] = b"input";
+    let (state, blinded) = ec::oprf::blind(ec::oprf::Mode::Oprf, input, b"", None, &mut rng)?;
+    let (evaluated, _) = server.blind_evaluate(&blinded, b"", &mut rng)?;
+    let output = ec::oprf::finalize(input, b"", &state, &blinded, &evaluated, None)?;
+    assert_eq!(output, server.evaluate(input, b"")?);
+    check_example(
+        "oprf-p256-sha256",
+        "let (state, blinded) = ic_ec::oprf::blind(ic_ec::oprf::Mode::Oprf, input, b\"\", None, &mut rng)?;\nlet (evaluated, _) = server.blind_evaluate(&blinded, b\"\", &mut rng)?;\nlet output = ic_ec::oprf::finalize(input, b\"\", &state, &blinded, &evaluated, None)?;",
+    );
+    Ok(())
+}
+
 /// scrypt, stored as a PHC string.
 #[test]
 fn scrypt_example_compiles_and_matches() -> Result<()> {

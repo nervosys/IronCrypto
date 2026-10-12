@@ -1293,6 +1293,34 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "RFC 9380",
+        title: "Hashing to Elliptic Curves",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2023,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc9380",
+        summary: "hash_to_field, expand_message_xmd and the curve maps, with suites for the \
+                  NIST curves among others. Appendices J and K carry the vectors this library \
+                  is checked against.",
+        requirements: &NO_REQS,
+    },
+    Standard {
+        id: "RFC 9497",
+        title: "Oblivious Pseudorandom Functions (OPRFs) Using Prime-Order Groups",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2023,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc9497",
+        summary: "The OPRF, VOPRF and POPRF protocols and their ciphersuites, from the CFRG. \
+                  Appendix A.3 carries the P256-SHA256 vectors this library is checked \
+                  against.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "RFC 7914",
         title: "The scrypt Password-Based Key Derivation Function",
         body: Body::Ietf,

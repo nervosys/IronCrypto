@@ -36,6 +36,12 @@ pub enum Class {
     SecretSharing,
     /// Encryption under a passphrase: a password KDF and an AEAD together.
     PasswordEncryption,
+    /// A hash onto an elliptic curve's group, whose output has no known
+    /// discrete logarithm.
+    HashToCurve,
+    /// An oblivious pseudorandom function: a keyed function evaluated
+    /// without the key holder seeing the input.
+    Oprf,
 }
 
 impl Class {
@@ -56,6 +62,8 @@ impl Class {
             Self::Signature => "signature",
             Self::SecretSharing => "secret-sharing",
             Self::PasswordEncryption => "password-encryption",
+            Self::HashToCurve => "hash-to-curve",
+            Self::Oprf => "oprf",
         }
     }
 
@@ -75,6 +83,8 @@ impl Class {
         Class::Signature,
         Class::SecretSharing,
         Class::PasswordEncryption,
+        Class::HashToCurve,
+        Class::Oprf,
     ];
 
     /// Parse a class from its identifier.

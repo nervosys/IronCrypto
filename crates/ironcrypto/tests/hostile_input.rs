@@ -590,8 +590,46 @@ fn hammered_here() -> Vec<&'static str> {
         "hss-lms",
         "slh-dsa",
         "passphrase-seal",
+        "oprf-p256-sha256",
     ]);
     ids
+}
+
+/// Every OPRF message is a point someone else chose. Random 33-byte
+/// strings, mutated real elements, and changed proofs are refused, never
+/// panicking, and a changed element never finalizes to the real output.
+#[test]
+fn oprf_messages_are_validated() {
+    use ironcrypto::ec::oprf::{blind, finalize, Mode, ServerKey, ELEMENT_LEN};
+    let mut rng = Rng::new(0x0bf1);
+    let mut draw = ironcrypto::drbg::Rng::from_entropy(&[0x51u8; 32], b"hostile oprf").unwrap();
+    for mode in [Mode::Oprf, Mode::Voprf, Mode::Poprf] {
+        let key = ServerKey::generate(mode, &mut draw).unwrap();
+        let info: &[u8] = if mode == Mode::Poprf { b"user 7" } else { b"" };
+        let pk = key.public_key();
+        let (state, blinded) = blind(mode, b"input", info, Some(&pk), &mut draw).unwrap();
+        let (evaluated, proof) = key.blind_evaluate(&blinded, info, &mut draw).unwrap();
+        let good = finalize(b"input", info, &state, &blinded, &evaluated, proof.as_ref()).unwrap();
+        for _ in 0..200 {
+            let mut junk = [0u8; ELEMENT_LEN];
+            for b in junk.iter_mut() {
+                *b = rng.byte();
+            }
+            let _ = key.blind_evaluate(&junk, info, &mut draw);
+            let mut e = evaluated;
+            e[1 + rng.below(32)] ^= 1 << rng.below(8);
+            if let Ok(out) = finalize(b"input", info, &state, &blinded, &e, proof.as_ref()) {
+                assert_ne!(
+                    out, good,
+                    "{mode:?}: a changed element gave the real output"
+                );
+            }
+        }
+        if let Some(mut p) = proof {
+            p[rng.below(64)] ^= 1;
+            assert!(finalize(b"input", info, &state, &blinded, &evaluated, Some(&p)).is_err());
+        }
+    }
 }
 
 /// A passphrase container is read from storage someone else may have
@@ -687,6 +725,7 @@ fn the_suite_hammers_every_implemented_primitive() {
         "kem",
         "key-agreement",
         "password-encryption",
+        "oprf",
     ];
 
     let hammered = hammered_here();
