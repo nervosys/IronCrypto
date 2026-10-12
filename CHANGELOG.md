@@ -3,6 +3,20 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Changed
+
+- **PBKDF2 is about 1.7 times faster.** It keyed its MAC again on every
+  iteration; it now keys it once and clones it, which for HMAC removes two of
+  the four compressions each iteration took. PBKDF2 applies one PRF under one
+  key, so the output is unchanged: the test that rebuilds the XOR chain from
+  HMAC directly, and Project Wycheproof's cases, hold it. HMAC-SHA-512 at
+  600 000 iterations went from about 355 ms to about 200 ms on an x86-64
+  machine, measured before and after a few minutes apart. Reported by the Lit
+  project, which found ic-hash's SHA-512 faster than RustCrypto's and this
+  PBKDF2 slower than theirs.
+
 ## 0.2.24
 
 ### Added

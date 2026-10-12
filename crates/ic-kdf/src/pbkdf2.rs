@@ -56,6 +56,13 @@ pub fn pbkdf2<M: Mac>(password: &[u8], salt: &[u8], iterations: u32, out: &mut [
         "mac tag too wide"
     );
 
+    // The PRF is keyed once, and every application of it starts from a clone.
+    // PBKDF2 applies one PRF under one key, the password, so a clone is the
+    // same MAC as keying it again; for HMAC, keying again is two compressions
+    // of the padded key on every iteration, which had made this twice the
+    // work it is. A clone holds the key's state exactly as `keyed` does, and
+    // is dropped as each fresh `M::new(password)` was.
+    let keyed = M::new(password)?;
     let mut u = [0u8; MAX_TAG_LEN];
     let mut acc = [0u8; MAX_TAG_LEN];
 
@@ -65,7 +72,7 @@ pub fn pbkdf2<M: Mac>(password: &[u8], salt: &[u8], iterations: u32, out: &mut [
             .ok_or(ic_core::err!(CounterExhausted, "pbkdf2 block counter"))?;
 
         // U_1 = PRF(password, salt || INT_BE(i))
-        let mut m = M::new(password)?;
+        let mut m = keyed.clone();
         m.update(salt);
         m.update(&counter.to_be_bytes());
         let t = m.finalize();
@@ -74,7 +81,7 @@ pub fn pbkdf2<M: Mac>(password: &[u8], salt: &[u8], iterations: u32, out: &mut [
 
         // U_j = PRF(password, U_{j-1}); accumulate the XOR of every U_j.
         for _ in 1..iterations {
-            let mut m = M::new(password)?;
+            let mut m = keyed.clone();
             m.update(&u[..M::TAG_LEN]);
             let t = m.finalize();
             u[..M::TAG_LEN].copy_from_slice(t.as_ref());
