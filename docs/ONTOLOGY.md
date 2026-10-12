@@ -12,7 +12,7 @@ might branch on is an enum with a stable identifier:
 
 | dimension | terms |
 |---|---|
-| `class` | `hash`, `xof`, `mac`, `block-cipher`, `cipher-mode`, `aead`, `kdf`, `password-kdf`, `drbg`, `key-agreement`, `kem`, `signature`, `secret-sharing` |
+| `class` | `hash`, `xof`, `mac`, `block-cipher`, `cipher-mode`, `aead`, `kdf`, `password-kdf`, `drbg`, `key-agreement`, `kem`, `signature`, `secret-sharing`, `password-encryption` |
 | `purpose` | `integrity`, `confidentiality`, `authentication`, `key-derivation`, `password-hashing`, `key-establishment`, `random-generation`, `non-repudiation`, `commitment` |
 | `fipsStatus` | `approved`, `allowed-as-component`, `not-approved`, `deprecated`, `disallowed` |
 | `implementationStatus` | `available`, `planned`, `excluded` |

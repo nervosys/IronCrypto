@@ -4,6 +4,8 @@
 //! * [`pbkdf2()`] — SP 800-132 password-based derivation.
 //! * [`kbkdf`] — SP 800-108 counter-mode KDF over HMAC.
 //! * [`argon2()`] — RFC 9106 memory-hard password hashing.
+//! * [`passphrase`] — a secret sealed under a passphrase: Argon2id and
+//!   XChaCha20-Poly1305 in one versioned container.
 //!
 //! The HMAC-based functions are generic over the instantiation, so the same
 //! code path serves SHA-256, SHA-384, SHA-512, and the SHA-3 family.
@@ -37,6 +39,7 @@ extern crate alloc;
 pub mod argon2;
 pub mod hkdf;
 pub mod kbkdf;
+pub mod passphrase;
 pub mod pbkdf2;
 
 pub use argon2::{argon2, Argon2Params, Variant};

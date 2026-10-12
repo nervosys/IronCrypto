@@ -1,0 +1,50 @@
+{
+ "algorithm": "Passphrase sealing: Argon2id and XChaCha20-Poly1305, format ICPW v1",
+ "source": "scripts/gen_passphrase_vectors.py with argon2-cffi 23.1.0 (the Argon2 reference implementation) and PyNaCl 1.5.0 (libsodium), run on 2026-10-12. The container is written by that script from the format's description, independently of ic_kdf. Salts and nonces are SHA-256 of labels so the output is reproducible; a real seal draws them. `name` is hex. The first case is under the library's floor and is for the self-test only.",
+ "cases": [
+  {
+   "name": "73656c662d74657374",
+   "passphrase": "49726f6e43727970746f20706173737068726173652073656c662d74657374",
+   "memory_kib": "8",
+   "passes": "1",
+   "lanes": "1",
+   "salt": "478dda73d3df495d3f929fafbfe96178",
+   "nonce": "4f8673a91b50f53a5ee19da0805e7e45621e67e226639dc7",
+   "plaintext": "73656c662d7465737420706c61696e74657874",
+   "sealed": "49435057010101000000080000000100000001478dda73d3df495d3f929fafbfe961784f8673a91b50f53a5ee19da0805e7e45621e67e226639dc7e2702fb70258d6df040e355e99421fee9ed792301afb714463eaf09b6bc17c47eb0662"
+  },
+  {
+   "name": "666c6f6f722c20656d707479",
+   "passphrase": "636f727265637420686f727365206261747465727920737461706c65",
+   "memory_kib": "19456",
+   "passes": "2",
+   "lanes": "1",
+   "salt": "b163d931bf20cad21d31fae03e6d14a0",
+   "nonce": "4e0700f2c552ed2830b1a476b6911938d1d4723814edcd18",
+   "plaintext": "",
+   "sealed": "4943505701010100004c000000000200000001b163d931bf20cad21d31fae03e6d14a04e0700f2c552ed2830b1a476b6911938d1d4723814edcd18858d4563ed9542db59d6505165e8abbb"
+  },
+  {
+   "name": "666c6f6f722c2061204341206b6579",
+   "passphrase": "70c3a4737377c3b67264207769746820c3bc6ec3af636f6465",
+   "memory_kib": "19456",
+   "passes": "2",
+   "lanes": "1",
+   "salt": "ae8b4eb15ec2726e448487c2fd6308c5",
+   "nonce": "51c529936668065a532402310235b0577ee327ad7f6448a1",
+   "plaintext": "ad21478314a5c0fe0855e8cf0fc80097c37e2d41ad392cbe4b462353eb2e4739275dc5ad8ac8a32f498bab9e6d05637d",
+   "sealed": "4943505701010100004c000000000200000001ae8b4eb15ec2726e448487c2fd6308c551c529936668065a532402310235b0577ee327ad7f6448a1430a9fdcf1b44b7560c0139622e068fc72aab9382e1e93d9854f0cf1f286e998ea853718f94303f664217ed989a37a3c5f4f78bbac3285bd1163fe08936e7bd5"
+  },
+  {
+   "name": "666c6f6f722c2074776f206c616e6573",
+   "passphrase": "78",
+   "memory_kib": "19456",
+   "passes": "2",
+   "lanes": "2",
+   "salt": "72d254b61d297a9e04ad0a1effc910b7",
+   "nonce": "8f38cb4430be5282308ac7596af163795a73b66d520bfcfe",
+   "plaintext": "74776f206c616e6573",
+   "sealed": "4943505701010100004c00000000020000000272d254b61d297a9e04ad0a1effc910b78f38cb4430be5282308ac7596af163795a73b66d520bfcfe39b05749d2af48b1a2524c9713b67879d297ab2349adaa6f79"
+  }
+ ]
+}

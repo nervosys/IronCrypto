@@ -15,6 +15,16 @@ all of them.
   an RFC. Checked against the draft's HChaCha20, XChaCha20 and AEAD vectors
   and all 315 of Project Wycheproof's cases. Not FIPS-approved, and refused in
   approved mode. Also through `ic seal`, `ic open` and their MCP tools.
+- **Passphrase sealing**, as `ic_kdf::passphrase`: a secret at rest under
+  a passphrase, such as a CA's signing key, in one call each way. Argon2id
+  derives the key and XChaCha20-Poly1305 seals, in a versioned container
+  whose header -- parameters, salt, nonce -- is authenticated. Both sides
+  refuse Argon2 parameters under a floor of 19 MiB over two passes, and
+  `open` refuses parameters past a ceiling before deriving anything, so a
+  hostile container cannot force an unbounded allocation. A second
+  implementation over libsodium and the Argon2 reference code sealed the
+  test containers. Not FIPS-approved. Asked for by AgentMesh, so that it
+  does not compose its own.
 - **URI alternative names in issued certificates**, as
   `SubjectAltName::Uri`: an absolute URI, such as a SPIFFE ID or an agent
   handle, written as given. Asked for by AgentMesh, which names each agent

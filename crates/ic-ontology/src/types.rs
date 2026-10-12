@@ -34,6 +34,8 @@ pub enum Class {
     Signature,
     /// A threshold secret-sharing scheme.
     SecretSharing,
+    /// Encryption under a passphrase: a password KDF and an AEAD together.
+    PasswordEncryption,
 }
 
 impl Class {
@@ -53,6 +55,7 @@ impl Class {
             Self::Kem => "kem",
             Self::Signature => "signature",
             Self::SecretSharing => "secret-sharing",
+            Self::PasswordEncryption => "password-encryption",
         }
     }
 
@@ -71,6 +74,7 @@ impl Class {
         Class::Kem,
         Class::Signature,
         Class::SecretSharing,
+        Class::PasswordEncryption,
     ];
 
     /// Parse a class from its identifier.

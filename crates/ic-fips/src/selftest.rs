@@ -108,6 +108,7 @@ static CASTS: &[Cast] = &[
         ic_kdf::Hkdf::<ic_mac::HmacSha256>::self_test,
     ),
     ("argon2id", argon2id_self_test),
+    ("passphrase-seal", ic_kdf::passphrase::self_test),
     ("pbkdf2-hmac-sha2-256", pbkdf2_hmac_sha2_256_self_test),
     (
         "sp800-108-counter-hmac-sha2-256",
@@ -659,7 +660,7 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
-pub const TEST_COUNT: usize = 76;
+pub const TEST_COUNT: usize = 77;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -757,7 +758,7 @@ pub fn integrity_check() -> Result<()> {
 const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
-const INTEGRITY_TAG: &str = "ab421cb36095b32928f1bb28f792766ccfadf3681de85eea30231957a234218d";
+const INTEGRITY_TAG: &str = "2e0177ef1b348d2af86bf63097dc296a3ec012cca3af1dbc7b441ef3c5363c38";
 
 #[cfg(test)]
 mod tests {

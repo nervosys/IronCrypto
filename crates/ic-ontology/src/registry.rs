@@ -2010,6 +2010,47 @@ pub static REGISTRY: &[Entry] = &[
                 hash is not a prefix of a long one.",
     },
     Entry {
+        id: "passphrase-seal",
+        name: "Passphrase sealing (Argon2id, XChaCha20-Poly1305)",
+        aliases: &["icpw", "password-encryption"],
+        summary: "A secret sealed under a passphrase in one versioned container: Argon2id \
+                  derives the key, XChaCha20-Poly1305 seals, the header is authenticated.",
+        class: Class::PasswordEncryption,
+        family: "IronCrypto",
+        purposes: &[Purpose::Confidentiality, Purpose::Authentication],
+        strength: Strength::symmetric(256),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 9106", "draft-irtf-cfrg-xchacha-03"],
+        params: &NO_PARAMS,
+        constraints: &[Constraint {
+            id: "passphrase-strength",
+            requirement: "Use a passphrase with real entropy; the parameters slow guessing, \
+                          they do not make a short password safe.",
+            consequence: "Argon2id at the floor costs an attacker tens of milliseconds a \
+                          guess on one core; a dictionary word falls in minutes.",
+            severity: Severity::Serious,
+        }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "argon2id" },
+            Edge { relation: Relation::BuiltOn, target: "xchacha20-poly1305" },
+        ],
+        performance: Performance::Slow,
+        rust_path: "ic_kdf::passphrase",
+        example: "let n = ic_kdf::passphrase::seal(passphrase, &params, &mut rng, secret, &mut out)?;\n\
+                  let m = ic_kdf::passphrase::open(passphrase, &out[..n], &mut back)?;",
+        notes: "For a key at rest that only a person's passphrase unlocks, such as a CA's \
+                signing key. Pass Argon2Params::INTERACTIVE or RECOMMENDED. The format is \
+                this library's own, version 1, described in ic_kdf::passphrase and \
+                implemented a second time over libsodium and the Argon2 reference code by \
+                scripts/gen_passphrase_vectors.py, whose containers this opens. Parameters \
+                travel in the header, which is authenticated; both sides refuse parameters \
+                under a floor of 19 MiB over two passes, or above a ceiling that stops a \
+                hostile container forcing an unbounded allocation. Not FIPS-approved; under \
+                a FIPS obligation, PBKDF2 with HMAC-SHA-256 and AES-256-GCM are the approved \
+                parts, and this format does not offer them.",
+    },
+    Entry {
         id: "blake2s",
         name: "BLAKE2s",
         aliases: &["blake2s-256"],

@@ -920,6 +920,29 @@ fn key_wrap_examples_compile_and_match() -> Result<()> {
     Ok(())
 }
 
+/// Passphrase sealing, whose parameters the caller chooses.
+#[test]
+fn passphrase_seal_example_compiles_and_matches() -> Result<()> {
+    let passphrase: &[u8] = b"correct horse battery staple";
+    let params = kdf::Argon2Params {
+        memory_kib: kdf::passphrase::MIN_MEMORY_KIB,
+        passes: 2,
+        lanes: 1,
+    };
+    let mut rng = drbg::Rng::from_entropy(&[0x3du8; 32], b"examples/passphrase")?;
+    let secret: &[u8] = &[0x66u8; 32];
+    let mut out = [0u8; 32 + kdf::passphrase::OVERHEAD];
+    let mut back = [0u8; 32];
+    let n = kdf::passphrase::seal(passphrase, &params, &mut rng, secret, &mut out)?;
+    let m = kdf::passphrase::open(passphrase, &out[..n], &mut back)?;
+    assert_eq!(&back[..m], secret);
+    check_example(
+        "passphrase-seal",
+        "let n = ic_kdf::passphrase::seal(passphrase, &params, &mut rng, secret, &mut out)?;\nlet m = ic_kdf::passphrase::open(passphrase, &out[..n], &mut back)?;",
+    );
+    Ok(())
+}
+
 /// XChaCha20-Poly1305, which draws its own nonce rather than counting.
 #[test]
 fn xchacha20_poly1305_example_compiles_and_matches() -> Result<()> {

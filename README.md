@@ -349,6 +349,7 @@ leaving the stronger claim to stand for all of them.
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519 |
 | Secret sharing | Shamir over GF(2^8), k of n, for backing up a key; constant time, in the AES field |
+| Passphrase sealing | a secret at rest under a passphrase, `ic_kdf::passphrase`: Argon2id and XChaCha20-Poly1305 in one versioned container whose header is authenticated, with a floor and a ceiling on the parameters; opens containers libsodium and the Argon2 reference code sealed |
 | Public-key encryption | HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) or DHKEM(P-384, HKDF-SHA384) -- MLS suites 1 and 7 -- and AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, with the exporter |
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
 | Backends | portable, written constant-time; on x86-64 AES-NI, `PCLMULQDQ`, SHA-NI and AVX2, each behind runtime detection. On 32-bit RISC-V the curve and RSA arithmetic runs on 32-bit words, because the 64-bit form compiled to branches on secrets there; [SECURITY.md](SECURITY.md) has what was checked on which target |

@@ -38,7 +38,7 @@
 //! test suite runs on, and a flaky timing test is worse than none.
 
 use ironcrypto::core_types::traits::{Aead, KeyAgreement, SignatureScheme};
-use ironcrypto::{cipher, drbg, ec, hpke, mlkem, pkix, rsa};
+use ironcrypto::{cipher, drbg, ec, hpke, kdf, mlkem, pkix, rsa};
 
 /// SplitMix64, so every failure reproduces exactly.
 struct Rng(u64);
@@ -589,8 +589,74 @@ fn hammered_here() -> Vec<&'static str> {
         "hpke-p384-sha384",
         "hss-lms",
         "slh-dsa",
+        "passphrase-seal",
     ]);
     ids
+}
+
+/// A passphrase container is read from storage someone else may have
+/// written. Whatever it holds, `open` returns an error rather than panicking,
+/// refuses a malformed or out-of-limits header before deriving anything, and
+/// opens a changed container to nothing.
+///
+/// Derivation is the expensive part, at 38 MiB of Argon2 a try, so the
+/// random inputs are shaped to be refused before it, and only three
+/// tamperings pay for one.
+#[test]
+fn passphrase_opening_is_total_and_sound() {
+    use ironcrypto::kdf::passphrase::{self, HEADER_LEN, OVERHEAD};
+    let mut rng = Rng::new(0x9a55);
+    let floor = kdf::Argon2Params {
+        memory_kib: passphrase::MIN_MEMORY_KIB,
+        passes: 2,
+        lanes: 1,
+    };
+    let mut draw = ironcrypto::drbg::Rng::from_entropy(&[0x77u8; 32], b"hostile").unwrap();
+    let mut sealed = [0u8; 32 + OVERHEAD];
+    passphrase::seal(b"pw", &floor, &mut draw, &[0x11u8; 32], &mut sealed).unwrap();
+    let mut out = [0u8; 256];
+
+    // Random bytes, at random lengths: almost all fail on the magic.
+    for _ in 0..500 {
+        let len = rng.below(200);
+        let junk: Vec<u8> = (0..len).map(|_| rng.byte()).collect();
+        assert!(passphrase::open(b"pw", &junk, &mut out).is_err());
+    }
+    // Every truncation of a real container is too short or fails its tag;
+    // the ones too short to hold a header and a tag cost nothing.
+    for len in 0..OVERHEAD {
+        let err = passphrase::open(b"pw", &sealed[..len], &mut out).unwrap_err();
+        assert_eq!(err.kind(), ic_core::ErrorKind::MalformedEncoding, "{len}");
+    }
+    // Parameters past the ceiling, as a hostile writer would set them to
+    // force an allocation, are refused before anything is derived: this loop
+    // would take hours if they were not.
+    for _ in 0..200 {
+        let mut c = sealed;
+        let field = 7 + 4 * rng.below(3);
+        let big = match field {
+            7 => passphrase::MAX_MEMORY_KIB + 1 + (rng.byte() as u32) * 1_000_000,
+            11 => passphrase::MAX_PASSES + 1 + rng.byte() as u32 * 1_000_000,
+            _ => passphrase::MAX_LANES + 1 + rng.byte() as u32,
+        };
+        c[field..field + 4].copy_from_slice(&big.to_be_bytes());
+        let err = passphrase::open(b"pw", &c, &mut out).unwrap_err();
+        assert_eq!(err.kind(), ic_core::ErrorKind::InvalidParameter);
+    }
+    // One changed byte in the salt, the ciphertext and the tag: each derives,
+    // and each fails as authentication, releasing nothing.
+    for at in [HEADER_LEN - 30, HEADER_LEN + 5, sealed.len() - 1] {
+        let mut c = sealed;
+        c[at] ^= 1 << rng.below(8);
+        let mut back = [0xaau8; 32];
+        let err = passphrase::open(b"pw", &c, &mut back).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            ic_core::ErrorKind::AuthenticationFailed,
+            "byte {at}"
+        );
+        assert_eq!(back, [0u8; 32], "byte {at}: released");
+    }
 }
 
 /// Every implemented algorithm that parses attacker-chosen bytes must be
@@ -615,7 +681,13 @@ fn the_suite_hammers_every_implemented_primitive() {
     // Classes whose parsing surface an attacker reaches directly: a signature
     // to verify, a sealed message to open, a peer's key, a ciphertext to
     // decapsulate.
-    const EXPOSED: &[&str] = &["aead", "signature", "kem", "key-agreement"];
+    const EXPOSED: &[&str] = &[
+        "aead",
+        "signature",
+        "kem",
+        "key-agreement",
+        "password-encryption",
+    ];
 
     let hammered = hammered_here();
     let excused: Vec<&str> = COVERED_ELSEWHERE.iter().map(|(id, _)| *id).collect();

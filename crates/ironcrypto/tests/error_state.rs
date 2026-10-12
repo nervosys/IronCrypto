@@ -75,6 +75,20 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     let chacha = cipher::ChaCha20Poly1305::new(&key32).unwrap();
     let siv128 = cipher::Aes128GcmSiv::new(&key32[..16]).unwrap();
     let siv256 = cipher::Aes256GcmSiv::new(&key32).unwrap();
+    // A passphrase container, sealed while sealing is allowed.
+    let mut passphrase_sealed = [0u8; 8 + kdf::passphrase::OVERHEAD];
+    kdf::passphrase::seal(
+        b"pw",
+        &kdf::Argon2Params {
+            memory_kib: kdf::passphrase::MIN_MEMORY_KIB,
+            passes: 2,
+            lanes: 1,
+        },
+        &mut rng,
+        &[1u8; 8],
+        &mut passphrase_sealed,
+    )
+    .unwrap();
     // XChaCha20-Poly1305 takes a 24-byte nonce, so it has its own message.
     let xchacha = cipher::XChaCha20Poly1305::new(&key32).unwrap();
     let xnonce = [3u8; 24];
@@ -492,6 +506,34 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         passes: 1,
         lanes: 1,
     };
+    {
+        let id = "passphrase-seal";
+        let floor = kdf::Argon2Params {
+            memory_kib: kdf::passphrase::MIN_MEMORY_KIB,
+            passes: 2,
+            lanes: 1,
+        };
+        // Refused before a salt is drawn: the source is never asked.
+        struct Untouched;
+        impl ic_core::traits::RandomSource for Untouched {
+            fn fill(&mut self, _: &mut [u8]) -> ic_core::Result<()> {
+                panic!("a salt was drawn in the error state")
+            }
+        }
+        let mut sealed_out = [0u8; 8 + kdf::passphrase::OVERHEAD];
+        seen.refused(
+            id,
+            "seal",
+            kdf::passphrase::seal(b"pw", &floor, &mut Untouched, &[1u8; 8], &mut sealed_out),
+        );
+        let mut back = [0xaau8; 8];
+        seen.refused(
+            id,
+            "open",
+            kdf::passphrase::open(b"pw", &passphrase_sealed, &mut back),
+        );
+        assert_eq!(back, [0xaau8; 8], "{id}: a refused open wrote nothing");
+    }
     seen.refused(
         "argon2id",
         "derive",
