@@ -591,8 +591,82 @@ fn hammered_here() -> Vec<&'static str> {
         "slh-dsa",
         "passphrase-seal",
         "oprf-p256-sha256",
+        "opaque-3dh-p256",
     ]);
     ids
+}
+
+/// Every OPAQUE message comes from the other side. Each byte of KE1, KE2
+/// and KE3 changed in turn ends the login in an error, never a panic and
+/// never a key.
+#[test]
+fn opaque_messages_fail_closed() {
+    use ironcrypto::hpke::opaque::{self, IdentityKsf, ServerSetup};
+    let mut draw = ironcrypto::drbg::Rng::from_entropy(&[0x52u8; 32], b"hostile opaque").unwrap();
+    let setup = ServerSetup::generate(&mut draw).unwrap();
+    let (state, request) = opaque::registration_start(b"pw", &mut draw).unwrap();
+    let response = setup.registration_response(&request, b"id").unwrap();
+    let (record, _) = opaque::registration_finish(
+        &IdentityKsf,
+        &state,
+        b"pw",
+        &response,
+        None,
+        None,
+        &mut draw,
+    )
+    .unwrap();
+    let (client, ke1) = opaque::login_start(b"pw", &mut draw).unwrap();
+    let (pending, ke2) = setup
+        .login_respond(&record, b"id", &ke1, None, None, b"", &mut draw)
+        .unwrap();
+    let (ke3, _, _) = client
+        .finish(&IdentityKsf, b"pw", &ke2, None, None, b"")
+        .unwrap();
+    pending.finish(&ke3).unwrap();
+
+    for i in 0..ke1.len() {
+        let mut bad = ke1;
+        bad[i] ^= 0x40;
+        // The server may refuse at once or answer; a client holding the
+        // original state must then fail.
+        let (client, _) = opaque::login_start(b"pw", &mut draw).unwrap();
+        if let Ok((_, ke2)) = setup.login_respond(&record, b"id", &bad, None, None, b"", &mut draw)
+        {
+            assert!(
+                client
+                    .finish(&IdentityKsf, b"pw", &ke2, None, None, b"")
+                    .is_err(),
+                "KE1 byte {i}"
+            );
+        }
+    }
+    for i in 0..ke2.len() {
+        let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x53u8; 32], b"replay").unwrap();
+        let (client, ke1) = opaque::login_start(b"pw", &mut rng).unwrap();
+        let (_, mut ke2) = setup
+            .login_respond(&record, b"id", &ke1, None, None, b"", &mut rng)
+            .unwrap();
+        ke2[i] ^= 0x40;
+        assert!(
+            client
+                .finish(&IdentityKsf, b"pw", &ke2, None, None, b"")
+                .is_err(),
+            "KE2 byte {i}"
+        );
+    }
+    let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x54u8; 32], b"ke3").unwrap();
+    for i in 0..ke3.len() {
+        let (client, ke1) = opaque::login_start(b"pw", &mut rng).unwrap();
+        let (pending, ke2) = setup
+            .login_respond(&record, b"id", &ke1, None, None, b"", &mut rng)
+            .unwrap();
+        let (mut ke3, _, _) = client
+            .finish(&IdentityKsf, b"pw", &ke2, None, None, b"")
+            .unwrap();
+        ke3[i] ^= 0x40;
+        assert!(pending.finish(&ke3).is_err(), "KE3 byte {i}");
+    }
 }
 
 /// Every OPRF message is a point someone else chose. Random 33-byte
@@ -726,6 +800,7 @@ fn the_suite_hammers_every_implemented_primitive() {
         "key-agreement",
         "password-encryption",
         "oprf",
+        "pake",
     ];
 
     let hammered = hammered_here();

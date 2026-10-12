@@ -2154,6 +2154,52 @@ pub static REGISTRY: &[Entry] = &[
                 derived keys, blinded and evaluated elements, proofs, outputs.",
     },
     Entry {
+        id: "opaque-3dh-p256",
+        name: "OPAQUE-3DH with P-256 and SHA-256",
+        aliases: &["opaque", "rfc9807", "apake"],
+        summary: "Password authentication in which the server never sees the password, and \
+                  a stolen database cannot be attacked without the server's key.",
+        class: Class::Pake,
+        family: "OPAQUE",
+        purposes: &[Purpose::Authentication, Purpose::KeyEstablishment, Purpose::PasswordHashing],
+        strength: Strength::classical_only(128),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Available,
+        standards: &["RFC 9807", "RFC 9497"],
+        params: &NO_PARAMS,
+        constraints: &[
+            Constraint {
+                id: "opaque-real-ksf",
+                requirement: "Use Argon2idKsf or ScryptKsf, never IdentityKsf, outside tests.",
+                consequence: "Without a key stretching function, someone holding the server's \
+                              OPRF seed and a record guesses passwords at the speed of SHA-256.",
+                severity: Severity::Critical,
+            },
+            Constraint {
+                id: "opaque-fake-records",
+                requirement: "Answer a login for an unknown credential identifier from a \
+                              ServerSetup::fake_record kept for that identifier.",
+                consequence: "Otherwise the response shows which identifiers are registered.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "oprf-p256-sha256" },
+            Edge { relation: Relation::BuiltOn, target: "hkdf-sha2-256" },
+            Edge { relation: Relation::PairsWith, target: "argon2id" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: "ic_hpke::opaque",
+        example: "let (client, ke1) = ic_hpke::opaque::login_start(password, &mut rng)?;\nlet (pending, ke2) = server.login_respond(&record, id, &ke1, None, None, context, &mut rng)?;\nlet (ke3, session_key, export_key) = client.finish(&ksf, password, &ke2, None, None, context)?;\nlet server_key = pending.finish(&ke3)?;",
+        notes: "RFC 9807's OPAQUE-3DH over P-256 with HKDF, HMAC and SHA-256, the second of \
+                its recommended configurations; the key stretching function is the caller's: \
+                Argon2idKsf (RFC 9807's parameters, 2 GiB, as RECOMMENDED) or ScryptKsf. \
+                Registration stores a 129-byte record per client; a login is three messages \
+                and leaves both sides a session key and the client an export key. Checked \
+                byte for byte against RFC 9807 appendices C.1.5, C.1.6 and C.2.3, every \
+                message and key.",
+    },
+    Entry {
         id: "blake2s",
         name: "BLAKE2s",
         aliases: &["blake2s-256"],

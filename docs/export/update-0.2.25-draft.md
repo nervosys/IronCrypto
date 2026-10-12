@@ -27,6 +27,10 @@ published, rather than relying on the earlier notice. What 0.2.25 changes:
     XChaCha20-Poly1305. It composes published algorithms and adds no
     primitive. The format is described in the public source,
     `crates/ic-kdf/src/passphrase.rs`.
+- **OPAQUE** (RFC 9807), a password-authenticated key exchange: three
+  Diffie-Hellman operations on P-256 and the OPRF below, with HKDF, HMAC
+  and SHA-256, and Argon2id or scrypt to stretch the password. It uses
+  only primitives already listed.
 - **Oblivious pseudorandom functions** (RFC 9497): a server evaluates a
   keyed function on a client's blinded input, with P-256 and SHA-256, in
   its three modes; and **hashing to elliptic curves** (RFC 9380), which it
@@ -104,6 +108,10 @@ CHANGES SINCE THE PREVIOUS NOTIFICATION
       Argon2id (RFC 9106) encrypts with XChaCha20-Poly1305, in a container
       format whose specification is published in the source code. It adds
       no cryptographic primitive.
+    - OPAQUE, the password-authenticated key exchange of RFC 9807, in
+      its OPAQUE-3DH form over P-256 with HKDF, HMAC and SHA-256. It
+      authenticates a client by password and establishes a shared key;
+      it uses only primitives already listed.
     - Oblivious pseudorandom functions (OPRF, VOPRF and POPRF) of RFC
       9497 over P-256 with SHA-256, and hashing to P-256 as RFC 9380
       specifies. They use only P-256 and SHA-256, already listed.
@@ -155,6 +163,7 @@ CRYPTOGRAPHIC FUNCTIONALITY
                              RFC 9858, SP 800-208)
     Oblivious PRFs           OPRF, VOPRF, POPRF over P-256 (RFC 9497);
                              hashing to curves (RFC 9380)
+    Password authentication  OPAQUE-3DH over P-256 (RFC 9807)
     Secret sharing           Shamir's scheme over GF(2^8)
     Protocol adapter         Record and packet protection for TLS 1.2, TLS 1.3
                              and QUIC (RFC 5288, 5869, 7905, 8446, 9001), as a

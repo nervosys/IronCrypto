@@ -42,6 +42,8 @@ pub enum Class {
     /// An oblivious pseudorandom function: a keyed function evaluated
     /// without the key holder seeing the input.
     Oprf,
+    /// A password-authenticated key exchange.
+    Pake,
 }
 
 impl Class {
@@ -64,6 +66,7 @@ impl Class {
             Self::PasswordEncryption => "password-encryption",
             Self::HashToCurve => "hash-to-curve",
             Self::Oprf => "oprf",
+            Self::Pake => "pake",
         }
     }
 
@@ -85,6 +88,7 @@ impl Class {
         Class::PasswordEncryption,
         Class::HashToCurve,
         Class::Oprf,
+        Class::Pake,
     ];
 
     /// Parse a class from its identifier.

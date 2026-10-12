@@ -7,6 +7,16 @@ all of them.
 
 ### Added
 
+- **OPAQUE (RFC 9807)**, as `ic_hpke::opaque`: password authentication in
+  which the server never sees the password, and a stolen database cannot be
+  attacked without also the server's key. OPAQUE-3DH over P-256 with HKDF,
+  HMAC and SHA-256, the second of RFC 9807's recommended configurations,
+  with Argon2id or scrypt as the key stretching function. Registration,
+  the three-message login with its session key and export key, and fake
+  records so that unknown identifiers cannot be told from known ones.
+  Every message and key matches RFC 9807's P-256 vectors, C.1.5, C.1.6
+  and the fake-record C.2.3; every byte of every message changed in turn
+  makes the login fail.
 - **Oblivious pseudorandom functions (RFC 9497)**, as `ic_ec::oprf`, with
   the P256-SHA256 suite, in all three modes: the base OPRF, the verifiable
   VOPRF, whose server proves which key it used, and the partially

@@ -695,6 +695,30 @@ pub fn finalize_batch(
     Ok(())
 }
 
+/// Check that `element` is a valid serialized element: compressed, on the
+/// curve, not the identity. For protocols built on this group, such as
+/// OPAQUE, which receive keys in the same encoding.
+pub fn validate_element(element: &[u8; ELEMENT_LEN]) -> Result<()> {
+    deserialize(element).map(|_| ())
+}
+
+/// Diffie-Hellman in this group as OPAQUE-3DH defines it for P-256:
+/// `private * public`, serialized as an element -- the compressed point,
+/// not the bare x-coordinate ordinary ECDH yields. `public` is validated.
+pub fn diffie_hellman(
+    private: &[u8; SCALAR_LEN],
+    public: &[u8; ELEMENT_LEN],
+) -> Result<[u8; ELEMENT_LEN]> {
+    ic_core::module::operational()?;
+    let k = scalar_from(private)?;
+    ensure!(
+        !bool::from(k.is_zero()),
+        InvalidParameter,
+        "oprf private key is zero"
+    );
+    serialize(&deserialize(public)?.mul_scalar(&k))
+}
+
 /// The known-answer test: RFC 9497 appendix A.3.1.1, the OPRF mode's first
 /// vector, evaluated with the derived key.
 pub fn self_test() -> Result<()> {

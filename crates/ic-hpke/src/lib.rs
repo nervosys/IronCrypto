@@ -59,6 +59,7 @@ use ic_core::{ensure, Result, Zeroize, Zeroizing};
 use ic_ec::X25519;
 use ic_mac::{HmacSha256, HmacSha384};
 
+pub mod opaque;
 pub mod p384;
 
 /// `DHKEM(X25519, HKDF-SHA256)`, RFC 9180 section 7.1.

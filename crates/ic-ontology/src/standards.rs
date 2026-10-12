@@ -1307,6 +1307,20 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "RFC 9807",
+        title: "The OPAQUE Augmented Password-Authenticated Key Exchange (aPAKE) Protocol",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2025,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc9807",
+        summary: "OPAQUE, from the CFRG: registration, the envelope, and the OPAQUE-3DH login, \
+                  with recommended configurations. Appendix C carries the P-256 vectors this \
+                  library is checked against.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "RFC 9497",
         title: "Oblivious Pseudorandom Functions (OPRFs) Using Prime-Order Groups",
         body: Body::Ietf,

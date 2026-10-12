@@ -14,7 +14,7 @@ publish.workspace = true
 
 [features]
 default = ["std"]
-std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-cipher/std", "ic-ec/std"]
+std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-cipher/std", "ic-ec/std", "ic-kdf/std"]
 
 [dependencies]
 ic-core = { workspace = true }
@@ -22,6 +22,7 @@ ic-hash = { workspace = true }
 ic-mac = { workspace = true }
 ic-cipher = { workspace = true }
 ic-ec = { workspace = true }
+ic-kdf = { workspace = true }
 
 # For the documentation example's random source only.
 [dev-dependencies]

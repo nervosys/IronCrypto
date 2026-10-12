@@ -537,6 +537,19 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         assert_eq!(back, [0xaau8; 8], "{id}: a refused open wrote nothing");
     }
     {
+        use hpke::opaque;
+        seen.refused(
+            "opaque-3dh-p256",
+            "generate",
+            opaque::ServerSetup::generate(&mut rng).map(|_| ()),
+        );
+        seen.refused(
+            "opaque-3dh-p256",
+            "login_start",
+            opaque::login_start(b"pw", &mut rng).map(|_| ()),
+        );
+    }
+    {
         use ec::oprf::{blind, Mode, ServerKey};
         seen.refused(
             "oprf-p256-sha256",

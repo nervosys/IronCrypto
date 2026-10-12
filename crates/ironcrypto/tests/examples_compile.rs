@@ -920,6 +920,34 @@ fn key_wrap_examples_compile_and_match() -> Result<()> {
     Ok(())
 }
 
+/// OPAQUE: a registration, then the login the example shows.
+#[test]
+fn opaque_example_compiles_and_matches() -> Result<()> {
+    use ironcrypto::hpke::opaque::{self, Argon2idKsf, ServerSetup};
+    let mut rng = drbg::Rng::from_entropy(&[0x40u8; 32], b"examples/opaque")?;
+    let ksf = Argon2idKsf::small_for_tests();
+    let password: &[u8] = b"correct horse";
+    let id: &[u8] = b"alice";
+    let context: &[u8] = b"examples v1";
+    let server = ServerSetup::generate(&mut rng)?;
+    let (state, request) = opaque::registration_start(password, &mut rng)?;
+    let response = server.registration_response(&request, id)?;
+    let (record, _) =
+        opaque::registration_finish(&ksf, &state, password, &response, None, None, &mut rng)?;
+
+    let (client, ke1) = ironcrypto::hpke::opaque::login_start(password, &mut rng)?;
+    let (pending, ke2) = server.login_respond(&record, id, &ke1, None, None, context, &mut rng)?;
+    let (ke3, session_key, _export_key) =
+        client.finish(&ksf, password, &ke2, None, None, context)?;
+    let server_key = pending.finish(&ke3)?;
+    assert_eq!(*session_key, *server_key);
+    check_example(
+        "opaque-3dh-p256",
+        "let (client, ke1) = ic_hpke::opaque::login_start(password, &mut rng)?;\nlet (pending, ke2) = server.login_respond(&record, id, &ke1, None, None, context, &mut rng)?;\nlet (ke3, session_key, export_key) = client.finish(&ksf, password, &ke2, None, None, context)?;\nlet server_key = pending.finish(&ke3)?;",
+    );
+    Ok(())
+}
+
 /// Hash-to-curve and the OPRF.
 #[test]
 fn oprf_examples_compile_and_match() -> Result<()> {
