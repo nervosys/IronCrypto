@@ -38,6 +38,10 @@ pub mod sp800_185;
 pub use blake2::{blake2b_long, Blake2b};
 pub use sha2::{Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
 pub use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256, XofReader};
+// Four SHAKE or SHA3-256 streams in step, for ML-KEM. Not API: hidden, and free
+// to change in any release.
+#[doc(hidden)]
+pub use sha3::{KeccakX4, Rate136};
 pub use sp800_185::{CShake128, CShake256};
 pub use sp800_185::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256};
 

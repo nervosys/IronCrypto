@@ -69,7 +69,56 @@ const PI: [usize; 24] = [
 /// the cycle walk this replaced. Those tables are kept, under `cfg(test)`, so
 /// the compact statement of what rho and pi do stays in the file and stays
 /// checked against the version that runs.
+#[allow(unsafe_code)]
 fn keccak_f1600(a: &mut [u64; 25]) {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if bmi() {
+        // SAFETY: `bmi()` is exactly the feature test `keccak_f1600_bmi`
+        // requires.
+        unsafe { keccak_f1600_bmi(a) };
+        return;
+    }
+    keccak_f1600_body(a);
+}
+
+/// [`keccak_f1600_body`], compiled for BMI1 and BMI2.
+///
+/// The same source; only the instructions differ. Baseline x86-64 has no
+/// and-not, so chi's `!b & c` is a copy, a not and an and, and every
+/// rotation overwrites its input, so one that is still needed is copied
+/// first. BMI1's `andn` and BMI2's `rorx` take a separate destination and
+/// remove those copies.
+///
+/// # Safety
+///
+/// The CPU must support BMI1 and BMI2.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[target_feature(enable = "bmi1,bmi2")]
+#[allow(unsafe_code)]
+unsafe fn keccak_f1600_bmi(a: &mut [u64; 25]) {
+    keccak_f1600_body(a);
+}
+
+/// Whether this CPU has BMI1 and BMI2, asked once.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn bmi() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    // 0 not yet asked, 1 yes, 2 no.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have =
+                std::is_x86_feature_detected!("bmi1") && std::is_x86_feature_detected!("bmi2");
+            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+            have
+        }
+    }
+}
+
+#[inline(always)]
+fn keccak_f1600_body(a: &mut [u64; 25]) {
     for round in RC.iter().take(ROUNDS) {
         // theta
         let c0 = a[0] ^ a[5] ^ a[10] ^ a[15] ^ a[20];
@@ -173,14 +222,14 @@ impl Sponge {
     /// spent getting the bytes into the state rather than mixing them.
     ///
     /// A block-aligned run is now xored a lane at a time, which is 17 of those
-    /// operations instead of 136. The byte-wise path stays for whatever
+    /// operations instead of 136. A partial path stays for whatever
     /// straddles the ends, since callers may hand over any lengths they like
     /// and the result must not depend on how the input was split up.
     pub(crate) fn absorb(&mut self, mut data: &[u8]) {
         // Every SHA-3 and SHAKE rate is a whole number of lanes, but the
         // sponge takes the rate as a parameter, so the fast path checks rather
-        // than assumes. A rate that is not lane-aligned simply keeps the old
-        // behaviour.
+        // than assumes. A rate that is not lane-aligned takes the partial-block
+        // path below for everything.
         let lane_aligned = self.rate.is_multiple_of(8);
 
         while !data.is_empty() {
@@ -196,16 +245,17 @@ impl Sponge {
                 continue;
             }
 
-            let byte = data[0];
-            let lane = self.pos / 8;
-            let shift = 8 * (self.pos % 8);
-            self.state[lane] ^= (byte as u64) << shift;
-            self.pos += 1;
+            // A partial block: up to the end of the rate or of the input,
+            // whichever comes first, xored in through the byte view of the
+            // lanes it touches.
+            let take = (self.rate - self.pos).min(data.len());
+            xor_bytes_into(&mut self.state, self.pos, &data[..take]);
+            self.pos += take;
             if self.pos == self.rate {
                 keccak_f1600(&mut self.state);
                 self.pos = 0;
             }
-            data = &data[1..];
+            data = &data[take..];
         }
     }
 
@@ -219,19 +269,74 @@ impl Sponge {
         self.pos = 0;
     }
 
-    pub(crate) fn squeeze(&mut self, out: &mut [u8]) {
-        let mut produced = 0;
-        while produced < out.len() {
+    /// Squeeze `out.len()` bytes, continuing from wherever the last call
+    /// stopped.
+    ///
+    /// This used to produce one byte per trip round the loop, each costing a
+    /// division, a remainder and a shift -- for ML-KEM's matrix sampling,
+    /// which squeezes three blocks per polynomial, about as much time as the
+    /// permutations that made the bytes. It now copies whole lanes, and the
+    /// byte-wise form survives only for the partial lanes at either end.
+    pub(crate) fn squeeze(&mut self, mut out: &mut [u8]) {
+        while !out.is_empty() {
             if self.pos == self.rate {
                 keccak_f1600(&mut self.state);
                 self.pos = 0;
             }
-            let lane = self.pos / 8;
-            let shift = 8 * (self.pos % 8);
-            out[produced] = (self.state[lane] >> shift) as u8;
-            self.pos += 1;
-            produced += 1;
+            let take = (self.rate - self.pos).min(out.len());
+            let (now, rest) = out.split_at_mut(take);
+            copy_bytes_from(&self.state, self.pos, now);
+            self.pos += take;
+            out = rest;
         }
+    }
+}
+
+/// Xor `data` into the little-endian byte view of `state`, starting at byte
+/// `start`. The caller keeps `start + data.len()` within the state.
+fn xor_bytes_into(state: &mut [u64; 25], start: usize, data: &[u8]) {
+    let mut pos = start;
+    let mut data = data;
+    while !data.is_empty() {
+        let lane = pos / 8;
+        let offset = pos % 8;
+        let take = (8 - offset).min(data.len());
+        let mut bytes = [0u8; 8];
+        bytes[offset..offset + take].copy_from_slice(&data[..take]);
+        state[lane] ^= u64::from_le_bytes(bytes);
+        pos += take;
+        data = &data[take..];
+    }
+}
+
+/// Copy the little-endian byte view of `state`, from byte `start`, into `out`.
+fn copy_bytes_from(state: &[u64; 25], start: usize, out: &mut [u8]) {
+    copy_words_out(|w| state[w], start, out);
+}
+
+/// Copy the little-endian bytes of a run of 64-bit words, from byte `start`,
+/// into `out`, where `word(w)` is word `w`.
+///
+/// Whole words go across as fixed eight-byte copies, and only the partial
+/// words at either end a byte at a time. Copying every word as a slice of
+/// whatever length remained made each one a call to `memcpy`, which cost as
+/// much as the permutation that produced the bytes.
+#[inline]
+fn copy_words_out(word: impl Fn(usize) -> u64, start: usize, out: &mut [u8]) {
+    let mut pos = start;
+    let mut at = 0;
+    while !pos.is_multiple_of(8) && at < out.len() {
+        out[at] = (word(pos / 8) >> (8 * (pos % 8))) as u8;
+        pos += 1;
+        at += 1;
+    }
+    let mut chunks = out[at..].chunks_exact_mut(8);
+    for chunk in &mut chunks {
+        chunk.copy_from_slice(&word(pos / 8).to_le_bytes());
+        pos += 8;
+    }
+    for (k, b) in chunks.into_remainder().iter_mut().enumerate() {
+        *b = (word(pos / 8) >> (8 * k)) as u8;
     }
 }
 
@@ -310,6 +415,313 @@ impl XofReader {
     /// Squeeze the next `out.len()` bytes.
     pub fn read(&mut self, out: &mut [u8]) {
         self.sponge.squeeze(out);
+    }
+}
+
+// Four permutations at once, where the CPU has AVX2. Only under `std`, because
+// the detection needs it; see `crate::sha2::avx2`.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[allow(unsafe_code)]
+mod x86;
+
+/// Keccak-f[1600] over four interleaved states: `state[w][s]` is word `w` of
+/// state `s`.
+#[allow(unsafe_code)]
+fn keccak_f1600_x4(state: &mut [[u64; 4]; 25]) {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if avx512vl() {
+        // SAFETY: `avx512vl()` checks AVX2, AVX-512F and AVX-512VL, which is
+        // what `permute_avx512vl` requires.
+        unsafe { x86::permute_avx512vl(state) };
+        return;
+    }
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if crate::sha2::avx2() {
+        // SAFETY: `avx2()` is exactly the feature test `permute` requires.
+        unsafe { x86::permute(state) };
+        return;
+    }
+    keccak_f1600_x4_portable(state);
+}
+
+/// Whether this CPU has AVX-512F and AVX-512VL as well as AVX2, asked once.
+///
+/// `is_x86_feature_detected!` also checks that the operating system saves
+/// the AVX-512 register state, without which the instructions fault.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn avx512vl() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    // 0 not yet asked, 1 yes, 2 no.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have = crate::sha2::avx2()
+                && std::is_x86_feature_detected!("avx512f")
+                && std::is_x86_feature_detected!("avx512vl");
+            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+            have
+        }
+    }
+}
+
+/// The fallback: the four states one after another.
+fn keccak_f1600_x4_portable(state: &mut [[u64; 4]; 25]) {
+    for s in 0..4 {
+        let mut one = [0u64; 25];
+        for (w, words) in one.iter_mut().zip(state.iter()) {
+            *w = words[s];
+        }
+        keccak_f1600(&mut one);
+        for (w, words) in one.iter().zip(state.iter_mut()) {
+            words[s] = *w;
+        }
+        one.zeroize();
+    }
+}
+
+/// Which FIPS 202 function a lane of a [`KeccakX4`] computes, at the
+/// 136-byte rate SHA3-256 and SHAKE256 share.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rate136 {
+    /// SHA3-256: domain bits `01`.
+    Sha3_256,
+    /// SHAKE256: domain bits `1111`.
+    Shake256,
+}
+
+/// Four Keccak sponges run in step, for callers with four independent
+/// streams to compute.
+///
+/// Not API. It exists for ML-KEM, whose matrix expansion and noise sampling
+/// are many independent SHAKE calls, and it is public only because that
+/// crate is a different one; it is hidden from the documentation and may
+/// change or vanish in any release.
+///
+/// Each lane computes exactly the function its constructor names, over its
+/// own input, and produces the same bytes the single-stream type would:
+/// `four_way_sponges_match_the_single_stream_ones` compares them over inputs
+/// whose lengths differ between lanes and straddle block boundaries.
+///
+/// On a CPU with AVX2 the four permutations are one vector permutation; on
+/// anything else they are four scalar ones, and [`KeccakX4::is_parallel`]
+/// says which, so a caller can keep its sequential form where batching buys
+/// nothing.
+#[doc(hidden)]
+pub struct KeccakX4 {
+    state: [[u64; 4]; 25],
+    rate: usize,
+    pos: usize,
+}
+
+impl Drop for KeccakX4 {
+    fn drop(&mut self) {
+        for words in self.state.iter_mut() {
+            words.zeroize();
+        }
+    }
+}
+
+impl KeccakX4 {
+    /// Whether the four permutations run as one, on this CPU.
+    pub fn is_parallel() -> bool {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        {
+            crate::sha2::avx2()
+        }
+        #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
+        {
+            false
+        }
+    }
+
+    /// Four all-zero states, for a caller driving the lanes itself through
+    /// [`Self::xor_lane`], [`Self::read_lane`] and [`Self::permute`].
+    ///
+    /// The raw form exists so that the lanes need not be doing the same
+    /// thing: one lane can absorb a long input while the others squeeze, and
+    /// a lane that finishes can be reset and given new work while the rest
+    /// carry on. Rate, padding and domain separation are then the caller's.
+    pub fn zeroed() -> Self {
+        Self {
+            state: [[0u64; 4]; 25],
+            rate: 0,
+            pos: 0,
+        }
+    }
+
+    /// Set lane `s` back to the all-zero state.
+    pub fn reset_lane(&mut self, s: usize) {
+        if s < 4 {
+            for words in self.state.iter_mut() {
+                words[s] = 0;
+            }
+        }
+    }
+
+    /// Xor `data` into lane `s`, starting at byte `offset` of its 200-byte
+    /// state. Does nothing if the lane or the range is out of bounds.
+    pub fn xor_lane(&mut self, s: usize, offset: usize, data: &[u8]) {
+        if s >= 4 || offset.checked_add(data.len()).is_none_or(|end| end > 200) {
+            return;
+        }
+        let mut pos = offset;
+        let mut at = 0;
+        while !pos.is_multiple_of(8) && at < data.len() {
+            self.state[pos / 8][s] ^= (data[at] as u64) << (8 * (pos % 8));
+            pos += 1;
+            at += 1;
+        }
+        let mut chunks = data[at..].chunks_exact(8);
+        for chunk in &mut chunks {
+            let mut b = [0u8; 8];
+            b.copy_from_slice(chunk);
+            self.state[pos / 8][s] ^= u64::from_le_bytes(b);
+            pos += 8;
+        }
+        for (k, byte) in chunks.remainder().iter().enumerate() {
+            self.state[pos / 8][s] ^= (*byte as u64) << (8 * k);
+        }
+    }
+
+    /// Copy bytes `offset..offset + out.len()` of lane `s`'s state into
+    /// `out`. Does nothing if the lane or the range is out of bounds.
+    pub fn read_lane(&self, s: usize, offset: usize, out: &mut [u8]) {
+        if s >= 4 || offset.checked_add(out.len()).is_none_or(|end| end > 200) {
+            return;
+        }
+        let state = &self.state;
+        copy_words_out(|w| state[w][s], offset, out);
+    }
+
+    /// Apply Keccak-f[1600] to all four lanes.
+    pub fn permute(&mut self) {
+        keccak_f1600_x4(&mut self.state);
+    }
+
+    /// Four SHAKE128 instances, lane `s` absorbing the concatenation of
+    /// `inputs[s]`.
+    pub fn shake128(inputs: [&[&[u8]]; 4]) -> Self {
+        Self::absorb(168, [0x1f; 4], inputs)
+    }
+
+    /// Four SHAKE256 instances.
+    pub fn shake256(inputs: [&[&[u8]]; 4]) -> Self {
+        Self::absorb(136, [0x1f; 4], inputs)
+    }
+
+    /// Four lanes at the 136-byte rate, each SHA3-256 or SHAKE256. Squeeze 32
+    /// bytes from a SHA3-256 lane to read its digest.
+    pub fn rate136(functions: [Rate136; 4], inputs: [&[&[u8]]; 4]) -> Self {
+        let pads = functions.map(|f| match f {
+            Rate136::Sha3_256 => 0x06,
+            Rate136::Shake256 => 0x1f,
+        });
+        Self::absorb(136, pads, inputs)
+    }
+
+    /// Absorb and pad every lane, and leave each ready to squeeze.
+    ///
+    /// The lanes advance in step, a block each per permutation. A lane whose
+    /// input runs out sooner than another's has already taken its final
+    /// padded block, and must not be permuted again until squeezing starts,
+    /// so its state is set aside across the permutations it sits out. The
+    /// lengths are the caller's, not secrets, and the branches here are on
+    /// nothing else.
+    fn absorb(rate: usize, pads: [u8; 4], inputs: [&[&[u8]]; 4]) -> Self {
+        let lens = inputs.map(|parts| parts.iter().map(|p| p.len()).sum::<usize>());
+        // A lane of `len` bytes absorbs `len / rate` full blocks, then one
+        // final block holding the remainder and the padding.
+        let blocks = lens.map(|len| len / rate + 1);
+        let steps = blocks.iter().copied().max().unwrap_or(1);
+
+        let mut x = Self {
+            state: [[0u64; 4]; 25],
+            rate,
+            pos: 0,
+        };
+        let mut block = [0u8; 200];
+        let mut parked = [[0u64; 25]; 4];
+        for step in 0..steps {
+            for s in 0..4 {
+                if step >= blocks[s] {
+                    for (w, words) in parked[s].iter_mut().zip(x.state.iter()) {
+                        *w = words[s];
+                    }
+                    continue;
+                }
+                let start = step * rate;
+                let take = (lens[s] - start).min(rate);
+                block[..rate].fill(0);
+                gather(inputs[s], start, &mut block[..take]);
+                if step + 1 == blocks[s] {
+                    block[take] ^= pads[s];
+                    block[rate - 1] ^= 0x80;
+                }
+                for (words, chunk) in x.state.iter_mut().zip(block[..rate].chunks_exact(8)) {
+                    let mut b = [0u8; 8];
+                    b.copy_from_slice(chunk);
+                    words[s] ^= u64::from_le_bytes(b);
+                }
+            }
+            keccak_f1600_x4(&mut x.state);
+            for s in 0..4 {
+                if step >= blocks[s] {
+                    for (w, words) in parked[s].iter().zip(x.state.iter_mut()) {
+                        words[s] = *w;
+                    }
+                }
+            }
+        }
+        block.zeroize();
+        for p in parked.iter_mut() {
+            p.zeroize();
+        }
+        x
+    }
+
+    /// Squeeze the next `N` bytes of every lane, continuing from wherever
+    /// the last call stopped.
+    pub fn squeeze<const N: usize>(&mut self, out: &mut [[u8; N]; 4]) {
+        let mut produced = 0;
+        while produced < N {
+            if self.pos == self.rate {
+                keccak_f1600_x4(&mut self.state);
+                self.pos = 0;
+            }
+            let take = (self.rate - self.pos).min(N - produced);
+            for (s, lane) in out.iter_mut().enumerate() {
+                let state = &self.state;
+                copy_words_out(
+                    |w| state[w][s],
+                    self.pos,
+                    &mut lane[produced..produced + take],
+                );
+            }
+            self.pos += take;
+            produced += take;
+        }
+    }
+}
+
+/// Copy bytes `start..start + out.len()` of the concatenation of `parts`.
+fn gather(parts: &[&[u8]], start: usize, out: &mut [u8]) {
+    let mut skip = start;
+    let mut at = 0;
+    for part in parts {
+        if at == out.len() {
+            break;
+        }
+        if skip >= part.len() {
+            skip -= part.len();
+            continue;
+        }
+        let n = (part.len() - skip).min(out.len() - at);
+        out[at..at + n].copy_from_slice(&part[skip..skip + n]);
+        at += n;
+        skip = 0;
     }
 }
 
@@ -699,5 +1111,294 @@ mod tests {
                 assert_eq!(got, want, "xof len {len} split into {chunk}-byte pieces");
             }
         }
+    }
+
+    /// Squeezing in uneven pieces, across lane and block boundaries, gives
+    /// the bytes one long squeeze does.
+    #[test]
+    fn squeezing_in_pieces_does_not_change_the_stream() {
+        use ic_core::traits::Xof;
+
+        let mut want = [0u8; 700];
+        Shake128::xof(b"pieces", &mut want);
+        for pieces in [&[1usize, 7, 8, 9, 160, 168, 347][..], &[3, 165, 1, 531]] {
+            let mut x = Shake128::default();
+            x.update(b"pieces");
+            let mut r = x.finalize_reader();
+            let mut got = Vec::new();
+            for n in pieces {
+                let mut buf = vec![0u8; *n];
+                r.read(&mut buf);
+                got.extend_from_slice(&buf);
+            }
+            assert_eq!(got[..], want[..got.len()], "pieces {pieces:?}");
+        }
+    }
+
+    fn lane_input(seed: usize, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| ((i * 131 + seed * 7919) ^ (i >> 3)) as u8)
+            .collect()
+    }
+
+    /// Every lane of a `KeccakX4` is the function its constructor names. The
+    /// lengths differ between lanes, so lanes finish absorbing on different
+    /// permutations, and straddle every rate; inputs are split into parts at
+    /// uneven places; and the output is squeezed in two pieces, the first
+    /// ending inside a block.
+    #[test]
+    fn four_way_sponges_match_the_single_stream_ones() {
+        let lengths = [
+            [0usize, 1, 33, 34],
+            [135, 136, 137, 0],
+            [167, 168, 169, 400],
+            [1184, 1120, 33, 1600],
+            [34, 34, 34, 34],
+        ];
+        let mut checked = 0;
+        for lens in lengths {
+            let inputs: Vec<Vec<u8>> = lens
+                .iter()
+                .enumerate()
+                .map(|(s, len)| lane_input(s, *len))
+                .collect();
+            // Split each lane's input in three, at places that differ by lane.
+            let cut = |v: &Vec<u8>, s: usize| -> Vec<Vec<u8>> {
+                let a = (s * 5).min(v.len());
+                let b = (a + v.len() / 2).min(v.len());
+                vec![v[..a].to_vec(), v[a..b].to_vec(), v[b..].to_vec()]
+            };
+            let parts: Vec<Vec<Vec<u8>>> = (0..4).map(|s| cut(&inputs[s], s)).collect();
+            let refs: Vec<Vec<&[u8]>> = parts
+                .iter()
+                .map(|p| p.iter().map(|v| v.as_slice()).collect())
+                .collect();
+            let lanes: [&[&[u8]]; 4] = [&refs[0], &refs[1], &refs[2], &refs[3]];
+
+            // SHAKE128 and SHAKE256: 100 bytes, then 300.
+            let mut x128 = KeccakX4::shake128(lanes);
+            let mut x256 = KeccakX4::shake256(lanes);
+            let mut first = [[0u8; 100]; 4];
+            let mut second = [[0u8; 300]; 4];
+            let mut first256 = [[0u8; 100]; 4];
+            let mut second256 = [[0u8; 300]; 4];
+            x128.squeeze(&mut first);
+            x128.squeeze(&mut second);
+            x256.squeeze(&mut first256);
+            x256.squeeze(&mut second256);
+            for s in 0..4 {
+                let mut want = [0u8; 400];
+                Shake128::xof(&inputs[s], &mut want);
+                assert_eq!(
+                    first[s][..],
+                    want[..100],
+                    "shake128 lane {s}, lens {lens:?}"
+                );
+                assert_eq!(
+                    second[s][..],
+                    want[100..],
+                    "shake128 lane {s}, lens {lens:?}"
+                );
+                Shake256::xof(&inputs[s], &mut want);
+                assert_eq!(
+                    first256[s][..],
+                    want[..100],
+                    "shake256 lane {s}, lens {lens:?}"
+                );
+                assert_eq!(
+                    second256[s][..],
+                    want[100..],
+                    "shake256 lane {s}, lens {lens:?}"
+                );
+            }
+
+            // SHA3-256 and SHAKE256 mixed, as ML-KEM's decapsulation uses them.
+            use Rate136::{Sha3_256 as H, Shake256 as J};
+            let functions = [H, J, J, H];
+            let mut mixed = KeccakX4::rate136(functions, lanes);
+            let mut out = [[0u8; 32]; 4];
+            mixed.squeeze(&mut out);
+            for s in 0..4 {
+                let want: [u8; 32] = if functions[s] == H {
+                    Sha3_256::digest(&inputs[s])
+                } else {
+                    let mut w = [0u8; 32];
+                    Shake256::xof(&inputs[s], &mut w);
+                    w
+                };
+                assert_eq!(out[s], want, "{:?} lane {s}, lens {lens:?}", functions[s]);
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, lengths.len(), "the comparison did not run");
+    }
+
+    /// The raw lane operations, driven the way a scheduler drives them: lane
+    /// 0 absorbs a long SHA3-256 input a block per permutation while lane 1
+    /// squeezes SHAKE128 output, then is reset and starts a second stream
+    /// part-way through; lanes 2 and 3 idle and are permuted regardless.
+    #[test]
+    fn raw_lanes_run_independent_sponges() {
+        let long = lane_input(9, 700);
+        let mut x = KeccakX4::zeroed();
+        let mut digest = [0u8; 32];
+        let mut streams: Vec<Vec<u8>> = vec![Vec::new(), Vec::new()];
+        let seeds: [&[u8]; 2] = [b"first stream", b"second, longer stream"];
+        let pad = |x: &mut KeccakX4, s: usize, msg: &[u8], domain: u8, rate: usize| {
+            x.xor_lane(s, 0, msg);
+            x.xor_lane(s, msg.len(), &[domain]);
+            x.xor_lane(s, rate - 1, &[0x80]);
+        };
+
+        // Lane 0: 700 bytes at rate 136 is five full blocks and a sixth
+        // holding the last 20 bytes and the padding.
+        // Lane 1: stream 0 for three blocks, then stream 1 for four.
+        let mut stream = 0;
+        let mut blocks_read = 0;
+        pad(&mut x, 1, seeds[0], 0x1f, 168);
+        for step in 0..6 {
+            if step < 5 {
+                x.xor_lane(0, 0, &long[step * 136..(step + 1) * 136]);
+            } else {
+                pad(&mut x, 0, &long[680..], 0x06, 136);
+            }
+            x.permute();
+            let mut block = [0u8; 168];
+            x.read_lane(1, 0, &mut block);
+            streams[stream].extend_from_slice(&block);
+            blocks_read += 1;
+            if stream == 0 && blocks_read == 3 {
+                stream = 1;
+                x.reset_lane(1);
+                pad(&mut x, 1, seeds[1], 0x1f, 168);
+            }
+        }
+        x.read_lane(0, 0, &mut digest);
+        assert_eq!(digest, Sha3_256::digest(&long), "lane 0's SHA3-256");
+
+        for (s, got) in streams.iter().enumerate() {
+            let mut want = vec![0u8; got.len()];
+            Shake128::xof(seeds[s], &mut want);
+            assert_eq!(*got, want, "lane 1's stream {s}");
+        }
+        assert_eq!(streams[1].len(), 3 * 168, "the second stream ran");
+
+        // Out-of-range requests are ignored rather than panicking.
+        x.xor_lane(4, 0, &[1]);
+        x.xor_lane(0, 199, &[1, 2]);
+        x.read_lane(0, 190, &mut [0u8; 11]);
+        x.reset_lane(7);
+    }
+
+    /// Four distinct states, so a lane mixed into its neighbour shows.
+    fn four_states() -> [[u64; 4]; 25] {
+        let mut st = [[0u64; 4]; 25];
+        for (w, words) in st.iter_mut().enumerate() {
+            for (s, v) in words.iter_mut().enumerate() {
+                *v = ((w as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+                    .rotate_left(s as u32 * 17 + 3)
+                    ^ ((s as u64) << 60);
+            }
+        }
+        st
+    }
+
+    /// The four-way fallback is four scalar permutations, lane for lane.
+    #[test]
+    fn the_portable_four_way_permutation_is_four_scalar_ones() {
+        let mut st = four_states();
+        let before = st;
+        keccak_f1600_x4_portable(&mut st);
+        for s in 0..4 {
+            let mut one: [u64; 25] = core::array::from_fn(|w| before[w][s]);
+            keccak_f1600(&mut one);
+            let got: [u64; 25] = core::array::from_fn(|w| st[w][s]);
+            assert_eq!(got, one, "lane {s}");
+        }
+    }
+
+    /// The AVX2 permutation against the scalar one, word for word, chained
+    /// over several permutations so that a fault in a rarely-hit rotation
+    /// spreads into every word.
+    ///
+    /// The tests above pass whichever path runs, so on their own they cannot
+    /// see the two disagree. This one runs both explicitly, and says so when
+    /// the CPU cannot run the vector path rather than passing silently.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx2_permutation_agrees_with_the_scalar_one() {
+        if !crate::sha2::avx2() {
+            println!("no AVX2 on this CPU; the four-way backend was not exercised");
+            return;
+        }
+        assert!(KeccakX4::is_parallel(), "AVX2 is present but not selected");
+        let mut vector = four_states();
+        let mut scalar = vector;
+        for round in 0..8 {
+            // SAFETY: guarded by the `avx2()` check above.
+            #[allow(unsafe_code)]
+            unsafe {
+                x86::permute(&mut vector)
+            };
+            keccak_f1600_x4_portable(&mut scalar);
+            assert_eq!(vector, scalar, "after {} permutations", round + 1);
+        }
+    }
+
+    /// The BMI build of the scalar permutation is the same source compiled
+    /// for other instructions; this runs both and compares, chained.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_bmi_permutation_agrees_with_the_baseline_one() {
+        if !bmi() {
+            println!("no BMI1/BMI2 on this CPU; that build was not exercised");
+            return;
+        }
+        let states = four_states();
+        let mut fast: [u64; 25] = core::array::from_fn(|w| states[w][1]);
+        let mut base = fast;
+        for round in 0..8 {
+            // SAFETY: guarded by the `bmi()` check above.
+            #[allow(unsafe_code)]
+            unsafe {
+                keccak_f1600_bmi(&mut fast)
+            };
+            keccak_f1600_body(&mut base);
+            assert_eq!(fast, base, "after {} permutations", round + 1);
+        }
+    }
+
+    /// The same, for the AVX-512VL permutation.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx512vl_permutation_agrees_with_the_scalar_one() {
+        if !avx512vl() {
+            println!("no AVX-512VL on this CPU; that backend was not exercised");
+            return;
+        }
+        let mut vector = four_states();
+        let mut scalar = vector;
+        for round in 0..8 {
+            // SAFETY: guarded by the `avx512vl()` check above.
+            #[allow(unsafe_code)]
+            unsafe {
+                x86::permute_avx512vl(&mut vector)
+            };
+            keccak_f1600_x4_portable(&mut scalar);
+            assert_eq!(vector, scalar, "after {} permutations", round + 1);
+        }
+    }
+
+    /// Say which four-way path this build takes.
+    #[test]
+    fn the_active_four_way_keccak_path_is_reported() {
+        println!(
+            "keccak x4 backend: {}",
+            if KeccakX4::is_parallel() {
+                "AVX2"
+            } else {
+                "portable"
+            }
+        );
     }
 }

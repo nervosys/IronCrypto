@@ -69,19 +69,77 @@ pub fn decompress(y: u16, d: u32) -> i16 {
 /// Little-endian bit order: coefficient 0 occupies the low `d` bits of the
 /// output, and each subsequent coefficient continues from where the last one
 /// stopped, crossing byte boundaries freely.
+///
+/// # Eight at a time
+///
+/// Eight coefficients of `d` bits are exactly `d` bytes, so a polynomial is 32
+/// groups that each start on a byte boundary. A group is packed into one
+/// integer with shifts the compiler knows, for each width ML-KEM uses, and
+/// written out whole. This used to set one bit per trip round a loop, at a
+/// division and a remainder per bit -- about a microsecond per polynomial,
+/// twice an NTT. Only the low `d` bits of each coefficient are kept, as
+/// before.
 pub fn byte_encode(p: &Poly, d: u32, out: &mut [u8]) {
     debug_assert_eq!(out.len(), 32 * d as usize);
-    for byte in out.iter_mut() {
-        *byte = 0;
+    match d {
+        1 => encode_groups::<1>(p, out),
+        4 => encode_groups::<4>(p, out),
+        5 => encode_groups::<5>(p, out),
+        10 => encode_groups::<10>(p, out),
+        11 => encode_groups::<11>(p, out),
+        12 => encode_groups::<12>(p, out),
+        _ => encode_bits(p, d, out),
     }
-    let mut bit = 0usize;
+}
+
+fn encode_groups<const D: usize>(p: &Poly, out: &mut [u8]) {
+    for (group, bytes) in p.c.chunks_exact(8).zip(out.chunks_exact_mut(D)) {
+        let mut eight = [0i16; 8];
+        eight.copy_from_slice(group);
+        bytes.copy_from_slice(&pack8::<D>(&eight)[..D]);
+    }
+}
+
+/// Eight `D`-bit fields, packed little-endian into the low `D` bytes.
+///
+/// Public only so that `scripts/check-ct.py` can inspect it; not API.
+#[doc(hidden)]
+#[inline]
+pub fn pack8<const D: usize>(v: &[i16; 8]) -> [u8; 16] {
+    let mask = (1u128 << D) - 1;
+    let mut acc = 0u128;
+    for (k, x) in v.iter().enumerate() {
+        acc |= ((*x as u16 as u128) & mask) << (D * k);
+    }
+    acc.to_le_bytes()
+}
+
+/// Eight `D`-bit fields from the low `D` bytes of `bytes`.
+///
+/// Public only so that `scripts/check-ct.py` can inspect it; not API.
+#[doc(hidden)]
+#[inline]
+pub fn unpack8<const D: usize>(bytes: &[u8; 16]) -> [u16; 8] {
+    let mask = (1u128 << D) - 1;
+    let acc = u128::from_le_bytes(*bytes);
+    core::array::from_fn(|k| ((acc >> (D * k)) & mask) as u16)
+}
+
+/// The width-generic form, for the widths ML-KEM never packs at.
+fn encode_bits(p: &Poly, d: u32, out: &mut [u8]) {
+    let mask = (1u32 << d) - 1;
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    let mut at = 0usize;
     for coefficient in p.c.iter() {
-        let value = *coefficient as u16;
-        for b in 0..d as usize {
-            let set = ((value >> b) & 1) as u8;
-            out[(bit + b) / 8] |= set << ((bit + b) % 8);
+        acc |= ((*coefficient as u16 as u32) & mask) << bits;
+        bits += d;
+        while bits >= 8 {
+            out[at] = acc as u8;
+            at += 1;
+            acc >>= 8;
+            bits -= 8;
         }
-        bit += d as usize;
     }
 }
 
@@ -91,22 +149,64 @@ pub fn byte_encode(p: &Poly, d: u32, out: &mut [u8]) {
 /// decoded value can land in `[q, 4096)`, which FIPS 203 reduces modulo `q`;
 /// that case is the one where a decoder that skips the reduction accepts keys
 /// another implementation would reject.
+///
+/// The reduction is [`reduce_12`], a subtraction and a mask. It was `% q`, on
+/// what is, for a decapsulation key, the secret vector.
 pub fn byte_decode(data: &[u8], d: u32, out: &mut Poly) {
     debug_assert_eq!(data.len(), 32 * d as usize);
-    let mut bit = 0usize;
-    for coefficient in out.c.iter_mut() {
-        let mut value = 0u16;
-        for b in 0..d as usize {
-            let set = (data[(bit + b) / 8] >> ((bit + b) % 8)) & 1;
-            value |= (set as u16) << b;
+    match d {
+        1 => decode_groups::<1>(data, out),
+        4 => decode_groups::<4>(data, out),
+        5 => decode_groups::<5>(data, out),
+        10 => decode_groups::<10>(data, out),
+        11 => decode_groups::<11>(data, out),
+        12 => {
+            decode_groups::<12>(data, out);
+            for c in out.c.iter_mut() {
+                *c = reduce_12(*c as u16);
+            }
         }
-        bit += d as usize;
-        *coefficient = if d == 12 {
-            (value % (Q as u16)) as i16
-        } else {
-            value as i16
-        };
+        _ => decode_bits(data, d, out),
     }
+}
+
+fn decode_groups<const D: usize>(data: &[u8], out: &mut Poly) {
+    for (bytes, group) in data.chunks_exact(D).zip(out.c.chunks_exact_mut(8)) {
+        let mut buf = [0u8; 16];
+        buf[..D].copy_from_slice(bytes);
+        for (c, v) in group.iter_mut().zip(unpack8::<D>(&buf)) {
+            *c = v as i16;
+        }
+    }
+}
+
+fn decode_bits(data: &[u8], d: u32, out: &mut Poly) {
+    let mask = (1u32 << d) - 1;
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    let mut at = 0usize;
+    for coefficient in out.c.iter_mut() {
+        while bits < d {
+            acc |= (data[at] as u32) << bits;
+            at += 1;
+            bits += 8;
+        }
+        *coefficient = (acc & mask) as i16;
+        acc >>= d;
+        bits -= d;
+    }
+}
+
+/// `x mod q` for a twelve-bit `x`, without a division or a branch.
+///
+/// `x < 4096 < 2q`, so one conditional subtraction suffices, and the
+/// condition is the sign bit of the difference rather than a comparison.
+/// Public only so that `scripts/check-ct.py` can inspect it; not API.
+#[doc(hidden)]
+#[inline]
+pub fn reduce_12(x: u16) -> i16 {
+    let r = (x & 0x0fff) as i16 - Q;
+    r + ((r >> 15) & Q)
 }
 
 /// Compress every coefficient and pack the result.
@@ -242,6 +342,53 @@ mod tests {
         for c in back.c.iter() {
             assert_eq!(*c, 4095 % Q, "4095 must reduce to {}", 4095 % Q);
             assert!(*c < Q, "a decoded coefficient must be below q");
+        }
+    }
+
+    /// Every twelve-bit field decodes to itself modulo `q`: the branch-free
+    /// reduction against `%`, for all 4096 values rather than only the largest.
+    #[test]
+    fn twelve_bit_decoding_reduces_every_value() {
+        for base in (0u16..4096).step_by(N) {
+            let mut p = Poly::ZERO;
+            for (i, c) in p.c.iter_mut().enumerate() {
+                *c = (base + i as u16) as i16;
+            }
+            let mut packed = vec![0u8; encoded_len(12)];
+            byte_encode(&p, 12, &mut packed);
+            let mut back = Poly::ZERO;
+            byte_decode(&packed, 12, &mut back);
+            for (i, c) in back.c.iter().enumerate() {
+                let x = base + i as u16;
+                assert_eq!(*c, (x % Q as u16) as i16, "decode of {x}");
+            }
+        }
+    }
+
+    /// Every width, including the ones only the generic path packs, agrees
+    /// with the bit buffer -- and keeps only the low `d` bits of a coefficient
+    /// that has more, which the group packer does with a mask.
+    #[test]
+    fn every_width_ignores_bits_above_d() {
+        let mut rng = Rng(0x5151);
+        for d in 1..=12u32 {
+            let mut p = Poly::ZERO;
+            let mut values = Vec::new();
+            for c in p.c.iter_mut() {
+                let v = rng.next() as u16;
+                *c = v as i16;
+                values.push(v & ((1u16 << d) - 1));
+            }
+            let mut got = vec![0u8; encoded_len(d)];
+            byte_encode(&p, d, &mut got);
+            assert_eq!(got, reference_encode(&values, d), "byte_encode at d={d}");
+            let mut back = Poly::ZERO;
+            byte_decode(&got, d, &mut back);
+            let want = reference_decode(&got, d, N);
+            for (i, c) in back.c.iter().enumerate() {
+                let w = if d == 12 { want[i] % Q as u16 } else { want[i] };
+                assert_eq!(*c as u16, w, "byte_decode at d={d}, index {i}");
+            }
         }
     }
 

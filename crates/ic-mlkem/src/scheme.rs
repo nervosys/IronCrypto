@@ -253,6 +253,200 @@ macro_rules! ml_kem {
             out
         }
 
+        /// Whether the lane-scheduled form below runs: only where the four-way
+        /// Keccak is a vector permutation, since elsewhere it is four scalar
+        /// ones and holding the matrix would buy nothing.
+        fn parallel() -> bool {
+            #[cfg(feature = "std")]
+            {
+                ic_hash::KeccakX4::is_parallel()
+            }
+            #[cfg(not(feature = "std"))]
+            {
+                false
+            }
+        }
+
+        /// K-PKE and the KEM's hashing with every Keccak call run through
+        /// [`crate::lanes`], four lanes at a time.
+        ///
+        /// # Why this one holds the matrix
+        ///
+        /// The streaming functions above sample each entry of `A` where it is
+        /// used and drop it, to keep an embedded stack small. Here the entries
+        /// are sampled together, in the same permutations as the hashes, so
+        /// they must be held until the arithmetic reaches them: `k * k`
+        /// polynomials, 8 KiB for ML-KEM-1024. That is only taken on a CPU with
+        /// the vector permutation, which is to say a hosted `std` build, and
+        /// the streaming form stays the only one a `no_std` build compiles.
+        ///
+        /// Each function computes exactly what its streaming counterpart
+        /// does, with the same reductions in the same order; the tests in
+        /// `held` compare both against the held-matrix reference.
+        #[cfg(feature = "std")]
+        mod fast {
+            use super::*;
+            use $crate::lanes::{run, Task};
+
+            /// `k * k`.
+            pub(super) const KK: usize = K * K;
+
+            /// The task that samples `A[i][j]`, or `A^T[i][j]`, into `slot`.
+            ///
+            /// The same index order as `matrix_entry`: FIPS 203 seeds
+            /// `A[i][j]` with `rho || j || i`.
+            fn uniform(
+                rho: &[u8; 32],
+                i: usize,
+                jj: usize,
+                transposed: bool,
+                slot: usize,
+            ) -> Task<'_> {
+                let index = if transposed {
+                    [i as u8, jj as u8]
+                } else {
+                    [jj as u8, i as u8]
+                };
+                Task::Uniform { rho, index, slot }
+            }
+
+            /// Row `i` of a held matrix times `v`, reduced: `matrix_row`'s sums.
+            fn row(m: &[Poly], i: usize, v: &[Poly]) -> Poly {
+                let mut acc = Poly::ZERO;
+                for (jj, vj) in v.iter().enumerate() {
+                    acc.basemul_add(&m[i * K + jj], vj);
+                }
+                acc.reduce();
+                acc
+            }
+
+            pub(super) fn pke_keygen(d: &[u8; 32], ek: &mut [u8], dk: &mut [u8]) {
+                let (rho, mut sigma) = $crate::scheme::g(&[d, &[K as u8]]);
+
+                // A, then s (nonces 0..k) and e (k..2k), in one schedule.
+                let mut polys = [Poly::ZERO; KK + 2 * K];
+                {
+                    let tasks: [Task<'_>; KK + 2 * K] = core::array::from_fn(|n| {
+                        if n < KK {
+                            uniform(&rho, n / K, n % K, false, n)
+                        } else {
+                            Task::Noise {
+                                seed: &sigma,
+                                nonce: (n - KK) as u8,
+                                eta: ETA1,
+                                slot: n,
+                            }
+                        }
+                    });
+                    run(&tasks, &mut polys, &mut []);
+                }
+                sigma.zeroize();
+
+                let (a, se) = polys.split_at_mut(KK);
+                for p in se.iter_mut() {
+                    p.ntt();
+                }
+                let (s, e) = se.split_at(K);
+                for (i, ei) in e.iter().enumerate() {
+                    let mut t = row(a, i, s);
+                    t.to_mont();
+                    t.add_assign(ei);
+                    t.reduce();
+                    encode_poly(&t, &mut ek[i * 384..(i + 1) * 384]);
+                }
+                ek[384 * K..].copy_from_slice(&rho);
+                for (i, p) in s.iter().enumerate() {
+                    encode_poly(p, &mut dk[i * 384..(i + 1) * 384]);
+                }
+                for p in se.iter_mut() {
+                    p.zeroize();
+                }
+            }
+
+            /// `y` (nonces 0..k, `eta1`), `e1` (k..2k, `eta2`) and `e2` (2k).
+            pub(super) fn encryption_noise(r: &[u8; 32]) -> [Poly; 2 * K + 1] {
+                let tasks: [Task<'_>; 2 * K + 1] = core::array::from_fn(|n| Task::Noise {
+                    seed: r,
+                    nonce: n as u8,
+                    eta: if n < K { ETA1 } else { ETA2 },
+                    slot: n,
+                });
+                let mut noise = [Poly::ZERO; 2 * K + 1];
+                run(&tasks, &mut noise, &mut []);
+                noise
+            }
+
+            /// `A^T` and up to two 32-byte hashes, in one schedule. The hashes
+            /// go first, being the longest tasks.
+            pub(super) fn transposed_matrix_and_hashes(
+                rho: &[u8; 32],
+                hash_tasks: &[Task<'_>],
+                hashes: &mut [[u8; 32]],
+            ) -> [Poly; KK] {
+                let mut tasks = [Task::Hash {
+                    parts: [&[], &[]],
+                    domain: 0,
+                    slot: usize::MAX,
+                }; KK + 2];
+                let n = hash_tasks.len().min(2);
+                tasks[..n].copy_from_slice(&hash_tasks[..n]);
+                for f in 0..KK {
+                    tasks[n + f] = uniform(rho, f / K, f % K, true, f);
+                }
+                let mut at = [Poly::ZERO; KK];
+                run(&tasks[..n + KK], &mut at, hashes);
+                at
+            }
+
+            /// K-PKE encryption, given `A^T` and the noise already drawn:
+            /// `pke_encrypt`'s arithmetic, in its order. Clears `noise`.
+            pub(super) fn pke_encrypt(
+                ek: &[u8],
+                m: &[u8; 32],
+                at: &[Poly; KK],
+                noise: &mut [Poly; 2 * K + 1],
+                out: &mut [u8],
+            ) {
+                let du_len = encoded_len(DU);
+                let (y, errors) = noise.split_at_mut(K);
+                for p in y.iter_mut() {
+                    p.ntt();
+                }
+
+                // u = InvNTT(A^T o y) + e1
+                for (i, e1) in errors[..K].iter().enumerate() {
+                    let mut u = row(at, i, y);
+                    u.inv_ntt();
+                    u.add_assign(e1);
+                    u.reduce();
+                    u.normalize();
+                    compress_encode(&u, DU, &mut out[i * du_len..(i + 1) * du_len]);
+                }
+
+                // v = InvNTT(t^T o y) + e2 + Decompress_1(m)
+                let mut v = Poly::ZERO;
+                for (i, yi) in y.iter().enumerate() {
+                    let mut t = Poly::ZERO;
+                    byte_decode(&ek[i * 384..(i + 1) * 384], 12, &mut t);
+                    v.basemul_add(&t, yi);
+                }
+                v.reduce();
+                v.inv_ntt();
+                v.add_assign(&errors[K]);
+                let mut mu = Poly::ZERO;
+                decode_decompress(m, 1, &mut mu);
+                v.add_assign(&mu);
+                v.reduce();
+                v.normalize();
+                compress_encode(&v, DV, &mut out[K * du_len..]);
+
+                for p in noise.iter_mut() {
+                    p.zeroize();
+                }
+                mu.zeroize();
+            }
+        }
+
         /// The held-matrix K-PKE these functions replaced, kept as the reference
         /// the streaming form is tested against. Unchanged apart from its names.
         #[cfg(test)]
@@ -457,6 +651,98 @@ macro_rules! ml_kem {
                 assert_eq!(checked, 12, "the comparison did not run");
             }
 
+            /// The lane-scheduled form against the streaming one, operation by
+            /// operation and through the whole KEM, over inputs no vector file
+            /// chose -- including a ciphertext that is not an encryption of
+            /// anything, and a key whose embedded hash is wrong.
+            ///
+            /// Both forms run here whatever the CPU: without the vector
+            /// permutation the scheduled form runs over four scalar ones, which
+            /// is slower and computes the same thing. Which one the public
+            /// functions select is checked separately below.
+            #[cfg(feature = "std")]
+            #[test]
+            fn the_lane_scheduled_form_matches_the_streaming_one() {
+                let mut checked = 0;
+                for seed in 0..12u8 {
+                    let d: [u8; 32] = bytes(seed);
+                    let mut ek = [0u8; ENCAPS_KEY_LEN];
+                    let mut dk = [0u8; 384 * K];
+                    let mut ek_lanes = [0u8; ENCAPS_KEY_LEN];
+                    let mut dk_lanes = [0u8; 384 * K];
+                    super::pke_keygen(&d, &mut ek, &mut dk);
+                    super::fast::pke_keygen(&d, &mut ek_lanes, &mut dk_lanes);
+                    assert_eq!(ek, ek_lanes, "encapsulation key, seed {seed}");
+                    assert_eq!(dk, dk_lanes, "decryption key, seed {seed}");
+
+                    let z: [u8; 32] = bytes(seed.wrapping_add(30));
+                    let mut full_ek = [0u8; ENCAPS_KEY_LEN];
+                    let mut full_dk = [0u8; DECAPS_KEY_LEN];
+                    $name::keygen_deterministic(&d, &z, &mut full_ek, &mut full_dk);
+
+                    let m: [u8; 32] = bytes(seed.wrapping_add(100));
+                    let mut ct = [0u8; CIPHERTEXT_LEN];
+                    let mut ct_lanes = [0u8; CIPHERTEXT_LEN];
+                    let mut sent = [0u8; SHARED_SECRET_LEN];
+                    let mut sent_lanes = [0u8; SHARED_SECRET_LEN];
+                    $name::encapsulate_streaming(&m, &full_ek, &mut ct, &mut sent);
+                    $name::encapsulate_lanes(&m, &full_ek, &mut ct_lanes, &mut sent_lanes);
+                    assert_eq!(ct, ct_lanes, "ciphertext, seed {seed}");
+                    assert_eq!(sent, sent_lanes, "shared secret, seed {seed}");
+
+                    let garbage: [u8; CIPHERTEXT_LEN] = bytes(seed.wrapping_add(50));
+                    for (what, c) in [("valid", ct), ("arbitrary", garbage)] {
+                        let mut a = [0u8; SHARED_SECRET_LEN];
+                        let mut b = [0u8; SHARED_SECRET_LEN];
+                        $name::decapsulate_streaming(&full_dk, &c, &mut a).unwrap();
+                        $name::decapsulate_lanes(&full_dk, &c, &mut b).unwrap();
+                        assert_eq!(a, b, "decapsulation of a {what} ciphertext, seed {seed}");
+                    }
+                    assert_eq!(sent, {
+                        let mut s = [0u8; SHARED_SECRET_LEN];
+                        $name::decapsulate_lanes(&full_dk, &ct, &mut s).unwrap();
+                        s
+                    });
+
+                    // The hash check refuses a key whose embedded hash, or whose
+                    // embedded public key, has been altered -- on both paths.
+                    for at in [384 * K + ENCAPS_KEY_LEN, 384 * K + 5] {
+                        let mut bad = full_dk;
+                        bad[at] ^= 1;
+                        let mut s = [0u8; SHARED_SECRET_LEN];
+                        assert!($name::decapsulate_streaming(&bad, &ct, &mut s).is_err());
+                        assert!($name::decapsulate_lanes(&bad, &ct, &mut s).is_err());
+                    }
+                    checked += 1;
+                }
+                assert_eq!(checked, 12, "the comparison did not run");
+            }
+
+            /// On a CPU with the vector permutation, the public functions take
+            /// the scheduled form; say which, so a vector run is not silently
+            /// testing the other.
+            #[cfg(feature = "std")]
+            #[test]
+            fn the_scheduled_form_is_selected_where_it_pays() {
+                assert_eq!(parallel(), ic_hash::KeccakX4::is_parallel());
+                #[cfg(target_arch = "x86_64")]
+                if std::is_x86_feature_detected!("avx2") {
+                    assert!(
+                        parallel(),
+                        "AVX2 is present but the scheduled form is not selected"
+                    );
+                }
+                println!(
+                    "{}: {}",
+                    $display,
+                    if parallel() {
+                        "lane-scheduled"
+                    } else {
+                        "streaming"
+                    }
+                );
+            }
+
             /// Decapsulation returns `K` for a ciphertext that re-encrypts to
             /// itself and `J(z || c)` for every other one, as FIPS 203 algorithm 18
             /// specifies -- checked against the rule, not only as "different".
@@ -567,6 +853,13 @@ macro_rules! ml_kem {
                 ek: &mut [u8; ENCAPS_KEY_LEN],
                 dk: &mut [u8; DECAPS_KEY_LEN],
             ) {
+                #[cfg(feature = "std")]
+                if parallel() {
+                    fast::pke_keygen(d, ek, &mut dk[..384 * K]);
+                } else {
+                    pke_keygen(d, ek, &mut dk[..384 * K]);
+                }
+                #[cfg(not(feature = "std"))]
                 pke_keygen(d, ek, &mut dk[..384 * K]);
                 dk[384 * K..384 * K + ENCAPS_KEY_LEN].copy_from_slice(ek);
                 let hash = $crate::scheme::h(ek);
@@ -610,9 +903,53 @@ macro_rules! ml_kem {
                 ct: &mut [u8; CIPHERTEXT_LEN],
                 shared: &mut [u8; SHARED_SECRET_LEN],
             ) {
-                let (k, r) = $crate::scheme::g(&[m, &$crate::scheme::h(ek)]);
+                #[cfg(feature = "std")]
+                if parallel() {
+                    Self::encapsulate_lanes(m, ek, ct, shared);
+                    return;
+                }
+                Self::encapsulate_streaming(m, ek, ct, shared);
+            }
+
+            /// [`Self::encapsulate_deterministic`], one Keccak call at a time.
+            fn encapsulate_streaming(
+                m: &[u8; 32],
+                ek: &[u8; ENCAPS_KEY_LEN],
+                ct: &mut [u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) {
+                let (mut k, mut r) = $crate::scheme::g(&[m, &$crate::scheme::h(ek)]);
                 pke_encrypt(ek, m, &r, ct);
                 shared.copy_from_slice(&k);
+                k.zeroize();
+                r.zeroize();
+            }
+
+            /// [`Self::encapsulate_deterministic`] with its Keccak calls
+            /// scheduled four lanes at a time: `H(ek)` on one lane while the
+            /// other three expand `A^T`, then the noise.
+            #[cfg(feature = "std")]
+            fn encapsulate_lanes(
+                m: &[u8; 32],
+                ek: &[u8; ENCAPS_KEY_LEN],
+                ct: &mut [u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) {
+                let mut rho = [0u8; 32];
+                rho.copy_from_slice(&ek[384 * K..]);
+                let mut hashes = [[0u8; 32]];
+                let hash = $crate::lanes::Task::Hash {
+                    parts: [&ek[..], &[]],
+                    domain: 0x06,
+                    slot: 0,
+                };
+                let at = fast::transposed_matrix_and_hashes(&rho, &[hash], &mut hashes);
+                let (mut k, mut r) = $crate::scheme::g(&[m, &hashes[0]]);
+                let mut noise = fast::encryption_noise(&r);
+                fast::pke_encrypt(ek, m, &at, &mut noise, ct);
+                shared.copy_from_slice(&k);
+                k.zeroize();
+                r.zeroize();
             }
 
             /// Decapsulate.
@@ -628,6 +965,22 @@ macro_rules! ml_kem {
                 shared: &mut [u8; SHARED_SECRET_LEN],
             ) -> Result<()> {
                 ic_core::module::operational()?;
+                // Where the four-way Keccak runs in hardware, the hash check's
+                // hash is computed alongside `J(z || c)` and the matrix, and
+                // compared by the same function `validate_decapsulation_key` uses.
+                #[cfg(feature = "std")]
+                if parallel() {
+                    return Self::decapsulate_lanes(dk, ct, shared);
+                }
+                Self::decapsulate_streaming(dk, ct, shared)
+            }
+
+            /// [`Self::decapsulate`], one Keccak call at a time.
+            fn decapsulate_streaming(
+                dk: &[u8; DECAPS_KEY_LEN],
+                ct: &[u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) -> Result<()> {
                 let dk_pke = &dk[..384 * K];
                 let ek: &[u8; ENCAPS_KEY_LEN] = dk[384 * K..384 * K + ENCAPS_KEY_LEN]
                     .try_into()
@@ -652,13 +1005,7 @@ macro_rules! ml_kem {
                 let mut recomputed = [0u8; CIPHERTEXT_LEN];
                 pke_encrypt(ek, &m, &r, &mut recomputed);
 
-                // Constant-time select: the comparison result must not be observable
-                // through timing, or the implicit rejection leaks exactly what it is
-                // meant to hide.
-                let matched = ic_core::ct::eq(&recomputed, ct);
-                for (i, out) in shared.iter_mut().enumerate() {
-                    *out = ic_core::ct::select_u8(matched, k[i], reject[i]);
-                }
+                Self::select_shared_secret(ct, &recomputed, &k, &reject, shared);
                 // Every one of these is key material. `m` is the recovered message,
                 // which is the value the whole transform protects; `k` and `reject` are
                 // the two candidate shared secrets, one of which was not selected and
@@ -670,6 +1017,95 @@ macro_rules! ml_kem {
                 k.zeroize();
                 r.zeroize();
                 reject.zeroize();
+                Ok(())
+            }
+
+            /// `K` if the re-encryption reproduced `ct`, otherwise the rejection
+            /// key, into `shared`.
+            ///
+            /// Constant-time select: the comparison result must not be observable
+            /// through timing, or the implicit rejection leaks exactly what it is
+            /// meant to hide.
+            fn select_shared_secret(
+                ct: &[u8; CIPHERTEXT_LEN],
+                recomputed: &[u8; CIPHERTEXT_LEN],
+                k: &[u8; 32],
+                reject: &[u8; 32],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) {
+                let matched = ic_core::ct::eq(recomputed, ct);
+                for (i, out) in shared.iter_mut().enumerate() {
+                    *out = ic_core::ct::select_u8(matched, k[i], reject[i]);
+                }
+            }
+
+            /// [`Self::decapsulate`] with its Keccak calls scheduled four lanes
+            /// at a time: the hash check's `H(ek)`, `J(z || c)` and `A^T` in one
+            /// schedule, then the re-encryption's noise.
+            #[cfg(feature = "std")]
+            fn decapsulate_lanes(
+                dk: &[u8; DECAPS_KEY_LEN],
+                ct: &[u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) -> Result<()> {
+                let dk_pke = &dk[..384 * K];
+                let ek: &[u8; ENCAPS_KEY_LEN] = dk[384 * K..384 * K + ENCAPS_KEY_LEN]
+                    .try_into()
+                    .map_err(|_| ic_core::err!(Internal, "decapsulation key layout"))?;
+                let hash = &dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32];
+                let z = &dk[384 * K + ENCAPS_KEY_LEN + 32..];
+                let mut rho = [0u8; 32];
+                rho.copy_from_slice(&ek[384 * K..]);
+
+                use $crate::lanes::Task;
+                let tasks = [
+                    Task::Hash {
+                        parts: [&ek[..], &[]],
+                        domain: 0x06,
+                        slot: 0,
+                    },
+                    Task::Hash {
+                        parts: [z, &ct[..]],
+                        domain: 0x1f,
+                        slot: 1,
+                    },
+                ];
+                let mut hashes = [[0u8; 32]; 2];
+                let at = fast::transposed_matrix_and_hashes(&rho, &tasks, &mut hashes);
+                let [computed, mut reject] = hashes;
+                // The hash check, before anything touches the secret key.
+                if let Err(e) = Self::check_embedded_hash(dk, &computed) {
+                    reject.zeroize();
+                    return Err(e);
+                }
+
+                let mut m = pke_decrypt(dk_pke, ct);
+                let (mut k, mut r) = $crate::scheme::g(&[&m, hash]);
+                let mut noise = fast::encryption_noise(&r);
+                let mut recomputed = [0u8; CIPHERTEXT_LEN];
+                fast::pke_encrypt(ek, &m, &at, &mut noise, &mut recomputed);
+
+                Self::select_shared_secret(ct, &recomputed, &k, &reject, shared);
+                // As in `decapsulate`: all key material, `noise` cleared by
+                // `pke_encrypt`.
+                recomputed.zeroize();
+                m.zeroize();
+                k.zeroize();
+                r.zeroize();
+                reject.zeroize();
+                Ok(())
+            }
+
+            /// FIPS 203's hash check, given `H(ek)` however it was computed:
+            /// the one comparison both [`Self::validate_decapsulation_key`] and
+            /// the scheduled decapsulation make.
+            fn check_embedded_hash(dk: &[u8; DECAPS_KEY_LEN], computed: &[u8; 32]) -> Result<()> {
+                let stored = &dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32];
+                ensure!(
+                    bool::from(ic_core::ct::eq(computed, stored)),
+                    MalformedEncoding,
+                    "decapsulation key's embedded hash does not match its public key"
+                );
                 Ok(())
             }
 
@@ -687,13 +1123,7 @@ macro_rules! ml_kem {
                 let ek: &[u8; ENCAPS_KEY_LEN] = dk[384 * K..384 * K + ENCAPS_KEY_LEN]
                     .try_into()
                     .map_err(|_| ic_core::err!(Internal, "decapsulation key layout"))?;
-                let stored = &dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32];
-                ensure!(
-                    bool::from(ic_core::ct::eq(&$crate::scheme::h(ek), stored)),
-                    MalformedEncoding,
-                    "decapsulation key's embedded hash does not match its public key"
-                );
-                Ok(())
+                Self::check_embedded_hash(dk, &$crate::scheme::h(ek))
             }
 
             /// Check that an encapsulation key is well formed.
