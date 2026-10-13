@@ -30,7 +30,7 @@ members = [
 # that dependency out of the workspace graph entirely, so
 # `scripts/no-third-party.sh` and the SBOM see exactly what they saw before. It
 # is a measurement tool, not part of the library, and nothing ships from it.
-exclude = ["bench"]
+exclude = ["bench", "ctgrind"]
 
 [workspace.package]
 version = "0.2.24"

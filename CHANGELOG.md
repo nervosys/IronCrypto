@@ -36,6 +36,13 @@ every caller of a hash function uses.
 
 ### Added
 
+- **Every test suite Graviola runs, run here.** NIST CAVP's SHA-2, SHA-3,
+  SHAKE and HMAC response files in full, Monte chains included, and
+  Wycheproof's ML-KEM (all three parameter sets, where Graviola runs one),
+  ECDSA in P1363 form and under other hashes, and AES-GMAC: about 12,000
+  cases from `scripts/gen_coverage_vectors.py`, every source pinned by
+  SHA-256, run by `ironcrypto/tests/coverage_vectors.rs`. All pass.
+- **`bench -- graviola`**, a per-operation comparison with Graviola 0.4.1.
 - **The P-256 compiled-code probes gate on the 32-bit targets too.** They
   were built and reported there, not gated. Cortex-M0's `__aeabi_lmul` is
   now disassembled from the toolchain's `compiler_builtins` and checked like
