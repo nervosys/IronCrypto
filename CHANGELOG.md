@@ -36,6 +36,23 @@ every caller of a hash function uses.
 
 ### Added
 
+- **Prepared ML-KEM keys**, for every parameter set:
+  `PreparedEncapsulationKey` and `PreparedDecapsulationKey` in
+  `ic_mlkem::{kem512, kem, kem1024}`, aliased at the crate root as
+  `MlKem768PreparedEncapsulationKey` and so on. `new` takes the key bytes
+  once: the encapsulation key gets FIPS 203's modulus check (an invalid key
+  is refused there, with `MalformedEncoding`), and the decapsulation key the
+  hash check; both then hold `H(ek)`, `t` and the expanded matrix `A^T`, so
+  `encapsulate`, `encapsulate_deterministic` and `decapsulate` do only the
+  per-message work. The output is byte for byte the unprepared functions',
+  which tests hold them to over random keys and messages on both the
+  lane-scheduled and the streaming form, and through the ACVP encapsulation
+  vectors and Wycheproof ML-KEM, every modulus-overflow key included. No
+  allocation: about 6 KiB (encapsulation) and 7.5 KiB (decapsulation) for
+  ML-KEM-768, up to 12 KiB for ML-KEM-1024. The decapsulation key wipes `s`
+  and `z` on drop. Everything refuses in the error state, constructors
+  included.
+
 - **`crypto_seal` refuses a nonce the agent supplies** unless it also sets
   `protocol_nonce: true`. Omitting the nonce, which draws one that is never
   reused, is the path an agent should take; passing its own now has to be
@@ -246,6 +263,24 @@ every caller of a hash function uses.
   PBKDF2 slower than theirs.
 
 ### Performance
+
+- **ML-KEM-768 encapsulation to a prepared key takes about half the time.**
+  On a Ryzen 9 9900X (Zen 5), best of four runs of `bench graviola`, the
+  builds before and after run alternately minutes apart, with Graviola
+  0.4.1 alongside, in microseconds (spread across runs in brackets):
+
+  | operation   | unprepared | prepared        | Graviola        |
+  |-------------|------------|-----------------|-----------------|
+  | encapsulate | 5.2 (5.2-6.2) | 2.6 (2.6-3.2) | 4.6 (4.6-5.5) |
+  | decapsulate | 6.1 (6.1-6.7) | 4.4 (4.4-4.9) | 5.9 (5.9-6.3) |
+
+  Graviola's encapsulation key holds `A^T` too, parsed once outside the
+  loop; its `DecapKey` always does. The unprepared functions are unchanged
+  (parity with the build before). The keygen row is relabelled, since
+  IronCrypto's `keygen` runs the pairwise-consistency test and Graviola's
+  `generate` does not, and a like-for-like row is added:
+  `keygen_deterministic` from one 64-byte operating-system draw, 6.4 us
+  against Graviola's 7.5.
 
 - **AES-GCM on x86-64 runs as one fused pass.** `H` and its powers are
   computed once per key instead of once per call, and counter mode and GHASH
