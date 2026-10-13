@@ -780,6 +780,7 @@ twice; `Ed25519::verify` still takes bytes and builds one per call.
 | SHA-256 | SHA-NI |
 | ChaCha20 | AVX2, eight blocks at a time |
 | Poly1305 | four blocks per group, reducing once instead of four times |
+| RSA exponentiation | AVX-512 IFMA in radix 2^52 for 1024-, 1536- and 2048-bit moduli (every RSA prime here, and an RSA-2048 modulus); `MULX`/`ADCX`/`ADOX` for the other products; a fixed four-bit window everywhere |
 
 Each is selected by runtime detection with the portable path as fallback, each
 is differentially tested against that portable path, and each reports which

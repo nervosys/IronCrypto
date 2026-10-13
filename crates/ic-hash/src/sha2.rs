@@ -263,6 +263,24 @@ impl Core256 {
         }
     }
 
+    /// Compress the buffered block in place.
+    ///
+    /// The buffer is copied out first only on the portable path, whose round
+    /// function borrows the whole core; SHA-NI takes the chaining value and
+    /// the block as separate fields, so finishing a short message does not
+    /// copy its last block twice.
+    fn compress_buffer(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if sha_ni() {
+            // SAFETY: `sha_ni()` is exactly the feature test this requires, and
+            // the buffer is one whole block.
+            unsafe { x86::compress(&mut self.h, &self.buf) };
+            return;
+        }
+        let block = self.buf;
+        self.compress(&block);
+    }
+
     fn update(&mut self, mut data: &[u8]) {
         self.len = self.len.wrapping_add(data.len() as u64);
         if self.buffered > 0 {
@@ -282,8 +300,7 @@ impl Core256 {
             // messages are mostly such blocks, so a 200-byte hash ran at a
             // third of the bulk rate and HMAC, which finishes two hashes per
             // tag, at about a quarter of what SHA-NI allows.
-            let block = self.buf;
-            self.compress_blocks(&block);
+            self.compress_buffer();
             self.buffered = 0;
         }
         let whole = data.len() - data.len() % 64;
@@ -295,24 +312,25 @@ impl Core256 {
 
     fn finalize(mut self) -> [u32; 8] {
         let bit_len = self.len.wrapping_mul(8);
-        let mut pad = [0u8; 72];
-        pad[0] = 0x80;
-        // Pad so that (buffered + 1 + zeros) % 64 == 56.
-        let zeros = (55 + 64 - (self.buffered % 64)) % 64;
-        pad[1 + zeros..1 + zeros + 8].copy_from_slice(&bit_len.to_be_bytes());
-        self.update_no_count(&pad[..1 + zeros + 8]);
+        // The padding is written into the block buffer where it goes, rather
+        // than assembled in a buffer of its own and fed through `update`: the
+        // 0x80, zeros to byte 56, and the length, with one extra block when
+        // fewer than nine bytes are left. Short messages -- every HMAC tag
+        // finishes two -- spent a fair part of their time in that detour.
+        let n = self.buffered;
+        self.buf[n] = 0x80;
+        self.buf[n + 1..].fill(0);
+        if n >= 56 {
+            self.compress_buffer();
+            self.buf = [0u8; 64];
+        }
+        self.buf[56..].copy_from_slice(&bit_len.to_be_bytes());
+        self.compress_buffer();
         // `self` is dropped on return, and `Drop` wipes `h` and `buf`. They
         // used to be wiped here as well, so every hash wiped its state twice;
         // HMAC finishes two hashes per tag, so that was four wipes of 96 bytes
         // where two do the same job.
         self.h
-    }
-
-    /// Absorb padding without disturbing the message-length counter.
-    fn update_no_count(&mut self, data: &[u8]) {
-        let saved = self.len;
-        self.update(data);
-        self.len = saved;
     }
 }
 
@@ -756,6 +774,45 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 6, "the comparison did not run");
+    }
+
+    /// `finalize` writes the padding into the block buffer itself, branching
+    /// on whether the length still fits. Against the padding of FIPS 180-4
+    /// section 5.1.1 built separately -- the message, 0x80, zeros to 56 mod
+    /// 64, the 64-bit bit length -- and compressed block by block with the
+    /// portable round function, at every length either side of one and two
+    /// blocks, and fed whole and in two pieces so the bytes reach the buffer
+    /// both ways.
+    #[test]
+    fn padding_matches_fips_180_4_at_every_short_length() {
+        const IV: [u32; 8] = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
+        ];
+        for len in 0..=200usize {
+            let msg: std::vec::Vec<u8> = (0..len).map(|i| (i * 7 + 3) as u8).collect();
+            let mut padded = msg.clone();
+            padded.push(0x80);
+            while padded.len() % 64 != 56 {
+                padded.push(0);
+            }
+            padded.extend_from_slice(&((len as u64) * 8).to_be_bytes());
+            let mut reference = Core256::new(IV);
+            for block in padded.chunks_exact(64) {
+                reference.compress(block);
+            }
+            let mut want = [0u8; 32];
+            for (i, w) in reference.h.iter().enumerate() {
+                want[4 * i..4 * i + 4].copy_from_slice(&w.to_be_bytes());
+            }
+
+            assert_eq!(Sha256::digest(&msg), want, "{len} bytes");
+            let mut h = Sha256::new();
+            let (a, b) = msg.split_at(len / 3);
+            h.update(a);
+            h.update(b);
+            assert_eq!(h.finalize(), want, "{len} bytes in two pieces");
+        }
     }
 
     /// Say which path this build will take, so a benchmark or a vector run is
