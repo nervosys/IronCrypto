@@ -41,7 +41,14 @@
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid`, so that two modules can be allowed unsafe and
+// every other line here stays a compile error: `uint::x86` and `uint::ifma`,
+// the Montgomery multiplications in `MULX`/`ADX` and AVX-512 IFMA assembly,
+// each behind runtime detection with the portable path as fallback. This crate
+// forbade unsafe outright until RSA-2048 signing, at about four times the
+// cost of the fastest assembly around, was asked to close that gap, which the
+// compiler cannot do: it emits neither `ADOX` nor IFMA from Rust.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 mod kat;

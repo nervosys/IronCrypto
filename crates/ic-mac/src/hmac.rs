@@ -124,6 +124,52 @@ fn tag_out_of_line<D: Digest>(mac: Hmac<D>) -> D::Output {
     tag(mac)
 }
 
+/// The whole tag in one pass: the inner hash to completion, then the outer.
+///
+/// [`Mac::mac`] through `new`, `update` and `finalize` builds both keyed
+/// states up front and carries them, as one `Hmac`, through a constructor, a
+/// `Result` and a finalizer -- the outer state sitting idle the whole time.
+/// A one-shot caller never needs the outer state until the inner digest
+/// exists, so here each state is built where it is used and only one is alive
+/// at a time. The same compressions in the same order, so the same tag; for a
+/// 200-byte HMAC-SHA256 that was about a tenth of the time, on top of the
+/// hashing. The pad is wiped as soon as the outer state has absorbed it.
+#[inline(always)]
+fn one_shot<D: Digest>(key: &[u8], data: &[u8]) -> D::Output {
+    let mut pad = [0x36u8; MAX_BLOCK_LEN];
+    let block = &mut pad[..D::BLOCK_LEN];
+    if key.len() > D::BLOCK_LEN {
+        xor_hashed_key::<D>(key, block);
+    } else {
+        for (p, k) in block.iter_mut().zip(key) {
+            *p ^= k;
+        }
+    }
+
+    let mut inner = D::new();
+    inner.update(block);
+    // The outer pad goes in before the message, not after the inner digest:
+    // it does not depend on the message, and issued here its compression is
+    // independent work the CPU overlaps with the inner hash's blocks instead
+    // of a block of latency at the end.
+    for p in block.iter_mut() {
+        *p ^= 0x36 ^ 0x5c;
+    }
+    let mut outer = D::new();
+    outer.update(block);
+    block.zeroize();
+
+    inner.update(data);
+    let inner_digest = inner.finalize();
+    outer.update(inner_digest.as_ref());
+    outer.finalize()
+}
+
+#[inline(never)]
+fn one_shot_out_of_line<D: Digest>(key: &[u8], data: &[u8]) -> D::Output {
+    one_shot::<D>(key, data)
+}
+
 /// XOR `D(key)` into `block`, for a key longer than one block.
 ///
 /// Out of line so that the third digest state it needs is on the stack only
@@ -165,6 +211,20 @@ impl<D: HmacDigest> Mac for Hmac<D> {
             tag_out_of_line(self)
         } else {
             tag(self)
+        }
+    }
+
+    fn mac(key: &[u8], data: &[u8]) -> Result<Self::Tag> {
+        ic_core::module::operational()?;
+        ensure!(
+            D::BLOCK_LEN <= MAX_BLOCK_LEN,
+            InvalidParameter,
+            "digest block exceeds hmac buffer"
+        );
+        if large_state::<D>() {
+            Ok(one_shot_out_of_line::<D>(key, data))
+        } else {
+            Ok(one_shot::<D>(key, data))
         }
     }
 }
@@ -360,6 +420,41 @@ mod tests {
             m.update(&data[split..]);
             assert_eq!(m.finalize(), HmacSha256::mac(b"k", &data).unwrap());
         }
+    }
+
+    /// `mac` has its own one-pass path; it must give the tag that `new`,
+    /// `update` and `finalize` give, for every digest, for keys shorter than,
+    /// equal to and longer than the block (the last are hashed first), and for
+    /// messages either side of a block boundary. The RFC 4231 cases above go
+    /// through `mac` and pin it to published values; this pins the two paths
+    /// to each other everywhere else.
+    #[test]
+    fn the_one_shot_path_matches_the_streaming_one() {
+        fn check<D: HmacDigest>() {
+            let block = D::BLOCK_LEN;
+            for key_len in [0, 1, 20, block - 1, block, block + 1, 2 * block + 3] {
+                let key: Vec<u8> = (0..key_len).map(|i| (i * 13 + 5) as u8).collect();
+                for len in [0, 1, 55, 56, 63, 64, 65, 111, 112, 128, 200] {
+                    let data: Vec<u8> = (0..len).map(|i| (i * 7 + 1) as u8).collect();
+                    let mut m = Hmac::<D>::new(&key).unwrap();
+                    m.update(&data);
+                    let want = m.finalize();
+                    let got = Hmac::<D>::mac(&key, &data).unwrap();
+                    assert_eq!(
+                        got.as_ref(),
+                        want.as_ref(),
+                        "{} key {key_len} msg {len}",
+                        D::ID
+                    );
+                }
+            }
+        }
+        check::<ic_hash::Sha256>();
+        check::<ic_hash::Sha384>();
+        check::<ic_hash::Sha512>();
+        check::<ic_hash::Sha512_256>();
+        check::<ic_hash::Sha3_256>();
+        check::<ic_hash::Sha3_512>();
     }
 
     #[test]

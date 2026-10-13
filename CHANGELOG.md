@@ -331,6 +331,39 @@ every caller of a hash function uses.
   ML-KEM helpers. Its first run found Cortex-M0 compiling the new mask
   into a branch; the barriers `compress` already uses removed it, and all
   twenty-six probes pass on all four targets.
+- **RSA-2048 signing is about five times faster, and verification about
+  four.** The private exponentiation uses a fixed four-bit window, a quarter
+  of the multiplications, with the multiplier read from its table by a
+  masked scan of every entry. On x86-64, whole exponentiations at 1024, 1536
+  and 2048 bits run on AVX-512 IFMA in radix 2^52, and single Montgomery
+  products on `MULX`/`ADCX`/`ADOX` assembly, each chosen at run time with the
+  portable path as fallback and reference; `ic_rsa::uint::backend_for` says
+  which runs. `R^2` per key takes a few doublings and about ten squarings
+  instead of 128 doublings a word. CRT and its verify-after-sign check are
+  unchanged, and nothing branches on or indexes by the exponent. Against
+  Graviola 0.4.1 (s2n-bignum) on an AMD Ryzen 9 9900X, `bench graviola`,
+  best of several runs:
+
+  | | before | after | Graviola |
+  |---|---|---|---|
+  | PKCS#1 v1.5 sign | 1290 us | 255 to 300 us | 345 us |
+  | PSS sign | 1688 us | 265 to 300 us | 365 to 400 us |
+  | PKCS#1 v1.5 verify | 33.0 us | 7.5 to 8.5 us | 9 to 10.5 us |
+
+  The machine had other builds running throughout, and Graviola's own figures
+  moved by a third between runs; under the heaviest load the margin on PKCS#1
+  v1.5 signing narrowed to about 1.1 times. The before and after columns were
+  taken minutes apart under the same load. The portable path, used on every
+  other CPU, is about twice as fast as before from the window alone.
+- **SHA-3 is about 10% faster** on x86-64 without an and-not instruction:
+  Keccak-f holds six lanes complemented, so chi needs one NOT a plane instead
+  of five. From 654 to about 690 MiB/s for SHA3-256 over 4 MiB, against
+  Graviola's 690 to 735 -- within noise of parity rather than ahead.
+- **A short HMAC-SHA256 is about 13% faster**: 265 to 230 ns for 200 bytes,
+  measured A/B. `mac` runs its own one-pass path, issuing the outer pad's
+  compression before the message so it overlaps the inner hash, and SHA-256
+  writes its padding into the block buffer instead of a copy. At parity with
+  Graviola, from 1.16 times slower.
 
 ## 0.2.24
 
