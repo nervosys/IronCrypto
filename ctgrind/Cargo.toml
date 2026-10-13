@@ -1,0 +1,25 @@
+[package]
+name = "ic-ctgrind"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Secret-dependence check under Valgrind memcheck, for IronCrypto and Graviola. Not part of the library."
+
+# Outside the workspace, like bench/, so that Graviola never enters the
+# library's dependency graph.
+[workspace]
+
+[dependencies]
+ironcrypto = { path = "../crates/ironcrypto" }
+ic-core = { path = "../crates/ic-core", features = ["std"] }
+ic-mlkem = { path = "../crates/ic-mlkem" }
+ic-mldsa = { path = "../crates/ic-mldsa" }
+ic-rsa = { path = "../crates/ic-rsa" }
+ic-pkix = { path = "../crates/ic-pkix" }
+graviola = "0.4.1"
+
+[profile.release]
+opt-level = 3
+debug = true
+lto = true
+codegen-units = 1
