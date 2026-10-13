@@ -58,7 +58,8 @@ What that leaves:
   before `initialize()` works. Self-tests before first use, and approved mode,
   hold only for services requested through `ic_fips::check` or `guarded`.
 - **What has no error to return cannot refuse.** Hash functions and XOFs
-  (`Sha256::new`, `update`, `finalize`, and BLAKE2 with or without a key);
+  (`Sha256::new`, `update`, `finalize`, and BLAKE2b, BLAKE2s and BLAKE3, with
+  or without a key, BLAKE3's key derivation included);
   KMAC, other than its `verify`; a MAC object's `update` and `finalize`, once
   it exists; and ML-KEM's `keygen_deterministic` and
   `encapsulate_deterministic`. These go on working in the error state.

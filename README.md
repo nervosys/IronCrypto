@@ -393,6 +393,10 @@ The ontology registers algorithms this library does **not** provide, marked
   signatures as legacy use. NIST has announced that it will withdraw SHA-1
   entirely by the end of 2030. A library begun now does not need it for the
   years that remain.
+- **Blowfish, the Salsa20/8 core and HChaCha20** — `excluded` as primitives
+  of their own. Each is implemented only inside something else: Blowfish in
+  bcrypt verification, Salsa20/8 in scrypt and yescrypt, HChaCha20 in
+  XChaCha20-Poly1305. Blowfish's 64-bit block rules it out for data.
 - **RSA encryption** — not offered at all. RSAES-PKCS1-v1_5 is a Bleichenbacher
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.
@@ -442,9 +446,12 @@ measurements remain outstanding.
 
 ### Compiled-code checks
 
-`python scripts/check-ct.py` checks nineteen fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V: **76 probe/target checks**. It rejects branches,
-integer division and calls in the selected core, ML-DSA and ML-KEM operations.
+`python scripts/check-ct.py` checks thirty-five fixed-size probes on x86-64 Linux,
+Cortex-M0, Cortex-M4 and RISC-V. It rejects branches, integer division and calls
+it cannot follow in the selected core, ML-DSA and ML-KEM operations on all four
+targets, and in P-256's field and scalar arithmetic on x86-64: **92 gating
+probe/target checks**. The P-256 probes on the 32-bit targets are reported
+rather than gated, for the reason the linked document gives.
 The full local gate and CI run the checker. These checks cover the compiled
 probes, not whole algorithms, memory-access timing or every caller context;
 [CONSTANT_TIME.md](docs/CONSTANT_TIME.md) gives the rules and limits.
