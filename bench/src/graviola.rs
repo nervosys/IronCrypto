@@ -225,13 +225,31 @@ pub fn run() {
         let mut rng = ironcrypto::drbg::Rng::from_os().unwrap();
         let mut ek = Box::new([0u8; m::ENCAPS_KEY_LEN]);
         let mut dk = Box::new([0u8; m::DECAPS_KEY_LEN]);
-        let k1 = per_op("ironcrypto ml-kem-768 keygen", 2000, 5, || {
+        // IronCrypto's `keygen` runs the FIPS 140-3 pairwise-consistency test
+        // (an encapsulation and a decapsulation) on every key; Graviola's
+        // `generate` has none. So this row is not like for like.
+        let k1 = per_op("ironcrypto ml-kem-768 keygen + pairwise", 2000, 5, || {
             ic_mlkem::MlKem768::keygen(&mut rng, &mut ek, &mut dk).unwrap();
         });
         let k2 = per_op("graviola ml-kem-768 keygen", 2000, 5, || {
             std::hint::black_box(graviola::key_agreement::mlkem768::DecapKey::generate().unwrap());
         });
-        verdict("ml-kem-768 keygen", k1, k2, false);
+        verdict("keygen (ironcrypto with pairwise test)", k1, k2, false);
+
+        // Like for like: key generation alone, from 64 bytes drawn from the
+        // operating system per key, as Graviola's `generate` draws them.
+        let k3 = per_op("ironcrypto ml-kem-768 keygen, no pairwise", 2000, 5, || {
+            let mut seed = [0u8; 64];
+            ic_core::entropy::fill(&mut seed).unwrap();
+            ic_mlkem::MlKem768::keygen_deterministic(
+                seed[..32].try_into().unwrap(),
+                seed[32..].try_into().unwrap(),
+                &mut ek,
+                &mut dk,
+            )
+            .unwrap();
+        });
+        verdict("keygen (like for like, no pairwise test)", k3, k2, false);
 
         let mut ct = Box::new([0u8; m::CIPHERTEXT_LEN]);
         let mut ss = [0u8; 32];
@@ -253,6 +271,30 @@ pub fn run() {
             std::hint::black_box(g_dk.decaps_internal(&g_ct));
         });
         verdict("ml-kem-768 decapsulate", o1, o2, false);
+
+        // The same, with each side's key parsed once outside the loop:
+        // IronCrypto's prepared keys hold A^T, t and H(ek); Graviola's
+        // `EncapKey::from_bytes` holds A^T, and its `DecapKey` is always in
+        // that form. Graviola's `encaps` consumes the key, so it is cloned
+        // per operation, as above. Both encapsulate to the same key bytes.
+        let p_ek = m::PreparedEncapsulationKey::new(&ek).unwrap();
+        let p1 = per_op("ironcrypto ml-kem-768 encaps, prepared", 2000, 5, || {
+            p_ek.encapsulate(&mut rng, &mut ct, &mut ss).unwrap();
+        });
+        let g_parsed = graviola::key_agreement::mlkem768::EncapKey::from_bytes(&ek).unwrap();
+        let p2 = per_op("graviola ml-kem-768 encaps, parsed once", 2000, 5, || {
+            std::hint::black_box(g_parsed.clone().encaps().unwrap());
+        });
+        verdict("ml-kem-768 encapsulate, prepared", p1, p2, false);
+
+        let p_dk = m::PreparedDecapsulationKey::new(&dk).unwrap();
+        let q1 = per_op("ironcrypto ml-kem-768 decaps, prepared", 2000, 5, || {
+            p_dk.decapsulate(&ct, &mut ss).unwrap();
+        });
+        let q2 = per_op("graviola ml-kem-768 decaps", 2000, 5, || {
+            std::hint::black_box(g_dk.decaps_internal(&g_ct));
+        });
+        verdict("ml-kem-768 decapsulate, prepared", q1, q2, false);
     }
 
     // RSA-2048 PKCS#1 v1.5 signing, on one key loaded into both.
