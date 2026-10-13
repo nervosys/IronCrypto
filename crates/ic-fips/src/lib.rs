@@ -175,6 +175,7 @@ pub fn initialize() -> Result<SelfTestReport> {
     }
 
     STATE.store(STATE_TESTING, Ordering::SeqCst);
+    ic_core::module::self_tests_started();
     let report = run_all_self_tests();
 
     if report.failed > 0 {
@@ -185,6 +186,7 @@ pub fn initialize() -> Result<SelfTestReport> {
         ));
     }
 
+    ic_core::module::self_tests_passed();
     STATE.store(STATE_INITIAL, Ordering::SeqCst);
     Ok(report)
 }

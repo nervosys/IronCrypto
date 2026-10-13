@@ -20,6 +20,6 @@ alloc = []
 # `ic_approved_only` leaves out every algorithm FIPS approved mode does not
 # permit; see docs/FIPS.md.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)", "cfg(ic_startup_gate_off)"] }
 
 [dependencies]

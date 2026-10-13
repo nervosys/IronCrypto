@@ -34,19 +34,76 @@
 //!
 //! Parsing and encoding, which use no key, are not gated either.
 //!
-//! Nor does anything here require the self-tests to have run. A primitive
-//! called before `ic_fips::initialize` works; only a module that has failed
-//! refuses. `ic_fips::check` remains the gate for that and for approved
-//! mode.
+//! # Before the self-tests
+//!
+//! In the default build nothing here requires the self-tests to have run: a
+//! primitive called before `ic_fips::initialize` works, and only a module that
+//! has failed refuses. `ic_fips::check` is the gate for that.
+//!
+//! A build with `--cfg ic_approved_only` closes it. There, every operation
+//! that consults [`operational`] also refuses, with
+//! [`ErrorKind::ModuleErrorState`], until `ic_fips::initialize` has run the
+//! known-answer tests and they have passed. FIPS 140-3 asks for the
+//! self-tests before a service is first used, and in that build it no longer
+//! depends on the caller asking for them.
+//!
+//! While the tests run, the primitives they call are let through, since the
+//! tests are made of them. A second thread that calls a primitive in that
+//! window is let through too: nothing below `ic_fips` can tell the two threads
+//! apart without `std`. A program that starts threads before `initialize`
+//! returns should not use the library from them until it does.
+//!
+//! This repository's own test suites are made of primitive calls that do not
+//! go through `ic_fips`, and the crates that hold them cannot depend on it, so
+//! `scripts/approved-only.sh` runs them with `--cfg ic_startup_gate_off` as
+//! well, which turns this gate, and only this gate, off. It is a test switch:
+//! a build with it does not run its self-tests before use. The same script
+//! then runs the tests that show the gate refusing, without it.
 //!
 //! # Cost
 //!
 //! One relaxed load of one byte per operation.
 
 use crate::{Error, ErrorKind, Result};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 static FAILED: AtomicBool = AtomicBool::new(false);
+
+const UNTESTED: u8 = 0;
+const TESTING: u8 = 1;
+const PASSED: u8 = 2;
+
+/// How far the known-answer tests have got. Consulted only in a build with
+/// `--cfg ic_approved_only`; see the module documentation.
+static SELF_TESTS: AtomicU8 = AtomicU8::new(UNTESTED);
+
+/// Whether this build refuses service until the self-tests have passed.
+const STARTUP_GATE: bool = cfg!(all(ic_approved_only, not(ic_startup_gate_off)));
+
+/// Record that the known-answer tests have started.
+///
+/// For `ic_fips::initialize`, which runs them. Until [`self_tests_passed`] is
+/// called the primitives the tests use are let through, so that the tests can
+/// run at all.
+pub fn self_tests_started() {
+    // Only forward: a module that has passed does not go back to testing
+    // when `initialize` is called again.
+    let _ = SELF_TESTS.compare_exchange(UNTESTED, TESTING, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// Record that every known-answer test passed.
+///
+/// For `ic_fips::initialize`. Calling it any other way skips the tests it
+/// stands for; the error state still overrides it.
+pub fn self_tests_passed() {
+    SELF_TESTS.store(PASSED, Ordering::SeqCst);
+}
+
+/// Whether the known-answer tests have passed in this process.
+#[must_use]
+pub fn self_tests_have_passed() -> bool {
+    SELF_TESTS.load(Ordering::SeqCst) == PASSED
+}
 
 /// Put the module into its error state.
 ///
@@ -84,7 +141,8 @@ pub fn in_error_state() -> bool {
     FAILED.load(Ordering::Relaxed)
 }
 
-/// `Ok(())` unless the module is in its error state.
+/// `Ok(())` unless the module is in its error state -- or, in a build with
+/// `--cfg ic_approved_only`, has not yet passed its self-tests.
 ///
 /// The first line of every operation that can refuse:
 ///
@@ -94,6 +152,7 @@ pub fn in_error_state() -> bool {
 ///     // ...
 ///     Ok(())
 /// }
+/// # ic_core::module::self_tests_passed(); // what ic_fips::initialize records
 /// # service().unwrap();
 /// ```
 #[inline]
@@ -102,6 +161,12 @@ pub fn operational() -> Result<()> {
         return Err(Error::new(
             ErrorKind::ModuleErrorState,
             "module in error state",
+        ));
+    }
+    if STARTUP_GATE && SELF_TESTS.load(Ordering::Relaxed) == UNTESTED {
+        return Err(Error::new(
+            ErrorKind::ModuleErrorState,
+            "self-tests have not run; call ic_fips::initialize() first",
         ));
     }
     Ok(())

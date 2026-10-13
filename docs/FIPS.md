@@ -54,12 +54,13 @@ made before the failure is refused the same way.
 
 What that leaves:
 
-- **Nothing makes a direct caller run the self-tests.** A primitive called
-  before `initialize()` works. Self-tests before first use, and approved mode,
-  hold only for services requested through `ic_fips::check` or `guarded` --
-  except that a build with `--cfg ic_approved_only` (below) does not contain
-  the algorithms approved mode refuses, so for those it holds however they
-  would have been called.
+- **In the default build, nothing makes a direct caller run the
+  self-tests.** A primitive called before `initialize()` works. Self-tests
+  before first use, and approved mode, hold only for services requested
+  through `ic_fips::check` or `guarded`. A build with `--cfg ic_approved_only`
+  (below) closes both: it does not contain the algorithms approved mode
+  refuses, and every operation that can refuse does so until `initialize()`
+  has passed the known-answer tests.
 - **What has no error to return cannot refuse.** Hash functions and XOFs
   (`Sha256::new`, `update`, `finalize`, and BLAKE2b, BLAKE2s and BLAKE3, with
   or without a key, BLAKE3's key derivation included);
@@ -152,6 +153,20 @@ rustdocflags = ["--cfg", "ic_approved_only"]
   approved.
 - **`ic_fips::check`** refuses those algorithms with `NotApprovedInFipsMode`,
   the reason, rather than `Unsupported`.
+- **Self-tests before first use, whoever the caller.** Every operation that
+  can refuse returns `ModuleErrorState` until `ic_fips::initialize()` has run
+  the known-answer tests and they have passed, so a primitive called directly
+  cannot run untested. The gate lives in `ic_core::module`, which every
+  primitive already consults for the error state. While the tests run, the
+  primitives they call are let through, and without `std` a second thread
+  calling in that window cannot be told apart from the tests and is let
+  through too; start threads that use the library after `initialize`
+  returns. `crates/ic-fips/tests/startup_gate.rs` shows the refusal, and
+  fails if the gate is removed. The repository's own suites call primitives
+  from crates that cannot depend on `ic-fips`, so `scripts/approved-only.sh`
+  runs them with a second cfg, `ic_startup_gate_off`, which turns off this
+  gate and nothing else, and then runs `startup_gate.rs` without it. That
+  cfg is a test switch: a build with it does not test before use.
 - **What arrives as data cannot be refused at compile time.** An Ed25519 public
   key in a certificate, or an Ed25519 private key handed to `ic_sig`'s signer
   or to `ic_rustls`'s key provider, is refused with `NotApprovedInFipsMode` at
@@ -397,11 +412,10 @@ In rough order of effort:
 5. **Laboratory testing and CMVP submission** against a specific binary on
    specific operational environments.
 6. **An enforced module boundary.** The error state now reaches every
-   operation that can report an error, however it is called, and a build
-   with `--cfg ic_approved_only` contains no algorithm approved mode refuses.
-   The self-tests before first use still gate only services requested through
-   `ic_fips::check` or `guarded`, and what cannot report an error -- hashing
-   above all -- cannot refuse at all. Validation needs every service behind
+   operation that can report an error, however it is called. A build with
+   `--cfg ic_approved_only` contains no algorithm approved mode refuses, and
+   refuses every such operation until the self-tests have passed. What cannot
+   report an error -- hashing above all -- cannot refuse at all. Validation needs every service behind
    one gate, which means constructors that can fail.
 7. **Continuous health tests on the DRBGs** and pairwise-consistency tests on
    every generated key pair. ML-KEM, ML-DSA and RSA key generation check their

@@ -112,8 +112,9 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
             present: cfg!(ic_approved_only),
             note: "Built with --cfg ic_approved_only: every algorithm FIPS 140-3 approved \
                    mode does not permit is left out of the build, so a call to one does not \
-                   compile, its ontology entry reports excluded, and the module comes up in \
-                   approved mode and cannot leave it. Without it, approved mode is a \
+                   compile, its ontology entry reports excluded, the module comes up in \
+                   approved mode and cannot leave it, and nothing that can refuse runs until \
+                   ic_fips::initialize has passed the self-tests. Without it, approved mode is a \
                    policy that ic_fips::check and ic_fips::guarded enforce at run time, and a \
                    direct call to a non-approved algorithm is not refused. Neither makes the \
                    module validated.",

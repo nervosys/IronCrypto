@@ -18,7 +18,9 @@ all of them.
   HPKE. Their ontology entries report `excluded`, `recommend` answers every
   policy as a FIPS one, the CAST table drops to 64 with its own integrity tag,
   the module comes up in approved mode and refuses to leave it, and
-  `ic_fips::check` gives the reason as `NotApprovedInFipsMode`. An Ed25519 key,
+  `ic_fips::check` gives the reason as `NotApprovedInFipsMode`. Every
+  operation that can refuse does so until `ic_fips::initialize` has passed
+  the self-tests, so a direct call can no longer run untested. An Ed25519 key,
   which arrives as data, is refused at run time by `ic_sig` and `ic_rustls`,
   whose provider offers only AES-GCM, P-256 and P-384, ECDSA and RSA. A cfg
   rather than a Cargo feature: removing API is not additive, and a feature any

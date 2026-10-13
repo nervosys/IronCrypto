@@ -610,8 +610,9 @@ leaves the rest out. `ic_fips::check` and `guarded` refuse a non-approved
 algorithm in approved mode; a direct call to one is not refused. Build with
 `--cfg ic_approved_only` (in `RUSTFLAGS` and `RUSTDOCFLAGS`) and every
 algorithm approved mode does not permit is left out of the build, so a call to
-one does not compile, the ontology reports it `excluded`, and the module comes
-up in approved mode and cannot leave it. An Ed25519 key, which arrives as data,
+one does not compile, the ontology reports it `excluded`, the module comes up
+in approved mode and cannot leave it, and nothing that can refuse runs before
+`ic_fips::initialize` has passed the self-tests. An Ed25519 key, which arrives as data,
 is refused at run time. [FIPS.md](docs/FIPS.md#a-build-with-only-the-approved-algorithms)
 lists what goes. It is still not a validated module.
 

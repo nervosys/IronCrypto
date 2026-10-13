@@ -82,7 +82,8 @@
 //! of the build, so code that calls one does not compile; its ontology entry
 //! reports `excluded` and [`recommend`] answers every policy as a FIPS one;
 //! [`ic_fips::initialize`] brings the module up in approved mode, and it cannot
-//! leave. An Ed25519 key, which arrives as data and so cannot be refused at
+//! leave; and until it has run and passed the self-tests, every operation
+//! that can refuse does, however it is called. An Ed25519 key, which arrives as data and so cannot be refused at
 //! compile time, is refused by `ic_sig` and `ic_rustls` with
 //! [`ErrorKind::NotApprovedInFipsMode`](ic_core::ErrorKind::NotApprovedInFipsMode).
 //! None of this makes the module validated.
