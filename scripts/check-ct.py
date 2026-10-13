@@ -63,6 +63,9 @@ X86_ONLY = (
     "ct_p384_fp_mul_adx", "ct_p384_fp_sqr_adx", "ct_p384_fn_mul_adx",
     "ct_p384_point_double_adx", "ct_p384_point_add_adx",
     "ct_p384_point_add_affine_adx", "ct_p384_fp_invert",
+    # ChaCha20's sixteen-block AVX-512 keystream group, and Poly1305's
+    # four-lane AVX2 step and final lane folding, under the key's r and s.
+    "ct_chacha20_zmm_group", "ct_poly1305_avx2_step", "ct_poly1305_avx2_finish",
 )
 SYMBOLS += X86_ONLY
 

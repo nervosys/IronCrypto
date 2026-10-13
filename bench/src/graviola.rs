@@ -3,6 +3,7 @@
 //! ```text
 //! cargo run --release -- graviola
 //! cargo run --release -- graviola-p384   # the P-384 rows alone
+//! cargo run --release -- graviola-chacha # ChaCha20-Poly1305, split in halves
 //! ```
 //!
 //! Graviola runs only on x86-64 with AES, AVX2, ADX, BMI2 and PCLMULQDQ, or on
@@ -386,4 +387,56 @@ pub fn p384() {
             .unwrap();
     });
     verdict("ecdsa p-384 verify", f3, f4, false);
+}
+
+/// The ChaCha20-Poly1305 rows alone, with the AEAD split into its halves.
+///
+/// ```text
+/// cargo run --release -- graviola-chacha
+/// ```
+///
+/// The split says which half limits the AEAD: the keystream alone and
+/// Poly1305 alone. The two back to back, against the AEAD, leave what the
+/// AEAD adds per message: the Poly1305 key block and the padding.
+pub fn chacha() {
+    println!();
+    println!("IronCrypto vs Graviola 0.4.1, ChaCha20-Poly1305 — best of {REPEATS}");
+    let key = [0x2au8; 32];
+    let nonce = [0x24u8; 12];
+    let mut data = vec![0u8; SIZE];
+    let mut tag = [0u8; 16];
+    for (label, size) in [("4 MiB", SIZE), ("1 KiB", 1024), ("64 B", 64)] {
+        println!();
+        println!("{label} messages");
+        let reps = SIZE / size;
+        let ic = ironcrypto::cipher::ChaCha20Poly1305::new(&key).unwrap();
+        let c1 = bulk("ironcrypto chacha20-poly1305", SIZE, REPEATS, || {
+            for chunk in data.chunks_mut(size).take(reps) {
+                ic.seal_detached(&nonce, b"", chunk, &mut tag).unwrap();
+            }
+        });
+        let g = graviola::aead::ChaCha20Poly1305::new(key);
+        let c2 = bulk("graviola chacha20-poly1305", SIZE, REPEATS, || {
+            for chunk in data.chunks_mut(size).take(reps) {
+                g.encrypt(&nonce, b"", chunk, &mut tag);
+            }
+        });
+        verdict(&format!("chacha20-poly1305, {label}"), c1, c2, true);
+        bulk("  ironcrypto chacha20 keystream only", SIZE, REPEATS, || {
+            for chunk in data.chunks_mut(size).take(reps) {
+                ic_cipher::chacha20_xor(&key, &nonce, 1, chunk).unwrap();
+            }
+        });
+        bulk("  ironcrypto poly1305 only", SIZE, REPEATS, || {
+            for chunk in data.chunks(size).take(reps) {
+                std::hint::black_box(<ic_cipher::Poly1305 as Mac>::mac(&key, chunk).unwrap());
+            }
+        });
+        bulk("  ironcrypto both halves, back to back", SIZE, REPEATS, || {
+            for chunk in data.chunks_mut(size).take(reps) {
+                ic_cipher::chacha20_xor(&key, &nonce, 1, chunk).unwrap();
+                std::hint::black_box(<ic_cipher::Poly1305 as Mac>::mac(&key, chunk).unwrap());
+            }
+        });
+    }
 }

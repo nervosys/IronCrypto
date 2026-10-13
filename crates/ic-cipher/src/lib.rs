@@ -66,6 +66,11 @@ pub mod chacha;
 // The carry-less multiply instruction.
 #[allow(unsafe_code)]
 mod clmul;
+// The x86-64 ChaCha20 and Poly1305 kernels, for scripts/ct-audit.
+#[cfg(all(feature = "ct-probes", not(ic_approved_only)))]
+#[allow(unsafe_code, missing_docs)]
+#[doc(hidden)]
+pub mod ct_probes;
 // GHASH via CLMUL when the CPU has it.
 #[allow(unsafe_code)]
 pub mod gcm;

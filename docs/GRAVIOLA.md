@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, P-384 ECDH | ChaCha20-Poly1305 on long messages (see below) |
+| Speed, x86-64 | AES-GCM, ChaCha20-Poly1305 from 1 KiB, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, P-384 ECDH, ChaCha20-Poly1305 on 64 B | |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's accelerated paths are not yet checked by either tool here |
@@ -39,8 +39,9 @@ and a ratio inside that as parity.
 |---|---|---|---|
 | AES-256-GCM seal, 4 MiB | 25.4 GB/s | 17.4 GB/s | 13957 / 12650 MiB/s |
 | AES-256-GCM seal, 64 B | 1.15 GB/s | 0.82 GB/s | 813 / 679 MiB/s |
-| ChaCha20-Poly1305 seal, 4 MiB | -- | -- | 944 / 1382 MiB/s |
-| ChaCha20-Poly1305 seal, 64 B | -- | -- | 162 / 104 MiB/s |
+| ChaCha20-Poly1305 seal, 4 MiB | 2426-3523 MiB/s, loaded | 955-1132 MiB/s, loaded | 2.54-3.68 in the same runs |
+| ChaCha20-Poly1305 seal, 1 KiB | 1724-2229 MiB/s, loaded | 662-1055 MiB/s, loaded | 2.07-2.65 in the same runs |
+| ChaCha20-Poly1305 seal, 64 B | 147-166 MiB/s, loaded | 113-137 MiB/s, loaded | 1.07-1.47 in the same runs |
 | SHA-256, 4 MiB | -- | -- | 2187 / 2275 MiB/s |
 | SHA-512, 4 MiB | -- | -- | 669 / 507 MiB/s |
 | SHA3-256, 4 MiB | 690 MiB/s | 690-735 MiB/s | 594 / 445 MiB/s |
@@ -74,10 +75,15 @@ Where it is not ahead:
   timed loop, where `EcdhP384::agree` takes SEC1 bytes and decodes,
   validates and builds its window inside every call, about 3.5 us of its
   time.
-- **ChaCha20-Poly1305** was ahead in an earlier run and is behind on 1 KiB
-  and 4 MiB messages in the latest, by 1.25 and 1.46 times; on 64-byte
-  messages it is ahead by 1.57. Until a quiet A/B separates load from code,
-  treat long-message ChaCha20-Poly1305 as behind.
+- **ChaCha20-Poly1305 on 64-byte messages** is level, not ahead: 1.07 to
+  1.47 times Graviola's rate across five rounds on a loaded machine, a
+  range that includes parity. One block of keystream and four of Poly1305
+  are too short for the vector kernels, so this is the portable code. On 1
+  KiB and 4 MiB messages it is ahead, by 2.1 to 3.7 times, since ChaCha20
+  runs sixteen blocks at a time on AVX-512 and Poly1305 four lanes on AVX2
+  (CHANGELOG.md has the A/B). Before that it was 0.8 to 1.5 times
+  Graviola's rate under the same load: parity, which an earlier single run
+  had read as behind.
 - **P-256 ECDH** led by under four percent controlled and trailed by sixteen
   in the latest run: parity, not a lead.
 - **aarch64** has an AES backend here and nothing else; every other
@@ -85,7 +91,8 @@ Where it is not ahead:
   requires the `aes`, `sha2`, `pmull` and `neon` features there. Nothing was
   measured on aarch64.
 - **CPUs without AVX-512.** Several of the leads above (X25519, the AES-GCM
-  wide kernels, RSA's exponentiation) come from AVX-512 or IFMA paths. On a
+  wide kernels, RSA's exponentiation, the ChaCha20 keystream) come from
+  AVX-512 or IFMA paths. On a
   CPU with only AVX2, BMI2 and ADX the MULX/ADX paths run instead; those
   have not been measured against Graviola on such a CPU, and the leads
   should be expected to narrow.

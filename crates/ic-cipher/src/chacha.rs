@@ -102,24 +102,75 @@ fn chacha20_block(key: &[u8; 32], counter: u32, nonce: &[u8; 12], out: &mut [u8;
     state.zeroize();
 }
 
-// Eight-way ChaCha20. `std` only, because the detection needs it.
+// The x86-64 backends, selected by `std`'s run-time detection. The AVX-512
+// keystream and the AVX2 Poly1305 are also compiled for `ct-probes`, whose
+// harness reads them.
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 mod avx2;
+#[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
+pub(crate) mod poly_avx2;
+#[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
+pub(crate) mod zmm;
 
-/// Whether this CPU has AVX2. Asked once; see the SHA-256 dispatch for why.
+/// Ask once per process whether every feature named is present, and cache
+/// the answer; see the SHA-256 dispatch for why.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+macro_rules! cached_detect {
+    ($($f:tt),+) => {{
+        use core::sync::atomic::{AtomicU8, Ordering};
+        static CACHED: AtomicU8 = AtomicU8::new(0);
+        match CACHED.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let have = true $(&& std::is_x86_feature_detected!($f))+;
+                CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+                have
+            }
+        }
+    }};
+}
+
+/// Whether this CPU has AVX2.
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 fn avx2() -> bool {
-    use core::sync::atomic::{AtomicU8, Ordering};
-    static CACHED: AtomicU8 = AtomicU8::new(0);
-    match CACHED.load(Ordering::Relaxed) {
-        1 => true,
-        2 => false,
-        _ => {
-            let have = std::is_x86_feature_detected!("avx2");
-            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
-            have
+    cached_detect!("avx2")
+}
+
+/// Whether this CPU has AVX-512F, which the sixteen-block kernel needs. `std`'s
+/// detection also confirms that the OS saves the `zmm` state.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn zmm_available() -> bool {
+    cached_detect!("avx512f")
+}
+
+/// Which keystream kernel runs the bulk of a message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backend {
+    /// One block at a time, everywhere.
+    Portable,
+    /// Eight blocks at a time on AVX2, then the portable path.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    Avx2,
+    /// Sixteen blocks at a time on AVX-512F, then AVX2, then portable.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    Zmm,
+}
+
+/// The fastest kernel this CPU has.
+fn best_backend() -> Backend {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        if zmm_available() && avx2() {
+            return Backend::Zmm;
+        }
+        if avx2() {
+            return Backend::Avx2;
         }
     }
+    Backend::Portable
 }
 
 /// XOR `data` with the ChaCha20 keystream, starting at `counter`.
@@ -139,48 +190,76 @@ pub fn chacha20_xor(key: &[u8], nonce: &[u8], counter: u32, data: &mut [u8]) -> 
     k.copy_from_slice(key);
     let mut n = [0u8; 12];
     n.copy_from_slice(nonce);
+    let result = xor_keystream(best_backend(), &k, &n, counter, data);
+    k.zeroize();
+    result
+}
 
-    // Eight blocks at a time where the CPU can. The tail, and every target
-    // without AVX2, falls through to the block-at-a-time path below.
+/// The keystream XOR behind [`chacha20_xor`] and the AEAD, on `backend`.
+///
+/// Refuses, before touching `data`, a message whose blocks would run the
+/// 32-bit counter past its last value. The wide kernels rely on that: they
+/// step the counter sixteen or eight blocks at a time and must not step over
+/// the boundary. (They used to be guarded by a check made in 64 bits that
+/// could never fail, so a message crossing the boundary wrapped the counter
+/// in the AVX2 path and reused keystream, where the portable path stopped
+/// with an error halfway through. Now every path refuses the whole message.)
+fn xor_keystream(
+    backend: Backend,
+    k: &[u8; 32],
+    n: &[u8; 12],
+    counter: u32,
+    data: &mut [u8],
+) -> Result<()> {
+    let blocks = (data.len() as u64).div_ceil(64);
+    ensure!(
+        u64::from(counter) + blocks <= 1 << 32,
+        CounterExhausted,
+        "chacha20 block counter"
+    );
+    let _ = backend;
+    #[allow(unused_mut)]
+    let (mut data, mut counter) = (data, counter);
+
+    // Sixteen blocks at a time where the CPU has AVX-512F.
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
-    let mut done = 0usize;
-    #[cfg(all(target_arch = "x86_64", feature = "std"))]
-    if avx2() {
-        let groups = data.len() / avx2::STRIDE;
-        // The counter must not wrap silently. The scalar path below reports
-        // exhaustion; this has to reach the same conclusion before it starts,
-        // because it advances eight at a time and would otherwise step over the
-        // boundary rather than land on it.
-        let needed = (groups as u64) * (avx2::LANES as u64);
-        if (counter as u64).checked_add(needed).is_some() {
-            for g in 0..groups {
-                let ctr = counter.wrapping_add((g * avx2::LANES) as u32);
-                let at = g * avx2::STRIDE;
-                // SAFETY: `avx2()` confirmed the feature, and the slice is
-                // exactly STRIDE bytes by construction.
-                unsafe { avx2::eight_blocks(&k, &n, ctr, &mut data[at..at + avx2::STRIDE]) };
+    if backend == Backend::Zmm && data.len() >= zmm::STRIDE {
+        let mut start = zmm::Start::new(k, n, counter);
+        let mut groups = data.chunks_exact_mut(zmm::STRIDE);
+        for group in &mut groups {
+            if let Ok(group) = <&mut [u8; zmm::STRIDE]>::try_from(group) {
+                // SAFETY: `Backend::Zmm` is chosen only where
+                // `zmm_available()` confirmed AVX-512F.
+                unsafe { zmm::group(&start, group) };
             }
-            done = groups * avx2::STRIDE;
+            counter = counter.wrapping_add(zmm::LANES as u32);
+            start.set_counter(counter);
         }
+        data = groups.into_remainder();
     }
-    #[cfg(all(target_arch = "x86_64", feature = "std"))]
-    let (data, counter) = {
-        let advanced = counter.wrapping_add((done / 64) as u32);
-        (&mut data[done..], advanced)
-    };
 
+    // Eight at a time on AVX2: the whole message there, the tail here.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if backend != Backend::Portable {
+        let mut groups = data.chunks_exact_mut(avx2::STRIDE);
+        for group in &mut groups {
+            // SAFETY: both wide backends are chosen only where `avx2()`
+            // confirmed AVX2, and the slice is exactly STRIDE bytes.
+            unsafe { avx2::eight_blocks(k, n, counter, group) };
+            counter = counter.wrapping_add(avx2::LANES as u32);
+        }
+        data = groups.into_remainder();
+    }
+
+    // What is left one block at a time; on the portable backend, all of it.
     let mut block = [0u8; 64];
     for (i, chunk) in data.chunks_mut(64).enumerate() {
-        let ctr = counter
-            .checked_add(i as u32)
-            .ok_or(ic_core::err!(CounterExhausted, "chacha20 block counter"))?;
-        chacha20_block(&k, ctr, &n, &mut block);
+        chacha20_block(k, counter.wrapping_add(i as u32), n, &mut block);
         for (d, b) in chunk.iter_mut().zip(block.iter()) {
             *d ^= b;
         }
     }
     block.zeroize();
-    k.zeroize();
     Ok(())
 }
 
@@ -297,6 +376,12 @@ impl Poly1305 {
         self.acc = reduce(d);
     }
 }
+
+/// The shortest input `update` hands to the AVX2 Poly1305: below two groups
+/// the lanes' final multiplication by distinct powers costs as much as it
+/// saves.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+const POLY_AVX2_MIN: usize = 128;
 
 /// `[5*r1, 5*r2, 5*r3, 5*r4]`, the companion the reduction folds in.
 fn five_times(r: [u32; 5]) -> [u32; 4] {
@@ -419,6 +504,15 @@ impl Mac for Poly1305 {
             let block = self.buf;
             self.absorb_block(&block);
             self.buffered = 0;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if data.len() >= POLY_AVX2_MIN && avx2() {
+            let whole = data.len() & !63;
+            // SAFETY: `avx2()` confirmed AVX2; `whole` is a nonzero multiple
+            // of 64.
+            let d = unsafe { poly_avx2::absorb(&self.acc, &self.r, &self.powers, &data[..whole]) };
+            self.acc = reduce(d);
+            data = &data[whole..];
         }
         while data.len() >= 64 {
             self.absorb4(&data[..64]);
@@ -546,6 +640,12 @@ impl ChaCha20Poly1305 {
     }
 
     /// Compute the AEAD tag over `aad || pad || ciphertext || pad || lengths`.
+    ///
+    /// Two passes over the message, the keystream and then this, rather than
+    /// one pass of cache-sized pieces. Both were measured, at 4 MiB and at
+    /// 256 MiB, and the single pass was not distinguishably faster on Zen 5;
+    /// and opening in one pass would have to decrypt before the tag is
+    /// checked.
     fn tag(&self, nonce: &[u8], aad: &[u8], ciphertext: &[u8]) -> Result<[u8; 16]> {
         let mut poly_key = self.poly_key(nonce)?;
         let mut m = Poly1305::new(&poly_key)?;
@@ -794,27 +894,39 @@ mod tests {
     /// Lengths straddle the stride in both directions, including several whole
     /// groups plus a tail, because the dispatch splits there and an off-by-one
     /// in the split is the likely error rather than a wrong round function.
+    ///
+    /// The same holds for the sixteen-block AVX-512 kernel, whose stride is
+    /// 1024, and for both together: on that backend a message is cut into
+    /// sixteen-block groups, then eight-block ones, then single blocks. So
+    /// every length from 0 to 2100 is run -- each split, each tail -- on
+    /// every backend this CPU has, at several counters, from an unaligned
+    /// start, with data that is not all zeros.
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
     #[test]
-    fn the_avx2_keystream_matches_the_block_function() {
-        if !avx2() {
-            println!("no AVX2 on this CPU; the backend was not exercised");
-            return;
+    fn the_wide_keystreams_match_the_block_function() {
+        let mut backends = std::vec![Backend::Portable];
+        if avx2() {
+            backends.push(Backend::Avx2);
+        }
+        if zmm_available() && avx2() {
+            backends.push(Backend::Zmm);
+        }
+        if backends.len() < 3 {
+            println!("only {backends:?} on this CPU; the others were not exercised");
         }
 
-        let key = [0x5au8; 32];
-        let nonce = [0x21u8; 12];
+        let key: [u8; 32] = core::array::from_fn(|i| 0x5a ^ (i as u8).wrapping_mul(37));
+        let nonce: [u8; 12] = core::array::from_fn(|i| 0x21 + i as u8);
+        let data: std::vec::Vec<u8> = (0..2101 + 3)
+            .map(|i| ((i as u32).wrapping_mul(0x9e37_79b9) >> 13) as u8)
+            .collect();
 
         let mut checked = 0;
-        for len in [
-            0usize, 1, 63, 64, 65, 127, 511, 512, 513, 575, 576, 1023, 1024, 1025, 4096, 4097,
-        ] {
-            for counter in [0u32, 1, 7, 8, 9, 1000] {
-                let mut actual = std::vec![0u8; len];
-                chacha20_xor(&key, &nonce, counter, &mut actual).unwrap();
-
-                // The reference: one block at a time, no grouping.
-                let mut expect = std::vec![0u8; len];
+        for &backend in &backends {
+            for counter in [0u32, 1, 15, 16, 17, 1000] {
+                // The reference: one block at a time, no grouping, once for
+                // the longest length; every shorter one is a prefix of it.
+                let mut expect = data[3..].to_vec();
                 let mut block = [0u8; 64];
                 for (i, chunk) in expect.chunks_mut(64).enumerate() {
                     chacha20_block(&key, counter + i as u32, &nonce, &mut block);
@@ -822,24 +934,88 @@ mod tests {
                         *d ^= b;
                     }
                 }
-
-                assert_eq!(
-                    actual, expect,
-                    "AVX2 and scalar keystreams differ at {len} bytes, counter {counter}"
-                );
-                checked += 1;
+                for len in 0..=2100usize {
+                    // Three bytes in, so no kernel sees an aligned buffer.
+                    let mut buf = data.clone();
+                    let region = &mut buf[3..3 + len];
+                    xor_keystream(backend, &key, &nonce, counter, region).unwrap();
+                    assert_eq!(
+                        &buf[3..3 + len],
+                        &expect[..len],
+                        "{backend:?} and the block function differ at {len} bytes, counter {counter}"
+                    );
+                    assert_eq!(buf[..3], data[..3], "{backend:?} wrote before the buffer");
+                    assert_eq!(
+                        buf[3 + len..],
+                        data[3 + len..],
+                        "{backend:?} wrote past the buffer"
+                    );
+                    checked += 1;
+                }
             }
         }
-        assert_eq!(checked, 16 * 6, "the comparison did not run");
+        assert_eq!(
+            checked,
+            backends.len() * 6 * 2101,
+            "the comparison did not run"
+        );
+
+        // And the public entry point, which picks the best backend itself,
+        // at lengths well past one group.
+        for len in [65536usize, 65536 + 1000, 200_000] {
+            let mut actual = std::vec![0u8; len];
+            chacha20_xor(&key, &nonce, 7, &mut actual).unwrap();
+            let mut expect = std::vec![0u8; len];
+            xor_keystream(Backend::Portable, &key, &nonce, 7, &mut expect).unwrap();
+            assert!(actual == expect, "chacha20_xor differs at {len} bytes");
+        }
+    }
+
+    /// The counter is 32 bits and must not wrap: a message whose blocks would
+    /// run past the last counter is refused whole, on every backend, before
+    /// anything is written; one that ends on the last counter is accepted.
+    #[test]
+    fn the_counter_is_refused_before_it_wraps() {
+        let key = [3u8; 32];
+        let nonce = [4u8; 12];
+        let mut backends = std::vec![Backend::Portable];
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        {
+            if avx2() {
+                backends.push(Backend::Avx2);
+            }
+            if zmm_available() && avx2() {
+                backends.push(Backend::Zmm);
+            }
+        }
+        for backend in backends {
+            for (counter, len) in [(u32::MAX, 65), (u32::MAX - 3, 1024), (u32::MAX - 15, 1025)] {
+                let mut buf = std::vec![0u8; len];
+                let err = xor_keystream(backend, &key, &nonce, counter, &mut buf).unwrap_err();
+                assert_eq!(err.kind(), ic_core::ErrorKind::CounterExhausted);
+                assert!(
+                    buf.iter().all(|&b| b == 0),
+                    "{backend:?} wrote before refusing"
+                );
+            }
+            // Ending exactly on the last counter is allowed, and the last
+            // block is the block function's at u32::MAX.
+            let mut buf = std::vec![0u8; 1024];
+            xor_keystream(backend, &key, &nonce, u32::MAX - 15, &mut buf).unwrap();
+            let mut last = [0u8; 64];
+            chacha20_block(&key, u32::MAX, &nonce, &mut last);
+            assert_eq!(buf[960..], last[..], "{backend:?}");
+        }
     }
 
     /// Say which path this build will take.
-    #[cfg(all(target_arch = "x86_64", feature = "std"))]
     #[test]
     fn the_active_chacha_path_is_reported() {
+        println!("chacha20 backend: {:?}", best_backend());
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
         println!(
-            "chacha20 backend: {}",
-            if avx2() { "AVX2 (8 blocks)" } else { "scalar" }
+            "poly1305: {}",
+            if avx2() { "AVX2 (4 lanes)" } else { "scalar" }
         );
     }
     use ic_core::codec::{hex, unhex};
@@ -1033,6 +1209,114 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 20, "the comparison did not run");
+    }
+
+    /// The AVX2 Poly1305 must agree with the one-block-at-a-time path.
+    ///
+    /// `update` hands it every whole 64-byte group of an input of 128 bytes
+    /// or more, so this runs every length from 0 to 600 and some far longer,
+    /// in one call and split where the buffering, the vector path and the
+    /// scalar tail meet, under the largest clamped `r` and ordinary keys, on
+    /// message bytes that are all `0xff` -- the largest limbs, where a carry
+    /// dropped or held too narrow shows -- and on mixed ones.
+    #[test]
+    fn the_avx2_poly1305_agrees_with_the_serial_one() {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if !avx2() {
+            println!("no AVX2 on this CPU; the vector path was not exercised");
+        }
+        let mut largest = [0xffu8; 32];
+        largest[..16].copy_from_slice(&[
+            0xff, 0xff, 0xff, 0x0f, 0xfc, 0xff, 0xff, 0x0f, 0xfc, 0xff, 0xff, 0x0f, 0xfc, 0xff,
+            0xff, 0x0f,
+        ]);
+        let ordinary: [u8; 32] = core::array::from_fn(|i| (i as u8).wrapping_mul(0x9d) ^ 0x3b);
+        let mixed: Vec<u8> = (0..70_000u32)
+            .map(|i| (i.wrapping_mul(0x9e37_79b9) >> 11) as u8)
+            .collect();
+        let ones = vec![0xffu8; 70_000];
+
+        let serial = |key: &[u8; 32], data: &[u8]| {
+            let mut m = Poly1305::new(key).unwrap();
+            for chunk in data.chunks(16) {
+                m.absorb_block(chunk);
+            }
+            m.finalize()
+        };
+
+        let mut lengths: Vec<usize> = (0..=600).collect();
+        lengths.extend([1023, 1024, 1025, 4096, 16_383, 16_384, 16_385, 69_999]);
+        let mut checked = 0;
+        for key in [&largest, &ordinary] {
+            for source in [&ones, &mixed] {
+                for &len in &lengths {
+                    let data = &source[..len];
+                    let want = serial(key, data);
+                    assert_eq!(Poly1305::mac(key, data).unwrap(), want, "{len} bytes");
+                    // Split so that a buffered partial block, a vector run
+                    // and a scalar tail all occur in one tag.
+                    for split in [1usize, 15, 17, 64, 129] {
+                        if split > len {
+                            continue;
+                        }
+                        let mut m = Poly1305::new(key).unwrap();
+                        m.update(&data[..split]);
+                        m.update(&data[split..]);
+                        assert_eq!(m.finalize(), want, "{len} bytes split at {split}");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 2 * 2 * lengths.len(), "the comparison did not run");
+    }
+
+    /// The AEAD, on whichever kernels this CPU selects, must give what the
+    /// portable forms give: the one-block keystream over the message and then
+    /// the one-block Poly1305 over the ciphertext. Every length from 0 to 600
+    /// and some far longer, with and without associated data, sealed and
+    /// opened, from unaligned buffers.
+    #[test]
+    fn the_aead_matches_the_portable_forms() {
+        let key: [u8; 32] = core::array::from_fn(|i| 0x80 + i as u8);
+        let nonce: [u8; 12] = core::array::from_fn(|i| 0x40 + i as u8);
+        let c = ChaCha20Poly1305::new(&key).unwrap();
+        let reference = |aad: &[u8], pt: &[u8]| {
+            let mut ct = pt.to_vec();
+            xor_keystream(Backend::Portable, &key, &nonce, 1, &mut ct).unwrap();
+            let mut block = [0u8; 64];
+            chacha20_block(&key, 0, &nonce, &mut block);
+            let mut m = Poly1305::new(&block[..32]).unwrap();
+            let mut mac_input = aad.to_vec();
+            mac_input.resize(aad.len().div_ceil(16) * 16, 0);
+            mac_input.extend_from_slice(&ct);
+            mac_input.resize(mac_input.len().div_ceil(16) * 16, 0);
+            mac_input.extend_from_slice(&(aad.len() as u64).to_le_bytes());
+            mac_input.extend_from_slice(&(ct.len() as u64).to_le_bytes());
+            for chunk in mac_input.chunks(16) {
+                m.absorb_block(chunk);
+            }
+            (ct, m.finalize())
+        };
+        let source: Vec<u8> = (0..70_000u32)
+            .map(|i| (i.wrapping_mul(0x2545_f491) >> 7) as u8)
+            .collect();
+        let mut lengths: Vec<usize> = (0..=600).collect();
+        lengths.extend([1024, 16_383, 16_384, 16_385, 32_768 + 1000, 69_000]);
+        for aad in [&b""[..], &b"0123456789abcdefXYZ"[..]] {
+            for &len in &lengths {
+                let pt = &source[1..1 + len];
+                let (want_ct, want_tag) = reference(aad, pt);
+                let mut buf = source[..1 + len].to_vec();
+                let mut tag = [0u8; 16];
+                c.seal_detached(&nonce, aad, &mut buf[1..], &mut tag)
+                    .unwrap();
+                assert!(buf[1..] == want_ct[..], "ciphertext at {len} bytes");
+                assert_eq!(tag, want_tag, "tag at {len} bytes");
+                c.open_detached(&nonce, aad, &mut buf[1..], &tag).unwrap();
+                assert!(&buf[1..] == pt, "round trip at {len} bytes");
+            }
+        }
     }
 
     /// `r^2`, `r^3` and `r^4` must be powers of `r`.

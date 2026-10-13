@@ -25,6 +25,9 @@ std = ["ic-core/std"]
 # the decryption key schedule being wrong. It becomes the default once the
 # arm64 job has actually passed.
 aarch64-crypto = []
+# Exposes `ct_probes`: the x86-64 ChaCha20 and Poly1305 kernels, wrapped for
+# scripts/ct-audit to compile and read. Not for use; see docs/CONSTANT_TIME.md.
+ct-probes = []
 
 # `ic_approved_only` leaves out every algorithm FIPS approved mode does not
 # permit; see docs/FIPS.md.

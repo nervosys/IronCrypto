@@ -277,6 +277,54 @@ every caller of a hash function uses.
 
 ### Performance
 
+- **ChaCha20-Poly1305 seals 4 MiB messages about three times faster on
+  x86-64 with AVX-512, and is ahead of Graviola at every size.** Diagnosis
+  first: `bench` gained a `graviola-chacha` mode that times the AEAD, the
+  ChaCha20 keystream alone, Poly1305 alone and the two back to back, at 4
+  MiB, 1 KiB and 64 B. Before, both halves ran at about 2-2.8 GB/s (the AVX2
+  eight-block keystream and the scalar four-block Poly1305), so neither
+  alone limited the AEAD; it made two passes. Changed:
+  - ChaCha20 runs sixteen blocks at a time on AVX-512F
+    (`chacha/zmm.rs`): one `asm!` block per 1 KiB, `vprold` for the
+    rotations, the whole state in `zmm0`..`zmm15` with nothing spilled, two
+    in-register transposes to block order. The AVX2 and portable paths take
+    the tail and every other CPU.
+  - Poly1305 runs four lanes of four blocks per step on AVX2
+    (`chacha/poly_avx2.rs`): radix 2^26 in 64-bit lanes, multiplied by
+    `r^4` each step and by `r^4, r^2, r^3, r` in the last, two interleaved
+    carry chains, branch-free. Inputs of 128 bytes or more.
+  - Tried and not kept, because neither cleared the noise: a single pass of
+    16 KiB pieces in place of two passes (parity at 4 MiB and at 256 MiB),
+    and a register transpose in place of the AVX2 keystream's
+    store-and-gather (2.6-3.0 against 2.1-2.8 GB/s).
+
+  Measured on a Ryzen 9 9900X (Zen 5) held at full load by other work: the
+  master branch (54d992f) and this build alternated, 45 seconds apart, five
+  rounds of `graviola-chacha` and three of `graviola`, Graviola 0.4.1 in
+  every run. Best to worst, MiB/s, and IronCrypto over Graviola in the same
+  run (`graviola-chacha` rounds):
+
+  | seal | before | after | before / Graviola | after / Graviola |
+  |---|---|---|---|---|
+  | 4 MiB | 833-1080 | 2426-3523 | 0.81-1.53 | 2.54-3.68 |
+  | 1 KiB | 646-895 | 1724-2229 | 0.89-1.21 | 2.07-2.65 |
+  | 64 B | 129-168 | 147-166 | 0.93-1.36 | 1.07-1.47 |
+
+  Keystream alone at 4 MiB went from 2072-2830 to 5345-8261 MiB/s and
+  Poly1305 alone from 1899-2789 to 5297-6971. The three `graviola` rounds
+  agree (after / Graviola 1.26-3.50 at 4 MiB, the low end one round in which
+  a load spike took both libraries down). 64 B is unchanged, parity with
+  the build before, and its lead over Graviola is inside the spread. On a CPU
+  with AVX2 and no AVX-512 the keystream is unchanged and only Poly1305 is
+  faster; that was not measured. Three compiled-code probes on x86-64
+  (`ct_chacha20_zmm_group`, `ct_poly1305_avx2_step`,
+  `ct_poly1305_avx2_finish`) hold the new kernels branch-free. Each kernel
+  is compared with the one-block path at every length from 0 to 2100 (the
+  keystream, unaligned, at six counters) or 0 to 600 and beyond (Poly1305,
+  with the largest limbs and largest clamped `r`; the AEAD, sealed and
+  opened); a wrong rotation, a wrong lane shuffle, a dropped carry and a
+  wrong order of powers each fail them.
+
 - **P-384 is about 1.5 times faster on x86-64, and its ECDH is level with
   Graviola.** On a Ryzen 9 9900X (Zen 5), `bench` with the new
   `graviola-p384` mode (P-384 ECDH, signing and verification for both
@@ -543,6 +591,15 @@ every caller of a hash function uses.
 
 ### Fixed
 
+- **`chacha20_xor` could wrap its block counter on AVX2 CPUs.** The guard
+  before the eight-block path added the counter and the block count in 64
+  bits and checked for overflow, which cannot happen, so a call whose
+  blocks ran past counter `2^32 - 1` -- a counter passed near the top, or a
+  ChaCha20-Poly1305 message over 256 GiB -- wrapped to 0 and reused
+  keystream, where the portable path stopped with `CounterExhausted`
+  partway through. Every path now refuses such a message whole, before
+  writing anything; `the_counter_is_refused_before_it_wraps` checks each
+  backend, and fails with the old guard restored.
 - **ML-KEM's 12-bit decode reduced modulo q with `%`**, on what is, in a
   decapsulation key, the secret vector. It is now a subtraction and a sign
   mask, and `scripts/check-ct.py` has probes for it and six other scalar

@@ -15,6 +15,7 @@ ic-core = { path = "../../crates/ic-core", default-features = false }
 ic-mldsa = { path = "../../crates/ic-mldsa", default-features = false }
 ic-mlkem = { path = "../../crates/ic-mlkem", default-features = false }
 ic-ec = { path = "../../crates/ic-ec", default-features = false, features = ["ct-probes"] }
+ic-cipher = { path = "../../crates/ic-cipher", default-features = false, features = ["ct-probes"] }
 
 [profile.release]
 opt-level = 3

@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and twenty-seven more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and thirty more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -69,6 +69,10 @@ release profile; this is not the workspace binary's overflow-checked profile.
   last the ECDSA nonce's). They exist on 64-bit targets only, and x86-64 is
   the 64-bit target the gate reads. See "P-384 specialised to its prime"
   below.
+- On x86-64 only, ChaCha20's sixteen-block AVX-512 keystream group
+  (`ct_chacha20_zmm_group`), and Poly1305's four-lane AVX2 step and the
+  lanes' final multiplication and folding (`ct_poly1305_avx2_step`,
+  `ct_poly1305_avx2_finish`). See "ChaCha20 and Poly1305 on x86-64" below.
   `X86_ONLY` in the checker requires all of these on that target and no other.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
@@ -404,3 +408,35 @@ branch either.
 Probe count: twenty-seven on x86-64 alone, where there were twenty-three.
 All seventy-one pass on x86-64, and the forty-four on each 32-bit target
 are unchanged.
+
+## ChaCha20 and Poly1305 on x86-64, 2026-10-13
+
+Two kernels handle the key, the keystream and Poly1305's `r` on x86-64, and
+both are probed.
+
+`ct_chacha20_zmm_group` is one sixteen-block group of the AVX-512 keystream
+(`ic-cipher/src/chacha/zmm.rs`): a single `asm!` block with the twenty rounds
+written out, so the compiled body is the text as written -- 320 `vprold`,
+the two transposes, the xor into the data, `vzeroall`, and the wipe of its
+scratch buffer -- with no branch. The probe calls the kernel through the
+real constructor of its starting state; the state's wipe on drop, a loop
+over a fixed sixteen words, is left out of the probe by `ManuallyDrop`.
+
+`ct_poly1305_avx2_step` is one step of the four-lane Poly1305
+(`ic-cipher/src/chacha/poly_avx2.rs`): load and split four blocks, 25
+`vpmuludq`, and the two interleaved carry chains, which are shifts, masks
+and adds with no comparison. `ct_poly1305_avx2_finish` is the last
+multiplication, by a different power of `r` in each lane, and the sum of the
+lanes. The loop over groups between them runs once per 64 bytes of message,
+which is public, and is not probed.
+
+All three pass. Inserting a `test`/`jz` on a byte of the starting state
+into the keystream's assembly fails `ct_chacha20_zmm_group` on that `je`, reported
+through the call into the kernel's body; restoring it passes.
+
+The AVX2 eight-block keystream that predates these is not probed: its round
+loop is not unrolled in the source.
+
+Probe count: thirty on x86-64 alone, where there were twenty-seven. All
+seventy-four pass on x86-64, and the forty-four on each 32-bit target are
+unchanged.

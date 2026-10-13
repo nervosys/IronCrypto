@@ -447,8 +447,9 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V, and twenty-seven more on x86-64 alone for its
-Curve25519, P-256 and P-384 assembly and its divsteps inversions: **203 gating
+Cortex-M0, Cortex-M4 and RISC-V, and thirty more on x86-64 alone for its
+Curve25519, P-256 and P-384 assembly, its divsteps inversions, and its
+AVX-512 ChaCha20 and AVX2 Poly1305 kernels: **206 gating
 probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
@@ -632,7 +633,7 @@ slow:
 |---|---|---|
 | AES-256, raw blocks | ~1.5 MiB/s | ~11 GiB/s (AES-NI) |
 | AES-256-GCM | ~1 MiB/s | ~23 GiB/s (VAES + VPCLMULQDQ, AVX-512); ~5 GiB/s (AES-NI + PCLMULQDQ) |
-| ChaCha20-Poly1305 | ~0.4 GiB/s | ~1.5 GiB/s (AVX2) |
+| ChaCha20-Poly1305 | ~0.4 GiB/s | ~3 GiB/s (AVX-512F keystream, AVX2 Poly1305); ~1.5 GiB/s (AVX2, before the Poly1305 lanes) |
 | SHA-256 | ~0.3 GiB/s | ~2.3 GiB/s (SHA-NI) |
 
 Indicative figures from a Ryzen 9 9900X, moving by a factor of two between runs
@@ -791,8 +792,8 @@ twice; `Ed25519::verify` still takes bytes and builds one per call.
 | AES | AES-NI, and ARMv8 crypto extensions behind a feature |
 | GHASH | `PCLMULQDQ`, eight blocks per group, summed unreduced and reduced once |
 | SHA-256 | SHA-NI |
-| ChaCha20 | AVX2, eight blocks at a time |
-| Poly1305 | four blocks per group, reducing once instead of four times |
+| ChaCha20 | AVX-512F, sixteen blocks at a time; AVX2, eight |
+| Poly1305 | AVX2, four lanes of four blocks per step; elsewhere four blocks per group, reducing once instead of four times |
 | RSA exponentiation | AVX-512 IFMA in radix 2^52 for 1024-, 1536- and 2048-bit moduli (every RSA prime here, and an RSA-2048 modulus); `MULX`/`ADCX`/`ADOX` for the other products; a fixed four-bit window everywhere |
 | X25519, Ed25519 | four-limb field on `MULX`/`ADX`; four field elements at once on AVX-512 IFMA |
 
