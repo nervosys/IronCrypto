@@ -1,8 +1,12 @@
-# Updated notification for 0.3.0: draft
+# Updated notification for 0.3.0: the text printed, reported sent
 
 The text of an updated notification under 15 CFR §742.15(b), drafted by this
-agent on 2026-10-12 for a version then numbered 0.2.25, and renumbered on
-2026-10-13 for 0.3.0, for the maintainer to complete and send. The contact
+agent on 2026-10-12 for a version then numbered 0.2.25, renumbered on
+2026-10-13 for 0.3.0, and printed for the maintainer that day. The maintainer
+then replied "Sent". **This is the text as printed, with its blanks, not the
+message as sent**: the completed contact fields, the date given for the
+previous notification, the sending time and the recipients have not been
+supplied here. The contact
 fields and the date of the previous notification are left blank: they are the
 maintainer's to fill in, and are not inferred here.
 `docs/export/notification.md` records what happens to it.
@@ -15,8 +19,7 @@ The maintainer decided on 2026-10-12 that this release is notified before it
 is published, rather than relying on the earlier notice. On 2026-10-13, asked
 what should happen with the notice for 0.3.0, they chose "Print an updated
 notice"; asked in the same question whether to prepare 0.3.0 now, they chose
-"Keep it on master". So this text is printed for a release not yet made, and
-nothing here records it as sent. The version became 0.3.0 because hash
+"Keep it on master". So this text was printed for a release not yet made. The version became 0.3.0 because hash
 functions now return errors, a breaking change to the API. What 0.3.0
 changes:
 

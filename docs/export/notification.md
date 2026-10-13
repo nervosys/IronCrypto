@@ -573,6 +573,22 @@ was `ic-core` at 2026-10-11 01:25:11 UTC and the last `ic-cli` at 01:27:20
 UTC. The published source commit is `6316a86`; all twenty-two packages
 identified that clean commit in their VCS metadata.
 
+## Notification submission for 0.3.0
+
+On 2026-10-13 this agent asked the maintainer what should happen with the
+export notice for 0.3.0, which adds algorithms 0.2.24 did not have. The
+maintainer chose "Print an updated notice", and in the same exchange chose
+to keep 0.3.0 on master rather than release it then. This agent printed the
+text now in `docs/export/update-0.3.0-as-printed.md`, addressed to
+`crypt@bis.doc.gov` and `enc@nsa.gov`, naming the GitHub repository and the
+same twenty-two crates.io packages, with the contact fields and the date of
+the previous notification left blank. The maintainer replied "Sent".
+
+This records that reply. It does not record the sent message, its completed
+fields, its sending time or its recipients, none of which have been supplied
+here. No release of 0.3.0 has been authorized or made; that will have its
+own entry.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
