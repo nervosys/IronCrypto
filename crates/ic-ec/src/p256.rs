@@ -11,16 +11,28 @@ use crate::nist::{ecdh, ecdsa};
 use ic_core::traits::{Algorithm, KeyAgreement, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result};
 
+// On 64-bit targets the field uses arithmetic specialised to p's shape; see
+// `nist::p256_field`. Elsewhere, the generic Montgomery word loop.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
 mont_field!(
     Fp,
     4,
     32,
-    [
-        0xffff_ffff_ffff_ffff,
-        0x0000_0000_ffff_ffff,
-        0x0000_0000_0000_0000,
-        0xffff_ffff_0000_0001,
-    ],
+    crate::nist::p256_field::P,
+    "The P-256 coordinate field, GF(p) with p = 2^256 - 2^224 + 2^192 + 2^96 - 1.",
+    mul = crate::nist::p256_field::active::mul,
+    square = crate::nist::p256_field::active::square,
+    invert = crate::nist::p256_field::active::invert,
+    add = crate::nist::p256_field::active::add,
+    sub = crate::nist::p256_field::active::sub
+);
+
+#[cfg(not(all(target_pointer_width = "64", not(ic_limb32))))]
+mont_field!(
+    Fp,
+    4,
+    32,
+    crate::nist::p256_field::P,
     "The P-256 coordinate field, GF(p) with p = 2^256 - 2^224 + 2^192 + 2^96 - 1."
 );
 

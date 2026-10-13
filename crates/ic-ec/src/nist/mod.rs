@@ -36,4 +36,10 @@ pub mod arith;
 pub mod ecdh;
 pub mod ecdsa;
 pub mod gentable;
+pub mod p256_field;
+// The one place in this crate allowed `unsafe`: inline assembly for P-256's
+// field on x86-64. See the module, and `lib.rs`, for why.
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod p256_x86;
 pub mod point;
