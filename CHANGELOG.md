@@ -36,6 +36,10 @@ every caller of a hash function uses.
 
 ### Added
 
+- **`crypto_seal` refuses a nonce the agent supplies** unless it also sets
+  `protocol_nonce: true`. Omitting the nonce, which draws one that is never
+  reused, is the path an agent should take; passing its own now has to be
+  said on purpose. AGENTS.md and `ic_ontology::RULES` say so.
 - **Every test suite Graviola runs, run here.** NIST CAVP's SHA-2, SHA-3,
   SHAKE and HMAC response files in full, Monte chains included, and
   Wycheproof's ML-KEM (all three parameter sets, where Graviola runs one),

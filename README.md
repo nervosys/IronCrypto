@@ -217,7 +217,7 @@ or shared with a second sealer -- needs its counter persisted and restored with
 | `crypto_profile` | "What does CNSA 2.0 permit, and what does it choose for this?" A named suite, not a strength floor |
 | `crypto_rules` | "What must I never do, whichever algorithm I use?" Also sent in the server's instructions at connect time |
 | `crypto_selftest` | "Is the module healthy?" |
-| `crypto_digest` / `crypto_hmac` / `crypto_seal` / `crypto_open` / `crypto_random` | primitive operations; `crypto_seal` draws the nonce when none is given |
+| `crypto_digest` / `crypto_hmac` / `crypto_seal` / `crypto_open` / `crypto_random` | primitive operations; `crypto_seal` draws the nonce when none is given, and refuses one passed without `protocol_nonce: true` |
 | `crypto_verify` | "Is this signature valid?" ECDSA, Ed25519, ML-DSA and RSA; an invalid signature is an answer, not an error |
 | `crypto_derive` | HKDF, to turn a shared secret into a key |
 | `crypto_lint` | "Does this code misuse the library?" Pattern checks for each rule; a finding can be wrong, and none is not proof |

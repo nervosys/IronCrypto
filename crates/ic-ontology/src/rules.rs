@@ -36,7 +36,9 @@ pub const RULES: &[Rule] = &[
         why: "Under GCM a repeated nonce leaks the authentication subkey and allows forgery; \
               under ChaCha20-Poly1305 it XORs the two plaintexts.",
         instead: "ic_cipher::Sealer chooses each nonce and ic_cipher::Opener refuses replays. \
-                  Through MCP, omit crypto_seal's nonce and one is drawn.",
+                  Through MCP, omit crypto_seal's nonce and one is drawn; a nonce you pass \
+                  is refused unless you also set protocol_nonce: true, for a protocol that \
+                  dictates it.",
         severity: Severity::Critical,
     },
     Rule {

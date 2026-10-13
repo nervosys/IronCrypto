@@ -509,7 +509,8 @@ fn tools() -> Vec<Tool> {
                 "Encrypt with an AEAD and return the ciphertext, tag and nonce as hex. Key and \
                  associated data are hex; the plaintext is a UTF-8 string. Omit the nonce and a \
                  fresh random 96-bit one is drawn and returned: do that unless a protocol fixes \
-                 the nonce. A (key, nonce) pair this server has already sealed under is refused.",
+                 the nonce. A supplied nonce is refused unless protocol_nonce is true, and a \
+                 (key, nonce) pair this server has already sealed under is refused.",
             schema: || {
                 schema(
                     vec![
@@ -522,6 +523,14 @@ fn tools() -> Vec<Tool> {
                                  supplied one must never have been used under this key.",
                             ),
                         ),
+                        (
+                            "protocol_nonce",
+                            bool_prop(
+                                "Set true only when a protocol you are implementing dictates \
+                                 the nonce. Leave the nonce out otherwise: one is drawn for you \
+                                 and never repeated.",
+                            ),
+                        ),
                         ("aad", string_prop("Optional hex-encoded associated data.")),
                         ("plaintext", string_prop("The text to encrypt.")),
                     ],
@@ -531,8 +540,20 @@ fn tools() -> Vec<Tool> {
             call: |args| {
                 let key = ic_core::Zeroizing::new(hex_arg(args, "key")?);
                 let nonce = match arg(args, "nonce") {
-                    Some(text) if !text.is_empty() => ic_core::codec::unhex(text)
-                        .map_err(|e| format!("'nonce' must be hex: {e}"))?,
+                    Some(text) if !text.is_empty() => {
+                        // A caller-chosen nonce is the way (key, nonce) pairs get
+                        // reused, so it needs an explicit statement that a protocol
+                        // dictates it.
+                        if !flag(args, "protocol_nonce") {
+                            return Err("a nonce was supplied without protocol_nonce: true. \
+                                        Omit the nonce and one is drawn that is never reused; \
+                                        pass your own only when a protocol dictates it, and say \
+                                        so with protocol_nonce: true."
+                                .to_string());
+                        }
+                        ic_core::codec::unhex(text)
+                            .map_err(|e| format!("'nonce' must be hex: {e}"))?
+                    }
                     _ => ops::random_nonce(required(args, "algorithm")?)?,
                 };
                 ops::claim_nonce(&key, &nonce)?;
@@ -1579,6 +1600,7 @@ mod tests {
                 ("algorithm", Json::str("aes-256-gcm")),
                 ("key", Json::str("00".repeat(32))),
                 ("nonce", Json::str("00".repeat(12))),
+                ("protocol_nonce", Json::Bool(true)),
                 ("plaintext", Json::str("data")),
             ]),
         );
@@ -1624,6 +1646,7 @@ mod tests {
                 ("algorithm", Json::str("aes-256-gcm")),
                 ("key", Json::str(key.as_str())),
                 ("nonce", Json::str(n1.as_str())),
+                ("protocol_nonce", Json::Bool(true)),
                 ("plaintext", Json::str("other")),
             ]),
         );
@@ -1635,6 +1658,7 @@ mod tests {
                 ("algorithm", Json::str("aes-256-gcm")),
                 ("key", Json::str("22".repeat(32))),
                 ("nonce", Json::str(n1.as_str())),
+                ("protocol_nonce", Json::Bool(true)),
                 ("plaintext", Json::str("other")),
             ]),
         );
@@ -1647,10 +1671,57 @@ mod tests {
                 ("algorithm", Json::str("aes-256-gcm")),
                 ("key", Json::str("00".repeat(16))),
                 ("nonce", Json::str("00".repeat(12))),
+                ("protocol_nonce", Json::Bool(true)),
                 ("plaintext", Json::str("data")),
             ]),
         );
         assert!(is_error(&r));
+    }
+
+    /// A caller-chosen nonce is refused unless the caller says a protocol
+    /// dictates it; omitting it always works.
+    #[test]
+    fn a_nonce_without_protocol_nonce_is_refused() {
+        let key = "55".repeat(32);
+        // Seals with the given fields: a nonce is supplied only if `nonce` is
+        // set, and `protocol_nonce` is passed only if `protocol` is given.
+        let seal = |nonce: bool, protocol: Option<Json>| {
+            let mut args = std::collections::BTreeMap::new();
+            args.insert("algorithm".to_string(), Json::str("aes-256-gcm"));
+            args.insert("key".to_string(), Json::str(key.as_str()));
+            args.insert("plaintext".to_string(), Json::str("data"));
+            if nonce {
+                args.insert("nonce".to_string(), Json::str("00".repeat(12)));
+            }
+            if let Some(value) = protocol {
+                args.insert("protocol_nonce".to_string(), value);
+            }
+            call("crypto_seal", Json::Object(args))
+        };
+        // Without the flag, a supplied nonce is refused and nothing is sealed.
+        let r = seal(true, None);
+        assert!(is_error(&r), "a nonce was sealed without protocol_nonce");
+        let text = r.get("result").unwrap().get("content").unwrap();
+        let text = match text {
+            Json::Array(items) => items[0].get("text").unwrap().as_str().unwrap(),
+            _ => panic!("expected content array"),
+        };
+        assert!(text.contains("protocol_nonce: true"), "{text}");
+        // Anything other than JSON true is refused too.
+        assert!(is_error(&seal(true, Some(Json::Bool(false)))));
+        assert!(is_error(&seal(true, Some(Json::str("true")))));
+        // With the flag, the caller's nonce is used.
+        let r = seal(true, Some(Json::Bool(true)));
+        assert!(!is_error(&r), "a protocol nonce was refused");
+        assert_eq!(
+            body(&r).get("nonce").unwrap().as_str(),
+            Some("00".repeat(12).as_str())
+        );
+        // Omitting the nonce works whatever the flag says.
+        assert!(
+            !is_error(&seal(false, None)),
+            "an omitted nonce was refused"
+        );
     }
 
     /// A drawn nonce is as long as the algorithm's: 24 bytes for
