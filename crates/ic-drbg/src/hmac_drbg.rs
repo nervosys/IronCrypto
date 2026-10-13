@@ -1,6 +1,8 @@
 //! SP 800-90A HMAC_DRBG.
 
-use ic_core::traits::{Algorithm, Drbg, Mac, SelfTest};
+use ic_core::traits::internal::Mac;
+
+use ic_core::traits::{Algorithm, Drbg, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 /// The widest MAC output supported (SHA-512).

@@ -462,7 +462,7 @@ const FIPS140_REQS: [Requirement; 6] = [
         compliance: Compliance::Partial {
             file: "crates/ic-fips/src/lib.rs",
             symbol: "enter_error_state",
-            gap: "The error state latches and cannot be left, and it reaches the primitives: the flag is ic_core::module's, and every operation that can report an error refuses with ModuleErrorState once it is set, whether or not the caller came through ic_fips. What has no error to return cannot refuse and goes on working: hash functions and XOFs, KMAC other than its verification, a MAC object's update and finalize, and ML-KEM's deterministic interfaces. A block cipher object's per-block methods are left ungated by decision. A validated module would have to close those, which needs fallible constructors.",
+            gap: "The error state latches and cannot be left, and it reaches the primitives: the flag is ic_core::module's, and every operation that can report an error refuses with ModuleErrorState once it is set, whether or not the caller came through ic_fips. Since 0.3.0 hashes, XOFs, MACs, KMAC and ML-KEM's deterministic interfaces refuse on output too; the primitives call one another through a hidden internal trait that does not, each refusing at its own entry. A block cipher object's per-block methods are left ungated by decision. Self-tests before first use are enforced only in the --cfg ic_approved_only build.",
         },
     },
     Requirement {

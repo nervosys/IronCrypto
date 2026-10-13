@@ -57,9 +57,12 @@ fn the_error_state_latches_and_reaches_the_primitives() {
         Some(ErrorKind::ModuleErrorState)
     );
 
-    // A hash cannot refuse: it has no error to return. This is the stated
-    // limit of the gate, asserted so that it is not mistaken for coverage.
-    assert_eq!(ic_hash::Sha256::digest(b"abc").as_ref()[0], 0xba);
+    // Hashing refuses too: a digest is output. It used to be the stated limit
+    // of the gate, when `Digest::finalize` had no error to return.
+    assert_eq!(
+        ic_hash::Sha256::digest(b"abc").unwrap_err().kind(),
+        ErrorKind::ModuleErrorState
+    );
 
     // And the state reports itself the same whoever set it.
     ic_core::module::enter_error_state();

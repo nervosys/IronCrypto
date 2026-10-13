@@ -163,10 +163,10 @@ macro_rules! mlkem_rows {
         use ic_mlkem::$m::{self as m, $t as Kem};
         let mut ek = [0u8; m::ENCAPS_KEY_LEN];
         let mut dk = [0u8; m::DECAPS_KEY_LEN];
-        Kem::keygen_deterministic(&[1u8; 32], &[2u8; 32], &mut ek, &mut dk);
+        Kem::keygen_deterministic(&[1u8; 32], &[2u8; 32], &mut ek, &mut dk).unwrap();
         let mut ct = [0u8; m::CIPHERTEXT_LEN];
         let mut ss = [0u8; m::SHARED_SECRET_LEN];
-        Kem::encapsulate_deterministic(&[3u8; 32], &ek, &mut ct, &mut ss);
+        Kem::encapsulate_deterministic(&[3u8; 32], &ek, &mut ct, &mut ss).unwrap();
 
         // The deterministic forms do the same work as the randomised ones
         // without an RNG in the measurement; validation and the pairwise test

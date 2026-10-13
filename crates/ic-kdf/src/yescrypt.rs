@@ -37,7 +37,9 @@
 
 use alloc::vec::Vec;
 
-use ic_core::traits::{Digest, Mac};
+use ic_core::traits::internal::Digest;
+
+use ic_core::traits::internal::Mac;
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Sha256;
 use ic_mac::HmacSha256;

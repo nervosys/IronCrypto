@@ -272,7 +272,7 @@ fn blake2s_self_test() -> Result<()> {
 /// `test_vectors.json`.
 #[cfg(not(ic_approved_only))]
 fn blake3_self_test() -> Result<()> {
-    let got = ic_hash::Blake3::hash(&[0u8]);
+    let got = ic_hash::Blake3::hash(&[0u8])?;
     let mut want = [0u8; 32];
     ic_core::codec::hex_decode(
         b"2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213",
@@ -353,7 +353,7 @@ fn ml_kem_768_self_test() -> Result<()> {
 
     let mut ek = [0u8; ic_mlkem::kem::ENCAPS_KEY_LEN];
     let mut dk = [0u8; ic_mlkem::kem::DECAPS_KEY_LEN];
-    ic_mlkem::MlKem768::keygen_deterministic(&d, &z, &mut ek, &mut dk);
+    ic_mlkem::MlKem768::keygen_deterministic(&d, &z, &mut ek, &mut dk)?;
 
     let mut want = [0u8; ic_mlkem::kem::ENCAPS_KEY_LEN];
     ic_core::codec::hex_decode(EK, &mut want)?;
@@ -405,7 +405,7 @@ fn ml_kem_512_self_test() -> Result<()> {
 
     let mut ek = [0u8; ic_mlkem::kem512::ENCAPS_KEY_LEN];
     let mut dk = [0u8; ic_mlkem::kem512::DECAPS_KEY_LEN];
-    ic_mlkem::MlKem512::keygen_deterministic(&d, &z, &mut ek, &mut dk);
+    ic_mlkem::MlKem512::keygen_deterministic(&d, &z, &mut ek, &mut dk)?;
 
     let mut want = [0u8; ic_mlkem::kem512::ENCAPS_KEY_LEN];
     ic_core::codec::hex_decode(EK, &mut want)?;
@@ -474,7 +474,7 @@ fn ml_kem_1024_self_test() -> Result<()> {
 
     let mut ek = [0u8; ic_mlkem::kem1024::ENCAPS_KEY_LEN];
     let mut dk = [0u8; ic_mlkem::kem1024::DECAPS_KEY_LEN];
-    ic_mlkem::MlKem1024::keygen_deterministic(&d, &z, &mut ek, &mut dk);
+    ic_mlkem::MlKem1024::keygen_deterministic(&d, &z, &mut ek, &mut dk)?;
 
     let mut want = [0u8; ic_mlkem::kem1024::ENCAPS_KEY_LEN];
     ic_core::codec::hex_decode(EK, &mut want)?;
@@ -821,7 +821,7 @@ pub fn tested_algorithms() -> impl Iterator<Item = &'static str> {
 /// documentation says so rather than letting the function's name imply more
 /// than it delivers.
 pub fn integrity_check() -> Result<()> {
-    use ic_core::traits::Mac;
+    use ic_core::traits::internal::Mac;
 
     let mut mac = ic_mac::HmacSha256::new(INTEGRITY_KEY)?;
     for (name, _) in CASTS {
@@ -1065,7 +1065,7 @@ mod tests {
     /// recomputed value is printed, so the fix is a copy and paste.
     #[test]
     fn the_integrity_tag_matches_the_table() {
-        use ic_core::traits::Mac;
+        use ic_core::traits::internal::Mac;
 
         let mut mac = ic_mac::HmacSha256::new(INTEGRITY_KEY).unwrap();
         for (name, _) in CASTS {

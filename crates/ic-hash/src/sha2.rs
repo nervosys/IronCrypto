@@ -8,7 +8,8 @@
 //! `needless_range_loop` is allowed rather than obscuring the correspondence.
 #![allow(clippy::needless_range_loop)]
 
-use ic_core::traits::{Algorithm, Digest, SelfTest};
+use ic_core::traits::internal::Digest;
+use ic_core::traits::{Algorithm, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 // SHA-NI, where the CPU has it. Only under `std`, because the detection does:

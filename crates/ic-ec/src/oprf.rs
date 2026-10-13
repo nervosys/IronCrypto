@@ -40,7 +40,8 @@ use crate::hash_to_curve::{hash_to_curve_point, hash_to_scalar};
 use crate::nist::arith::Field;
 use crate::nist::point::{AffinePoint, Point};
 use crate::p256::{Fn as Scalar, P256};
-use ic_core::traits::{Digest, RandomSource};
+use ic_core::traits::internal::Digest;
+use ic_core::traits::RandomSource;
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Sha256;
 

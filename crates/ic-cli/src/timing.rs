@@ -411,10 +411,12 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
                 &[0x22u8; 32],
                 &mut ek,
                 &mut dk,
-            );
+            )
+            .unwrap();
             let mut ct = [0u8; ic_mlkem::kem::CIPHERTEXT_LEN];
             let mut shared = [0u8; ic_mlkem::kem::SHARED_SECRET_LEN];
-            ic_mlkem::MlKem768::encapsulate_deterministic(&[0x33u8; 32], &ek, &mut ct, &mut shared);
+            ic_mlkem::MlKem768::encapsulate_deterministic(&[0x33u8; 32], &ek, &mut ct, &mut shared)
+                .unwrap();
             if class == 1 {
                 ct[0] ^= 0xff;
             }
@@ -490,7 +492,7 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
             if target == Target::Blake2sKeyed {
                 let _ = ic_hash::Blake2s::keyed_hash(&key, &message, &mut out);
             } else {
-                out = ic_hash::Blake3::keyed_hash(&key, &message);
+                out = ic_hash::Blake3::keyed_hash(&key, &message).unwrap_or([0u8; 32]);
             }
             let elapsed = start.elapsed().as_nanos() as f64;
             *sink = sink.wrapping_add(out[0] as u64);

@@ -195,7 +195,7 @@ fn main() {
     println!("Hashes");
     let mut out32 = [0u8; 32];
     let h1 = bulk("ironcrypto sha-256", SIZE, REPEATS, || {
-        out32 = ironcrypto::hash::Sha256::digest(&data);
+        out32 = ironcrypto::hash::Sha256::digest(&data).unwrap();
     });
     let h2 = bulk("rustcrypto sha2 sha-256", SIZE, REPEATS, || {
         use sha2::Digest;
@@ -205,7 +205,7 @@ fn main() {
 
     let mut out64 = [0u8; 64];
     let h3 = bulk("ironcrypto sha-512", SIZE, REPEATS, || {
-        out64 = ironcrypto::hash::Sha512::digest(&data);
+        out64 = ironcrypto::hash::Sha512::digest(&data).unwrap();
     });
     let h4 = bulk("rustcrypto sha2 sha-512", SIZE, REPEATS, || {
         use sha2::Digest;
@@ -214,7 +214,7 @@ fn main() {
     verdict("sha-512", h3, h4, true);
 
     let h5 = bulk("ironcrypto sha3-256", SIZE, REPEATS, || {
-        out32 = ironcrypto::hash::Sha3_256::digest(&data);
+        out32 = ironcrypto::hash::Sha3_256::digest(&data).unwrap();
     });
     let h6 = bulk("rustcrypto sha3-256", SIZE, REPEATS, || {
         use sha3::Digest;

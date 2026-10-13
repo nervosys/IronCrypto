@@ -209,7 +209,7 @@ macro_rules! pss_kat {
     ($scheme:ty, $hash:ty, $expected:ident, $id:literal) => {
         impl SelfTest for $scheme {
             fn self_test() -> Result<()> {
-                use ic_core::traits::Digest;
+                use ic_core::traits::internal::Digest;
                 let mut got = [0u8; 256];
                 crate::pss::sign_with_salt::<$hash>(
                     &kat_key()?,
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     #[ignore = "used to produce the pinned constants"]
     fn print_kat_signatures() {
-        use ic_core::traits::Digest;
+        use ic_core::traits::internal::Digest;
         let key = kat_key().unwrap();
         let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
         let mut sig = [0u8; 256];

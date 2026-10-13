@@ -1,6 +1,6 @@
 //! SP 800-132 / RFC 8018 PBKDF2.
 
-use ic_core::traits::Mac;
+use ic_core::traits::internal::Mac;
 use ic_core::{ensure, Result, Zeroize};
 
 /// The largest MAC output any supported instantiation produces.

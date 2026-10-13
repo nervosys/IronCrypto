@@ -51,7 +51,7 @@
 
 use crate::encode::{bit_unpack, packed_len, z_bits};
 use crate::poly::{Poly, N, Q};
-use ic_core::traits::Xof;
+use ic_core::traits::internal::Xof;
 #[cfg(test)]
 use ic_hash::XofReader;
 use ic_hash::{Shake128, Shake256};
@@ -120,7 +120,7 @@ pub fn sample_in_ball(seed: &[u8], tau: usize) -> Poly {
     let mut reader = x.finalize_reader();
 
     let mut signs = [0u8; 8];
-    reader.read(&mut signs);
+    reader.read_unchecked(&mut signs);
     let mut h = u64::from_le_bytes(signs);
 
     let mut out = Poly::ZERO;
@@ -128,7 +128,7 @@ pub fn sample_in_ball(seed: &[u8], tau: usize) -> Poly {
     for i in (N - tau)..N {
         // Reject until the target is within the prefix already built.
         loop {
-            reader.read(&mut byte);
+            reader.read_unchecked(&mut byte);
             if (byte[0] as usize) <= i {
                 break;
             }
@@ -166,7 +166,7 @@ pub fn rej_ntt_poly(rho: &[u8; 32], s: u8, r: u8) -> Poly {
     let mut buf = [0u8; SQUEEZE_CHUNK];
 
     while filled < N {
-        reader.read(&mut buf);
+        reader.read_unchecked(&mut buf);
         let mut offset = 0;
         while offset + 3 <= SQUEEZE_CHUNK && filled < N {
             if let Some(z) = coeff_from_three_bytes(buf[offset], buf[offset + 1], buf[offset + 2]) {
@@ -196,7 +196,7 @@ pub fn rej_bounded_poly(rho: &[u8; 64], nonce: u16, eta: i32) -> Poly {
     let mut buf = [0u8; 136]; // one SHAKE-256 rate
 
     while filled < N {
-        reader.read(&mut buf);
+        reader.read_unchecked(&mut buf);
         for &b in buf.iter() {
             if filled >= N {
                 break;
@@ -300,14 +300,14 @@ mod tests {
         let mut reader = x.finalize_reader();
 
         let mut bytes = [0u8; 8];
-        reader.read(&mut bytes);
+        reader.read_unchecked(&mut bytes);
         let mut c = vec![0i32; N];
 
         for i in (256 - tau)..256 {
             let mut j;
             loop {
                 let mut one = [0u8; 1];
-                reader.read(&mut one);
+                reader.read_unchecked(&mut one);
                 j = one[0] as usize;
                 if j <= i {
                     break;
@@ -382,7 +382,7 @@ mod tests {
         let mut out = Vec::with_capacity(N);
         let mut three = [0u8; 3];
         while out.len() < N {
-            reader.read(&mut three);
+            reader.read_unchecked(&mut three);
             let z = ((three[2] & 0x7f) as i32) << 16 | (three[1] as i32) << 8 | three[0] as i32;
             if z < Q {
                 out.push(z);
@@ -437,7 +437,7 @@ mod tests {
         let mut out = Vec::with_capacity(N);
         let mut one = [0u8; 1];
         while out.len() < N {
-            reader.read(&mut one);
+            reader.read_unchecked(&mut one);
             let b = one[0];
             let lo = b % 16;
             let hi = b / 16;

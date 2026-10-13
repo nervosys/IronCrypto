@@ -53,7 +53,9 @@
 //! Checked against RFC 9807 appendix C.1.5, C.1.6 and C.2.3, the P-256
 //! vectors, byte for byte.
 
-use ic_core::traits::{Mac, RandomSource};
+use ic_core::traits::internal::Mac;
+
+use ic_core::traits::RandomSource;
 use ic_core::{ensure, Result, Zeroize, Zeroizing};
 use ic_ec::oprf::{self, Mode, ServerKey, ELEMENT_LEN};
 use ic_kdf::Hkdf;
@@ -195,7 +197,7 @@ fn mac(key: &[u8], parts: &[&[u8]]) -> Result<[u8; NH]> {
 }
 
 fn sha256(parts: &[&[u8]]) -> [u8; NH] {
-    use ic_core::traits::Digest;
+    use ic_core::traits::internal::Digest;
     let mut h = ic_hash::Sha256::new();
     for p in parts {
         h.update(p);

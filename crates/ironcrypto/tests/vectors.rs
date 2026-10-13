@@ -140,7 +140,8 @@ fn ml_kem_keygen_vectors_from_file() {
             z[..].try_into().unwrap(),
             &mut ek,
             &mut dk,
-        );
+        )
+        .unwrap();
 
         assert_eq!(hex(&ek), hex(&want_ek), "encapsulation key, case {index}");
         assert_eq!(hex(&dk), hex(&want_dk), "decapsulation key, case {index}");
@@ -171,7 +172,8 @@ fn ml_kem_encap_vectors_from_file() {
             ek,
             &mut ct,
             &mut shared,
-        );
+        )
+        .unwrap();
 
         assert_eq!(hex(&ct), hex(&want_ct), "ciphertext, case {index}");
         assert_eq!(hex(&shared), hex(&want_k), "shared secret, case {index}");
@@ -203,7 +205,8 @@ macro_rules! ml_kem_acvp {
                     z[..].try_into().unwrap(),
                     &mut ek,
                     &mut dk,
-                );
+                )
+                .unwrap();
                 assert_eq!(hex(&ek), hex(&hex_field(case, "ek")), "ek, case {index}");
                 assert_eq!(hex(&dk), hex(&hex_field(case, "dk")), "dk, case {index}");
             }
@@ -227,7 +230,8 @@ macro_rules! ml_kem_acvp {
                     ek,
                     &mut ct,
                     &mut shared,
-                );
+                )
+                .unwrap();
                 assert_eq!(
                     hex(&ct),
                     hex(&hex_field(case, "c")),

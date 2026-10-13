@@ -10,7 +10,7 @@
 
 use alloc::boxed::Box;
 
-use ic_core::traits::Digest;
+use ic_core::traits::internal::Digest;
 use rustls::crypto::hash::{self, HashAlgorithm};
 
 pub(crate) static SHA256: Hash<ic_hash::Sha256> = Hash::new(HashAlgorithm::SHA256);

@@ -61,21 +61,27 @@ What that leaves:
   (below) closes both: it does not contain the algorithms approved mode
   refuses, and every operation that can refuse does so until `initialize()`
   has passed the known-answer tests.
-- **What has no error to return cannot refuse.** Hash functions and XOFs
-  (`Sha256::new`, `update`, `finalize`, and BLAKE2b, BLAKE2s and BLAKE3, with
-  or without a key, BLAKE3's key derivation included);
-  KMAC, other than its `verify`; a MAC object's `update` and `finalize`, once
-  it exists; and ML-KEM's `keygen_deterministic` and
-  `encapsulate_deterministic`. These go on working in the error state.
+- **Hashes, XOFs and MACs refuse on output** (0.3.0). `Digest::finalize`
+  and `digest`, `Xof::finalize_xof`, SHAKE's `xof` and its reader's `read`,
+  cSHAKE, TupleHash, ParallelHash, BLAKE2's `finalize_into`, BLAKE3's
+  reader and everything built on it, `Mac::finalize`, KMAC's `mac` and
+  `finalize`, and ML-KEM's `keygen_deterministic` and
+  `encapsulate_deterministic` return `ModuleErrorState` in the error state.
+  They used to have no error to return and went on working; that was a
+  breaking change to make. Creating a hasher and feeding it input produce no
+  output and are not refused. The primitives call each other through
+  `ic_core::traits::internal`, hidden and not API, which does not refuse:
+  each refuses at its own entry instead, which is where a module boundary
+  refuses a service.
 - **A block cipher object's per-block methods are left ungated by decision.**
   They are the inner loop of every mode, each of which refuses at its own
   entry, as does making the key.
 
 `crates/ironcrypto/tests/error_state.rs` holds this to the ontology rather
 than to a list: it enters the error state and requires every algorithm the
-registry marks implemented to be shown refusing, except the hash functions
-and XOFs, which it names. An algorithm added without the check fails that
-test.
+registry marks implemented to be shown refusing, with no exceptions since the
+hash functions and XOFs began to refuse. An algorithm added without the check
+fails that test, and removing the check from `Digest::finalize` fails it.
 
 The checks themselves were tested two ways, and the first is recorded because
 of what it failed to show. Removing each of the 95 checks in turn failed the
@@ -93,8 +99,8 @@ call of its own now and is reached. Both runs were done by scripts that are
 not in the repository and are not part of the suite; a check added later is
 held by the ontology test above and not by them.
 
-A validated module would have to close the three gaps above, which needs
-fallible constructors; see the list below.
+What remains for a validated module is the first gap above in the default
+build, and the per-block methods by decision; see the list below.
 
 The module comes up *unrestricted*. Entering approved mode is an explicit
 operator decision, never a default a caller might not have noticed. A build
@@ -202,7 +208,7 @@ fn main() -> ic_core::Result<()> {
     let data = b"payload";
     let (digest, indicator) = ic_fips::guarded("sha2-256", || Sha256::digest(data))?;
     assert_eq!(indicator, ServiceIndicator::Approved);
-    assert_eq!(digest.len(), 32);
+    assert_eq!(digest?.len(), 32);
     Ok(())
 }
 ```
@@ -212,7 +218,7 @@ a mode), `NotApproved`.
 
 ### Cryptographic algorithm self-tests
 
-75 known-answer tests, one per implemented algorithm except six variants whose
+85 known-answer tests, one per implemented algorithm except six variants whose
 computation another test covers (listed in `selftest.rs`), run by `initialize()` and
 individually addressable:
 
@@ -414,9 +420,11 @@ In rough order of effort:
 6. **An enforced module boundary.** The error state now reaches every
    operation that can report an error, however it is called. A build with
    `--cfg ic_approved_only` contains no algorithm approved mode refuses, and
-   refuses every such operation until the self-tests have passed. What cannot
-   report an error -- hashing above all -- cannot refuse at all. Validation needs every service behind
-   one gate, which means constructors that can fail.
+   refuses every such operation until the self-tests have passed. Since 0.3.0
+   hashes, XOFs and MACs refuse on output too. What is left is the default
+   build, where self-tests before first use are still the caller's to ask
+   for, and a block cipher's per-block methods, ungated by decision; a lab
+   would have to accept the second or see it closed.
 7. **Continuous health tests on the DRBGs** and pairwise-consistency tests on
    every generated key pair. ML-KEM, ML-DSA and RSA key generation check their
    pairs, and so does HPKE's `KeyPair::generate` for both KEMs, by computing

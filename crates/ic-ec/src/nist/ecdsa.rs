@@ -23,7 +23,8 @@
 
 use super::arith::Field;
 use super::point::{AffinePoint, Curve, Point};
-use ic_core::traits::{Digest, Mac};
+use ic_core::traits::internal::Digest;
+use ic_core::traits::internal::Mac;
 use ic_core::{ensure, Result, Zeroize};
 
 /// A curve paired with the hash and MAC its signatures use.

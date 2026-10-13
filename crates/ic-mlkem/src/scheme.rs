@@ -17,7 +17,7 @@
 //! five constants lifted out, not a rewrite. Each set is checked against its
 //! own NIST ACVP vectors.
 
-use ic_core::traits::{Digest, Xof};
+use ic_core::traits::internal::{Digest, Xof};
 use ic_hash::{Sha3_256, Sha3_512, Shake256};
 
 /// `G(x) = SHA3-512(x)`, split into two 32-byte halves.
@@ -468,10 +468,10 @@ macro_rules! ml_kem {
             fn decapsulation_selects_k_or_the_rejection_key() {
                 let mut ek = [0u8; ENCAPS_KEY_LEN];
                 let mut dk = [0u8; DECAPS_KEY_LEN];
-                $name::keygen_deterministic(&bytes(1), &bytes(2), &mut ek, &mut dk);
+                $name::keygen_deterministic(&bytes(1), &bytes(2), &mut ek, &mut dk).unwrap();
                 let mut ct = [0u8; CIPHERTEXT_LEN];
                 let mut sent = [0u8; SHARED_SECRET_LEN];
-                $name::encapsulate_deterministic(&bytes(3), &ek, &mut ct, &mut sent);
+                $name::encapsulate_deterministic(&bytes(3), &ek, &mut ct, &mut sent).unwrap();
 
                 let mut received = [0u8; SHARED_SECRET_LEN];
                 $name::decapsulate(&dk, &ct, &mut received).unwrap();
@@ -507,7 +507,7 @@ macro_rules! ml_kem {
                 let mut z = [0u8; 32];
                 rng.fill(&mut d)?;
                 rng.fill(&mut z)?;
-                Self::keygen_deterministic(&d, &z, ek, dk);
+                Self::keygen_inner(&d, &z, ek, dk);
                 d.zeroize();
                 z.zeroize();
                 // FIPS 140-3 requires a pairwise consistency test on a generated key
@@ -540,7 +540,7 @@ macro_rules! ml_kem {
                 let m = $crate::scheme::h(ek);
                 let mut ct = [0u8; CIPHERTEXT_LEN];
                 let mut sent = [0u8; SHARED_SECRET_LEN];
-                Self::encapsulate_deterministic(&m, ek, &mut ct, &mut sent);
+                Self::encapsulate_inner(&m, ek, &mut ct, &mut sent);
 
                 let mut received = [0u8; SHARED_SECRET_LEN];
                 Self::decapsulate(dk, &ct, &mut received)?;
@@ -560,8 +560,22 @@ macro_rules! ml_kem {
             ///
             /// Exposed because it is the only way to test the scheme reproducibly, and
             /// because ACVP vectors are specified this way. Production callers should
-            /// use [`Self::keygen`].
+            /// use [`Self::keygen`]. Refuses with `ModuleErrorState` once the module
+            /// has failed.
             pub fn keygen_deterministic(
+                d: &[u8; 32],
+                z: &[u8; 32],
+                ek: &mut [u8; ENCAPS_KEY_LEN],
+                dk: &mut [u8; DECAPS_KEY_LEN],
+            ) -> Result<()> {
+                ic_core::module::operational()?;
+                Self::keygen_inner(d, z, ek, dk);
+                Ok(())
+            }
+
+            /// [`Self::keygen_deterministic`] after the caller has checked the
+            /// module, as `keygen` has.
+            fn keygen_inner(
                 d: &[u8; 32],
                 z: &[u8; 32],
                 ek: &mut [u8; ENCAPS_KEY_LEN],
@@ -591,7 +605,7 @@ macro_rules! ml_kem {
                 Self::validate_encapsulation_key(ek)?;
                 let mut m = [0u8; 32];
                 rng.fill(&mut m)?;
-                Self::encapsulate_deterministic(&m, ek, ct, shared);
+                Self::encapsulate_inner(&m, ek, ct, shared);
                 m.zeroize();
                 Ok(())
             }
@@ -604,7 +618,21 @@ macro_rules! ml_kem {
             /// whatever bytes the vector file contains. Anything handling a key that
             /// came from a peer wants [`Self::encapsulate`], which performs the check,
             /// or must call [`Self::validate_encapsulation_key`] itself first.
+            /// Refuses with `ModuleErrorState` once the module has failed.
             pub fn encapsulate_deterministic(
+                m: &[u8; 32],
+                ek: &[u8; ENCAPS_KEY_LEN],
+                ct: &mut [u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) -> Result<()> {
+                ic_core::module::operational()?;
+                Self::encapsulate_inner(m, ek, ct, shared);
+                Ok(())
+            }
+
+            /// [`Self::encapsulate_deterministic`] after the caller has checked the
+            /// module.
+            fn encapsulate_inner(
                 m: &[u8; 32],
                 ek: &[u8; ENCAPS_KEY_LEN],
                 ct: &mut [u8; CIPHERTEXT_LEN],

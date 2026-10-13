@@ -83,7 +83,11 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
-use ic_core::traits::{Algorithm, Digest, Mac, RandomSource, SelfTest, Xof};
+use ic_core::traits::internal::{Digest, Xof};
+
+use ic_core::traits::internal::Mac;
+
+use ic_core::traits::{Algorithm, RandomSource, SelfTest};
 use ic_core::{ensure, Result, Zeroize, Zeroizing};
 use ic_hash::{
     Sha224, Sha256, Sha384, Sha3_224, Sha3_256, Sha3_384, Sha3_512, Sha512, Sha512_224, Sha512_256,

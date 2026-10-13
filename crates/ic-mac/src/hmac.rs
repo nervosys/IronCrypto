@@ -1,6 +1,10 @@
 //! FIPS 198-1 HMAC, generic over any digest.
 
-use ic_core::traits::{Algorithm, Digest, Mac, SelfTest};
+use ic_core::traits::internal::Digest;
+
+use ic_core::traits::internal::Mac;
+
+use ic_core::traits::{Algorithm, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 /// The largest block size among supported digests.
@@ -361,11 +365,13 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_tag_and_length() {
         let tag = HmacSha256::mac(b"k", b"m").unwrap();
-        HmacSha256::verify(b"k", b"m", tag.as_ref()).unwrap();
+        <HmacSha256 as ic_core::traits::Mac>::verify(b"k", b"m", tag.as_ref()).unwrap();
         let mut bad = tag;
         bad[0] ^= 1;
-        assert!(HmacSha256::verify(b"k", b"m", bad.as_ref()).is_err());
-        assert!(HmacSha256::verify(b"k", b"m", &tag.as_ref()[..31]).is_err());
+        assert!(<HmacSha256 as ic_core::traits::Mac>::verify(b"k", b"m", bad.as_ref()).is_err());
+        assert!(
+            <HmacSha256 as ic_core::traits::Mac>::verify(b"k", b"m", &tag.as_ref()[..31]).is_err()
+        );
     }
 
     #[test]

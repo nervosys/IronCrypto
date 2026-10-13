@@ -20,13 +20,13 @@ use ironcrypto::rsa::{Pkcs1Sha256, RsaPublicKey};
 
 fn digest(name: &str, message: &[u8]) -> Vec<u8> {
     match name {
-        "SHA2-256" => hash::Sha256::digest(message).as_ref().to_vec(),
-        "SHA2-384" => hash::Sha384::digest(message).as_ref().to_vec(),
-        "SHA2-512" => hash::Sha512::digest(message).as_ref().to_vec(),
-        "SHA2-512/256" => hash::Sha512_256::digest(message).as_ref().to_vec(),
-        "SHA3-256" => hash::Sha3_256::digest(message).as_ref().to_vec(),
-        "SHA3-384" => hash::Sha3_384::digest(message).as_ref().to_vec(),
-        "SHA3-512" => hash::Sha3_512::digest(message).as_ref().to_vec(),
+        "SHA2-256" => hash::Sha256::digest(message).unwrap().as_ref().to_vec(),
+        "SHA2-384" => hash::Sha384::digest(message).unwrap().as_ref().to_vec(),
+        "SHA2-512" => hash::Sha512::digest(message).unwrap().as_ref().to_vec(),
+        "SHA2-512/256" => hash::Sha512_256::digest(message).unwrap().as_ref().to_vec(),
+        "SHA3-256" => hash::Sha3_256::digest(message).unwrap().as_ref().to_vec(),
+        "SHA3-384" => hash::Sha3_384::digest(message).unwrap().as_ref().to_vec(),
+        "SHA3-512" => hash::Sha3_512::digest(message).unwrap().as_ref().to_vec(),
         other => panic!("no such hash here: {other}"),
     }
 }
@@ -245,12 +245,12 @@ fn cshake_matches_the_byte_aligned_acvp_cases() {
             "cshake128" => {
                 let mut h = hash::CShake128::new(&name, &custom);
                 h.update(&message);
-                h.finalize_xof(&mut out);
+                h.finalize_xof(&mut out).unwrap();
             }
             "cshake256" => {
                 let mut h = hash::CShake256::new(&name, &custom);
                 h.update(&message);
-                h.finalize_xof(&mut out);
+                h.finalize_xof(&mut out).unwrap();
             }
             other => panic!("unknown algorithm {other}"),
         }

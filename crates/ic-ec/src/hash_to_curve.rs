@@ -21,7 +21,7 @@ use crate::nist::arith::Field;
 use crate::nist::point::{AffinePoint, Curve, Point};
 use crate::p256::{Fn as Scalar, Fp, P256};
 use ic_core::ct::Choice;
-use ic_core::traits::Digest;
+use ic_core::traits::internal::Digest;
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Sha256;
 

@@ -7,12 +7,17 @@
 //! use ic_hash::Sha256;
 //! use ic_core::traits::Digest;
 //!
-//! let d = Sha256::digest(b"abc");
+//! let d = Sha256::digest(b"abc")?;
 //! assert_eq!(
 //!     ic_core::codec::hex(d.as_ref()),
 //!     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 //! );
+//! # Ok::<(), ic_core::Error>(())
 //! ```
+//!
+//! Producing output refuses with `ModuleErrorState` once the module has
+//! failed, which is why `digest` returns a `Result`; see
+//! [`ic_core::traits::Digest`].
 //!
 //! Every type here implements [`ic_core::traits::Digest`] (or [`ic_core::traits::Xof`])
 //! and [`ic_core::traits::SelfTest`], so `ic-fips` can drive their known-answer

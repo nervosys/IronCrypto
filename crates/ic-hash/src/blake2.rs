@@ -192,7 +192,10 @@ impl Blake2b {
     }
 
     /// Finish and write the digest into `out`, which must be `output_len` long.
+    ///
+    /// Refuses with `ModuleErrorState` once the module has failed.
     pub fn finalize_into(mut self, out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(
             out.len() == self.output_len,
             InvalidLength,
@@ -373,7 +376,10 @@ impl Blake2s {
     }
 
     /// Finish and write the digest into `out`, which must be `output_len` long.
+    ///
+    /// Refuses with `ModuleErrorState` once the module has failed.
     pub fn finalize_into(mut self, out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
         ensure!(
             out.len() == self.output_len,
             InvalidLength,

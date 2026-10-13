@@ -4,7 +4,7 @@
 //! mechanism behind the key hierarchies in TLS exporters, IKEv2, and most
 //! HSM-backed designs.
 
-use ic_core::traits::Mac;
+use ic_core::traits::internal::Mac;
 use ic_core::{ensure, Result, Zeroize};
 
 const MAX_TAG_LEN: usize = 64;

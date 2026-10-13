@@ -16,7 +16,8 @@
 
 use crate::key::{RsaPrivateKey, RsaPublicKey};
 use crate::uint::MAX_BYTES;
-use ic_core::traits::{Digest, RandomSource};
+use ic_core::traits::internal::Digest;
+use ic_core::traits::RandomSource;
 use ic_core::{ct, ensure, Result};
 
 /// Largest digest this module handles, which bounds the stack buffers.

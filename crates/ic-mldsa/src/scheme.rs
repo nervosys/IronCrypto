@@ -18,7 +18,7 @@
 //! constants lifted out, not a rewrite. Each set is checked against its own
 //! NIST ACVP vectors.
 
-use ic_core::traits::Xof;
+use ic_core::traits::internal::Xof;
 use ic_hash::Shake256;
 
 /// How many times signing will retry before giving up.
@@ -135,7 +135,7 @@ impl PreHash {
 
     /// Hash `message`, returning the digest and its length.
     pub(crate) fn digest(self, message: &[u8]) -> ([u8; MAX_DIGEST], usize) {
-        use ic_core::traits::Digest;
+        use ic_core::traits::internal::Digest;
         let mut out = [0u8; MAX_DIGEST];
         match self {
             Self::Sha256 => out[..32].copy_from_slice(ic_hash::Sha256::digest(message).as_ref()),

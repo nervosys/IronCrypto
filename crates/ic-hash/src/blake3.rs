@@ -20,7 +20,7 @@
 //! It computes the same tree as the SIMD and multi-threaded implementations,
 //! one chunk at a time, so it is not their speed on large inputs.
 
-use ic_core::Zeroize;
+use ic_core::{Result, Zeroize};
 
 const OUT_LEN: usize = 32;
 const KEY_LEN: usize = 32;
@@ -325,7 +325,9 @@ impl Blake3 {
     pub fn new_derive_key(context: &str) -> Self {
         let mut context_hasher = Self::new_internal(IV, DERIVE_KEY_CONTEXT);
         context_hasher.update(context.as_bytes());
-        let mut context_key = context_hasher.finalize();
+        // A step inside the constructor, not output, so not refused.
+        let mut context_key = [0u8; OUT_LEN];
+        context_hasher.finalize_xof().fill_inner(&mut context_key);
         let mut key_words = [0u32; 8];
         words_from_le_bytes(&context_key, &mut key_words);
         let h = Self::new_internal(key_words, DERIVE_KEY_MATERIAL);
@@ -387,11 +389,11 @@ impl Blake3 {
     }
 
     /// The 32-byte digest. The hasher is left as it was, so more input may
-    /// follow.
-    pub fn finalize(&self) -> [u8; OUT_LEN] {
+    /// follow. Refuses with `ModuleErrorState` once the module has failed.
+    pub fn finalize(&self) -> Result<[u8; OUT_LEN]> {
         let mut out = [0u8; OUT_LEN];
-        self.finalize_xof().fill(&mut out);
-        out
+        self.finalize_xof().fill(&mut out)?;
+        Ok(out)
     }
 
     /// The extendable output: as many bytes as wanted, of which the first 32
@@ -406,24 +408,24 @@ impl Blake3 {
     }
 
     /// One-shot hash.
-    pub fn hash(data: &[u8]) -> [u8; OUT_LEN] {
+    pub fn hash(data: &[u8]) -> Result<[u8; OUT_LEN]> {
         let mut h = Self::new();
         h.update(data);
         h.finalize()
     }
 
     /// One-shot keyed hash.
-    pub fn keyed_hash(key: &[u8; KEY_LEN], data: &[u8]) -> [u8; OUT_LEN] {
+    pub fn keyed_hash(key: &[u8; KEY_LEN], data: &[u8]) -> Result<[u8; OUT_LEN]> {
         let mut h = Self::new_keyed(key);
         h.update(data);
         h.finalize()
     }
 
     /// One-shot key derivation, any output length.
-    pub fn derive_key(context: &str, key_material: &[u8], out: &mut [u8]) {
+    pub fn derive_key(context: &str, key_material: &[u8], out: &mut [u8]) -> Result<()> {
         let mut h = Self::new_derive_key(context);
         h.update(key_material);
-        h.finalize_xof().fill(out);
+        h.finalize_xof().fill(out)
     }
 }
 
@@ -443,7 +445,16 @@ impl Drop for Blake3Reader {
 
 impl Blake3Reader {
     /// Write the next `out.len()` bytes of output.
-    pub fn fill(&mut self, out: &mut [u8]) {
+    ///
+    /// Every output of BLAKE3 comes through here, and refuses here with
+    /// `ModuleErrorState` once the module has failed.
+    pub fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
+        self.fill_inner(out);
+        Ok(())
+    }
+
+    fn fill_inner(&mut self, out: &mut [u8]) {
         for byte in out.iter_mut() {
             if self.used == self.block.len() {
                 self.block = self.output.root_block(self.counter);
@@ -465,7 +476,7 @@ mod tests {
     #[test]
     fn empty_input() {
         assert_eq!(
-            hex(&Blake3::hash(b"")),
+            hex(&Blake3::hash(b"").unwrap()),
             "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
         );
     }
@@ -479,14 +490,14 @@ mod tests {
             h
         };
         let mut whole = [0u8; 300];
-        h.finalize_xof().fill(&mut whole);
+        h.finalize_xof().fill(&mut whole).unwrap();
         let mut r = h.finalize_xof();
         let mut pieces = [0u8; 300];
         for c in pieces.chunks_mut(37) {
-            r.fill(c);
+            r.fill(c).unwrap();
         }
         assert_eq!(whole, pieces);
-        assert_eq!(whole[..32], h.finalize());
+        assert_eq!(whole[..32], h.finalize().unwrap());
     }
 
     /// Streaming matches one-shot across block, chunk and subtree boundaries.

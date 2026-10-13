@@ -10,7 +10,7 @@
 
 use alloc::boxed::Box;
 
-use ic_core::traits::Mac;
+use ic_core::traits::internal::Mac;
 use rustls::crypto::hmac;
 
 pub(crate) static SHA256: Hmac<ic_mac::HmacSha256> = Hmac::new();

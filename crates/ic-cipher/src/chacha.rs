@@ -7,7 +7,9 @@
 //! `fips_status: NotApproved`, and `ic-fips` refuses to construct them while
 //! the module is in approved mode.
 
-use ic_core::traits::{Aead, Algorithm, Mac, RandomSource, SelfTest};
+use ic_core::traits::internal::Mac;
+
+use ic_core::traits::{Aead, Algorithm, RandomSource, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 const SIGMA: [u32; 4] = [0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574];

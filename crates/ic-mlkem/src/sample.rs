@@ -27,7 +27,7 @@
 //! mass at each point.
 
 use crate::poly::{Poly, N, Q};
-use ic_core::traits::Xof;
+use ic_core::traits::internal::Xof;
 #[cfg(test)]
 use ic_hash::XofReader;
 use ic_hash::{Shake128, Shake256};
@@ -57,7 +57,7 @@ pub fn sample_ntt(seed: &[u8; 32], i: u8, j: u8) -> Poly {
     let mut buf = [0u8; SQUEEZE_CHUNK];
 
     while filled < N {
-        reader.read(&mut buf);
+        reader.read_unchecked(&mut buf);
         let mut offset = 0;
         while offset + 3 <= SQUEEZE_CHUNK && filled < N {
             // Three bytes carry two twelve-bit candidates: the first takes a
@@ -155,7 +155,7 @@ mod tests {
         let mut filled = 0usize;
         while filled < N {
             let mut c = [0u8; 3];
-            reader.read(&mut c);
+            reader.read_unchecked(&mut c);
             let d1 = (c[0] as u16) + 256 * ((c[1] as u16) % 16);
             let d2 = ((c[1] as u16) / 16) + 16 * (c[2] as u16);
             if d1 < Q as u16 {
@@ -297,13 +297,13 @@ mod tests {
         let seed = [0x99u8; 32];
         let mut one = matrix_xof(&seed, 1, 2);
         let mut a = [0u8; 300];
-        one.read(&mut a);
+        one.read_unchecked(&mut a);
 
         let mut two = matrix_xof(&seed, 1, 2);
         let mut b = [0u8; 300];
-        two.read(&mut b[..7]);
-        two.read(&mut b[7..200]);
-        two.read(&mut b[200..]);
+        two.read_unchecked(&mut b[..7]);
+        two.read_unchecked(&mut b[7..200]);
+        two.read_unchecked(&mut b[200..]);
         assert_eq!(a, b, "the xof stream depends on how it is read");
     }
 

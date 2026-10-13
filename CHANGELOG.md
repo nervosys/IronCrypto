@@ -5,6 +5,35 @@ all of them.
 
 ## Unreleased
 
+The next release is 0.3.0: the changes under **Breaking** change signatures
+every caller of a hash function uses.
+
+### Breaking
+
+- **Hashes, XOFs and MACs refuse in the error state.** They were the gate's
+  stated limit: `Digest::finalize` had no error to return, so a hash went on
+  working after the module had failed. Now every interface that produces
+  output returns a `Result` and refuses with `ModuleErrorState`:
+  `Digest::finalize` and `digest`; `Xof::finalize_xof`; SHAKE's `xof` and
+  `XofReader::read`; cSHAKE's `finalize_xof` and `xof`; TupleHash's and
+  ParallelHash's `finalize`, `hash` and `hash_xof`; BLAKE3's `finalize`,
+  `hash`, `keyed_hash`, `derive_key` and `Blake3Reader::fill`;
+  `Mac::finalize`; KMAC's `finalize`, `finalize_xof`, `mac` and `mac_xof`;
+  and ML-KEM's `keygen_deterministic` and `encapsulate_deterministic`.
+  BLAKE2's already returned one and now also refuses. Creating a hasher and
+  `update` are unchanged.
+
+  To migrate, add `?` where the output is used:
+  `let d = Sha256::digest(data)?;`.
+
+  The primitives call one another through `ic_core::traits::internal`, a
+  hidden module holding the old infallible traits; each primitive refuses at
+  its own entry instead. It is not API and not covered by semver.
+  `crates/ironcrypto/tests/error_state.rs` no longer exempts hashes: every
+  implemented algorithm must be shown refusing.
+- **ParallelHash refuses a zero block size** with `InvalidParameter`. It
+  used to panic, on a caller's input.
+
 ### Added
 
 - **The P-256 compiled-code probes gate on the 32-bit targets too.** They

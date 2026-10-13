@@ -116,7 +116,8 @@ macro_rules! kem_case {
             seed[32..].try_into().unwrap(),
             &mut ek,
             &mut dk,
-        );
+        )
+        .unwrap();
         assert_eq!(
             hex(&ek),
             hex(&hex_field(case, "ek")),

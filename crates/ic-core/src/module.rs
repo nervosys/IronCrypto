@@ -10,21 +10,21 @@
 //! Once [`enter_error_state`] has been called, every operation in this
 //! library that can report an error reports
 //! [`ErrorKind::ModuleErrorState`] and does nothing else: encryption and decryption, signing and verification,
-//! key generation and agreement, MACs made from a key, key derivation and
+//! key generation and agreement, MACs, hashes and XOFs, key derivation and
 //! random generation. The operations that return `bool` return `false`.
+//!
+//! Hashes, XOFs and MACs refuse on output -- `finalize`, `digest`, `xof`, a
+//! reader's `read` or `fill`, `mac` -- so an object made before the failure
+//! produces nothing after it. Making one and feeding it input produce no
+//! output, and are not refused. Until 0.3.0 those interfaces had no error to
+//! return and could not refuse at all; they were the gate's stated limit.
 //!
 //! # What this does not gate
 //!
-//! What has no error to return cannot refuse, and goes on working in the
-//! error state:
-//!
-//! - Hash functions and XOFs: `Sha256::new`, `update` and `finalize`, and
-//!   BLAKE2 with or without a key.
-//! - KMAC, whose constructor and `mac` are infallible. Only `verify` refuses.
-//! - A MAC object's `update` and `finalize`, once it exists. HMAC, CMAC and
-//!   Poly1305 refuse where they are made, in `Mac::new`.
-//! - ML-KEM's `keygen_deterministic` and `encapsulate_deterministic`, the
-//!   interfaces that take their randomness as arguments.
+//! The primitives call one another through `ic_core::traits::internal`, which
+//! does not refuse: a signature or a KDF refuses at its own entry, and does
+//! not check again for each hash on the way to its answer. That module is
+//! hidden and not API; a caller who names it has stepped inside the boundary.
 //!
 //! One thing that could refuse is left ungated on purpose: a block cipher
 //! object's `encrypt_block`, `decrypt_block` and `encrypt_blocks`. They are

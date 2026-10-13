@@ -117,7 +117,7 @@ mod tests {
         // And the workaround the documentation warns against: hashing the
         // message yourself and calling the pure variant produces something the
         // pre-hash verifier rejects.
-        use ic_core::traits::Digest;
+        use ic_core::traits::internal::Digest;
         let digest = ic_hash::Sha512::digest(message);
         let mut hand_rolled = [0u8; SIGNATURE_LEN];
         assert!(sign_deterministic(

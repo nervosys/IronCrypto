@@ -542,7 +542,7 @@ mod tests {
 
     /// Bytes from a counter, through SHA-256: deterministic and unstructured.
     fn bytes(seed: u32) -> [u8; 32] {
-        use ic_core::traits::Digest;
+        use ic_core::traits::internal::Digest;
         ic_hash::Sha256::digest(&seed.to_le_bytes())
     }
 

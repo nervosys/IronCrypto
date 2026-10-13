@@ -46,19 +46,22 @@ fn the_sp_800_185_functions_match_the_byte_aligned_acvp_cases() {
                     (_, false) => TupleHash256::hash(&custom, &refs, &mut out),
                     (_, true) => TupleHash256::hash_xof(&custom, &refs, &mut out),
                 }
+                .unwrap()
             }
             "parallelhash128" | "parallelhash256" => {
                 let data = hex_field(case, "input");
                 let block: usize = case["block_size"].parse().expect("block size");
                 match (function, xof) {
                     ("parallelhash128", false) => {
-                        ParallelHash128::hash(&custom, block, &data, &mut out)
+                        ParallelHash128::hash(&custom, block, &data, &mut out).unwrap()
                     }
                     ("parallelhash128", true) => {
-                        ParallelHash128::hash_xof(&custom, block, &data, &mut out)
+                        ParallelHash128::hash_xof(&custom, block, &data, &mut out).unwrap()
                     }
-                    (_, false) => ParallelHash256::hash(&custom, block, &data, &mut out),
-                    (_, true) => ParallelHash256::hash_xof(&custom, block, &data, &mut out),
+                    (_, false) => ParallelHash256::hash(&custom, block, &data, &mut out).unwrap(),
+                    (_, true) => {
+                        ParallelHash256::hash_xof(&custom, block, &data, &mut out).unwrap()
+                    }
                 }
             }
             "kmac128" | "kmac256" => {
@@ -69,6 +72,7 @@ fn the_sp_800_185_functions_match_the_byte_aligned_acvp_cases() {
                     (_, false) => Kmac256::mac(&key, &custom, &data, &mut out),
                     (_, true) => Kmac256::mac_xof(&key, &custom, &data, &mut out),
                 }
+                .unwrap()
             }
             other => panic!("unknown function {other}"),
         }

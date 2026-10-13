@@ -64,7 +64,9 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
-use ic_core::traits::{Algorithm, Digest, SelfTest, Xof};
+use ic_core::traits::internal::{Digest, Xof};
+
+use ic_core::traits::{Algorithm, SelfTest};
 use ic_core::{ensure, err, Result};
 use ic_hash::{Sha256, Shake256};
 

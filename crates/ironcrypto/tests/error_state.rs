@@ -8,10 +8,9 @@
 //! this build implements, and the test fails for any entry it was not shown
 //! refusing.
 //!
-//! Two classes are exempt because they cannot refuse: hash functions and
-//! XOFs have no error to return. The test names them rather than skipping
-//! them silently, and checks that a digest still comes out right, so the
-//! limit of the gate is on the record beside its coverage.
+//! Nothing is exempt. Hash functions and XOFs were, while `Digest::finalize`
+//! had no error to return; they refuse on output now, and are held to the
+//! same list as everything else.
 //!
 //! Everything a refusal needs -- keys, signatures, ciphertexts, objects made
 //! while the module worked -- is made first. Then the state is entered, once,
@@ -33,7 +32,7 @@ use ironcrypto::core_types::traits::{
     Aead, BlockCipher, Digest, Drbg, Kdf, KeyAgreement, Mac, SignatureScheme,
 };
 use ironcrypto::core_types::ErrorKind;
-use ironcrypto::{cipher, drbg, ec, hpke, kdf, lms, mac, mldsa, mlkem, rsa, sig, slhdsa};
+use ironcrypto::{cipher, drbg, ec, hash, hpke, kdf, lms, mac, mldsa, mlkem, rsa, sig, slhdsa};
 
 /// Records that `id` was shown refusing, and that it refused as it should.
 struct Seen(BTreeSet<&'static str>);
@@ -281,8 +280,16 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         .unwrap();
     let software_signer = sig::SoftwareSigner::from_pkcs8(&pkcs8[..pkcs8_len]).unwrap();
 
-    // A digest, to compare with the one computed afterwards.
-    let digest_before = ironcrypto::hash::Sha256::digest(message);
+    // Hashers and readers made while the module worked, which must produce
+    // nothing after it has failed.
+    let mut sha256_before = hash::Sha256::new();
+    sha256_before.update(message);
+    let mut shake_before = <hash::Shake128 as Default>::default();
+    ironcrypto::core_types::traits::Xof::update(&mut shake_before, message);
+    let mut shake_reader_before = hash::Shake256::default().finalize_reader();
+    let mut blake3_reader_before = hash::Blake3::new().finalize_xof();
+    let mut hmac_before = mac::HmacSha256::new(&key32).unwrap();
+    hmac_before.update(message);
 
     // ---- The failure ------------------------------------------------------
     module::enter_error_state();
@@ -454,20 +461,133 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     seen.refused("cmac-aes-192", "new", mac::CmacAes192::new(&key32[..24]));
     seen.refused("cmac-aes-256", "new", mac::CmacAes256::new(&key32));
     seen.refused("poly1305", "new", mac::Poly1305::new(&key32));
-    // KMAC is made and computed infallibly, so only its verification refuses.
+    // A MAC keyed before the failure produces no tag after it.
+    seen.refused(
+        "hmac-sha2-256",
+        "finalize, keyed before",
+        hmac_before.finalize(),
+    );
+    // KMAC is made infallibly, and refuses on output and on verification.
     let mut kmac_tag = [0u8; 32];
-    mac::Kmac128::mac(&key32, b"", message, &mut kmac_tag);
+    seen.refused(
+        "kmac128",
+        "mac",
+        mac::Kmac128::mac(&key32, b"", message, &mut kmac_tag),
+    );
     seen.refused(
         "kmac128",
         "verify",
         mac::Kmac128::verify(&key32, b"", message, &kmac_tag),
     );
-    mac::Kmac256::mac(&key32, b"", message, &mut kmac_tag);
+    seen.refused(
+        "kmac256",
+        "mac_xof",
+        mac::Kmac256::mac_xof(&key32, b"", message, &mut kmac_tag),
+    );
     seen.refused(
         "kmac256",
         "verify",
         mac::Kmac256::verify(&key32, b"", message, &kmac_tag),
     );
+    assert_eq!(kmac_tag, [0u8; 32], "kmac: no tag");
+
+    // Hash functions and XOFs: on output, from objects made before the
+    // failure as well as after.
+    seen.refused(
+        "sha2-256",
+        "finalize, made before",
+        sha256_before.finalize(),
+    );
+    macro_rules! digest_refuses {
+        ($($id:literal => $ty:ty),* $(,)?) => {$(
+            seen.refused($id, "digest", <$ty as Digest>::digest(message));
+        )*};
+    }
+    digest_refuses!(
+        "sha2-224" => hash::Sha224,
+        "sha2-256" => hash::Sha256,
+        "sha2-384" => hash::Sha384,
+        "sha2-512" => hash::Sha512,
+        "sha2-512-224" => hash::Sha512_224,
+        "sha2-512-256" => hash::Sha512_256,
+        "sha3-224" => hash::Sha3_224,
+        "sha3-256" => hash::Sha3_256,
+        "sha3-384" => hash::Sha3_384,
+        "sha3-512" => hash::Sha3_512,
+    );
+    let mut squeezed = [0u8; 32];
+    seen.refused(
+        "shake128",
+        "finalize_xof, made before",
+        ironcrypto::core_types::traits::Xof::finalize_xof(shake_before, &mut squeezed),
+    );
+    seen.refused(
+        "shake128",
+        "xof",
+        hash::Shake128::xof(message, &mut squeezed),
+    );
+    seen.refused(
+        "shake256",
+        "xof",
+        hash::Shake256::xof(message, &mut squeezed),
+    );
+    seen.refused(
+        "shake256",
+        "read, reader made before",
+        shake_reader_before.read(&mut squeezed),
+    );
+    seen.refused(
+        "cshake128",
+        "xof",
+        hash::CShake128::xof(b"", b"app", message, &mut squeezed),
+    );
+    seen.refused(
+        "cshake256",
+        "finalize_xof",
+        hash::CShake256::new(b"", b"app").finalize_xof(&mut squeezed),
+    );
+    seen.refused(
+        "tuplehash128",
+        "hash",
+        hash::TupleHash128::hash(b"", &[message], &mut squeezed),
+    );
+    seen.refused(
+        "tuplehash256",
+        "hash_xof",
+        hash::TupleHash256::hash_xof(b"", &[message], &mut squeezed),
+    );
+    seen.refused(
+        "parallelhash128",
+        "hash",
+        hash::ParallelHash128::hash(b"", 8, message, &mut squeezed),
+    );
+    seen.refused(
+        "parallelhash256",
+        "hash_xof",
+        hash::ParallelHash256::hash_xof(b"", 8, message, &mut squeezed),
+    );
+    seen.refused(
+        "blake2b",
+        "hash",
+        hash::Blake2b::hash(message, &mut squeezed),
+    );
+    seen.refused(
+        "blake2s",
+        "hash",
+        hash::Blake2s::hash(message, &mut squeezed),
+    );
+    seen.refused("blake3", "hash", hash::Blake3::hash(message));
+    seen.refused(
+        "blake3",
+        "fill, reader made before",
+        blake3_reader_before.fill(&mut squeezed),
+    );
+    seen.refused(
+        "blake3",
+        "derive_key",
+        hash::Blake3::derive_key("app 2026-10-12 test", message, &mut squeezed),
+    );
+    assert_eq!(squeezed, [0u8; 32], "no hash wrote output");
 
     // Key derivation.
     seen.refused(
@@ -799,6 +919,23 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
                 $id,
                 "decapsulate",
                 mlkem::$scheme::decapsulate(dk, ct, &mut shared),
+            );
+            // The deterministic interfaces, which took their randomness as
+            // arguments and once had nothing to return.
+            seen.refused(
+                $id,
+                "keygen_deterministic",
+                mlkem::$scheme::keygen_deterministic(
+                    &[1u8; 32],
+                    &[2u8; 32],
+                    &mut new_ek,
+                    &mut new_dk,
+                ),
+            );
+            seen.refused(
+                $id,
+                "encapsulate_deterministic",
+                mlkem::$scheme::encapsulate_deterministic(&[3u8; 32], ek, &mut new_ct, &mut shared),
             );
             assert_eq!(shared, [0u8; 32], "{}: no shared secret", $id);
         }};
@@ -1203,7 +1340,6 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     assert_eq!(block, [0u8; 16]);
 
     // ---- The list is the ontology's ---------------------------------------
-    let mut cannot_refuse = Vec::new();
     let mut missing = Vec::new();
     for entry in ironcrypto::ontology::all() {
         if entry.status != ironcrypto::ontology::ImplStatus::Available {
@@ -1212,11 +1348,7 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         if seen.0.contains(entry.id) {
             continue;
         }
-        match entry.class.id() {
-            // No error to return: `ic_core::module` says so, and why.
-            "hash" | "xof" => cannot_refuse.push(entry.id),
-            _ => missing.push(entry.id),
-        }
+        missing.push(entry.id);
     }
     assert!(
         missing.is_empty(),
@@ -1230,17 +1362,5 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
             "{id} is not an entry"
         );
     }
-    println!(
-        "{} algorithms refuse; {} cannot: {cannot_refuse:?}",
-        seen.0.len(),
-        cannot_refuse.len()
-    );
-    assert!(!cannot_refuse.is_empty());
-
-    // The stated limit, asserted so it is not mistaken for coverage: a hash
-    // goes on working, and gives the answer it gave before.
-    assert_eq!(
-        ironcrypto::hash::Sha256::digest(message).as_ref(),
-        digest_before.as_ref()
-    );
+    println!("{} algorithms refuse", seen.0.len());
 }

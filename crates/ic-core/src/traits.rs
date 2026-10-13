@@ -24,6 +24,16 @@ pub trait Algorithm {
 }
 
 /// A cryptographic hash function with a fixed-length output.
+///
+/// Producing output can fail: [`Digest::finalize`] and [`Digest::digest`]
+/// refuse with [`ErrorKind::ModuleErrorState`](crate::ErrorKind) once the
+/// module is in its error state, and, in a build with
+/// `--cfg ic_approved_only`, before `ic_fips::initialize` has passed the
+/// self-tests. Making a hasher and absorbing input produce nothing, and do not
+/// refuse.
+///
+/// Implemented for every type that implements [`internal::Digest`], which is
+/// how the hash functions are written.
 pub trait Digest: Algorithm + Clone + Default {
     /// The fixed-size output buffer type, e.g. `[u8; 32]`.
     type Output: AsRef<[u8]> + AsMut<[u8]> + Copy;
@@ -34,18 +44,16 @@ pub trait Digest: Algorithm + Clone + Default {
     const BLOCK_LEN: usize;
 
     /// Create a fresh, empty hasher.
-    fn new() -> Self {
-        Self::default()
-    }
+    fn new() -> Self;
 
     /// Absorb more input. May be called any number of times.
     fn update(&mut self, data: &[u8]);
 
     /// Consume the hasher and produce the digest.
-    fn finalize(self) -> Self::Output;
+    fn finalize(self) -> Result<Self::Output>;
 
     /// One-shot convenience: hash `data` in a single call.
-    fn digest(data: &[u8]) -> Self::Output {
+    fn digest(data: &[u8]) -> Result<Self::Output> {
         let mut h = Self::new();
         h.update(data);
         h.finalize()
@@ -53,6 +61,8 @@ pub trait Digest: Algorithm + Clone + Default {
 }
 
 /// An extendable-output function (XOF) such as SHAKE128 / SHAKE256.
+///
+/// [`Xof::finalize_xof`] refuses as [`Digest::finalize`] does.
 pub trait Xof: Algorithm + Clone + Default {
     /// Rate in bytes.
     const BLOCK_LEN: usize;
@@ -61,10 +71,137 @@ pub trait Xof: Algorithm + Clone + Default {
     fn update(&mut self, data: &[u8]);
 
     /// Squeeze `out.len()` bytes of output, consuming the state.
-    fn finalize_xof(self, out: &mut [u8]);
+    fn finalize_xof(self, out: &mut [u8]) -> Result<()>;
+}
+
+impl<T: internal::Digest> Digest for T {
+    type Output = <T as internal::Digest>::Output;
+    const OUTPUT_LEN: usize = <T as internal::Digest>::OUTPUT_LEN;
+    const BLOCK_LEN: usize = <T as internal::Digest>::BLOCK_LEN;
+
+    fn new() -> Self {
+        <T as internal::Digest>::new()
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        <T as internal::Digest>::update(self, data)
+    }
+
+    fn finalize(self) -> Result<Self::Output> {
+        crate::module::operational()?;
+        Ok(<T as internal::Digest>::finalize(self))
+    }
+}
+
+impl<T: internal::Xof> Xof for T {
+    const BLOCK_LEN: usize = <T as internal::Xof>::BLOCK_LEN;
+
+    fn update(&mut self, data: &[u8]) {
+        <T as internal::Xof>::update(self, data)
+    }
+
+    fn finalize_xof(self, out: &mut [u8]) -> Result<()> {
+        crate::module::operational()?;
+        <T as internal::Xof>::finalize_xof(self, out);
+        Ok(())
+    }
+}
+
+/// The hash functions and MACs as the rest of this library calls them,
+/// without the refusal on output. **Not API**, and not covered by semver.
+///
+/// A FIPS module has to refuse its services once it has failed; it does not
+/// have to refuse each step inside one. HMAC, HKDF, the DRBGs, ECDSA, RSA,
+/// ML-KEM, ML-DSA, SLH-DSA, LMS and the rest each refuse at their own entry,
+/// and then hash on the way to their answer through these traits, without a
+/// second check per block. Everything outside the module reaches a hash
+/// through [`Digest`] and [`Xof`], which refuse.
+///
+/// Nothing stops another crate from naming this module. A caller who does has
+/// stepped inside the boundary on purpose, and gets a hash that does not
+/// refuse.
+#[doc(hidden)]
+pub mod internal {
+    use super::Algorithm;
+
+    /// [`super::Digest`], without the refusal.
+    pub trait Digest: Algorithm + Clone + Default {
+        /// The fixed-size output buffer type.
+        type Output: AsRef<[u8]> + AsMut<[u8]> + Copy;
+        /// Output length in bytes.
+        const OUTPUT_LEN: usize;
+        /// Internal block (rate) length in bytes.
+        const BLOCK_LEN: usize;
+
+        /// Create a fresh, empty hasher.
+        fn new() -> Self {
+            Self::default()
+        }
+
+        /// Absorb more input.
+        fn update(&mut self, data: &[u8]);
+
+        /// Consume the hasher and produce the digest.
+        fn finalize(self) -> Self::Output;
+
+        /// Hash `data` in a single call.
+        fn digest(data: &[u8]) -> Self::Output {
+            let mut h = Self::new();
+            h.update(data);
+            h.finalize()
+        }
+    }
+
+    /// [`super::Mac`], without the refusal in `finalize`. `new` still
+    /// refuses, as every implementation's does.
+    pub trait Mac: Algorithm + Clone {
+        /// The fixed-size tag type.
+        type Tag: AsRef<[u8]> + AsMut<[u8]> + Copy;
+        /// Tag length in bytes.
+        const TAG_LEN: usize;
+
+        /// Create a MAC instance from a key.
+        fn new(key: &[u8]) -> crate::Result<Self>
+        where
+            Self: Sized;
+
+        /// Absorb more input.
+        fn update(&mut self, data: &[u8]);
+
+        /// Consume the instance and produce the tag.
+        fn finalize(self) -> Self::Tag;
+
+        /// One-shot authentication.
+        fn mac(key: &[u8], data: &[u8]) -> crate::Result<Self::Tag>
+        where
+            Self: Sized,
+        {
+            let mut m = Self::new(key)?;
+            m.update(data);
+            Ok(m.finalize())
+        }
+    }
+
+    /// [`super::Xof`], without the refusal.
+    pub trait Xof: Algorithm + Clone + Default {
+        /// Rate in bytes.
+        const BLOCK_LEN: usize;
+
+        /// Absorb more input.
+        fn update(&mut self, data: &[u8]);
+
+        /// Squeeze `out.len()` bytes of output, consuming the state.
+        fn finalize_xof(self, out: &mut [u8]);
+    }
 }
 
 /// A keyed message authentication code.
+///
+/// [`Mac::new`] and [`Mac::finalize`] refuse with
+/// [`ErrorKind::ModuleErrorState`](crate::ErrorKind) once the module is in its
+/// error state, so a MAC keyed before the failure produces no tag after it.
+///
+/// Implemented for every type that implements [`internal::Mac`].
 pub trait Mac: Algorithm + Clone {
     /// The fixed-size tag type.
     type Tag: AsRef<[u8]> + AsMut<[u8]> + Copy;
@@ -81,7 +218,7 @@ pub trait Mac: Algorithm + Clone {
     fn update(&mut self, data: &[u8]);
 
     /// Consume the instance and produce the tag.
-    fn finalize(self) -> Self::Tag;
+    fn finalize(self) -> Result<Self::Tag>;
 
     /// One-shot authentication.
     fn mac(key: &[u8], data: &[u8]) -> Result<Self::Tag>
@@ -90,7 +227,7 @@ pub trait Mac: Algorithm + Clone {
     {
         let mut m = Self::new(key)?;
         m.update(data);
-        Ok(m.finalize())
+        m.finalize()
     }
 
     /// Constant-time tag verification.
@@ -107,6 +244,24 @@ pub trait Mac: Algorithm + Clone {
         } else {
             Err(crate::err!(AuthenticationFailed, "mac tag"))
         }
+    }
+}
+
+impl<T: internal::Mac> Mac for T {
+    type Tag = <T as internal::Mac>::Tag;
+    const TAG_LEN: usize = <T as internal::Mac>::TAG_LEN;
+
+    fn new(key: &[u8]) -> Result<Self> {
+        <T as internal::Mac>::new(key)
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        <T as internal::Mac>::update(self, data)
+    }
+
+    fn finalize(self) -> Result<Self::Tag> {
+        crate::module::operational()?;
+        Ok(<T as internal::Mac>::finalize(self))
     }
 }
 

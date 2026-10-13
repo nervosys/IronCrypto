@@ -169,7 +169,7 @@ fn signatures_match_the_acvp_cases() {
                 "{label}: length"
             );
             assert_eq!(
-                hex(ic_hash::Sha256::digest(&signature).as_ref()),
+                hex(ic_hash::Sha256::digest(&signature).unwrap().as_ref()),
                 case["signature_sha256"],
                 "{label}: signature"
             );

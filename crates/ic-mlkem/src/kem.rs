@@ -130,14 +130,14 @@ mod tests {
         let mut ek = [0u8; ENCAPS_KEY_LEN];
         let mut dk_a = [0u8; DECAPS_KEY_LEN];
         let mut dk_b = [0u8; DECAPS_KEY_LEN];
-        MlKem768::keygen_deterministic(&d, &[0x22u8; 32], &mut ek, &mut dk_a);
+        MlKem768::keygen_deterministic(&d, &[0x22u8; 32], &mut ek, &mut dk_a).unwrap();
         let mut ek_b = [0u8; ENCAPS_KEY_LEN];
-        MlKem768::keygen_deterministic(&d, &[0x33u8; 32], &mut ek_b, &mut dk_b);
+        MlKem768::keygen_deterministic(&d, &[0x33u8; 32], &mut ek_b, &mut dk_b).unwrap();
         assert_eq!(ek, ek_b, "z must not affect the public key");
 
         let mut ct = [0u8; CIPHERTEXT_LEN];
         let mut secret = [0u8; 32];
-        MlKem768::encapsulate_deterministic(&[0x44u8; 32], &ek, &mut ct, &mut secret);
+        MlKem768::encapsulate_deterministic(&[0x44u8; 32], &ek, &mut ct, &mut secret).unwrap();
         ct[0] ^= 1;
 
         let mut a = [0u8; 32];
@@ -155,13 +155,13 @@ mod tests {
         let mut dk_a = [0u8; DECAPS_KEY_LEN];
         let mut ek_b = [0u8; ENCAPS_KEY_LEN];
         let mut dk_b = [0u8; DECAPS_KEY_LEN];
-        MlKem768::keygen_deterministic(&d, &z, &mut ek_a, &mut dk_a);
-        MlKem768::keygen_deterministic(&d, &z, &mut ek_b, &mut dk_b);
+        MlKem768::keygen_deterministic(&d, &z, &mut ek_a, &mut dk_a).unwrap();
+        MlKem768::keygen_deterministic(&d, &z, &mut ek_b, &mut dk_b).unwrap();
         assert_eq!(ek_a, ek_b);
         assert_eq!(dk_a, dk_b);
 
         // And a different seed gives a different key.
-        MlKem768::keygen_deterministic(&[0x78u8; 32], &z, &mut ek_b, &mut dk_b);
+        MlKem768::keygen_deterministic(&[0x78u8; 32], &z, &mut ek_b, &mut dk_b).unwrap();
         assert_ne!(ek_a, ek_b);
     }
 
@@ -368,14 +368,14 @@ mod tests {
         let z = [0x02u8; 32];
         let mut ek = [0u8; ENCAPS_KEY_LEN];
         let mut dk = [0u8; DECAPS_KEY_LEN];
-        MlKem768::keygen_deterministic(&d, &z, &mut ek, &mut dk);
+        MlKem768::keygen_deterministic(&d, &z, &mut ek, &mut dk).unwrap();
 
         let mut ct_a = [0u8; CIPHERTEXT_LEN];
         let mut a = [0u8; 32];
         let mut ct_b = [0u8; CIPHERTEXT_LEN];
         let mut b = [0u8; 32];
-        MlKem768::encapsulate_deterministic(&[0x10u8; 32], &ek, &mut ct_a, &mut a);
-        MlKem768::encapsulate_deterministic(&[0x11u8; 32], &ek, &mut ct_b, &mut b);
+        MlKem768::encapsulate_deterministic(&[0x10u8; 32], &ek, &mut ct_a, &mut a).unwrap();
+        MlKem768::encapsulate_deterministic(&[0x11u8; 32], &ek, &mut ct_b, &mut b).unwrap();
         assert_ne!(a, b);
         assert_ne!(ct_a, ct_b);
     }

@@ -27,7 +27,7 @@
 
 use crate::key::{RsaPrivateKey, RsaPublicKey};
 use crate::uint::MAX_BYTES;
-use ic_core::traits::Digest;
+use ic_core::traits::internal::Digest;
 use ic_core::{ct, ensure, Result};
 
 /// The smallest block this will produce: RFC 8017 requires at least 8 padding

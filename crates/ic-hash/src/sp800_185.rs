@@ -169,16 +169,27 @@ macro_rules! cshake {
             }
 
             /// Squeeze `out.len()` bytes.
-            pub fn finalize_xof(mut self, out: &mut [u8]) {
+            ///
+            /// Refuses with `ModuleErrorState` once the module has failed.
+            pub fn finalize_xof(self, out: &mut [u8]) -> ic_core::Result<()> {
+                ic_core::module::operational()?;
+                self.finalize_xof_unchecked(out);
+                Ok(())
+            }
+
+            /// [`Self::finalize_xof`] without the refusal, for KMAC and the
+            /// constructions here. Not API; see `ic_core::traits::internal`.
+            #[doc(hidden)]
+            pub fn finalize_xof_unchecked(mut self, out: &mut [u8]) {
                 self.sponge.finish();
                 self.sponge.squeeze(out);
             }
 
             /// One-shot.
-            pub fn xof(n: &[u8], s: &[u8], data: &[u8], out: &mut [u8]) {
+            pub fn xof(n: &[u8], s: &[u8], data: &[u8], out: &mut [u8]) -> ic_core::Result<()> {
                 let mut x = Self::new(n, s);
                 x.update(data);
-                x.finalize_xof(out);
+                x.finalize_xof(out)
             }
 
             /// Absorb `bytepad(encode_string(s), RATE)`.
@@ -214,12 +225,12 @@ macro_rules! cshake_self_test {
             fn self_test() -> ic_core::Result<()> {
                 let mut plain = [0u8; 32];
                 let mut shake = [0u8; 32];
-                Self::xof(b"", b"", b"abc", &mut plain);
-                <$shake>::xof(b"abc", &mut shake);
+                Self::xof(b"", b"", b"abc", &mut plain)?;
+                <$shake>::xof(b"abc", &mut shake)?;
                 ic_core::ensure!(ic_core::ct::verify(&plain, &shake), SelfTestFailed, $id);
 
                 let mut customized = [0u8; 32];
-                Self::xof(b"", b"self-test", b"abc", &mut customized);
+                Self::xof(b"", b"self-test", b"abc", &mut customized)?;
                 ic_core::ensure!(
                     !ic_core::ct::verify(&plain, &customized),
                     SelfTestFailed,
@@ -287,37 +298,49 @@ macro_rules! tuple_hash {
             }
 
             /// Finish with a fixed-length output, binding the length in.
-            pub fn finalize(mut self, out: &mut [u8]) {
+            ///
+            /// Refuses with `ModuleErrorState` once the module has failed.
+            pub fn finalize(mut self, out: &mut [u8]) -> ic_core::Result<()> {
+                ic_core::module::operational()?;
                 let mut buf = [0u8; MAX_ENCODE];
                 let used = right_encode((out.len() as u64) * 8, &mut buf);
                 self.inner.update(&buf[..used]);
-                self.inner.finalize_xof(out);
+                self.inner.finalize_xof_unchecked(out);
+                Ok(())
             }
 
             /// Finish in XOF mode, where the output is a stream.
-            pub fn finalize_xof(mut self, out: &mut [u8]) {
+            ///
+            /// Refuses with `ModuleErrorState` once the module has failed.
+            pub fn finalize_xof(mut self, out: &mut [u8]) -> ic_core::Result<()> {
+                ic_core::module::operational()?;
                 let mut buf = [0u8; MAX_ENCODE];
                 let used = right_encode(0, &mut buf);
                 self.inner.update(&buf[..used]);
-                self.inner.finalize_xof(out);
+                self.inner.finalize_xof_unchecked(out);
+                Ok(())
             }
 
             /// One-shot over a slice of elements.
-            pub fn hash(custom: &[u8], elements: &[&[u8]], out: &mut [u8]) {
+            pub fn hash(custom: &[u8], elements: &[&[u8]], out: &mut [u8]) -> ic_core::Result<()> {
                 let mut t = Self::new(custom);
                 for element in elements {
                     t.update(element);
                 }
-                t.finalize(out);
+                t.finalize(out)
             }
 
             /// One-shot in XOF mode.
-            pub fn hash_xof(custom: &[u8], elements: &[&[u8]], out: &mut [u8]) {
+            pub fn hash_xof(
+                custom: &[u8],
+                elements: &[&[u8]],
+                out: &mut [u8],
+            ) -> ic_core::Result<()> {
                 let mut t = Self::new(custom);
                 for element in elements {
                     t.update(element);
                 }
-                t.finalize_xof(out);
+                t.finalize_xof(out)
             }
         }
 
@@ -327,13 +350,13 @@ macro_rules! tuple_hash {
             fn self_test() -> ic_core::Result<()> {
                 let mut a = [0u8; 32];
                 let mut b = [0u8; 32];
-                Self::hash(b"self-test", &[b"abc", b"d"], &mut a);
-                Self::hash(b"self-test", &[b"ab", b"cd"], &mut b);
+                Self::hash(b"self-test", &[b"abc", b"d"], &mut a)?;
+                Self::hash(b"self-test", &[b"ab", b"cd"], &mut b)?;
                 ic_core::ensure!(!ic_core::ct::verify(&a, &b), SelfTestFailed, $id);
 
                 // And it is deterministic.
                 let mut again = [0u8; 32];
-                Self::hash(b"self-test", &[b"abc", b"d"], &mut again);
+                Self::hash(b"self-test", &[b"abc", b"d"], &mut again)?;
                 ic_core::ensure!(ic_core::ct::verify(&a, &again), SelfTestFailed, $id);
                 Ok(())
             }
@@ -385,19 +408,43 @@ macro_rules! parallel_hash {
 
             /// Hash `data` in blocks of `block_size` bytes.
             ///
-            /// `block_size` must be at least one. SP 800-185 places no upper
-            /// bound on it, and neither does this.
-            pub fn hash(custom: &[u8], block_size: usize, data: &[u8], out: &mut [u8]) {
+            /// `block_size` must be at least one; zero is refused with
+            /// `InvalidParameter`. SP 800-185 places no upper bound on it, and
+            /// neither does this. Refuses with `ModuleErrorState` once the
+            /// module has failed.
+            pub fn hash(
+                custom: &[u8],
+                block_size: usize,
+                data: &[u8],
+                out: &mut [u8],
+            ) -> ic_core::Result<()> {
                 Self::run(custom, block_size, data, out, false)
             }
 
             /// As [`Self::hash`], in XOF mode.
-            pub fn hash_xof(custom: &[u8], block_size: usize, data: &[u8], out: &mut [u8]) {
+            pub fn hash_xof(
+                custom: &[u8],
+                block_size: usize,
+                data: &[u8],
+                out: &mut [u8],
+            ) -> ic_core::Result<()> {
                 Self::run(custom, block_size, data, out, true)
             }
 
-            fn run(custom: &[u8], block_size: usize, data: &[u8], out: &mut [u8], xof: bool) {
-                assert!(block_size > 0, "parallelhash block size must be positive");
+            fn run(
+                custom: &[u8],
+                block_size: usize,
+                data: &[u8],
+                out: &mut [u8],
+                xof: bool,
+            ) -> ic_core::Result<()> {
+                // An assert here once panicked on a caller's zero.
+                ic_core::ensure!(
+                    block_size > 0,
+                    InvalidParameter,
+                    "parallelhash block size is zero"
+                );
+                ic_core::module::operational()?;
                 let mut outer = <$cshake>::new(b"ParallelHash", custom);
                 let mut buf = [0u8; MAX_ENCODE];
 
@@ -409,7 +456,9 @@ macro_rules! parallel_hash {
                     // Each block's digest is plain SHAKE at the chaining width,
                     // which is what cSHAKE with no customization gives.
                     let mut chain = [0u8; $chain];
-                    <$cshake>::xof(b"", b"", block, &mut chain);
+                    let mut leaf = <$cshake>::new(b"", b"");
+                    leaf.update(block);
+                    leaf.finalize_xof_unchecked(&mut chain);
                     outer.update(&chain);
                     blocks += 1;
                 }
@@ -418,7 +467,8 @@ macro_rules! parallel_hash {
                 outer.update(&buf[..used]);
                 let used = right_encode(if xof { 0 } else { (out.len() as u64) * 8 }, &mut buf);
                 outer.update(&buf[..used]);
-                outer.finalize_xof(out);
+                outer.finalize_xof_unchecked(out);
+                Ok(())
             }
         }
 
@@ -430,12 +480,12 @@ macro_rules! parallel_hash {
                 let data = [0x5au8; 200];
                 let mut a = [0u8; 32];
                 let mut b = [0u8; 32];
-                Self::hash(b"self-test", 16, &data, &mut a);
-                Self::hash(b"self-test", 32, &data, &mut b);
+                Self::hash(b"self-test", 16, &data, &mut a)?;
+                Self::hash(b"self-test", 32, &data, &mut b)?;
                 ic_core::ensure!(!ic_core::ct::verify(&a, &b), SelfTestFailed, $id);
 
                 let mut again = [0u8; 32];
-                Self::hash(b"self-test", 16, &data, &mut again);
+                Self::hash(b"self-test", 16, &data, &mut again)?;
                 ic_core::ensure!(ic_core::ct::verify(&a, &again), SelfTestFailed, $id);
                 Ok(())
             }
@@ -690,7 +740,7 @@ mod tests {
             "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
         );
         // And it agrees with the shipped implementation on the same input.
-        assert_eq!(hex(Sha3_256::digest(b"abc").as_ref()), hex(&got));
+        assert_eq!(hex(Sha3_256::digest(b"abc").unwrap().as_ref()), hex(&got));
     }
 
     // -- cSHAKE ------------------------------------------------------------
@@ -701,12 +751,12 @@ mod tests {
         for len in [1usize, 16, 32, 168, 169, 512] {
             let mut a = vec![0u8; len];
             let mut b = vec![0u8; len];
-            CShake128::xof(b"", b"", b"the quick brown fox", &mut a);
-            Shake128::xof(b"the quick brown fox", &mut b);
+            CShake128::xof(b"", b"", b"the quick brown fox", &mut a).unwrap();
+            Shake128::xof(b"the quick brown fox", &mut b).unwrap();
             assert_eq!(a, b, "cSHAKE128 with no customization, {len} bytes");
 
-            CShake256::xof(b"", b"", b"the quick brown fox", &mut a);
-            Shake256::xof(b"the quick brown fox", &mut b);
+            CShake256::xof(b"", b"", b"the quick brown fox", &mut a).unwrap();
+            Shake256::xof(b"the quick brown fox", &mut b).unwrap();
             assert_eq!(a, b, "cSHAKE256 with no customization, {len} bytes");
         }
     }
@@ -742,9 +792,9 @@ mod tests {
 
                 let mut got = [0u8; 64];
                 if is_128 {
-                    CShake128::xof(n, s, data, &mut got);
+                    CShake128::xof(n, s, data, &mut got).unwrap();
                 } else {
-                    CShake256::xof(n, s, data, &mut got);
+                    CShake256::xof(n, s, data, &mut got).unwrap();
                 }
                 assert_eq!(
                     hex(&got),
@@ -762,9 +812,9 @@ mod tests {
         let mut a = [0u8; 32];
         let mut b = [0u8; 32];
         let mut c = [0u8; 32];
-        CShake128::xof(b"", b"one", b"message", &mut a);
-        CShake128::xof(b"", b"two", b"message", &mut b);
-        CShake128::xof(b"", b"", b"message", &mut c);
+        CShake128::xof(b"", b"one", b"message", &mut a).unwrap();
+        CShake128::xof(b"", b"two", b"message", &mut b).unwrap();
+        CShake128::xof(b"", b"", b"message", &mut c).unwrap();
         assert_ne!(a, b, "S is bound into the output");
         assert_ne!(a, c, "and distinguishes customized from plain");
     }
@@ -773,14 +823,14 @@ mod tests {
     fn streaming_matches_the_one_shot() {
         let data = [0x37u8; 500];
         let mut one = [0u8; 64];
-        CShake128::xof(b"KMAC", b"S", &data, &mut one);
+        CShake128::xof(b"KMAC", b"S", &data, &mut one).unwrap();
 
         let mut x = CShake128::new(b"KMAC", b"S");
         for chunk in data.chunks(7) {
             x.update(chunk);
         }
         let mut streamed = [0u8; 64];
-        x.finalize_xof(&mut streamed);
+        x.finalize_xof(&mut streamed).unwrap();
         assert_eq!(one, streamed);
     }
 }
@@ -830,9 +880,9 @@ mod tuple_parallel_tests {
         }
         z.extend_from_slice(&renc(if xof { 0 } else { (out.len() as u64) * 8 }));
         if wide {
-            CShake256::xof(b"TupleHash", custom, &z, out);
+            CShake256::xof(b"TupleHash", custom, &z, out).unwrap();
         } else {
-            CShake128::xof(b"TupleHash", custom, &z, out);
+            CShake128::xof(b"TupleHash", custom, &z, out).unwrap();
         }
     }
 
@@ -851,9 +901,9 @@ mod tuple_parallel_tests {
         for block in data.chunks(block_size) {
             let mut chain = vec![0u8; chain_len];
             if wide {
-                CShake256::xof(b"", b"", block, &mut chain);
+                CShake256::xof(b"", b"", block, &mut chain).unwrap();
             } else {
-                CShake128::xof(b"", b"", block, &mut chain);
+                CShake128::xof(b"", b"", block, &mut chain).unwrap();
             }
             z.extend_from_slice(&chain);
             n += 1;
@@ -861,9 +911,9 @@ mod tuple_parallel_tests {
         z.extend_from_slice(&renc(n));
         z.extend_from_slice(&renc(if xof { 0 } else { (out.len() as u64) * 8 }));
         if wide {
-            CShake256::xof(b"ParallelHash", custom, &z, out);
+            CShake256::xof(b"ParallelHash", custom, &z, out).unwrap();
         } else {
-            CShake128::xof(b"ParallelHash", custom, &z, out);
+            CShake128::xof(b"ParallelHash", custom, &z, out).unwrap();
         }
     }
 
@@ -883,15 +933,15 @@ mod tuple_parallel_tests {
                 let mut got = vec![0u8; len];
 
                 reference_tuple_hash(false, custom, elements, &mut want, false);
-                TupleHash128::hash(custom, elements, &mut got);
+                TupleHash128::hash(custom, elements, &mut got).unwrap();
                 assert_eq!(got, want, "TupleHash128 fixed, {len} bytes");
 
                 reference_tuple_hash(true, custom, elements, &mut want, false);
-                TupleHash256::hash(custom, elements, &mut got);
+                TupleHash256::hash(custom, elements, &mut got).unwrap();
                 assert_eq!(got, want, "TupleHash256 fixed, {len} bytes");
 
                 reference_tuple_hash(false, custom, elements, &mut want, true);
-                TupleHash128::hash_xof(custom, elements, &mut got);
+                TupleHash128::hash_xof(custom, elements, &mut got).unwrap();
                 assert_eq!(got, want, "TupleHash128 xof, {len} bytes");
             }
         }
@@ -913,7 +963,7 @@ mod tuple_parallel_tests {
         let mut seen: Vec<[u8; 32]> = Vec::new();
         for elements in splits {
             let mut out = [0u8; 32];
-            TupleHash128::hash(b"", elements, &mut out);
+            TupleHash128::hash(b"", elements, &mut out).unwrap();
             assert!(
                 !seen.contains(&out),
                 "two different tuples collided: {elements:?}"
@@ -925,14 +975,14 @@ mod tuple_parallel_tests {
     #[test]
     fn tuple_hash_streams() {
         let mut one = [0u8; 32];
-        TupleHash128::hash(b"S", &[b"alpha", b"beta", b"gamma"], &mut one);
+        TupleHash128::hash(b"S", &[b"alpha", b"beta", b"gamma"], &mut one).unwrap();
 
         let mut t = TupleHash128::new(b"S");
         t.update(b"alpha");
         t.update(b"beta");
         t.update(b"gamma");
         let mut streamed = [0u8; 32];
-        t.finalize(&mut streamed);
+        t.finalize(&mut streamed).unwrap();
         assert_eq!(one, streamed);
     }
 
@@ -945,15 +995,15 @@ mod tuple_parallel_tests {
                 let mut got = vec![0u8; len];
 
                 reference_parallel_hash(false, b"S", block_size, &data, &mut want, false);
-                ParallelHash128::hash(b"S", block_size, &data, &mut got);
+                ParallelHash128::hash(b"S", block_size, &data, &mut got).unwrap();
                 assert_eq!(got, want, "ParallelHash128 B={block_size}, {len} bytes");
 
                 reference_parallel_hash(true, b"", block_size, &data, &mut want, false);
-                ParallelHash256::hash(b"", block_size, &data, &mut got);
+                ParallelHash256::hash(b"", block_size, &data, &mut got).unwrap();
                 assert_eq!(got, want, "ParallelHash256 B={block_size}, {len} bytes");
 
                 reference_parallel_hash(false, b"S", block_size, &data, &mut want, true);
-                ParallelHash128::hash_xof(b"S", block_size, &data, &mut got);
+                ParallelHash128::hash_xof(b"S", block_size, &data, &mut got).unwrap();
                 assert_eq!(got, want, "ParallelHash128 xof B={block_size}");
             }
         }
@@ -965,7 +1015,7 @@ mod tuple_parallel_tests {
         let mut want = [0u8; 32];
         let mut got = [0u8; 32];
         reference_parallel_hash(false, b"", 64, b"", &mut want, false);
-        ParallelHash128::hash(b"", 64, b"", &mut got);
+        ParallelHash128::hash(b"", 64, b"", &mut got).unwrap();
         assert_eq!(got, want);
     }
 
@@ -975,8 +1025,8 @@ mod tuple_parallel_tests {
         let data = [0xa1u8; 256];
         let mut a = [0u8; 32];
         let mut b = [0u8; 32];
-        ParallelHash128::hash(b"", 32, &data, &mut a);
-        ParallelHash128::hash(b"", 64, &data, &mut b);
+        ParallelHash128::hash(b"", 32, &data, &mut a).unwrap();
+        ParallelHash128::hash(b"", 64, &data, &mut b).unwrap();
         assert_ne!(a, b, "B is bound into the output");
     }
 
@@ -984,17 +1034,17 @@ mod tuple_parallel_tests {
     fn output_length_is_bound_in_for_both() {
         let mut short = [0u8; 32];
         let mut long = [0u8; 64];
-        TupleHash128::hash(b"", &[b"x"], &mut short);
-        TupleHash128::hash(b"", &[b"x"], &mut long);
+        TupleHash128::hash(b"", &[b"x"], &mut short).unwrap();
+        TupleHash128::hash(b"", &[b"x"], &mut long).unwrap();
         assert_ne!(short[..], long[..32], "TupleHash binds L");
 
-        ParallelHash128::hash(b"", 32, b"x", &mut short);
-        ParallelHash128::hash(b"", 32, b"x", &mut long);
+        ParallelHash128::hash(b"", 32, b"x", &mut short).unwrap();
+        ParallelHash128::hash(b"", 32, b"x", &mut long).unwrap();
         assert_ne!(short[..], long[..32], "ParallelHash binds L");
 
         // The XOF forms, by contrast, extend.
-        TupleHash128::hash_xof(b"", &[b"x"], &mut short);
-        TupleHash128::hash_xof(b"", &[b"x"], &mut long);
+        TupleHash128::hash_xof(b"", &[b"x"], &mut short).unwrap();
+        TupleHash128::hash_xof(b"", &[b"x"], &mut long).unwrap();
         assert_eq!(short[..], long[..32], "the xof form is a stream");
     }
 

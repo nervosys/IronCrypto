@@ -425,14 +425,15 @@ fn check_example(id: &str, compiled: &str) {
 macro_rules! digest_family {
     ($($id:literal => $ty:ident),* $(,)?) => {
         #[test]
-        fn digest_examples_compile_and_match() {
+        fn digest_examples_compile_and_match() -> Result<()> {
             $({
-                let _d = ironcrypto::hash::$ty::digest(b"message");
+                let _d = ironcrypto::hash::$ty::digest(b"message")?;
                 let expected = concat!(
-                    "let d = ic_hash::", stringify!($ty), "::digest(b\"message\");"
+                    "let d = ic_hash::", stringify!($ty), "::digest(b\"message\")?;"
                 );
                 check_example($id, expected);
             })*
+            Ok(())
         }
     };
 }
@@ -642,21 +643,22 @@ fn poly1305_example_compiles_and_matches() -> Result<()> {
 
 /// `shake128` and `shake256`, the extendable-output functions.
 #[test]
-fn shake_examples_compile_and_match() {
+fn shake_examples_compile_and_match() -> Result<()> {
     let mut out = [0u8; 64];
-    hash::Shake128::xof(b"seed", &mut out);
+    hash::Shake128::xof(b"seed", &mut out)?;
     check_example(
         "shake128",
         "let mut out = [0u8; 64];
-ic_hash::Shake128::xof(b\"seed\", &mut out);",
+ic_hash::Shake128::xof(b\"seed\", &mut out)?;",
     );
 
-    hash::Shake256::xof(b"seed", &mut out);
+    hash::Shake256::xof(b"seed", &mut out)?;
     check_example(
         "shake256",
         "let mut out = [0u8; 64];
-ic_hash::Shake256::xof(b\"seed\", &mut out);",
+ic_hash::Shake256::xof(b\"seed\", &mut out)?;",
     );
+    Ok(())
 }
 
 /// `blake2b`, whose output length is a parameter rather than fixed.
@@ -685,13 +687,14 @@ fn blake2s_example_compiles_and_matches() -> Result<()> {
 
 /// `blake3`, which returns its 32-byte digest.
 #[test]
-fn blake3_example_compiles_and_matches() {
-    let digest = hash::Blake3::hash(b"message");
+fn blake3_example_compiles_and_matches() -> Result<()> {
+    let digest = hash::Blake3::hash(b"message")?;
     assert_eq!(digest.len(), 32);
     check_example(
         "blake3",
-        "let digest = ic_hash::Blake3::hash(b\"message\");",
+        "let digest = ic_hash::Blake3::hash(b\"message\")?;",
     );
+    Ok(())
 }
 
 /// The SP 800-185 functions: cSHAKE, TupleHash, ParallelHash and KMAC.
@@ -704,54 +707,54 @@ fn sp800_185_examples_compile_and_match() -> Result<()> {
     let (a, b): (&[u8], &[u8]) = (b"alpha", b"beta");
 
     let mut out = [0u8; 32];
-    hash::CShake128::xof(b"", b"my app", msg, &mut out);
+    hash::CShake128::xof(b"", b"my app", msg, &mut out)?;
     check_example(
         "cshake128",
-        "let mut out = [0u8; 32];\nic_hash::CShake128::xof(b\"\", b\"my app\", msg, &mut out);",
+        "let mut out = [0u8; 32];\nic_hash::CShake128::xof(b\"\", b\"my app\", msg, &mut out)?;",
     );
 
-    hash::CShake256::xof(b"", b"my app", msg, &mut out);
+    hash::CShake256::xof(b"", b"my app", msg, &mut out)?;
     check_example(
         "cshake256",
-        "ic_hash::CShake256::xof(b\"\", b\"my app\", msg, &mut out);",
+        "ic_hash::CShake256::xof(b\"\", b\"my app\", msg, &mut out)?;",
     );
 
-    hash::TupleHash128::hash(b"my app", &[field_a, field_b], &mut out);
+    hash::TupleHash128::hash(b"my app", &[field_a, field_b], &mut out)?;
     check_example(
         "tuplehash128",
-        "let mut out = [0u8; 32];\nic_hash::TupleHash128::hash(b\"my app\", &[field_a, field_b], &mut out);",
+        "let mut out = [0u8; 32];\nic_hash::TupleHash128::hash(b\"my app\", &[field_a, field_b], &mut out)?;",
     );
 
-    hash::TupleHash256::hash(b"my app", &[a, b], &mut out);
+    hash::TupleHash256::hash(b"my app", &[a, b], &mut out)?;
     check_example(
         "tuplehash256",
-        "ic_hash::TupleHash256::hash(b\"my app\", &[a, b], &mut out);",
+        "ic_hash::TupleHash256::hash(b\"my app\", &[a, b], &mut out)?;",
     );
 
-    hash::ParallelHash128::hash(b"my app", 8192, data, &mut out);
+    hash::ParallelHash128::hash(b"my app", 8192, data, &mut out)?;
     check_example(
         "parallelhash128",
-        "ic_hash::ParallelHash128::hash(b\"my app\", 8192, data, &mut out);",
+        "ic_hash::ParallelHash128::hash(b\"my app\", 8192, data, &mut out)?;",
     );
 
-    hash::ParallelHash256::hash(b"my app", 8192, data, &mut out);
+    hash::ParallelHash256::hash(b"my app", 8192, data, &mut out)?;
     check_example(
         "parallelhash256",
-        "ic_hash::ParallelHash256::hash(b\"my app\", 8192, data, &mut out);",
+        "ic_hash::ParallelHash256::hash(b\"my app\", 8192, data, &mut out)?;",
     );
 
     let mut tag = [0u8; 32];
-    mac::Kmac128::mac(key, b"my app", msg, &mut tag);
+    mac::Kmac128::mac(key, b"my app", msg, &mut tag)?;
     mac::Kmac128::verify(key, b"my app", msg, &tag)?;
     check_example(
         "kmac128",
-        "let mut tag = [0u8; 32];\nic_mac::Kmac128::mac(key, b\"my app\", msg, &mut tag);\nic_mac::Kmac128::verify(key, b\"my app\", msg, &tag)?;",
+        "let mut tag = [0u8; 32];\nic_mac::Kmac128::mac(key, b\"my app\", msg, &mut tag)?;\nic_mac::Kmac128::verify(key, b\"my app\", msg, &tag)?;",
     );
 
-    mac::Kmac256::mac(key, b"my app", msg, &mut tag);
+    mac::Kmac256::mac(key, b"my app", msg, &mut tag)?;
     check_example(
         "kmac256",
-        "ic_mac::Kmac256::mac(key, b\"my app\", msg, &mut tag);",
+        "ic_mac::Kmac256::mac(key, b\"my app\", msg, &mut tag)?;",
     );
     Ok(())
 }

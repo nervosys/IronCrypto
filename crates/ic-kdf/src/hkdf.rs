@@ -1,7 +1,8 @@
 //! RFC 5869 HKDF: extract-then-expand.
 
 use core::marker::PhantomData;
-use ic_core::traits::{Algorithm, Kdf, Mac, SelfTest};
+use ic_core::traits::internal::Mac;
+use ic_core::traits::{Algorithm, Kdf, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 /// The largest PRK any supported HMAC produces (SHA-512).

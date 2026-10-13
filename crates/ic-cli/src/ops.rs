@@ -545,17 +545,18 @@ pub fn errors_json() -> Json {
 pub fn digest_hex(algorithm: &str, data: &[u8]) -> Result<String, String> {
     use ic_hash::*;
     let hex = |b: &[u8]| ic_core::codec::hex(b);
+    let err = |e: ic_core::Error| e.to_string();
     Ok(match algorithm {
-        "sha2-224" | "sha224" => hex(Sha224::digest(data).as_ref()),
-        "sha2-256" | "sha256" => hex(Sha256::digest(data).as_ref()),
-        "sha2-384" | "sha384" => hex(Sha384::digest(data).as_ref()),
-        "sha2-512" | "sha512" => hex(Sha512::digest(data).as_ref()),
-        "sha2-512-224" => hex(Sha512_224::digest(data).as_ref()),
-        "sha2-512-256" => hex(Sha512_256::digest(data).as_ref()),
-        "sha3-224" => hex(Sha3_224::digest(data).as_ref()),
-        "sha3-256" => hex(Sha3_256::digest(data).as_ref()),
-        "sha3-384" => hex(Sha3_384::digest(data).as_ref()),
-        "sha3-512" => hex(Sha3_512::digest(data).as_ref()),
+        "sha2-224" | "sha224" => hex(Sha224::digest(data).map_err(err)?.as_ref()),
+        "sha2-256" | "sha256" => hex(Sha256::digest(data).map_err(err)?.as_ref()),
+        "sha2-384" | "sha384" => hex(Sha384::digest(data).map_err(err)?.as_ref()),
+        "sha2-512" | "sha512" => hex(Sha512::digest(data).map_err(err)?.as_ref()),
+        "sha2-512-224" => hex(Sha512_224::digest(data).map_err(err)?.as_ref()),
+        "sha2-512-256" => hex(Sha512_256::digest(data).map_err(err)?.as_ref()),
+        "sha3-224" => hex(Sha3_224::digest(data).map_err(err)?.as_ref()),
+        "sha3-256" => hex(Sha3_256::digest(data).map_err(err)?.as_ref()),
+        "sha3-384" => hex(Sha3_384::digest(data).map_err(err)?.as_ref()),
+        "sha3-512" => hex(Sha3_512::digest(data).map_err(err)?.as_ref()),
         other => {
             return Err(match ic_ontology::get(other) {
                 Some(e) if e.class != ic_ontology::Class::Hash => {
@@ -875,7 +876,7 @@ pub fn claim_nonce(key: &[u8], nonce: &[u8]) -> Result<(), String> {
     mac.update(&(key.len() as u64).to_be_bytes());
     mac.update(key);
     mac.update(nonce);
-    let fingerprint: [u8; 32] = mac.finalize();
+    let fingerprint: [u8; 32] = mac.finalize().map_err(|e| e.to_string())?;
 
     if memory.seen.contains(&fingerprint) {
         return Err(

@@ -14,7 +14,8 @@ use ic_core::ct::Choice;
 // The precomputed basepoint table. See the module for why it is `std` only.
 #[cfg(feature = "std")]
 mod basepoint_table;
-use ic_core::traits::{Algorithm, Digest, SelfTest, SignatureScheme};
+use ic_core::traits::internal::Digest;
+use ic_core::traits::{Algorithm, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Sha512;
 

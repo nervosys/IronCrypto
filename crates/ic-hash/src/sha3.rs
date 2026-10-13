@@ -1,6 +1,9 @@
 //! FIPS 202 SHA-3 and SHAKE, built on the Keccak-f[1600] permutation.
 
-use ic_core::traits::{Algorithm, Digest, SelfTest, Xof};
+// The infallible traits: the refusing `Digest` and `Xof` are implemented for
+// these types by ic-core, over the ones written here.
+use ic_core::traits::internal::{Digest, Xof};
+use ic_core::traits::{Algorithm, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 const ROUNDS: usize = 24;
@@ -308,7 +311,20 @@ pub struct XofReader {
 
 impl XofReader {
     /// Squeeze the next `out.len()` bytes.
-    pub fn read(&mut self, out: &mut [u8]) {
+    ///
+    /// Refuses with `ModuleErrorState` once the module has failed, as
+    /// [`ic_core::traits::Digest::finalize`] does.
+    pub fn read(&mut self, out: &mut [u8]) -> Result<()> {
+        ic_core::module::operational()?;
+        self.sponge.squeeze(out);
+        Ok(())
+    }
+
+    /// [`Self::read`] without the refusal, for the primitives in this library
+    /// that sample from an XOF after refusing at their own entry. Not API; see
+    /// `ic_core::traits::internal`.
+    #[doc(hidden)]
+    pub fn read_unchecked(&mut self, out: &mut [u8]) {
         self.sponge.squeeze(out);
     }
 }
@@ -354,7 +370,18 @@ macro_rules! shake {
             }
 
             /// One-shot: absorb `data` and squeeze `out.len()` bytes.
-            pub fn xof(data: &[u8], out: &mut [u8]) {
+            ///
+            /// Refuses with `ModuleErrorState` once the module has failed.
+            pub fn xof(data: &[u8], out: &mut [u8]) -> Result<()> {
+                ic_core::module::operational()?;
+                Self::xof_unchecked(data, out);
+                Ok(())
+            }
+
+            /// [`Self::xof`] without the refusal. Not API; see
+            /// `ic_core::traits::internal`.
+            #[doc(hidden)]
+            pub fn xof_unchecked(data: &[u8], out: &mut [u8]) {
                 let mut x = Self::default();
                 <Self as Xof>::update(&mut x, data);
                 x.finalize_xof(out);
@@ -364,7 +391,7 @@ macro_rules! shake {
         impl SelfTest for $name {
             fn self_test() -> Result<()> {
                 let mut got = [0u8; 32];
-                Self::xof(b"abc", &mut got);
+                Self::xof_unchecked(b"abc", &mut got);
                 let mut want = [0u8; 32];
                 ic_core::codec::hex_decode($kat.as_bytes(), &mut want)?;
                 ensure!(ic_core::ct::verify(&want, &got), SelfTestFailed, $id);
@@ -458,12 +485,12 @@ mod tests {
     #[test]
     fn shake_vectors() {
         let mut out = [0u8; 32];
-        Shake128::xof(b"", &mut out);
+        Shake128::xof(b"", &mut out).unwrap();
         assert_eq!(
             hex(&out),
             "7f9c2ba4e88f827d616045507605853ed73b8093f6efbc88eb1a6eacfa66ef26"
         );
-        Shake256::xof(b"", &mut out);
+        Shake256::xof(b"", &mut out).unwrap();
         assert_eq!(
             hex(&out),
             "46b9dd2b0ba88d13233b3feb743eeb243fcd52ea62b81b82b50c27646ed5762f"
@@ -476,8 +503,8 @@ mod tests {
     fn shake_long_squeeze_is_prefix_consistent() {
         let mut short = [0u8; 16];
         let mut long = [0u8; 512];
-        Shake128::xof(b"agentic", &mut short);
-        Shake128::xof(b"agentic", &mut long);
+        Shake128::xof(b"agentic", &mut short).unwrap();
+        Shake128::xof(b"agentic", &mut long).unwrap();
         assert_eq!(&long[..16], &short[..]);
     }
 
@@ -643,8 +670,6 @@ mod tests {
     /// on one.
     #[test]
     fn chunking_the_input_does_not_change_the_digest() {
-        use ic_core::traits::Digest;
-
         for len in [0usize, 1, 7, 8, 9, 135, 136, 137, 271, 272, 273, 400] {
             let msg: Vec<u8> = (0..len).map(|i| (i * 31 + 7) as u8).collect();
             let want = Sha3_256::digest(&msg);
@@ -679,8 +704,6 @@ mod tests {
     /// The same, for the extendable-output side and its different rate.
     #[test]
     fn chunking_the_input_does_not_change_the_xof_output() {
-        use ic_core::traits::Xof;
-
         for len in [0usize, 1, 167, 168, 169, 337, 500] {
             let msg: Vec<u8> = (0..len).map(|i| (i * 17 + 3) as u8).collect();
             let mut want = [0u8; 137];

@@ -63,7 +63,8 @@
 #![warn(clippy::all)]
 
 use ic_cipher::{Aes128Gcm, Aes256Gcm, ChaCha20Poly1305};
-use ic_core::traits::{Aead as AeadTrait, Algorithm, KeyAgreement, Mac, RandomSource, SelfTest};
+use ic_core::traits::internal::Mac;
+use ic_core::traits::{Aead as AeadTrait, Algorithm, KeyAgreement, RandomSource, SelfTest};
 use ic_core::{ensure, Result, Zeroize, Zeroizing};
 use ic_ec::X25519;
 use ic_mac::{HmacSha256, HmacSha384};

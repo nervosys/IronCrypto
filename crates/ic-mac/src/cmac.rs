@@ -10,7 +10,8 @@
 #![allow(clippy::needless_range_loop)]
 
 use ic_cipher::aes::{Aes128, Aes192, Aes256, BLOCK_LEN};
-use ic_core::traits::{Algorithm, BlockCipher, Mac, SelfTest};
+use ic_core::traits::internal::Mac;
+use ic_core::traits::{Algorithm, BlockCipher, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
 /// The CMAC subkey generation constant for a 128-bit block, `x^128 + x^7 + x^2 + x + 1`.
@@ -300,8 +301,8 @@ mod tests {
     fn verify_detects_tampering() {
         let key = unhex("2b7e151628aed2a6abf7158809cf4f3c").unwrap();
         let tag = CmacAes128::mac(&key, b"data").unwrap();
-        CmacAes128::verify(&key, b"data", &tag).unwrap();
-        assert!(CmacAes128::verify(&key, b"datb", &tag).is_err());
+        <CmacAes128 as ic_core::traits::Mac>::verify(&key, b"data", &tag).unwrap();
+        assert!(<CmacAes128 as ic_core::traits::Mac>::verify(&key, b"datb", &tag).is_err());
     }
 
     #[test]

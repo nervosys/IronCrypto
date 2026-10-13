@@ -273,11 +273,11 @@ fn kmac_matches_wycheproof() {
         let mut made = vec![0u8; tag.len()];
         let verified = match case["function"].as_str() {
             "kmac128" => {
-                Kmac128::mac(&key, b"", &message, &mut made);
+                Kmac128::mac(&key, b"", &message, &mut made).unwrap();
                 Kmac128::verify(&key, b"", &message, &tag)
             }
             "kmac256" => {
-                Kmac256::mac(&key, b"", &message, &mut made);
+                Kmac256::mac(&key, b"", &message, &mut made).unwrap();
                 Kmac256::verify(&key, b"", &message, &tag)
             }
             other => panic!("no such function here: {other}"),

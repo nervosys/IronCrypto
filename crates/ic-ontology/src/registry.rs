@@ -1237,7 +1237,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_180_4,
         &SHA224_P,
         "ic_hash::Sha224",
-        "let d = ic_hash::Sha224::digest(b\"message\");",
+        "let d = ic_hash::Sha224::digest(b\"message\")?;",
         &SHA2_EDGE,
         "Truncated SHA-256. Use only when a 28-byte digest is required by an existing format.",
     ),
@@ -1251,7 +1251,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_180_4,
         &SHA256_P,
         "ic_hash::Sha256",
-        "let d = ic_hash::Sha256::digest(b\"message\");",
+        "let d = ic_hash::Sha256::digest(b\"message\")?;",
         &SHA2_EDGE,
         "The default general-purpose hash: approved, fast, and universally interoperable.",
     ),
@@ -1265,7 +1265,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_180_4,
         &SHA384_P,
         "ic_hash::Sha384",
-        "let d = ic_hash::Sha384::digest(b\"message\");",
+        "let d = ic_hash::Sha384::digest(b\"message\")?;",
         &SHA2_EDGE,
         "Truncated SHA-512. Faster than SHA-256 on 64-bit targets and immune to length extension.",
     ),
@@ -1279,7 +1279,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_180_4,
         &SHA512_P,
         "ic_hash::Sha512",
-        "let d = ic_hash::Sha512::digest(b\"message\");",
+        "let d = ic_hash::Sha512::digest(b\"message\")?;",
         &SHA2_EDGE,
         "The widest SHA-2 digest; the hash underneath Ed25519.",
     ),
@@ -1293,7 +1293,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_180_4,
         &SHA512_224_P,
         "ic_hash::Sha512_224",
-        "let d = ic_hash::Sha512_224::digest(b\"message\");",
+        "let d = ic_hash::Sha512_224::digest(b\"message\")?;",
         &SHA2_EDGE,
         "SHA-512 truncated to 224 bits with a distinct IV.",
     ),
@@ -1307,7 +1307,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_180_4,
         &SHA512_256_P,
         "ic_hash::Sha512_256",
-        "let d = ic_hash::Sha512_256::digest(b\"message\");",
+        "let d = ic_hash::Sha512_256::digest(b\"message\")?;",
         &SHA2_EDGE,
         "SHA-256-strength output at SHA-512 speed on 64-bit targets, with no length extension.",
     ),
@@ -1321,7 +1321,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_202,
         &SHA3_224_P,
         "ic_hash::Sha3_224",
-        "let d = ic_hash::Sha3_224::digest(b\"message\");",
+        "let d = ic_hash::Sha3_224::digest(b\"message\")?;",
         &SHA3_EDGE,
         "Keccak-based 224-bit digest.",
     ),
@@ -1335,7 +1335,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_202,
         &SHA3_256_P,
         "ic_hash::Sha3_256",
-        "let d = ic_hash::Sha3_256::digest(b\"message\");",
+        "let d = ic_hash::Sha3_256::digest(b\"message\")?;",
         &SHA3_EDGE,
         "A structurally different alternative to SHA-256, for algorithm diversity.",
     ),
@@ -1349,7 +1349,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_202,
         &SHA3_384_P,
         "ic_hash::Sha3_384",
-        "let d = ic_hash::Sha3_384::digest(b\"message\");",
+        "let d = ic_hash::Sha3_384::digest(b\"message\")?;",
         &SHA3_EDGE,
         "Keccak-based 384-bit digest.",
     ),
@@ -1363,7 +1363,7 @@ pub static REGISTRY: &[Entry] = &[
         &S_FIPS_202,
         &SHA3_512_P,
         "ic_hash::Sha3_512",
-        "let d = ic_hash::Sha3_512::digest(b\"message\");",
+        "let d = ic_hash::Sha3_512::digest(b\"message\")?;",
         &SHA3_EDGE,
         "Keccak-based 512-bit digest.",
     ),
@@ -1384,7 +1384,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &SHA3_EDGE,
         performance: Performance::Fast,
         rust_path: "ic_hash::Shake128",
-        example: "let mut out = [0u8; 64];\nic_hash::Shake128::xof(b\"seed\", &mut out);",
+        example: "let mut out = [0u8; 64];\nic_hash::Shake128::xof(b\"seed\", &mut out)?;",
         notes: "Used as the symmetric core of the FIPS 203/204 post-quantum schemes.",
     },
     Entry {
@@ -1404,7 +1404,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &SHA3_EDGE,
         performance: Performance::Fast,
         rust_path: "ic_hash::Shake256",
-        example: "let mut out = [0u8; 64];\nic_hash::Shake256::xof(b\"seed\", &mut out);",
+        example: "let mut out = [0u8; 64];\nic_hash::Shake256::xof(b\"seed\", &mut out)?;",
         notes: "",
     },
     Entry {
@@ -2430,7 +2430,7 @@ pub static REGISTRY: &[Entry] = &[
         ],
         performance: Performance::Fast,
         rust_path: if_built("ic_hash::Blake3"),
-        example: if_built("let digest = ic_hash::Blake3::hash(b\"message\");"),
+        example: if_built("let digest = ic_hash::Blake3::hash(b\"message\")?;"),
         notes: "Blake3::hash, keyed_hash with a 32-byte key, and derive_key under a \
                 hard-coded context string, each with an extendable output through \
                 finalize_xof. This is the portable serial form, transcribed from the authors' \
@@ -3125,7 +3125,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::BuiltOn, target: "cshake128" }],
         performance: Performance::Fast,
         rust_path: "ic_hash::TupleHash128",
-        example: "let mut out = [0u8; 32];\nic_hash::TupleHash128::hash(b\"my app\", &[field_a, field_b], &mut out);",
+        example: "let mut out = [0u8; 32];\nic_hash::TupleHash128::hash(b\"my app\", &[field_a, field_b], &mut out)?;",
         notes: "Reach for this wherever a protocol hashes several fields together. Every element \
                 is length-prefixed, so distinct tuples always hash distinctly, which plain \
                 concatenation cannot promise.",
@@ -3155,7 +3155,7 @@ pub static REGISTRY: &[Entry] = &[
         ],
         performance: Performance::Fast,
         rust_path: "ic_hash::TupleHash256",
-        example: "ic_hash::TupleHash256::hash(b\"my app\", &[a, b], &mut out);",
+        example: "ic_hash::TupleHash256::hash(b\"my app\", &[a, b], &mut out)?;",
         notes: "Same construction as TupleHash128 over the wider sponge.",
     },
     Entry {
@@ -3181,7 +3181,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::BuiltOn, target: "cshake128" }],
         performance: Performance::Fast,
         rust_path: "ic_hash::ParallelHash128",
-        example: "ic_hash::ParallelHash128::hash(b\"my app\", 8192, data, &mut out);",
+        example: "ic_hash::ParallelHash128::hash(b\"my app\", 8192, data, &mut out)?;",
         notes: "The structure allows the per-block work to be spread across cores. This build \
                 does the blocks in order, since the workspace has no threading and a no_std \
                 target has no threads to spread onto, so what it buys here is interoperability \
@@ -3212,7 +3212,7 @@ pub static REGISTRY: &[Entry] = &[
         ],
         performance: Performance::Fast,
         rust_path: "ic_hash::ParallelHash256",
-        example: "ic_hash::ParallelHash256::hash(b\"my app\", 8192, data, &mut out);",
+        example: "ic_hash::ParallelHash256::hash(b\"my app\", 8192, data, &mut out)?;",
         notes: "Uses a 64-byte inner digest per block where ParallelHash128 uses 32.",
     },
     Entry {
@@ -3250,7 +3250,7 @@ pub static REGISTRY: &[Entry] = &[
         ],
         performance: Performance::Fast,
         rust_path: "ic_mac::Kmac128",
-        example: "let mut tag = [0u8; 32];\nic_mac::Kmac128::mac(key, b\"my app\", msg, &mut tag);\nic_mac::Kmac128::verify(key, b\"my app\", msg, &tag)?;",
+        example: "let mut tag = [0u8; 32];\nic_mac::Kmac128::mac(key, b\"my app\", msg, &mut tag)?;\nic_mac::Kmac128::verify(key, b\"my app\", msg, &tag)?;",
         notes: "Unlike HMAC, the tag length is an input to the computation rather than a \
                 truncation of it, so a 32-byte tag is unrelated to the first 32 bytes of a \
                 64-byte one and cannot be forged by truncating it. The XOF variant encodes zero \
@@ -3281,7 +3281,7 @@ pub static REGISTRY: &[Entry] = &[
         ],
         performance: Performance::Fast,
         rust_path: "ic_mac::Kmac256",
-        example: "ic_mac::Kmac256::mac(key, b\"my app\", msg, &mut tag);",
+        example: "ic_mac::Kmac256::mac(key, b\"my app\", msg, &mut tag)?;",
         notes: "A smaller rate than KMAC128, so it absorbs fewer bytes per permutation and runs \
                 proportionally slower. Choose it to meet a profile.",
     },
@@ -3302,7 +3302,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::Specializes, target: "shake128" }],
         performance: Performance::Fast,
         rust_path: "ic_hash::CShake128",
-        example: "let mut out = [0u8; 32];\nic_hash::CShake128::xof(b\"\", b\"my app\", msg, &mut out);",
+        example: "let mut out = [0u8; 32];\nic_hash::CShake128::xof(b\"\", b\"my app\", msg, &mut out)?;",
         notes: "With an empty customization string this is bit-for-bit SHAKE128, which is how \
                 SP 800-185 defines it and how the self-test checks it. Reach for it when two \
                 protocols hash the same bytes and must not agree on the result.",
@@ -3324,7 +3324,7 @@ pub static REGISTRY: &[Entry] = &[
         edges: &[Edge { relation: Relation::Specializes, target: "shake256" }],
         performance: Performance::Fast,
         rust_path: "ic_hash::CShake256",
-        example: "ic_hash::CShake256::xof(b\"\", b\"my app\", msg, &mut out);",
+        example: "ic_hash::CShake256::xof(b\"\", b\"my app\", msg, &mut out)?;",
         notes: "With an empty customization string this is bit-for-bit SHAKE256.",
     },
     Entry {

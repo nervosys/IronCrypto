@@ -67,36 +67,42 @@ macro_rules! kmac {
             /// Produce a tag of exactly `out.len()` bytes.
             ///
             /// The length is bound into the computation, so tags of different
-            /// lengths over the same input are unrelated.
-            pub fn finalize(mut self, out: &mut [u8]) {
+            /// lengths over the same input are unrelated. Refuses with
+            /// `ModuleErrorState` once the module has failed.
+            pub fn finalize(mut self, out: &mut [u8]) -> Result<()> {
+                ic_core::module::operational()?;
                 let mut buf = [0u8; MAX_ENCODE];
                 let used = right_encode((out.len() as u64) * 8, &mut buf);
                 self.inner.update(&buf[..used]);
-                self.inner.finalize_xof(out);
+                self.inner.finalize_xof_unchecked(out);
+                Ok(())
             }
 
             /// Produce an arbitrary-length stream instead of a fixed tag.
             ///
-            /// Encodes a length of zero, per SP 800-185 section 4.3.1.
-            pub fn finalize_xof(mut self, out: &mut [u8]) {
+            /// Encodes a length of zero, per SP 800-185 section 4.3.1. Refuses
+            /// with `ModuleErrorState` once the module has failed.
+            pub fn finalize_xof(mut self, out: &mut [u8]) -> Result<()> {
+                ic_core::module::operational()?;
                 let mut buf = [0u8; MAX_ENCODE];
                 let used = right_encode(0, &mut buf);
                 self.inner.update(&buf[..used]);
-                self.inner.finalize_xof(out);
+                self.inner.finalize_xof_unchecked(out);
+                Ok(())
             }
 
             /// One-shot fixed-length tag.
-            pub fn mac(key: &[u8], custom: &[u8], data: &[u8], out: &mut [u8]) {
+            pub fn mac(key: &[u8], custom: &[u8], data: &[u8], out: &mut [u8]) -> Result<()> {
                 let mut k = Self::new(key, custom);
                 k.update(data);
-                k.finalize(out);
+                k.finalize(out)
             }
 
             /// One-shot XOF mode.
-            pub fn mac_xof(key: &[u8], custom: &[u8], data: &[u8], out: &mut [u8]) {
+            pub fn mac_xof(key: &[u8], custom: &[u8], data: &[u8], out: &mut [u8]) -> Result<()> {
                 let mut k = Self::new(key, custom);
                 k.update(data);
-                k.finalize_xof(out);
+                k.finalize_xof(out)
             }
 
             /// Verify a tag in constant time.
@@ -112,7 +118,7 @@ macro_rules! kmac {
                     "kmac tag length"
                 );
                 let mut expected = [0u8; MAX_TAG];
-                Self::mac(key, custom, data, &mut expected[..tag.len()]);
+                Self::mac(key, custom, data, &mut expected[..tag.len()])?;
                 ensure!(
                     ic_core::ct::verify(&expected[..tag.len()], tag),
                     AuthenticationFailed,
@@ -136,15 +142,15 @@ macro_rules! kmac {
                 let key = [0x40u8; 32];
                 let mut short = [0u8; 32];
                 let mut long = [0u8; 64];
-                Self::mac(&key, b"self-test", b"message", &mut short);
-                Self::mac(&key, b"self-test", b"message", &mut long);
+                Self::mac(&key, b"self-test", b"message", &mut short)?;
+                Self::mac(&key, b"self-test", b"message", &mut long)?;
 
                 // The output length is bound in, so the short tag is not a
                 // prefix of the long one. Drop right_encode(L) and it would be.
                 ensure!(short[..] != long[..32], SelfTestFailed, $id);
 
                 let mut again = [0u8; 32];
-                Self::mac(&key, b"self-test", b"message", &mut again);
+                Self::mac(&key, b"self-test", b"message", &mut again)?;
                 ensure!(ic_core::ct::verify(&short, &again), SelfTestFailed, $id);
                 Self::verify(&key, b"self-test", b"message", &short)?;
 
@@ -222,9 +228,9 @@ mod tests {
         message.extend_from_slice(&renc(if xof { 0 } else { (out.len() as u64) * 8 }));
 
         if rate == 168 {
-            CShake128::xof(b"KMAC", custom, &message, out);
+            CShake128::xof(b"KMAC", custom, &message, out).unwrap();
         } else {
-            CShake256::xof(b"KMAC", custom, &message, out);
+            CShake256::xof(b"KMAC", custom, &message, out).unwrap();
         }
     }
 
@@ -243,19 +249,19 @@ mod tests {
                 let mut got = vec![0u8; len];
 
                 reference_kmac(168, key, custom, data, &mut want, false);
-                Kmac128::mac(key, custom, data, &mut got);
+                Kmac128::mac(key, custom, data, &mut got).unwrap();
                 assert_eq!(got, want, "KMAC128 fixed, {len} bytes");
 
                 reference_kmac(136, key, custom, data, &mut want, false);
-                Kmac256::mac(key, custom, data, &mut got);
+                Kmac256::mac(key, custom, data, &mut got).unwrap();
                 assert_eq!(got, want, "KMAC256 fixed, {len} bytes");
 
                 reference_kmac(168, key, custom, data, &mut want, true);
-                Kmac128::mac_xof(key, custom, data, &mut got);
+                Kmac128::mac_xof(key, custom, data, &mut got).unwrap();
                 assert_eq!(got, want, "KMAC128 xof, {len} bytes");
 
                 reference_kmac(136, key, custom, data, &mut want, true);
-                Kmac256::mac_xof(key, custom, data, &mut got);
+                Kmac256::mac_xof(key, custom, data, &mut got).unwrap();
                 assert_eq!(got, want, "KMAC256 xof, {len} bytes");
             }
         }
@@ -268,8 +274,8 @@ mod tests {
         let key = [0x7fu8; 32];
         let mut short = [0u8; 32];
         let mut long = [0u8; 64];
-        Kmac128::mac(&key, b"", b"message", &mut short);
-        Kmac128::mac(&key, b"", b"message", &mut long);
+        Kmac128::mac(&key, b"", b"message", &mut short).unwrap();
+        Kmac128::mac(&key, b"", b"message", &mut long).unwrap();
         assert_ne!(short[..], long[..32], "truncation must not forge");
     }
 
@@ -280,8 +286,8 @@ mod tests {
         let key = [0x7fu8; 32];
         let mut short = [0u8; 32];
         let mut long = [0u8; 64];
-        Kmac128::mac_xof(&key, b"", b"message", &mut short);
-        Kmac128::mac_xof(&key, b"", b"message", &mut long);
+        Kmac128::mac_xof(&key, b"", b"message", &mut short).unwrap();
+        Kmac128::mac_xof(&key, b"", b"message", &mut long).unwrap();
         assert_eq!(short[..], long[..32], "the xof output is a prefix");
     }
 
@@ -290,14 +296,14 @@ mod tests {
         let key = [0x31u8; 32];
         let data = [0x62u8; 777];
         let mut one = [0u8; 32];
-        Kmac256::mac(&key, b"S", &data, &mut one);
+        Kmac256::mac(&key, b"S", &data, &mut one).unwrap();
 
         let mut k = Kmac256::new(&key, b"S");
         for chunk in data.chunks(13) {
             k.update(chunk);
         }
         let mut streamed = [0u8; 32];
-        k.finalize(&mut streamed);
+        k.finalize(&mut streamed).unwrap();
         assert_eq!(one, streamed);
     }
 
@@ -305,10 +311,10 @@ mod tests {
     fn keys_and_customization_both_change_the_tag() {
         let mut a = [0u8; 32];
         let mut b = [0u8; 32];
-        Kmac128::mac(&[1u8; 32], b"S", b"m", &mut a);
-        Kmac128::mac(&[2u8; 32], b"S", b"m", &mut b);
+        Kmac128::mac(&[1u8; 32], b"S", b"m", &mut a).unwrap();
+        Kmac128::mac(&[2u8; 32], b"S", b"m", &mut b).unwrap();
         assert_ne!(a, b, "the key matters");
-        Kmac128::mac(&[1u8; 32], b"T", b"m", &mut b);
+        Kmac128::mac(&[1u8; 32], b"T", b"m", &mut b).unwrap();
         assert_ne!(a, b, "the customization matters");
     }
 
@@ -316,7 +322,7 @@ mod tests {
     fn verification_rejects_tampering_and_bad_lengths() {
         let key = [0x55u8; 32];
         let mut tag = [0u8; 32];
-        Kmac128::mac(&key, b"S", b"message", &mut tag);
+        Kmac128::mac(&key, b"S", b"message", &mut tag).unwrap();
         Kmac128::verify(&key, b"S", b"message", &tag).unwrap();
 
         for bit in [0usize, 7, 128, 255] {

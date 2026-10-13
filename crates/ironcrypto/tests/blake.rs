@@ -55,7 +55,7 @@ fn streamed(mut h: Blake3, data: &[u8], len: usize) -> Vec<u8> {
     let mut out = vec![0u8; len];
     let mut reader = h.finalize_xof();
     for piece in out.chunks_mut(23) {
-        reader.fill(piece);
+        reader.fill(piece).unwrap();
     }
     out
 }
@@ -75,23 +75,27 @@ fn blake3_matches_the_blake3_vectors() {
         let mut h = Blake3::new();
         h.update(&data);
         let mut got = vec![0u8; want.len()];
-        h.finalize_xof().fill(&mut got);
+        h.finalize_xof().fill(&mut got).unwrap();
         assert_eq!(got, want, "hash, {len} bytes");
-        assert_eq!(Blake3::hash(&data), want[..32], "hash, {len} bytes");
+        assert_eq!(
+            Blake3::hash(&data).unwrap(),
+            want[..32],
+            "hash, {len} bytes"
+        );
         assert_eq!(streamed(Blake3::new(), &data, want.len()), want);
 
         let want = hex_field(case, "keyed_hash");
         let mut got = vec![0u8; want.len()];
         let mut h = Blake3::new_keyed(&key);
         h.update(&data);
-        h.finalize_xof().fill(&mut got);
+        h.finalize_xof().fill(&mut got).unwrap();
         assert_eq!(got, want, "keyed_hash, {len} bytes");
-        assert_eq!(Blake3::keyed_hash(&key, &data), want[..32]);
+        assert_eq!(Blake3::keyed_hash(&key, &data).unwrap(), want[..32]);
         assert_eq!(streamed(Blake3::new_keyed(&key), &data, want.len()), want);
 
         let want = hex_field(case, "derive_key");
         let mut got = vec![0u8; want.len()];
-        Blake3::derive_key(&context, &data, &mut got);
+        Blake3::derive_key(&context, &data, &mut got).unwrap();
         assert_eq!(got, want, "derive_key, {len} bytes");
         assert_eq!(
             streamed(Blake3::new_derive_key(&context), &data, want.len()),
