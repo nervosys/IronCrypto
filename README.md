@@ -611,7 +611,7 @@ slow:
 | | portable | accelerated |
 |---|---|---|
 | AES-256, raw blocks | ~1.5 MiB/s | ~11 GiB/s (AES-NI) |
-| AES-256-GCM | ~1 MiB/s | ~2.3 GiB/s (AES-NI + PCLMULQDQ) |
+| AES-256-GCM | ~1 MiB/s | ~23 GiB/s (VAES + VPCLMULQDQ, AVX-512); ~5 GiB/s (AES-NI + PCLMULQDQ) |
 | ChaCha20-Poly1305 | ~0.4 GiB/s | ~1.5 GiB/s (AVX2) |
 | SHA-256 | ~0.3 GiB/s | ~2.3 GiB/s (SHA-NI) |
 
@@ -670,6 +670,12 @@ through memory. Eight products summed and reduced once took it from 2.6 to 6.6
 GiB/s, and the AEAD from 1.8 to 3.1. Counter mode then got a kernel of its own
 -- counters built in place, keystream XORed from registers, one call per
 message rather than one per eight blocks -- and the AEAD reached 4.1.
+After 0.2.24 the two passes became one: `H` and its powers are computed per
+key rather than per call, and GHASH of each group of ciphertext runs between
+the AES rounds of the next. Where the CPU has VAES and VPCLMULQDQ the kernel
+works on 256- or 512-bit registers, and AES-256-GCM sealing measured 25 GB/s
+at 4 MiB and 1.15 GB/s at 64 bytes, against Graviola 0.4.1's 17 and 0.8 on
+the same machine.
 
 Short HMAC is the one row still behind that wiping explains. RustCrypto's
 `hmac` does not zeroize by default; this library wipes both SHA-256 states and
