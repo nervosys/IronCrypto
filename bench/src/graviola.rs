@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! cargo run --release -- graviola
+//! cargo run --release -- graviola-p384   # the P-384 rows alone
 //! ```
 //!
 //! Graviola runs only on x86-64 with AES, AVX2, ADX, BMI2 and PCLMULQDQ, or on
@@ -197,6 +198,8 @@ pub fn run() {
     });
     verdict("ecdsa p-256 verify", v1, v2, false);
 
+    p384();
+
     let mut ed_sig = [0u8; 64];
     let ic_key = ironcrypto::ec::Ed25519Key::from_seed(&sk).unwrap();
     let d1 = per_op("ironcrypto ed25519 sign", 3000, 5, || {
@@ -329,4 +332,58 @@ pub fn run() {
         });
         verdict("rsa-2048 verify", r3, r4, false);
     }
+}
+
+/// The P-384 rows alone: `cargo run --release -- graviola-p384`.
+pub fn p384() {
+    println!();
+    println!("P-384, per operation (lower is better)");
+    let msg = b"benchmark message";
+    // The same three rows as P-256, on one key loaded into both.
+    let q_sk = [0x5au8; 48];
+    let mut q_pk = [0u8; 97];
+    ironcrypto::ec::EcdhP384::public_key(&q_sk, &mut q_pk).unwrap();
+    let mut q_shared = [0u8; 48];
+    let q1 = per_op("ironcrypto p-384 ecdh", 500, 5, || {
+        ironcrypto::ec::EcdhP384::agree(&q_sk, &q_pk, &mut q_shared).unwrap();
+    });
+    let gq_sk = graviola::key_agreement::p384::StaticPrivateKey::from_bytes(&q_sk).unwrap();
+    let gq_pk = graviola::key_agreement::p384::PublicKey::from_x962_uncompressed(&q_pk).unwrap();
+    let q2 = per_op("graviola p-384 ecdh", 500, 5, || {
+        std::hint::black_box(gq_sk.diffie_hellman(&gq_pk).unwrap());
+    });
+    assert_eq!(gq_sk.diffie_hellman(&gq_pk).unwrap().0, q_shared);
+    verdict("p-384 ecdh", q1, q2, false);
+
+    let mut q_sig = [0u8; 96];
+    let f1 = per_op("ironcrypto ecdsa p-384 sign", 500, 5, || {
+        ironcrypto::ec::p384::EcdsaP384Sha384::sign(&q_sk, msg, &mut q_sig).unwrap();
+    });
+    let gq_signer = graviola::signing::ecdsa::SigningKey::<graviola::signing::ecdsa::P384> {
+        private_key: graviola::key_agreement::p384::StaticPrivateKey::from_bytes(&q_sk).unwrap(),
+    };
+    let mut gq_sig = [0u8; 96];
+    let f2 = per_op("graviola ecdsa p-384 sign", 500, 5, || {
+        std::hint::black_box(
+            gq_signer
+                .sign::<graviola::hashing::Sha384>(&[msg], &mut gq_sig)
+                .unwrap(),
+        );
+    });
+    verdict("ecdsa p-384 sign", f1, f2, false);
+
+    let f3 = per_op("ironcrypto ecdsa p-384 verify", 500, 5, || {
+        ironcrypto::ec::p384::EcdsaP384Sha384::verify(&q_pk, msg, &q_sig).unwrap();
+    });
+    let gq_verifier =
+        graviola::signing::ecdsa::VerifyingKey::<graviola::signing::ecdsa::P384>::from_x962_uncompressed(
+            &q_pk,
+        )
+        .unwrap();
+    let f4 = per_op("graviola ecdsa p-384 verify", 500, 5, || {
+        gq_verifier
+            .verify::<graviola::hashing::Sha384>(&[msg], &q_sig)
+            .unwrap();
+    });
+    verdict("ecdsa p-384 verify", f3, f4, false);
 }

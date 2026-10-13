@@ -277,6 +277,60 @@ every caller of a hash function uses.
 
 ### Performance
 
+- **P-384 is about 1.5 times faster on x86-64, and its ECDH is level with
+  Graviola.** On a Ryzen 9 9900X (Zen 5), `bench` with the new
+  `graviola-p384` mode (P-384 ECDH, signing and verification for both
+  libraries, also in `graviola`), the master branch before this work
+  (9f7d64b) and this build run alternately, five rounds each, with Graviola
+  0.4.1 in every run. Another workload held the machine near full load
+  throughout, which raised every figure, Graviola's from about 80 to
+  103-138 us for ECDH; so the table gives each range, best to worst, and the
+  ratio to Graviola within the same run, which load moves less:
+
+  | operation | before | after | Graviola | before / Graviola | after / Graviola |
+  |---|---|---|---|---|---|
+  | P-384 ECDH | 183-232 | 117-141 | 103-138 | 1.61-2.03 | 0.94-1.25 |
+  | ECDSA P-384 sign | 76-88 | 46-58 | 125-155 | 0.56-0.68 | 0.30-0.42 |
+  | ECDSA P-384 verify | 206-255 | 160-203 | 228-300 | 0.90-1.00 | 0.58-0.79 |
+
+  ECDH is parity, not a lead: the ratio lands either side of one. It is
+  also not quite like for like, in Graviola's favour: Graviola parses the
+  peer's key and builds its window table outside the timed loop, where
+  `EcdhP384::agree` decodes, validates and builds its window in every call.
+
+  Where the time went, measured first: ECDH already ran the one-block
+  MULX/ADX point formulas, 385 doublings and 77 additions; those were
+  about 85 percent of it and inversion by Fermat about 10. Every field
+  multiplication in them was CIOS generic in the modulus, 72 `mulx`, with
+  squaring done as multiplication and each final correction copied through
+  memory. Now (`scripts/gen_p384_x86_point.py`, regenerated): Montgomery
+  reduction by P-384's shape, two `mulx` per word by constants instead of
+  six; a squaring of its own, 21 `mulx` for the product where
+  multiplication takes 36; corrections by masked addition in registers;
+  and the doubling's small multiples folded into three fused `c*a - d*b`
+  operations, eight additive steps where it had fifteen. A doubling went
+  from 2,626 instructions to 2,426, near Graviola's; its multiplication is
+  285 instructions and squaring 226, against s2n-bignum's 263 and 230. `Fp`
+  multiplies and squares through the same blocks, and P-384's field
+  inverts by Bernstein-Yang divsteps on 64-bit targets, 18 batches of 62
+  for the 1111 steps their Theorem 11.2 requires at 384 bits: 2.4 us where
+  the addition chain took 6.8 to 10.9, and the old windowed exponentiation
+  about 20. 32-bit targets use the addition chain. The variable-base window
+  and the generator table are read by the SSE2 scan P-256 uses. Signing and
+  verification gain from the same field and the scan.
+
+  Tested against the generic arithmetic: each field operation on every pair
+  of 74 edge values, on sums and differences landing on 0, p - 1, p and
+  p + 1, on a million random pairs, and on operands built so that every word
+  of the reduction takes its rare carry; the divsteps against a branching
+  transcription of the paper's definition. See `docs/FIPS.md`. Four new
+  x86-64 compiled-code probes: the specialised squaring and the three
+  divsteps inversions, P-256's two among them, whose 59-step batches and ten
+  rounds are now written out too. The first run of the P-384 inversion probe
+  found a branch the new code had introduced, and it was removed before
+  landing; see `docs/CONSTANT_TIME.md`. P-256's inversion time is unchanged
+  (1.09-1.50 us against 1.23-1.61 for the scalar ring, interleaved).
+
 - **ML-KEM-768 encapsulation to a prepared key takes about half the time.**
   On a Ryzen 9 9900X (Zen 5), best of four runs of `bench graviola`, the
   builds before and after run alternately minutes apart, with Graviola
