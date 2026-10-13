@@ -87,8 +87,13 @@ const STARTUP_GATE: bool = cfg!(all(ic_approved_only, not(ic_startup_gate_off)))
 /// run at all.
 pub fn self_tests_started() {
     // Only forward: a module that has passed does not go back to testing
-    // when `initialize` is called again.
-    let _ = SELF_TESTS.compare_exchange(UNTESTED, TESTING, Ordering::SeqCst, Ordering::SeqCst);
+    // when `initialize` is called again. A load and a store rather than a
+    // compare-exchange, which Cortex-M0 does not have; two racing callers can
+    // at worst leave the state at TESTING after a pass, which lets service
+    // through as PASSED does.
+    if SELF_TESTS.load(Ordering::SeqCst) == UNTESTED {
+        SELF_TESTS.store(TESTING, Ordering::SeqCst);
+    }
 }
 
 /// Record that every known-answer test passed.

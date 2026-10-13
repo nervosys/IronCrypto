@@ -7,7 +7,7 @@
 # flag. So it is checked here, on its own: clippy, the tests, the documentation
 # tests -- which include the compile_fail examples in the ironcrypto crate
 # documentation that show a non-approved algorithm is absent, not merely
-# refused -- and one no_std target.
+# refused -- and the four no_std targets.
 #
 # Its own target directory, because RUSTFLAGS is part of what Cargo fingerprints
 # and sharing one would rebuild the workspace on every switch between the two.
@@ -45,13 +45,16 @@ cargo clippy "${packages[@]}" --all-targets -- -D warnings
 echo "-- tests"
 cargo test "${packages[@]}"
 
-target=thumbv7em-none-eabihf
-if rustup target list --installed 2>/dev/null | grep -qx "$target"; then
-    echo "-- $target"
-    cargo build -p ironcrypto --no-default-features --target "$target"
-else
-    echo "-- $target not installed; the approved-only no_std build was NOT checked"
-fi
+# All four, not one: the startup gate first used a compare-exchange, which
+# Cortex-M0 does not have, and a build of thumbv7em alone passed it.
+for target in thumbv7em-none-eabihf thumbv6m-none-eabi riscv32imac-unknown-none-elf wasm32-unknown-unknown; do
+    if rustup target list --installed 2>/dev/null | grep -qx "$target"; then
+        echo "-- $target"
+        cargo build -p ironcrypto --no-default-features --target "$target"
+    else
+        echo "-- $target not installed; the approved-only no_std build was NOT checked"
+    fi
+done
 
 echo "-- the startup gate, without the test switch"
 export CARGO_TARGET_DIR="$base_target/approved-only-gated"

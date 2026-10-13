@@ -164,7 +164,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
         with:
           toolchain: stable
-          targets: thumbv7em-none-eabihf
+          targets: thumbv7em-none-eabihf, thumbv6m-none-eabi, riscv32imac-unknown-none-elf, wasm32-unknown-unknown
           components: clippy
       # --cfg ic_approved_only, which no other job builds. The same script the
       # local gate runs.
