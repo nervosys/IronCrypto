@@ -35,7 +35,8 @@ release profile; this is not the workspace binary's overflow-checked profile.
 - P-256 field and scalar operations: reduction from bytes, addition,
   subtraction, multiplication, negation, conditional move, equality and
   parity, each from and back to bytes. Hashing to the curve, the OPRF,
-  ECDH and ECDSA are built from these; see below for which targets gate.
+  ECDH and ECDSA are built from these. All four targets gate; on the
+  32-bit ones a few findings are excused by rule, as described below.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
 Branches and integer division/remainder instructions are rejected. A call or
@@ -125,9 +126,8 @@ instruction on x86-64, where they gate. The byte form of `to_be_bytes` also
 shifted a u64 by a variable amount, which 32-bit RISC-V compiles to a branch
 on whether it reaches 32: an index, not a secret, but now gone.
 
-On the three 32-bit targets the P-256 probes are built and their findings
-printed, and they do not gate. Each finding was read on 2026-10-12, with
-rustc 1.99.0:
+On the three 32-bit targets the P-256 probes leave findings the checker
+would reject. Each was read on 2026-10-12, with rustc 1.99.0:
 
 - Cortex-M4: one `bne.w` per function, after `subs r1, #1` on a counter
   spilled to the stack: the Montgomery multiplication's word loop.
@@ -135,17 +135,50 @@ rustc 1.99.0:
   address, the same loop; and a `memset` of a constant 40 bytes.
 - Cortex-M0: `beq`/`b` after `cmp r1, #32` on a counter stepping by 8, the
   same loop; and `__aeabi_lmul`, the runtime library's 64-bit multiply,
-  which M0 needs for every 32x32 product and whose body is not in this
-  output to inspect.
+  which M0 needs for every 32x32 product.
 
-None branches on a field element. They are not gated because a text check
-cannot tell a loop counter from a secret, and allowing a branch count would
-be the blanket allowance this gate exists to refuse. A change to these
-targets' P-256 code therefore needs these findings read again; the checker
-prints how many there are so a change in that number is visible. The M0
-multiply routine's timing is the multiplier's, which on Cortex-M0 is fixed
-per implementation, not per operand; that is a statement about the core, not
-something this gate checked.
+None branches on a field element.
+
+### How they gate, 2026-10-12
+
+They were first left ungated, because a text check cannot tell a loop
+counter from a secret and allowing a branch count would be the blanket
+allowance this gate exists to refuse. They gate now, on all three targets,
+without one:
+
+- **`__aeabi_lmul` is read, not trusted.** The checker disassembles it from
+  the toolchain's own `compiler_builtins` for Cortex-M0, with `llvm-objdump`
+  from `rustup component add llvm-tools`, and holds that body to the same
+  rules as a probe. In rustc 1.99.0 it is straight-line `muls`, `adds` and
+  `adcs`. A routine is followed this way only where `VERIFIED_EXTERNAL`
+  names it for that target, and without the tools the check fails rather
+  than skips. Its timing is then the multiplier's, which on Cortex-M0 is fixed
+  per implementation, not per operand; that last step is a statement about
+  the core, not something the gate checked.
+- **The rest is excused by rule, not by text.** Each rule is about the
+  instructions around the finding: a conditional branch whose flags come from
+  `subs rN, #imm`, or from `cmp rN, #imm` directly after `adds rN, #imm` on
+  the same register (a counter stepped by a constant); an unconditional jump
+  to a local label; on RISC-V, a branch against a bound computed as `sp` plus
+  a constant, and a `memset` whose length is loaded as a constant into a
+  destination on the stack. `cmp r0, #0; bne`, `subs r0, r0, r1; bne`, a
+  branch between two registers, or a `memset` of a computed length matches
+  none of them. Rules apply only to the P-256 probes, only on the target
+  each was reviewed for.
+- **Each rule has a ceiling**, the number of findings it excused when they
+  were read (`EXCUSE_CEILINGS`, counted per probe, so a loop in a shared
+  `from_mont` counts once for each probe that reaches it). A rule that excuses
+  more fails the gate: a new loop that resembles the old ones is read before
+  it is accepted, not after.
+
+Turning `select_ct` into a branch on its mask failed every target: 32
+findings on x86-64, 303 on Cortex-M0, which also exceeded its jump ceiling,
+48 on Cortex-M4 and 52 on RISC-V. It was restored and all four pass.
+
+A counter rule is a pattern, not a proof that the register is a counter:
+`subs rN, #1; bne` on a secret-derived `rN` would match it. What closes that
+is the ceiling, which means any such branch has to arrive as part of a change
+that someone then reads, and the review recorded above.
 
 Not probed: BLAKE2s and BLAKE3, whose round loops stay rolled on some
 targets. Both are additions, rotations and XORs with no table and no

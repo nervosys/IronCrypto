@@ -7,6 +7,7 @@ expected symbol. See docs/CONSTANT_TIME.md for coverage and limitations.
 """
 
 import argparse
+import collections
 from pathlib import Path
 import re
 import subprocess
@@ -35,16 +36,37 @@ P256 = tuple(
     for op in ("reduce", "add", "sub", "mul", "neg", "cmov", "eq", "is_odd")
 )
 SYMBOLS += P256
-# Probes that gate only on some targets. On the rest they are built and their
-# findings printed, not failed: on 32-bit targets P-256's limb loops stay
-# rolled, and a text check cannot tell a loop counter from a secret. The
-# review that classified those findings is in docs/CONSTANT_TIME.md.
-GATED_ONLY_ON = {name: ("x86_64-unknown-linux-gnu",) for name in P256}
 
+# Runtime-library routines a probe may call on a target, because their bodies
+# are disassembled from that target's compiler_builtins and held to the same
+# rules as the probes. Cortex-M0 has no 32x32->64 multiply, so every wide
+# product in the P-256 arithmetic is a call to `__aeabi_lmul`.
+VERIFIED_EXTERNAL = {
+    "thumbv6m-none-eabi": ("__aeabi_lmul",),
+}
 
-def gated(finding, target):
-    probe = finding.split(":", 1)[0].split(" -> ", 1)[0]
-    return target in GATED_ONLY_ON.get(probe, TARGETS)
+# On the 32-bit targets LLVM keeps P-256's Montgomery word loop rolled, and on
+# RISC-V zeroes its scratch array with `memset`. Those findings are excused by
+# rule, each rule about the instructions around the finding rather than its
+# text, and only in the P-256 probes on these targets; everything else still
+# fails. Each rule also has a ceiling, the number it excused when the findings
+# were last read (docs/CONSTANT_TIME.md): more than that fails too, so a new
+# loop or a new call is read before it is accepted, rather than passing because
+# it resembles an old one.
+# Counted per probe, following calls: one loop in a shared `from_mont` is
+# counted once for each probe that reaches it. Read on 2026-10-12, rustc 1.99.0.
+EXCUSE_CEILINGS = {
+    "thumbv6m-none-eabi": {"counter loop": 32, "unconditional jump": 40},
+    "thumbv7em-none-eabihf": {"counter loop": 32},
+    "riscv32imac-unknown-none-elf": {"stack-bound loop": 16, "constant memset": 16},
+}
+
+# Loads and stores, which do not set the flags a conditional branch reads, and
+# so may sit between the comparison and the branch.
+_MEMORY = re.compile(r"(?:ldr|str|ldm|stm)[a-z]*(?:\.w)?")
+_THUMB_COND = re.compile(
+    r"b(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)(?:\.w)?")
+_LOCAL_LABEL = re.compile(r"\.L[\w.$]+")
 
 
 def bodies(assembly):
@@ -145,26 +167,173 @@ def instructions_of(lines):
             and not line.strip().endswith(":")]
 
 
-def inspect(assembly, target):
+def _split(line):
+    line = re.split(r"\s+(?:@|//|# )", line, maxsplit=1)[0].strip()
+    fields = line.split(None, 1)
+    op = fields[0].lower() if fields else ""
+    if op.startswith("c."):
+        op = op[2:]
+    operands = [o.strip() for o in fields[1].split(",")] if len(fields) == 2 else []
+    return op, operands
+
+
+def _previous(ins, i, count, skip=None):
+    """Up to `count` instructions before `i`, nearest first, passing over any
+    that `skip` matches."""
+    found = []
+    j = i - 1
+    while j >= 0 and len(found) < count:
+        op, operands = _split(ins[j])
+        if not (skip and skip.fullmatch(op)):
+            found.append((op, operands))
+        j -= 1
+    return found
+
+
+def excuse(target, ins, i):
+    """The rule that excuses the finding at `ins[i]`, or None.
+
+    Applied only to P-256 probes on 32-bit targets; see EXCUSE_CEILINGS.
+    """
+    op, operands = _split(ins[i])
+    if target.startswith("thumb"):
+        if op in {"b", "b.w"} and len(operands) == 1 and _LOCAL_LABEL.fullmatch(operands[0]):
+            return "unconditional jump"
+        if _THUMB_COND.fullmatch(op) and len(operands) == 1 and _LOCAL_LABEL.fullmatch(operands[0]):
+            before = _previous(ins, i, 2, _MEMORY)
+            imm = re.compile(r"#\d+")
+            # Cortex-M4: a counter decremented by a constant, then tested.
+            if (before and before[0][0] == "subs" and len(before[0][1]) == 2
+                    and imm.fullmatch(before[0][1][1])):
+                return "counter loop"
+            # Cortex-M0: a counter stepped by a constant, then compared with
+            # a constant.
+            if (len(before) == 2 and before[0][0] == "cmp" and before[1][0] == "adds"
+                    and len(before[0][1]) == 2 and len(before[1][1]) == 2
+                    and before[0][1][0] == before[1][1][0]
+                    and imm.fullmatch(before[0][1][1]) and imm.fullmatch(before[1][1][1])):
+                return "counter loop"
+        return None
+    if target.startswith("riscv32"):
+        if op == "j" and len(operands) == 1 and _LOCAL_LABEL.fullmatch(operands[0]):
+            return "unconditional jump"
+        before = _previous(ins, i, 3)
+        if (re.fullmatch(r"b(?:eq|ne|lt|ge|ltu|geu)", op) and len(operands) == 3
+                and _LOCAL_LABEL.fullmatch(operands[2])):
+            # A loop that runs until a pointer reaches the end of a stack
+            # array: one operand is that bound, sp plus a constant.
+            for prev_op, prev in before:
+                if (prev_op == "addi" and len(prev) == 3 and prev[1] == "sp"
+                        and prev[0] in operands[:2] and re.fullmatch(r"-?\d+", prev[2])):
+                    return "stack-bound loop"
+            return None
+        if op == "call" and operands == ["memset"]:
+            # A constant length, written into the stack.
+            length = any(p == "li" and len(a) == 2 and a[0] == "a2"
+                         and re.fullmatch(r"\d+", a[1]) for p, a in before)
+            dest = any(p == "addi" and len(a) == 3 and a[0] == "a0" and a[1] == "sp"
+                       for p, a in before)
+            if length and dest:
+                return "constant memset"
+        return None
+    return None
+
+
+_external_cache = {}
+
+
+def external_body(target, symbol):
+    """The instructions of a runtime-library routine, from the toolchain's
+    own compiler_builtins for `target`.
+
+    Fails closed: without llvm-objdump (`rustup component add llvm-tools`) or
+    without the symbol, the call is not verified and so is not allowed.
+    """
+    key = (target, symbol)
+    if key in _external_cache:
+        return _external_cache[key]
+    sysroot = Path(subprocess.run(["rustc", "--print", "sysroot"], check=True,
+                                  capture_output=True, text=True).stdout.strip())
+    libs = sorted((sysroot / "lib/rustlib" / target / "lib").glob("libcompiler_builtins-*.rlib"))
+    tools = sorted((sysroot / "lib/rustlib").glob("*/bin/llvm-objdump*"))
+    if not libs or not tools:
+        raise ValueError(f"{target}: cannot verify {symbol}: compiler_builtins or llvm-objdump "
+                         "not found (rustup component add llvm-tools)")
+    out = subprocess.run([str(tools[0]), "-d", "--no-show-raw-insn",
+                          f"--disassemble-symbols={symbol}", str(libs[0])],
+                         check=True, capture_output=True, text=True).stdout
+    body, inside = [], False
+    for line in out.splitlines():
+        if re.match(r"^[0-9a-f]+ <" + re.escape(symbol) + r">:", line):
+            if inside:
+                raise ValueError(f"{target}: {symbol} is defined more than once")
+            inside = True
+            continue
+        if inside:
+            m = re.match(r"^\s*[0-9a-f]+:\s+(.+)$", line)
+            if m:
+                body.append("\t" + m[1].strip())
+            elif not line.strip():
+                inside = False
+    if not body:
+        raise ValueError(f"{target}: {symbol} not found in {libs[0].name}")
+    _external_cache[key] = body
+    return body
+
+
+def inspect(assembly, target, excused=None):
+    """Forbidden instructions in the probes, as findings.
+
+    `excused`, a Counter if given, receives a count per rule of the findings
+    `excuse` allowed; whether those exceed EXCUSE_CEILINGS is for the caller.
+    """
     failures = []
     functions = bodies(assembly)
+    externals = VERIFIED_EXTERNAL.get(target, ())
+    excusable = target in EXCUSE_CEILINGS
+    if excused is None:
+        excused = collections.Counter()
 
-    def walk(probe, name, seen):
-        for line in instructions_of(functions[name]):
+    def walk(probe, name, lines, seen):
+        ins = instructions_of(lines)
+        for i, line in enumerate(ins):
             callee = called(line, target, functions)
             if callee is not None:
                 if callee not in seen:
                     seen.add(callee)
-                    walk(probe, callee, seen)
-            elif forbidden(line, target):
-                where = probe if name == probe else f"{probe} -> {name}"
-                failures.append(f"{where}: {line.strip()}")
+                    walk(probe, callee, functions[callee], seen)
+                continue
+            op, operands = _split(line)
+            external = next((s for s in externals if operands == [s]
+                             and op in {"bl", "call", "tail"}), None)
+            if external is not None:
+                if external not in seen:
+                    seen.add(external)
+                    walk(probe, external, external_body(target, external), seen)
+                continue
+            if not forbidden(line, target):
+                continue
+            rule = excuse(target, ins, i) if excusable and probe in P256 else None
+            # A rule excuses only on a target it was reviewed for.
+            if rule is not None and rule in EXCUSE_CEILINGS[target]:
+                excused[rule] += 1
+                continue
+            where = probe if name == probe else f"{probe} -> {name}"
+            failures.append(f"{where}: {line.strip()}")
 
     for name in SYMBOLS:
         if not instructions_of(functions[name]):
             failures.append(f"{name}: empty body")
-        walk(name, name, {name})
+        walk(name, name, functions[name], {name})
     return failures
+
+
+def over_ceiling(target, excused):
+    """A failure for each rule that excused more than it was reviewed for."""
+    ceilings = EXCUSE_CEILINGS.get(target, {})
+    return [f"{count} findings excused as {rule}, more than the {ceilings.get(rule, 0)} "
+            "reviewed; read them and update EXCUSE_CEILINGS and docs/CONSTANT_TIME.md"
+            for rule, count in sorted(excused.items()) if count > ceilings.get(rule, 0)]
 
 
 def build_probe(target):
@@ -192,13 +361,13 @@ def main():
     subprocess.run(["rustc", "--version"], check=True)
     failures = []
     for target in args.target or TARGETS:
-        found = inspect(build_probe(target), target)
-        gating = [finding for finding in found if gated(finding, target)]
-        reported = [finding for finding in found if not gated(finding, target)]
-        failures.extend(f"{target}: {finding}" for finding in gating)
-        print(f"{target}: {len(SYMBOLS)} probes, {len(gating)} forbidden instructions"
-              + (f"; {len(reported)} more in probes not gated on this target"
-                 if reported else ""), flush=True)
+        excused = collections.Counter()
+        found = inspect(build_probe(target), target, excused) + over_ceiling(target, excused)
+        failures.extend(f"{target}: {finding}" for finding in found)
+        print(f"{target}: {len(SYMBOLS)} probes, {len(found)} failures"
+              + ("; excused by rule: " + ", ".join(
+                  f"{rule} {count}" for rule, count in sorted(excused.items()))
+                 if excused else ""), flush=True)
     if failures:
         print("\n".join(failures), file=sys.stderr)
         return 1

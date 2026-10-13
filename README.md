@@ -447,11 +447,13 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks thirty-five fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V. It rejects branches, integer division and calls
-it cannot follow in the selected core, ML-DSA and ML-KEM operations on all four
-targets, and in P-256's field and scalar arithmetic on x86-64: **92 gating
-probe/target checks**. The P-256 probes on the 32-bit targets are reported
-rather than gated, for the reason the linked document gives.
+Cortex-M0, Cortex-M4 and RISC-V: **140 gating probe/target checks**. It rejects
+branches, integer division and calls it cannot follow in the selected core,
+ML-DSA, ML-KEM and P-256 field and scalar operations. On the 32-bit targets the
+P-256 Montgomery loop stays rolled; its counter branches, and a constant-length
+`memset` on RISC-V, are excused by rules about the surrounding instructions,
+each capped at the count that was read, and Cortex-M0's runtime multiply is
+disassembled from the toolchain and checked like a probe.
 The full local gate and CI run the checker. These checks cover the compiled
 probes, not whole algorithms, memory-access timing or every caller context;
 [CONSTANT_TIME.md](docs/CONSTANT_TIME.md) gives the rules and limits.

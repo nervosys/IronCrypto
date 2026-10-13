@@ -7,6 +7,16 @@ all of them.
 
 ### Added
 
+- **The P-256 compiled-code probes gate on the 32-bit targets too.** They
+  were built and reported there, not gated. Cortex-M0's `__aeabi_lmul` is
+  now disassembled from the toolchain's `compiler_builtins` and checked like
+  a probe (it is branch-free), and the Montgomery loop's counter branches and
+  RISC-V's constant `memset` are excused by rules about the surrounding
+  instructions, each capped at the number that was read; a branch on a
+  value, a `memset` of a computed length, or one more loop fails. Turning the
+  constant-time select into a branch failed all four targets. `check-ct.py`
+  needs `rustup component add llvm-tools` for the M0 check, and fails
+  without it.
 - **A build with only the FIPS-approved algorithms**, `--cfg ic_approved_only`
   in `RUSTFLAGS` and `RUSTDOCFLAGS`. Approved mode used to refuse a
   non-approved algorithm only through `ic_fips::check` and `guarded`; a direct

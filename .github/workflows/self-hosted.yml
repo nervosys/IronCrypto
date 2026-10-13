@@ -104,6 +104,8 @@ jobs:
                         riscv32imac-unknown-none-elf wasm32-unknown-unknown; do
             rustup target add "$target"
           done
+          # llvm-objdump, for check-ct.py's reading of Cortex-M0's multiply.
+          rustup component add llvm-tools
 
       - name: scripts/check.sh
         shell: bash

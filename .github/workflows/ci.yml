@@ -124,6 +124,9 @@ jobs:
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
+          # llvm-objdump, which check-ct.py uses to read Cortex-M0's runtime
+          # multiply out of compiler_builtins. Without it that check fails.
+          components: llvm-tools
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.x'
