@@ -63,6 +63,10 @@ X86_ONLY = (
     "ct_p384_fp_mul_adx", "ct_p384_fp_sqr_adx", "ct_p384_fn_mul_adx",
     "ct_p384_point_double_adx", "ct_p384_point_add_adx",
     "ct_p384_point_add_affine_adx", "ct_p384_fp_invert",
+    # RSA's windowed-exponentiation table read at 2048 bits. Its masked scan is
+    # unrolled on x86-64. On the 32-bit targets and RISC-V LLVM keeps the entry
+    # loop rolled, a loop over a public count, so the probe is x86-64 only.
+    "ct_rsa_select_2048",
 )
 SYMBOLS += X86_ONLY
 

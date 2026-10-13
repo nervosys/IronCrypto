@@ -15,6 +15,10 @@ publish.workspace = true
 [features]
 default = ["std"]
 std = ["ic-core/std", "ic-hash/std"]
+# Internals for `scripts/ct-audit` and `ctgrind`: a table-read probe, and a
+# switch that takes the MULX/ADX backend under Valgrind. Not API, not covered
+# by semver.
+ct-probes = []
 
 # `ic_limb32` selects the 32-bit word arithmetic on any target; see
 # `src/uint.rs`.

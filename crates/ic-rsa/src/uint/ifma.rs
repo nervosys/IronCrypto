@@ -84,6 +84,9 @@ const LANES: usize = MAX_WORDS + 4;
 /// Whether this CPU has AVX-512F, IFMA and BMI2, asked once.
 pub(crate) fn available() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
+    if super::adx_forced() {
+        return false;
+    }
     // 0 not yet asked, 1 yes, 2 no.
     static CACHED: AtomicU8 = AtomicU8::new(0);
     match CACHED.load(Ordering::Relaxed) {
