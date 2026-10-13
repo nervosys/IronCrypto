@@ -3,12 +3,9 @@
 //! # Why
 //!
 //! [`Point::mul_scalar`][super::point::Point::mul_scalar] handles an arbitrary
-//! point: it builds `1..=8` times the point per call and walks the scalar four
-//! bits at a time, which is what ECDH needs. Every digit still costs four
+//! point: it builds `1..=16` times the point per call and walks the scalar five
+//! bits at a time, which is what ECDH needs. Every digit still costs five
 //! doublings, and for an arbitrary point nothing can remove them.
-//!
-//! The measurements below date from when `mul_scalar` was a
-//! double-and-add-always ladder, one addition per bit.
 //!
 //! ECDSA signing does not need it. `R = k*G` multiplies the generator, which is
 //! the same point in every signature, so its multiples can be computed once.
@@ -19,238 +16,364 @@
 //!
 //! # The shape
 //!
-//! The same construction [`crate::ed25519`] uses, and the reasoning is there in
-//! full: signed radix-16 digits so only positive multiples are stored, one
-//! table per *pair* of digits with the odd ones scaled by four doublings
-//! applied once, and a lookup that reads every entry and selects with
-//! conditional moves rather than indexing -- a table indexed by a secret is a
-//! cache-timing channel.
+//! The scalar is recoded into signed digits of `W` bits, each in
+//! `[-2^(W-1), 2^(W-1))`, and window `i` stores `1..=2^(W-1)` times
+//! `2^(W*i) * G`, affine. Then `k*G` is one addition per digit and no
+//! doublings at all: the digit's multiple, negated in `y` when the digit is
+//! negative, added to the accumulator. The lookup reads every entry of the
+//! window and selects with conditional moves rather than indexing -- a table
+//! indexed by a secret is a cache-timing channel.
 //!
-//! The differences are that a Weierstrass point negates in `y` rather than `x`
-//! and `t`, and that the scalar width varies by curve, so the digit count is
-//! computed from `C::SCALAR_BYTES` and the arrays are sized for the widest
-//! curve this crate has.
+//! `W` is per curve, trading storage for additions: 6 for P-256 (43
+//! additions, 88 KiB), 5 for P-384 (77, 118 KiB), 4 for P-521 (133, 150 KiB).
+//! This replaced a radix-16 comb with two passes and four doublings between
+//! them, 65 additions on P-256 in a complete projective formula; the
+//! additions here are Jacobian with an affine operand, seven multiplications
+//! and four squarings, and all but the last may be incomplete -- see
+//! [`mul`] for why.
 //!
 //! # Where it lives
 //!
 //! Behind `std`, in a `static` per curve: one `OnceLock` per window, filled in
-//! order on first use, or earlier through [`crate::prepare`]. P-256's table is
-//! about 25 KiB and P-521's about 114 KiB, which is a reasonable trade on a
-//! host and a bad one on a microcontroller. `no_std` multiplies the generator
-//! with [`Point::mul_scalar`], which uses this module's [`Window`] and
-//! [`signed_digits`] against the point it is given, one window built per call:
-//! the same four bits per addition, without the storage.
+//! order on first use, or earlier through [`crate::prepare`]. `no_std`
+//! multiplies the generator with [`Point::mul_scalar`], which uses this
+//! module's [`Window`] and [`signed_digits_w`] against the point it is given,
+//! one window built per call: five bits per addition, without the storage.
 //!
 //! The storage is static, not heap. It used to be a `Vec`, and a caller that
 //! forbids allocation after start-up -- a TLS engine running in caller-owned
 //! memory -- met that allocation in the middle of its first handshake. A
 //! single `OnceLock` holding every window would avoid the heap, but its value
-//! is built on the stack and then moved in, which is 114 KiB of stack for
-//! P-521; that overflowed once, and is why the `Vec` was there. A lock per
+//! is built on the stack and then moved in, which is the whole table's worth
+//! of stack; that overflowed once, and is why the `Vec` was there. A lock per
 //! window needs neither: each window is built where it is stored, and at most
 //! one window's worth of stack is in use at a time. `tests/cold_tables.rs`
 //! checks that a first use allocates nothing.
 
 use ic_core::ct::Choice;
 
+use super::arith::masks_for;
 #[cfg(feature = "std")]
 use super::arith::Field;
+#[cfg(feature = "std")]
+use super::point::AffinePoint;
 use super::point::Curve;
 use super::point::Point;
-#[cfg(feature = "std")]
-use super::point::{AffinePoint, Projective};
 
-/// Digits for the widest curve here: P-521 has a 66-byte scalar, so 132
-/// nibbles, plus one for the carry out of the top. See `signed_digits`.
-const MAX_DIGITS: usize = 133;
+/// The window width of [`Point::mul_scalar`]: five bits, signed digits in
+/// `[-16, 16]`.
+pub(super) const WIDTH: usize = 5;
 
-/// Entries per table: the multiples `1..=8`.
-const ENTRIES: usize = 8;
+/// Entries per window of [`Point::mul_scalar`]: the multiples `1..=16`.
+const ENTRIES: usize = 1 << (WIDTH - 1);
 
-/// `1..=8` times some fixed point: a multiple of the generator in the table,
-/// or the point being multiplied in [`Point::mul_scalar`].
+/// `1..=16` times some fixed point, for [`Point::mul_scalar`].
 pub(super) struct Window<C: Curve>([Point<C>; ENTRIES]);
 
 impl<C: Curve> Window<C> {
+    /// Even multiples by doubling, odd ones by adding `base` to the even one
+    /// below: `2k * base` and `base` are never the same point when `base` has
+    /// prime order above 8, so [`Point::add_unequal`] is enough, and it also
+    /// handles a `base` at infinity.
     pub(super) fn new(base: &Point<C>) -> Self {
-        let mut entries = [Point::identity(); ENTRIES];
-        entries[0] = *base;
-        for i in 1..ENTRIES {
-            entries[i] = entries[i - 1].add(base);
-        }
-        Self(entries)
+        Self(multiples(base))
     }
 
-    /// `digit * base` for `digit` in `[-8, 8]`, without indexing by it.
+    /// `digit * base` for `digit` in `[-16, 16]`, without indexing by it.
     pub(super) fn select(&self, digit: i8) -> Point<C> {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
 
-        let mut out = Point::identity();
-        for (i, entry) in self.0.iter().enumerate() {
-            let hit = Choice::from_u8(u8::from(magnitude == (i as u8 + 1)));
-            Point::cmov(&mut out, entry, hit);
-        }
+        // From all zeros, which is a point at infinity (Z = 0) and so the
+        // answer for a zero digit, which matches no entry.
+        let masks = masks_for::<ENTRIES>(magnitude as u32, 1);
+        let mut out = match C::scan_point(&self.0, &masks) {
+            Some([x, y, z]) => Point::from_coordinates(x, y, z),
+            None => {
+                let mut out = Point::zero();
+                for (entry, mask) in self.0.iter().zip(masks) {
+                    Point::or_masked(&mut out, entry, mask);
+                }
+                out
+            }
+        };
         out.conditional_negate(negative);
         out
     }
 }
 
-/// `1..=8` times one power of the generator, normalized to affine, for
-/// [`Table`]: an affine entry makes the accumulator's addition one
-/// multiplication cheaper. Normalizing costs an inversion per entry, once,
-/// when the table is built.
+/// `1..=E` times `base`, Jacobian: even multiples by doubling, odd ones by
+/// one incomplete addition; see [`Window::new`].
+fn multiples<C: Curve, const E: usize>(base: &Point<C>) -> [Point<C>; E] {
+    let mut entries = [Point::identity(); E];
+    entries[0] = *base;
+    for i in 1..E {
+        // entries[i] = (i + 1) * base
+        entries[i] = if i % 2 == 1 {
+            entries[i / 2].double()
+        } else {
+            entries[i - 1].add_unequal(base)
+        };
+    }
+    entries
+}
+
+/// `a == b`, as a [`Choice`], without a comparison the compiler could turn
+/// into a branch: the xor is zero exactly when they are equal, and zero minus
+/// one is the only value here with the top bit set.
+#[inline]
 #[cfg(feature = "std")]
-pub struct AffineWindow<C: Curve>([AffinePoint<C>; ENTRIES]);
+fn equal(a: u8, b: u8) -> Choice {
+    Choice::from_u8((((a ^ b) as u32).wrapping_sub(1) >> 31) as u8)
+}
+
+/// `1..=E` times one power of the generator, affine, for [`mul`]: an affine
+/// entry makes the accumulator's addition three multiplications cheaper.
+#[cfg(feature = "std")]
+pub struct AffineWindow<C: Curve, const E: usize>([AffinePoint<C>; E]);
 
 #[cfg(feature = "std")]
-impl<C: Curve> AffineWindow<C> {
-    /// `None` only if a multiple of `base` is the identity, which `1..=8`
-    /// times a power of a generator of prime order above 8 never is.
-    fn new(base: &Point<C>) -> Option<Self> {
-        let window = Window::new(base);
+impl<C: Curve, const E: usize> AffineWindow<C, E> {
+    /// The window for `base`, a nonzero multiple of the generator, so none of
+    /// its multiples `1..=E` is the identity. Normalised with one inversion
+    /// for the whole window (Montgomery's trick): the product of every `Z`,
+    /// inverted once, then unwound.
+    fn new(base: &Point<C>) -> Self {
+        let points: [Point<C>; E] = multiples(base);
+        let mut prefix = [C::Field::ONE; E];
+        let mut acc = C::Field::ONE;
+        for (p, point) in prefix.iter_mut().zip(points.iter()) {
+            *p = acc;
+            acc = acc.mul(&point.z());
+        }
+        // acc = z_0 * .. * z_{E-1}; walk back, peeling one z at a time.
+        let mut inv = acc.invert();
         let mut entries = [AffinePoint {
             x: C::Field::ZERO,
             y: C::Field::ZERO,
-        }; ENTRIES];
-        for (out, entry) in entries.iter_mut().zip(window.0.iter()) {
-            *out = entry.to_affine()?;
+        }; E];
+        for i in (0..E).rev() {
+            let z_inv = inv.mul(&prefix[i]);
+            inv = inv.mul(&points[i].z());
+            let z_inv2 = z_inv.square();
+            entries[i] = AffinePoint {
+                x: points[i].x().mul(&z_inv2),
+                y: points[i].y().mul(&z_inv2.mul(&z_inv)),
+            };
         }
-        Some(Self(entries))
+        Self(entries)
     }
 
-    /// `acc + digit * base` for `digit` in `[-8, 8]`, without indexing by it.
-    ///
-    /// A zero digit selects the identity, which has no affine form, so the
-    /// addition is made anyway -- on an arbitrary entry -- and its result
-    /// discarded by a conditional move. The work is the same for every digit.
-    fn add_to(&self, acc: &Projective<C>, digit: i8) -> Projective<C> {
+    /// `|digit| * base`'s coordinates, negated in `y` for a negative digit,
+    /// without indexing by the digit. A zero digit selects the first entry,
+    /// which the caller discards.
+    fn select(&self, digit: i8) -> (C::Field, C::Field) {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
-
-        let mut x = self.0[0].x;
-        let mut y = self.0[0].y;
-        for (i, entry) in self.0.iter().enumerate() {
-            let hit = Choice::from_u8(u8::from(magnitude == (i as u8 + 1)));
-            C::Field::cmov(&mut x, &entry.x, hit);
-            C::Field::cmov(&mut y, &entry.y, hit);
-        }
+        // A zero digit matches no entry and leaves (0, 0), which the caller
+        // discards.
+        let masks = masks_for::<E>(magnitude as u32, 1);
+        let (x, mut y) = match C::scan_affine(&self.0, &masks) {
+            Some(p) => (p.x, p.y),
+            None => {
+                let mut x = C::Field::ZERO;
+                let mut y = C::Field::ZERO;
+                for (entry, mask) in self.0.iter().zip(masks) {
+                    C::Field::or_masked(&mut x, &entry.x, mask);
+                    C::Field::or_masked(&mut y, &entry.y, mask);
+                }
+                (x, y)
+            }
+        };
         let ny = y.neg();
         C::Field::cmov(&mut y, &ny, negative);
+        (x, y)
+    }
 
-        let mut out = acc.add_affine(&x, &y);
-        Projective::cmov(&mut out, acc, Choice::from_u8(u8::from(magnitude == 0)));
-        out
+    /// `acc + digit * base`, in constant time. With `complete` false, `acc`
+    /// must not equal `digit * base`; see [`mul`].
+    fn add_to(&self, acc: &Point<C>, digit: i8, complete: bool) -> Point<C> {
+        let (x, y) = self.select(digit);
+        // A zero digit adds the identity, which has no affine form: the
+        // addition is made anyway, of zeros, and discarded. All ones for a
+        // zero digit: `digit as u8` is below 256, so subtracting one sets the
+        // top bit only from zero.
+        let zero = ((digit as u8 as u64).wrapping_sub(1) >> 63).wrapping_neg();
+        if complete {
+            let mut out = acc.add(&Point::from_affine(&AffinePoint { x, y }));
+            Point::cmov(&mut out, acc, equal(digit as u8, 0));
+            out
+        } else {
+            acc.add_affine_unequal_or_keep(&x, &y, zero)
+        }
+    }
+
+    /// `acc + digit * base` for a public digit, as in verification.
+    fn add_to_vartime(&self, acc: &Point<C>, digit: i8) -> Point<C> {
+        if digit == 0 {
+            return *acc;
+        }
+        let entry = &self.0[digit.unsigned_abs() as usize - 1];
+        if digit > 0 {
+            acc.add_affine_vartime(&entry.x, &entry.y)
+        } else {
+            acc.add_affine_vartime(&entry.x, &entry.y.neg())
+        }
     }
 }
 
-/// One curve's windows: `16^(2i) * G` and its multiples `1..=8`, for each `i`.
+/// One curve's windows: `2^(W*i) * G` and its multiples `1..=E`, for each
+/// `i`, where `E = 2^(W-1)`.
 #[cfg(feature = "std")]
-pub type Windows<C> = [std::sync::OnceLock<AffineWindow<C>>];
+pub type Windows<C, const E: usize> = [std::sync::OnceLock<AffineWindow<C, E>>];
 
-/// The window for `base`, which is always a nonzero multiple of the generator.
+/// The window width that goes with `E` entries.
 #[cfg(feature = "std")]
-fn window_for<C: Curve>(base: &Point<C>) -> AffineWindow<C> {
-    match AffineWindow::new(base) {
-        Some(window) => window,
-        None => unreachable!("a multiple of the generator below its order is the identity"),
-    }
+const fn width<const E: usize>() -> usize {
+    E.trailing_zeros() as usize + 1
 }
 
 /// Fill every window, in order, sharing the doublings between them.
 ///
-/// Costs a little over one scalar multiplication, once. `built` makes it run
-/// once: a second caller waits for the first rather than repeating the work.
+/// Costs about one variable-base scalar multiplication plus one inversion per
+/// window, once. `built` makes it run once: a second caller waits for the
+/// first rather than repeating the work.
 #[cfg(feature = "std")]
-pub fn prepare<C: Curve>(windows: &Windows<C>, built: &std::sync::OnceLock<()>) {
+pub fn prepare<C: Curve, const E: usize>(windows: &Windows<C, E>, built: &std::sync::OnceLock<()>) {
     built.get_or_init(|| {
         let mut base = Point::<C>::generator();
         for (i, slot) in windows.iter().enumerate() {
             if i > 0 {
-                // times 16^2 = eight doublings.
-                for _ in 0..8 {
+                for _ in 0..width::<E>() {
                     base = base.double();
                 }
             }
-            slot.get_or_init(|| window_for(&base));
+            slot.get_or_init(|| AffineWindow::new(&base));
         }
     });
 }
 
-/// `scalar * G`.
+/// Window `i`, built by itself if [`prepare`] somehow had not: slower, and
+/// the same answer rather than a panic.
 #[cfg(feature = "std")]
-pub fn mul<C: Curve>(
-    windows: &Windows<C>,
+fn window<C: Curve, const E: usize>(windows: &Windows<C, E>, i: usize) -> &AffineWindow<C, E> {
+    windows[i].get_or_init(|| {
+        let mut base = Point::<C>::generator();
+        for _ in 0..width::<E>() * i {
+            base = base.double();
+        }
+        AffineWindow::new(&base)
+    })
+}
+
+/// `scalar * G`, constant time in the scalar.
+///
+/// # Which additions can be incomplete
+///
+/// The digits are added least significant first, so before digit `i` the
+/// accumulator is `L * G` with `L` the integer the digits below `i` spell,
+/// `|L| < 2^(W*i) / 1.8`, and the entry is `d * 2^(W*i) * G`. They are equal
+/// only if `L = d * 2^(W*i) mod n`. For `d != 0` the right side is at least
+/// `2^(W*i)` in magnitude, more than `|L|`, so the two differ as integers; and
+/// their difference is below `0.6 * 2^(W*(i+1))`, which is below `n`
+/// whenever `W*(i+1) < ORDER_BITS`, since `n > 2^(ORDER_BITS-1)`. So up to
+/// there the points differ, and [`Point::add_affine_unequal`] is exact; it
+/// also handles an accumulator at infinity, and `d = 0` is discarded by the
+/// caller. The windows above that bound -- one on P-256 and P-384, three on
+/// P-521 -- use the complete addition.
+#[cfg(feature = "std")]
+pub fn mul<C: Curve, const E: usize>(
+    windows: &Windows<C, E>,
     built: &std::sync::OnceLock<()>,
     scalar: &C::Scalar,
 ) -> Point<C> {
     prepare(windows, built);
-    // Every window is filled by now. Each read still goes through
-    // `get_or_init`, building that one window by itself if it somehow were
-    // not, which is slower and gives the same answer rather than a panic.
-    let window = |i: usize| {
-        windows[i].get_or_init(|| {
-            let mut base = Point::<C>::generator();
-            for _ in 0..8 * i {
-                base = base.double();
-            }
-            window_for(&base)
-        })
-    };
-
+    let w = width::<E>();
     let bytes = scalar.to_bytes();
-    let digits = signed_digits(bytes.as_ref());
-    // Every nibble, plus the carry digit above them.
-    let n = bytes.as_ref().len() * 2 + 1;
-    debug_assert!(n.div_ceil(2) <= windows.len());
+    let digits = signed_digits_w(bytes.as_ref(), w);
+    let n = digit_count(bytes.as_ref().len(), w);
+    debug_assert!(n <= windows.len());
 
-    // Accumulated projectively; see `Projective` for why.
-    let mut acc = Projective::identity();
-    for i in (1..n).step_by(2) {
-        acc = window(i / 2).add_to(&acc, digits[i]);
+    let mut acc = Point::identity();
+    for (i, digit) in digits.iter().take(n).enumerate() {
+        let complete = w * (i + 1) >= C::ORDER_BITS;
+        acc = window(windows, i).add_to(&acc, *digit, complete);
     }
-    for _ in 0..4 {
-        acc = acc.double();
-    }
-    for i in (0..n).step_by(2) {
-        acc = window(i / 2).add_to(&acc, digits[i]);
-    }
-    acc.to_jacobian()
+    acc
 }
 
-/// The scalar as signed radix-16 digits, each in `[-8, 8]`.
-///
-/// `bytes` is big-endian, as `Field::to_bytes` produces; the digits are
-/// little-endian, least significant first, because that is the order the
-/// accumulation wants.
-///
-/// Every nibble is recoded and the carry out of the top gets a digit of its
-/// own, which is where this differs from the Ed25519 version.
-///
-/// There, scalars are below `2^255`, so the most significant nibble is at most
-/// 7, one carry takes it to 8, and 8 is a legal digit -- the last nibble can
-/// absorb the carry and no extra digit is needed. Here the group orders are
-/// close to `2^(8*SCALAR_BYTES)`, so the top nibble can be 15; a carry would
-/// make it 16, which is outside `[-8, 8]`, and `select` would match no entry
-/// and silently return the identity. Hence the extra digit, which is 0 or 1.
-///
-/// That is exactly how this failed first: the Ed25519 recoding was reused
-/// unchanged and every RFC 6979 vector rejected it.
-pub(super) fn signed_digits(bytes: &[u8]) -> [i8; MAX_DIGITS] {
-    let mut nibbles = [0i8; MAX_DIGITS];
-    let n = bytes.len() * 2;
-    for (i, byte) in bytes.iter().rev().enumerate() {
-        nibbles[i * 2] = (byte & 0x0f) as i8;
-        nibbles[i * 2 + 1] = (byte >> 4) as i8;
+/// `scalar * G` for a public scalar, as in verification: the entry is read by
+/// index and zero digits are skipped.
+#[cfg(feature = "std")]
+pub fn mul_vartime<C: Curve, const E: usize>(
+    windows: &Windows<C, E>,
+    built: &std::sync::OnceLock<()>,
+    scalar: &C::Scalar,
+) -> Point<C> {
+    prepare(windows, built);
+    let w = width::<E>();
+    let bytes = scalar.to_bytes();
+    let digits = signed_digits_w(bytes.as_ref(), w);
+    let n = digit_count(bytes.as_ref().len(), w);
+    let mut acc = Point::identity();
+    for (i, digit) in digits.iter().take(n).enumerate() {
+        acc = window(windows, i).add_to_vartime(&acc, *digit);
     }
+    acc
+}
 
-    for i in 0..n {
-        let carry = (nibbles[i] + 8) >> 4;
-        nibbles[i] -= carry << 4;
-        nibbles[i + 1] += carry;
+/// Digits of `W` bits in a `len`-byte scalar, plus one for the carry out of
+/// the top.
+pub(crate) const fn digit_count(len: usize, w: usize) -> usize {
+    8 * len / w + 1
+}
+
+/// The widest digit expansion [`signed_digits_w`] produces: P-521's 66 bytes
+/// at four bits.
+const MAX_DIGITS_W: usize = 8 * 66 / 4 + 1;
+
+/// The scalar as signed digits of `w` bits, each in `[-2^(w-1), 2^(w-1))`
+/// but the top one, in `[0, 2^(w-1)]`, least significant first; `bytes` is
+/// big-endian.
+///
+/// Branch-free in the scalar: each window's bits are read at a public
+/// position, the carry is `(v + 2^(w-1)) >> w`, and the digit is `v` less the
+/// carry shifted back. The top window absorbs the last carry.
+pub(crate) fn signed_digits_w(bytes: &[u8], w: usize) -> [i8; MAX_DIGITS_W] {
+    // Little-endian words, with room above the top for windows that run past
+    // it.
+    let mut limbs = [0u64; 10];
+    for (i, byte) in bytes.iter().rev().enumerate() {
+        limbs[i / 8] |= (*byte as u64) << (8 * (i % 8));
     }
-    debug_assert!(nibbles[n] == 0 || nibbles[n] == 1);
-    nibbles
+    let n = digit_count(bytes.len(), w);
+    let mask = (1u64 << w) - 1;
+    let half = 1i16 << (w - 1);
+    let mut digits = [0i8; MAX_DIGITS_W];
+    let mut carry = 0i16;
+    for (i, digit) in digits.iter_mut().take(n).enumerate() {
+        let bit = w * i;
+        let (word, shift) = (bit / 64, bit % 64);
+        // The window's bits, which may straddle two words. `shift` is public.
+        let lo = limbs[word] >> shift;
+        let hi = if shift + w > 64 {
+            limbs[word + 1] << (64 - shift)
+        } else {
+            0
+        };
+        let v = ((lo | hi) & mask) as i16 + carry;
+        if i + 1 == n {
+            // The top window holds at most w - 1 of the scalar's bits, so
+            // with the carry it is at most 2^(w-1): a magnitude the table
+            // has, kept rather than recoded, because there is no digit above
+            // to take a carry.
+            *digit = v as i8;
+        } else {
+            carry = (v + half) >> w;
+            *digit = (v - (carry << w)) as i8;
+        }
+    }
+    digits
 }
 
 /// A curve that knows how to multiply its own generator.
@@ -265,28 +388,37 @@ pub(super) fn signed_digits(bytes: &[u8]) -> [i8; MAX_DIGITS] {
 /// function is shared across every instantiation, which would hand P-384 the
 /// P-256 table.
 pub trait HasGeneratorTable: Curve + Sized + 'static {
-    /// `scalar * G`.
+    /// `scalar * G`, constant time in the scalar.
     fn mul_generator(scalar: &Self::Scalar) -> super::point::Point<Self>;
+
+    /// `scalar * G` for a public scalar: variable time.
+    fn mul_generator_vartime(scalar: &Self::Scalar) -> super::point::Point<Self>;
 
     /// Build the table now rather than on first use. Nothing under `no_std`.
     fn prepare_generator_table();
 }
 
-/// Implement [`HasGeneratorTable`] for a curve, with its own storage.
+/// Implement [`HasGeneratorTable`] for a curve, with its own storage, in
+/// windows of `$entries = 2^(W-1)` multiples.
 macro_rules! generator_table_for {
-    ($curve:ty) => {
+    ($curve:ty, $entries:literal) => {
         /// This curve's generator table, and whether it has been filled.
         #[cfg(feature = "std")]
         fn generator_table() -> (
-            &'static $crate::nist::gentable::Windows<$curve>,
+            &'static $crate::nist::gentable::Windows<$curve, $entries>,
             &'static std::sync::OnceLock<()>,
         ) {
-            const USED: usize = <$curve as $crate::nist::point::Curve>::SCALAR_BYTES + 1;
+            const USED: usize = $crate::nist::gentable::digit_count(
+                <$curve as $crate::nist::point::Curve>::SCALAR_BYTES,
+                ($entries as usize).trailing_zeros() as usize + 1,
+            );
             #[allow(clippy::declare_interior_mutable_const)]
-            const EMPTY: std::sync::OnceLock<$crate::nist::gentable::AffineWindow<$curve>> =
-                std::sync::OnceLock::new();
-            static WINDOWS: [std::sync::OnceLock<$crate::nist::gentable::AffineWindow<$curve>>;
-                USED] = [EMPTY; USED];
+            const EMPTY: std::sync::OnceLock<
+                $crate::nist::gentable::AffineWindow<$curve, $entries>,
+            > = std::sync::OnceLock::new();
+            static WINDOWS: [std::sync::OnceLock<
+                $crate::nist::gentable::AffineWindow<$curve, $entries>,
+            >; USED] = [EMPTY; USED];
             static BUILT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
             (&WINDOWS, &BUILT)
         }
@@ -307,6 +439,21 @@ macro_rules! generator_table_for {
                 $crate::nist::point::Point::<Self>::generator().mul_scalar(scalar)
             }
 
+            #[cfg(feature = "std")]
+            fn mul_generator_vartime(
+                scalar: &<Self as $crate::nist::point::Curve>::Scalar,
+            ) -> $crate::nist::point::Point<Self> {
+                let (windows, built) = generator_table();
+                $crate::nist::gentable::mul_vartime(windows, built, scalar)
+            }
+
+            #[cfg(not(feature = "std"))]
+            fn mul_generator_vartime(
+                scalar: &<Self as $crate::nist::point::Curve>::Scalar,
+            ) -> $crate::nist::point::Point<Self> {
+                $crate::nist::point::Point::<Self>::generator().mul_scalar_vartime(scalar)
+            }
+
             fn prepare_generator_table() {
                 #[cfg(feature = "std")]
                 {
@@ -319,3 +466,44 @@ macro_rules! generator_table_for {
 }
 
 pub(crate) use generator_table_for;
+
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+
+    /// The recoding, read back: every width, scalars at the edges and a
+    /// spread between, each digit in range and the digits summing to the
+    /// scalar. Arithmetic in i128 over 15-byte scalars, independently of the
+    /// curve code; 120 bits leaves every width's top window partly full.
+    #[test]
+    fn signed_digits_sum_to_the_scalar() {
+        let mut cases: std::vec::Vec<[u8; 15]> = std::vec![[0; 15], [0xff; 15], [0x80; 15]];
+        let mut x = [0u8; 15];
+        for i in 0..200u32 {
+            for (j, b) in x.iter_mut().enumerate() {
+                *b = (i.wrapping_mul(2654435761) >> (j % 24)) as u8 ^ (j as u8).wrapping_mul(37);
+            }
+            cases.push(x);
+        }
+        for w in 4..=6 {
+            for bytes in &cases {
+                let digits = signed_digits_w(bytes, w);
+                let n = digit_count(bytes.len(), w);
+                let half = 1i128 << (w - 1);
+                let mut sum = 0i128;
+                for (i, d) in digits.iter().take(n).enumerate() {
+                    let d = *d as i128;
+                    if i + 1 == n {
+                        assert!(0 <= d && d <= half, "top digit {d} at width {w}");
+                    } else {
+                        assert!(-half <= d && d < half, "digit {d} at width {w}");
+                    }
+                    sum += d << (w * i);
+                }
+                assert!(digits[n..].iter().all(|d| *d == 0));
+                let want = bytes.iter().fold(0i128, |acc, b| (acc << 8) | *b as i128);
+                assert_eq!(sum, want, "width {w}");
+            }
+        }
+    }
+}

@@ -449,6 +449,53 @@ every caller of a hash function uses.
   compression before the message so it overlaps the inner hash, and SHA-256
   writes its padding into the block buffer instead of a copy. At parity with
   Graviola, from 1.16 times slower.
+- **P-256 is about three times faster, and on x86-64 at or ahead of
+  Graviola.** Microseconds per operation on a Ryzen 9 9900X (Zen 5), best of
+  four interleaved rounds of the master branch before this work and of this
+  build, Graviola 0.4.1 measured in the same runs (its range across the two
+  binaries in brackets):
+
+  | operation | before | after | Graviola |
+  |---|---|---|---|
+  | P-256 ECDH | 68.4 | 24.8 | [25.7, 26.3] |
+  | ECDSA P-256 sign | 28.0 | 7.5 | [7.8, 8.0] |
+  | ECDSA P-256 verify | 81.9 | 26.8 | [30.0, 30.6] |
+  | P-256 public key | 19.4 | 5.7 | -- |
+  | P-384 ECDH | 233 | 135 | [80, 80] |
+  | ECDSA P-384 sign | 98 | 50 | [86, 88] |
+  | ECDSA P-384 verify | 276 | 145 | [154, 171] |
+
+  ECDH and signing lead by three to six percent, which is within the noise
+  of a shared machine: call them parity. Verification leads by more than
+  ten. P-384 signing and verification lead too; P-384 ECDH remains
+  slower: its field arithmetic here is generic in the modulus, where
+  Graviola's is specialised to the prime.
+
+  What changed: P-256's field reduction uses the prime's shape, in x86-64
+  assembly (baseline `mul`/`adc`/`cmov`, and MULX/ADCX/ADOX where BMI2 and
+  ADX are present, detected once) and in portable Rust on other 64-bit
+  targets; on x86-64 with BMI2/ADX each point formula of P-256 and P-384 is
+  one generated assembly block (`scripts/gen_p256_x86_point.py`,
+  `scripts/gen_p384_x86_point.py`, `scripts/gen_mont_x86.py`). The generator
+  table uses signed six-bit windows on P-256 (five on P-384, four on P-521)
+  with affine entries and no doublings, read by a masked SSE2 or AVX2 scan;
+  variable-base multiplication uses five-bit windows. Additions that cannot
+  meet equal points skip the doubling the complete law computes, with the
+  argument in the code and the edge scalars in the tests. P-256 inverts by
+  Bernstein-Yang divsteps on 64-bit targets. Verification uses
+  variable-time paths on its public inputs, reads the generator table by
+  index, and checks `r` against the Jacobian x-coordinate without
+  inverting. RFC 6979 keys each HMAC once.
+
+  Nothing about what is computed changed: RFC 6979 signatures, every NIST,
+  Wycheproof and ACVP vector, and the error-state gate are as before. `ic-ec`
+  now denies `unsafe` instead of forbidding it, and allows it in the
+  assembly modules alone. Every exponentiation is now a fixed four-bit
+  window read by masked scan, so no inversion or square root branches on its
+  exponent; Valgrind's secret-dependence harness had reported that branch in
+  the ECDSA nonce inversion, and reports nothing in an inversion now. Ten
+  x86-64 compiled-code probes cover the new assembly (`scripts/check-ct.py`),
+  all passing; see `docs/CONSTANT_TIME.md`.
 
 ## 0.2.24
 

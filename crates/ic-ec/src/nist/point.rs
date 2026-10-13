@@ -65,9 +65,58 @@ pub trait Curve: Sized {
     /// Used where a specification calls for reduction, such as turning a hash
     /// or an x-coordinate into a scalar.
     fn scalar_reduce_slice(bytes: &[u8]) -> Self::Scalar;
+
+    /// This curve's own doubling of Jacobian `(x, y, z)`, where it has one
+    /// faster than [`Point::double`]'s formula, computing exactly the same
+    /// thing; `None` to use the formula. P-256 on x86-64 with BMI2 and ADX
+    /// has one: the whole formula as one block of assembly.
+    #[inline(always)]
+    fn double_fast(
+        _x: &Self::Field,
+        _y: &Self::Field,
+        _z: &Self::Field,
+    ) -> Option<[Self::Field; 3]> {
+        None
+    }
+
+    /// The same for the Jacobian addition formula: the sum, then `h` and `r`.
+    #[inline(always)]
+    #[allow(clippy::type_complexity)]
+    fn add_fast(
+        _p: [&Self::Field; 3],
+        _q: [&Self::Field; 3],
+    ) -> Option<([Self::Field; 3], Self::Field, Self::Field)> {
+        None
+    }
+
+    /// A faster table scan, where the curve has one: the `OR` over `entries`
+    /// of each entry masked by its mask, which `gentable` uses to read one
+    /// entry of a window without indexing by the digit. `None` to use the
+    /// portable loop. P-256 on x86-64 has one, in SSE2 or AVX2.
+    #[inline(always)]
+    fn scan_affine(_entries: &[AffinePoint<Self>], _masks: &[u64]) -> Option<AffinePoint<Self>> {
+        None
+    }
+
+    /// The same over Jacobian points, as coordinates.
+    #[inline(always)]
+    fn scan_point(_entries: &[Point<Self>], _masks: &[u64]) -> Option<[Self::Field; 3]> {
+        None
+    }
+
+    /// The same for the mixed addition formula, with `q` affine.
+    #[inline(always)]
+    #[allow(clippy::type_complexity)]
+    fn add_affine_fast(
+        _p: [&Self::Field; 3],
+        _q: [&Self::Field; 2],
+    ) -> Option<([Self::Field; 3], Self::Field, Self::Field)> {
+        None
+    }
 }
 
 /// A point in Jacobian coordinates.
+#[repr(C)]
 pub struct Point<C: Curve> {
     x: C::Field,
     y: C::Field,
@@ -83,6 +132,7 @@ impl<C: Curve> Clone for Point<C> {
 impl<C: Curve> Copy for Point<C> {}
 
 /// A point in affine coordinates, as produced by decoding or normalization.
+#[repr(C)]
 pub struct AffinePoint<C: Curve> {
     /// The x-coordinate.
     pub x: C::Field,
@@ -132,7 +182,18 @@ impl<C: Curve> Point<C> {
     }
 
     /// Point doubling (`dbl-2001-b`, specialized for `a = -3`).
+    #[inline]
     pub fn double(&self) -> Self {
+        if let Some([x, y, z]) = C::double_fast(&self.x, &self.y, &self.z) {
+            return Point { x, y, z };
+        }
+        self.double_formula()
+    }
+
+    /// [`Self::double`] in field operations, which [`Curve::double_fast`]
+    /// must match.
+    #[inline(never)]
+    pub(crate) fn double_formula(&self) -> Self {
         let delta = self.z.square();
         let gamma = self.y.square();
         let beta = self.x.mul(&gamma);
@@ -160,9 +221,27 @@ impl<C: Curve> Point<C> {
 
     /// The Jacobian addition formula (`add-2007-bl`), without case handling.
     ///
-    /// Also reports whether the inputs had equal `x` (`h == 0`) and equal `y`
-    /// (`r == 0`), which [`Point::add`] uses to pick the right answer.
-    fn add_raw(&self, other: &Self) -> (Self, Choice, Choice) {
+    /// Also returns `h` and `r`, whose being zero says the inputs had equal
+    /// `x` and equal `y`, which [`Point::add`] uses to pick the right answer.
+    ///
+    /// Of the cases the formula gets wrong, one is right by accident: for
+    /// `P + (-P)`, `h = 0` makes `Z3 = 0`, which is the identity. The others
+    /// are an input at infinity, and `P + P`, where `r = 0` as well and the
+    /// formula returns the identity instead of `2P`.
+    #[inline]
+    fn add_formula(&self, other: &Self) -> (Self, C::Field, C::Field) {
+        if let Some(([x, y, z], h, r)) =
+            C::add_fast([&self.x, &self.y, &self.z], [&other.x, &other.y, &other.z])
+        {
+            return (Point { x, y, z }, h, r);
+        }
+        self.add_formula_generic(other)
+    }
+
+    /// [`Self::add_formula`] in field operations, which [`Curve::add_fast`]
+    /// must match.
+    #[inline(never)]
+    pub(crate) fn add_formula_generic(&self, other: &Self) -> (Self, C::Field, C::Field) {
         let z1z1 = self.z.square();
         let z2z2 = other.z.square();
         let u1 = self.x.mul(&z2z2);
@@ -172,9 +251,6 @@ impl<C: Curve> Point<C> {
 
         let h = u2.sub(&u1);
         let r = s2.sub(&s1).double();
-
-        let h_is_zero = h.is_zero();
-        let r_is_zero = r.is_zero();
 
         let i = h.double().square();
         let j = h.mul(&i);
@@ -190,14 +266,163 @@ impl<C: Curve> Point<C> {
                 y: y3,
                 z: z3,
             },
-            h_is_zero,
-            r_is_zero,
+            h,
+            r,
+        )
+    }
+
+    /// `self + other` for inputs that are not the same point, in constant
+    /// time: correct when either is the identity, and for `P + (-P)`, but
+    /// **not** for `P + P`, which returns the identity.
+    ///
+    /// Only for a caller that can show its inputs are never equal. Half the
+    /// price of [`Point::add`], which computes a doubling beside every
+    /// addition in case they are; see [`Point::mul_scalar`] for the argument
+    /// that makes its loop such a caller.
+    pub(crate) fn add_unequal(&self, other: &Self) -> Self {
+        let (sum, _, _) = self.add_formula(other);
+        // Both identity tests behind one barrier.
+        let [other_inf, self_inf] =
+            core::hint::black_box([other.z.zero_mask(), self.z.zero_mask()]);
+        let result = Self::select_masked(other_inf, self, &sum);
+        Self::select_masked(self_inf, other, &result)
+    }
+
+    /// `a` where `mask` is all ones, `b` where it is zero; the mask must
+    /// already be behind a barrier.
+    #[inline]
+    fn select_masked(mask: u64, a: &Self, b: &Self) -> Self {
+        Point {
+            x: C::Field::select_mask(mask, &a.x, &b.x),
+            y: C::Field::select_mask(mask, &a.y, &b.y),
+            z: C::Field::select_mask(mask, &a.z, &b.z),
+        }
+    }
+
+    /// `self + other`, complete, branching on the cases: for public points
+    /// only, as in verification.
+    pub(crate) fn add_vartime(&self, other: &Self) -> Self {
+        if bool::from(self.is_identity()) {
+            return *other;
+        }
+        if bool::from(other.is_identity()) {
+            return *self;
+        }
+        let (sum, h, r) = self.add_formula(other);
+        if bool::from(h.is_zero()) {
+            return if bool::from(r.is_zero()) {
+                self.double()
+            } else {
+                Self::identity()
+            };
+        }
+        sum
+    }
+
+    /// `self + (x2, y2)` for an affine point (`madd-2007-bl`, `Z2 = 1`):
+    /// seven multiplications and four squarings, where the general addition
+    /// takes eleven and five.
+    ///
+    /// Constant time, and correct when `self` is the identity or `-(x2, y2)`,
+    /// but not when it is `(x2, y2)` itself; the same contract as
+    /// [`Point::add_unequal`].
+    #[cfg(test)]
+    pub(crate) fn add_affine_unequal(&self, x2: &C::Field, y2: &C::Field) -> Self {
+        self.add_affine_unequal_or_keep(x2, y2, 0)
+    }
+
+    /// [`Point::add_affine_unequal`], or `self` unchanged where `keep` is
+    /// all ones: the generator table's zero digit, whose identity has no
+    /// affine form. `keep` need not be behind a barrier yet; it is put behind
+    /// one together with the identity test, one barrier for both.
+    #[cfg(feature = "std")]
+    pub(crate) fn add_affine_unequal_or_keep(
+        &self,
+        x2: &C::Field,
+        y2: &C::Field,
+        keep: u64,
+    ) -> Self {
+        let (sum, _, _) = self.add_affine_formula(x2, y2);
+        let lifted = Point {
+            x: *x2,
+            y: *y2,
+            z: C::Field::ONE,
+        };
+        let [self_inf, keep] = core::hint::black_box([self.z.zero_mask(), keep]);
+        let result = Self::select_masked(self_inf, &lifted, &sum);
+        Self::select_masked(keep, self, &result)
+    }
+
+    /// [`Point::add_affine_unequal`], complete, branching on the cases: for
+    /// public points only.
+    #[cfg(feature = "std")]
+    pub(crate) fn add_affine_vartime(&self, x2: &C::Field, y2: &C::Field) -> Self {
+        let lifted = Point {
+            x: *x2,
+            y: *y2,
+            z: C::Field::ONE,
+        };
+        if bool::from(self.is_identity()) {
+            return lifted;
+        }
+        let (sum, h, r) = self.add_affine_formula(x2, y2);
+        if bool::from(h.is_zero()) {
+            return if bool::from(r.is_zero()) {
+                self.double()
+            } else {
+                Self::identity()
+            };
+        }
+        sum
+    }
+
+    /// The mixed addition formula, without case handling; `h` and `r` as in
+    /// [`Point::add_formula`].
+    #[inline]
+    #[cfg(feature = "std")]
+    fn add_affine_formula(&self, x2: &C::Field, y2: &C::Field) -> (Self, C::Field, C::Field) {
+        if let Some(([x, y, z], h, r)) = C::add_affine_fast([&self.x, &self.y, &self.z], [x2, y2]) {
+            return (Point { x, y, z }, h, r);
+        }
+        self.add_affine_formula_generic(x2, y2)
+    }
+
+    /// [`Self::add_affine_formula`] in field operations, which
+    /// [`Curve::add_affine_fast`] must match.
+    #[inline(never)]
+    #[cfg(feature = "std")]
+    pub(crate) fn add_affine_formula_generic(
+        &self,
+        x2: &C::Field,
+        y2: &C::Field,
+    ) -> (Self, C::Field, C::Field) {
+        let z1z1 = self.z.square();
+        let u2 = x2.mul(&z1z1);
+        let s2 = y2.mul(&self.z).mul(&z1z1);
+        let h = u2.sub(&self.x);
+        let hh = h.square();
+        let i = hh.double().double();
+        let j = h.mul(&i);
+        let r = s2.sub(&self.y).double();
+        let v = self.x.mul(&i);
+        let x3 = r.square().sub(&j).sub(&v.double());
+        let y3 = r.mul(&v.sub(&x3)).sub(&self.y.mul(&j).double());
+        let z3 = self.z.add(&h).square().sub(&z1z1).sub(&hh);
+        (
+            Point {
+                x: x3,
+                y: y3,
+                z: z3,
+            },
+            h,
+            r,
         )
     }
 
     /// The complete group law: correct for every pair of inputs.
     pub fn add(&self, other: &Self) -> Self {
-        let (sum, h_zero, r_zero) = self.add_raw(other);
+        let (sum, h, r) = self.add_formula(other);
+        let (h_zero, r_zero) = (h.is_zero(), r.is_zero());
         let doubled = self.double();
 
         let self_inf = self.is_identity();
@@ -236,6 +461,30 @@ impl<C: Curve> Point<C> {
         C::Field::cmov(&mut a.z, &b.z, choice);
     }
 
+    /// The point with these Jacobian coordinates, for a table scan.
+    #[inline]
+    pub(crate) fn from_coordinates(x: C::Field, y: C::Field, z: C::Field) -> Self {
+        Point { x, y, z }
+    }
+
+    /// All coordinates zero: a point at infinity, since `Z = 0`, and the
+    /// starting value of a table scan by [`Self::or_masked`].
+    pub(crate) fn zero() -> Self {
+        Point {
+            x: C::Field::ZERO,
+            y: C::Field::ZERO,
+            z: C::Field::ZERO,
+        }
+    }
+
+    /// `a |= b & mask`, coordinate by coordinate; see [`Field::or_masked`].
+    #[inline]
+    pub(crate) fn or_masked(a: &mut Self, b: &Self, mask: u64) {
+        C::Field::or_masked(&mut a.x, &b.x, mask);
+        C::Field::or_masked(&mut a.y, &b.y, mask);
+        C::Field::or_masked(&mut a.z, &b.z, mask);
+    }
+
     /// Point negation.
     pub fn neg(&self) -> Self {
         Point {
@@ -247,39 +496,57 @@ impl<C: Curve> Point<C> {
 
     /// Scalar multiplication, constant-time in the scalar.
     ///
-    /// Four bits at a time. The scalar becomes signed radix-16 digits in
-    /// `[-8, 8]`, `1..=8` times this point are computed once per call, and each
-    /// digit selects one of them by reading all eight with conditional moves,
-    /// then negates it or not the same way. Every scalar of a curve has the
-    /// same digit count, and every digit costs four doublings, one selection
-    /// and one addition, so the trace does not depend on the scalar.
+    /// Five bits at a time. The scalar becomes signed digits in `[-16, 16]`,
+    /// `1..=16` times this point are computed once per call, and each digit
+    /// selects one of them by reading all sixteen with conditional moves, then
+    /// negates it or not the same way. Every scalar of a curve has the same
+    /// digit count, and every digit costs five doublings, one selection and
+    /// one addition, so the trace does not depend on the scalar.
     ///
-    /// That is an addition per four bits where the double-and-add-always
-    /// ladder it replaced had one per bit. ECDH is one of these, so this is
-    /// most of its cost; under `no_std` it is also what multiplies the
-    /// generator, since there is no stored table there. The window is eight
-    /// points on the stack, freed on return.
+    /// ECDH is one of these, so this is most of its cost; under `no_std` it is
+    /// also what multiplies the generator, since there is no stored table
+    /// there. The window is sixteen points on the stack, freed on return.
+    /// Four-bit windows cost thirteen more additions on P-256 and eight
+    /// fewer entries to build; five measured faster.
     ///
-    /// Correct only because [`Self::add`] is complete: a selected entry can be
-    /// the identity, and the accumulator can equal the entry it is added to.
+    /// # Which additions can be incomplete
+    ///
+    /// Every addition but the last is [`Self::add_unequal`], which skips the
+    /// doubling [`Self::add`] computes in case its inputs are equal, because
+    /// they cannot be. `self` is a point of prime order `n` (every point of
+    /// a NIST curve is: the cofactor is 1), or the identity. Before digit `i`
+    /// is added, the accumulator is `32 * S * P`, where `S` is the integer
+    /// the digits above `i` spell, and the entry is `d * P` with `|d| <= 16`.
+    /// They are equal only if `32 * S - d = 0 mod n`. The scalar is below
+    /// `n`, so for `i >= 1`, `|32 * S - d| <= k / 32 + 48 < n`, which makes
+    /// that `32 * S = d` exactly, and with `|d| <= 16` that is `S = d = 0`:
+    /// an identity on both sides, which `add_unequal` handles. At `i = 0` the
+    /// bound fails -- `k = n - 2` makes the accumulator `-P` and the last
+    /// digit `-1` -- so the last addition is the complete one. Selected
+    /// identities, and `P + (-P)`, are handled by `add_unequal` as well.
+    ///
+    /// The scalars at that edge, `n - 1 .. n - 40` and `1 .. 40`, are in the
+    /// tests, as is a comparison with the ladder over random scalars.
     pub fn mul_scalar(&self, scalar: &C::Scalar) -> Self {
-        use super::gentable::{signed_digits, Window};
+        use super::gentable::{digit_count, signed_digits_w, Window, WIDTH};
 
         let bytes = scalar.to_bytes();
         let bytes = bytes.as_ref();
-        let digits = signed_digits(bytes);
-        // Every nibble, plus the carry digit above them.
-        let n = bytes.len() * 2 + 1;
+        let digits = signed_digits_w(bytes, WIDTH);
+        let n = digit_count(bytes.len(), WIDTH);
         let window = Window::new(self);
 
         let mut acc = window.select(digits[n - 1]);
-        for i in (0..n - 1).rev() {
-            for _ in 0..4 {
+        for i in (1..n - 1).rev() {
+            for _ in 0..WIDTH {
                 acc = acc.double();
             }
-            acc = acc.add(&window.select(digits[i]));
+            acc = acc.add_unequal(&window.select(digits[i]));
         }
-        acc
+        for _ in 0..WIDTH {
+            acc = acc.double();
+        }
+        acc.add(&window.select(digits[0]))
     }
 
     /// The double-and-add-always ladder [`Self::mul_scalar`] replaced, kept as
@@ -331,7 +598,7 @@ impl<C: Curve> Point<C> {
         let twice = self.double();
         let mut odd = [*self; 8];
         for i in 1..8 {
-            odd[i] = odd[i - 1].add(&twice);
+            odd[i] = odd[i - 1].add_vartime(&twice);
         }
 
         let bytes = scalar.to_bytes();
@@ -344,9 +611,9 @@ impl<C: Curve> Point<C> {
             if digit != 0 {
                 let entry = &odd[(digit.unsigned_abs() as usize) / 2];
                 acc = if digit > 0 {
-                    acc.add(entry)
+                    acc.add_vartime(entry)
                 } else {
-                    acc.add(&entry.negate())
+                    acc.add_vartime(&entry.negate())
                 };
             }
         }
@@ -361,11 +628,12 @@ impl<C: Curve> Point<C> {
     where
         C: super::gentable::HasGeneratorTable,
     {
-        // Both halves are public here. The generator gets its table; the
-        // other point gets the non-adjacent form.
+        // Both halves are public here. The generator gets its table, read by
+        // index and skipping zero digits; the other point gets the
+        // non-adjacent form.
         #[cfg(feature = "std")]
         {
-            Self::mul_generator(a).add(&p.mul_scalar_vartime(b))
+            Self::mul_generator_vartime(a).add_vartime(&p.mul_scalar_vartime(b))
         }
         // No table, so the generator costs a full chain of doublings like any
         // other point -- and the two chains can be one.
@@ -389,7 +657,7 @@ impl<C: Curve> Point<C> {
             let twice = base.double();
             let mut odd = [*base; 8];
             for i in 1..8 {
-                odd[i] = odd[i - 1].add(&twice);
+                odd[i] = odd[i - 1].add_vartime(&twice);
             }
             odd
         };
@@ -406,9 +674,9 @@ impl<C: Curve> Point<C> {
                 if digit != 0 {
                     let entry = &table[(digit.unsigned_abs() as usize) / 2];
                     acc = if digit > 0 {
-                        acc.add(entry)
+                        acc.add_vartime(entry)
                     } else {
-                        acc.add(&entry.negate())
+                        acc.add_vartime(&entry.negate())
                     };
                 }
             }
@@ -430,6 +698,30 @@ impl<C: Curve> Point<C> {
         C: super::gentable::HasGeneratorTable,
     {
         C::mul_generator(scalar)
+    }
+
+    /// `scalar * G` for a public scalar, **not** constant time: the table's
+    /// entries are read by index. For verification only, like
+    /// [`Self::mul_scalar_vartime`].
+    pub fn mul_generator_vartime(scalar: &C::Scalar) -> Self
+    where
+        C: super::gentable::HasGeneratorTable,
+    {
+        C::mul_generator_vartime(scalar)
+    }
+
+    /// The Jacobian coordinates, for the generator table's normalisation.
+    #[cfg(feature = "std")]
+    pub(super) fn x(&self) -> C::Field {
+        self.x
+    }
+    #[cfg(feature = "std")]
+    pub(super) fn y(&self) -> C::Field {
+        self.y
+    }
+    #[cfg(feature = "std")]
+    pub(super) fn z(&self) -> C::Field {
+        self.z
     }
 }
 
@@ -531,6 +823,28 @@ impl<C: Curve> Point<C> {
         })
     }
 
+    /// Whether this point's affine x-coordinate is one of `xs`, compared as
+    /// `X == x * Z^2`, without an inversion; `false` for the identity.
+    /// **Variable time**: for verification, where every value is public.
+    pub(crate) fn x_is_one_of_vartime(&self, xs: &[C::Field]) -> bool {
+        if bool::from(self.is_identity()) {
+            return false;
+        }
+        let z2 = self.z.square();
+        xs.iter().any(|x| x.mul(&z2) == self.x)
+    }
+
+    /// The affine x-coordinate alone, or `None` for the identity: what
+    /// ECDSA's `r` needs, two multiplications fewer than [`Self::to_affine`].
+    /// The identity test is the same one, on the same value.
+    pub fn to_affine_x(self) -> Option<C::Field> {
+        if bool::from(self.is_identity()) {
+            return None;
+        }
+        let z_inv = self.z.invert();
+        Some(self.x.mul(&z_inv.square()))
+    }
+
     /// Constant-time equality, comparing through the projective scaling.
     pub fn ct_eq(&self, other: &Self) -> Choice {
         // X1*Z2^2 == X2*Z1^2 and Y1*Z2^3 == Y2*Z1^3
@@ -618,177 +932,6 @@ impl<C: Curve> AffinePoint<C> {
             return Some(AffinePoint { x, y: chosen });
         }
         None
-    }
-}
-
-/// The generator table's accumulator, in homogeneous projective coordinates.
-///
-/// `(X : Y : Z)` is the affine point `(X/Z, Y/Z)`, and the identity is
-/// `(0 : 1 : 0)`. The addition is Renes, Costello and Batina's complete formula
-/// for prime-order curves with `a = -3` ("Complete addition formulas for prime
-/// order elliptic curves", EUROCRYPT 2016), algorithm 4 with the second input's
-/// `Z` fixed at one; the doubling is their algorithm 6.
-///
-/// # Why only here
-///
-/// [`Point`]'s Jacobian addition is not complete, so [`Point::add`] computes an
-/// addition *and* a doubling and selects: 420 ns on P-256, against about 300
-/// for these formulas. But its doubling is the cheaper one, 153 ns against
-/// about 270. Moving every point to these formulas made the generator faster
-/// and variable-base multiplication, four doublings per addition, slower -- 71
-/// to 90 microseconds for ECDH. Measured, not guessed: see
-/// `where_the_time_goes` in `p256.rs`.
-///
-/// So each is used where it wins. The generator table does 65 additions and
-/// four doublings for P-256, and its entries are stored affine, so this adds
-/// them with `Z2 = 1` and saves a multiplication more. Everything else stays
-/// Jacobian.
-///
-/// Behind `std`, as the table is.
-#[cfg(feature = "std")]
-pub(super) struct Projective<C: Curve> {
-    x: C::Field,
-    y: C::Field,
-    z: C::Field,
-}
-
-#[cfg(feature = "std")]
-impl<C: Curve> Clone for Projective<C> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-#[cfg(feature = "std")]
-impl<C: Curve> Copy for Projective<C> {}
-
-#[cfg(feature = "std")]
-impl<C: Curve> Projective<C> {
-    /// The point at infinity, `(0 : 1 : 0)`.
-    pub(super) fn identity() -> Self {
-        Projective {
-            x: C::Field::ZERO,
-            y: C::Field::ONE,
-            z: C::Field::ZERO,
-        }
-    }
-
-    /// Doubling: algorithm 6, complete. The step numbers are the paper's.
-    pub(super) fn double(&self) -> Self {
-        let b = C::B;
-        let (x, y, z) = (self.x, self.y, self.z);
-        let t0 = x.square(); // 1
-        let t1 = y.square(); // 2
-        let t2 = z.square(); // 3
-        let t3 = x.mul(&y); // 4
-        let t3 = t3.add(&t3); // 5
-        let z3 = x.mul(&z); // 6
-        let z3 = z3.add(&z3); // 7
-        let y3 = b.mul(&t2); // 8
-        let y3 = y3.sub(&z3); // 9
-        let x3 = y3.add(&y3); // 10
-        let y3 = x3.add(&y3); // 11
-        let x3 = t1.sub(&y3); // 12
-        let y3 = t1.add(&y3); // 13
-        let y3 = x3.mul(&y3); // 14
-        let x3 = x3.mul(&t3); // 15
-        let t3 = t2.add(&t2); // 16
-        let t2 = t2.add(&t3); // 17
-        let z3 = b.mul(&z3); // 18
-        let z3 = z3.sub(&t2); // 19
-        let z3 = z3.sub(&t0); // 20
-        let t3 = z3.add(&z3); // 21
-        let z3 = z3.add(&t3); // 22
-        let t3 = t0.add(&t0); // 23
-        let t0 = t3.add(&t0); // 24
-        let t0 = t0.sub(&t2); // 25
-        let t0 = t0.mul(&z3); // 26
-        let y3 = y3.add(&t0); // 27
-        let t0 = y.mul(&z); // 28
-        let t0 = t0.add(&t0); // 29
-        let z3 = t0.mul(&z3); // 30
-        let x3 = x3.sub(&z3); // 31
-        let z3 = t0.mul(&t1); // 32
-        let z3 = z3.add(&z3); // 33
-        let z3 = z3.add(&z3); // 34
-        Projective {
-            x: x3,
-            y: y3,
-            z: z3,
-        }
-    }
-
-    /// `self + (x2, y2)`, for an affine point that is not the identity.
-    ///
-    /// Algorithm 4 with `Z2 = 1`, which the step numbers follow. Three steps
-    /// change: step 3's `Z1*Z2` is `Z1`; steps 9-13, `(Y1+Z1)(Y2+Z2) - Y1*Y2 -
-    /// Z1*Z2`, are `Y2*Z1 + Y1`; steps 14-18 likewise are `X2*Z1 + X1`. That is
-    /// one multiplication fewer than algorithm 4, and still complete in `self`:
-    /// the identity, `(x2, y2)` itself and its negation all add correctly. The
-    /// caller handles an identity *second* operand, which has no affine form.
-    pub(super) fn add_affine(&self, x2: &C::Field, y2: &C::Field) -> Self {
-        let b = C::B;
-        let (x1, y1, z1) = (self.x, self.y, self.z);
-        let t0 = x1.mul(x2); // 1
-        let t1 = y1.mul(y2); // 2
-        let t2 = z1; // 3
-        let t3 = x1.add(&y1); // 4
-        let t4 = x2.add(y2); // 5
-        let t3 = t3.mul(&t4); // 6
-        let t4 = t0.add(&t1); // 7
-        let t3 = t3.sub(&t4); // 8
-        let t4 = y2.mul(&z1).add(&y1); // 9-13
-        let y3 = x2.mul(&z1).add(&x1); // 14-18
-        let z3 = b.mul(&t2); // 19
-        let x3 = y3.sub(&z3); // 20
-        let z3 = x3.add(&x3); // 21
-        let x3 = x3.add(&z3); // 22
-        let z3 = t1.sub(&x3); // 23
-        let x3 = t1.add(&x3); // 24
-        let y3 = b.mul(&y3); // 25
-        let t1 = t2.add(&t2); // 26
-        let t2 = t1.add(&t2); // 27
-        let y3 = y3.sub(&t2); // 28
-        let y3 = y3.sub(&t0); // 29
-        let t1 = y3.add(&y3); // 30
-        let y3 = t1.add(&y3); // 31
-        let t1 = t0.add(&t0); // 32
-        let t0 = t1.add(&t0); // 33
-        let t0 = t0.sub(&t2); // 34
-        let t1 = t4.mul(&y3); // 35
-        let t2 = t0.mul(&y3); // 36
-        let y3 = x3.mul(&z3); // 37
-        let y3 = y3.add(&t2); // 38
-        let x3 = t3.mul(&x3); // 39
-        let x3 = x3.sub(&t1); // 40
-        let z3 = t4.mul(&z3); // 41
-        let t1 = t3.mul(&t0); // 42
-        let z3 = z3.add(&t1); // 43
-        Projective {
-            x: x3,
-            y: y3,
-            z: z3,
-        }
-    }
-
-    /// Constant-time conditional move.
-    #[inline]
-    pub(super) fn cmov(a: &mut Self, b: &Self, choice: Choice) {
-        C::Field::cmov(&mut a.x, &b.x, choice);
-        C::Field::cmov(&mut a.y, &b.y, choice);
-        C::Field::cmov(&mut a.z, &b.z, choice);
-    }
-
-    /// The same point in Jacobian coordinates: `(X*Z : Y*Z^2 : Z)`, since
-    /// `X*Z / Z^2 = X/Z` and `Y*Z^2 / Z^3 = Y/Z`. The identity maps to
-    /// [`Point::identity`] by a conditional move, not a branch.
-    pub(super) fn to_jacobian(self) -> Point<C> {
-        let mut out = Point {
-            x: self.x.mul(&self.z),
-            y: self.y.mul(&self.z.square()),
-            z: self.z,
-        };
-        Point::cmov(&mut out, &Point::identity(), self.z.is_zero());
-        out
     }
 }
 
@@ -968,63 +1111,182 @@ mod tests {
         assert_eq!(checked, 36);
     }
 
-    /// The generator table's projective accumulator against the same
-    /// reference: the identity on the left, a point plus itself and plus its
-    /// negative, distinct points, accumulators that are not normalized, and
-    /// doubling -- every case its loop can reach. The identity on the right
-    /// has no affine form and is the caller's; `Table::mul` is tested against
-    /// `mul_scalar` for that, with zero digits.
-    fn the_projective_accumulator_agrees_with_affine<C: Curve>() -> usize {
-        let g = Point::<C>::generator();
-        let mut multiples = std::vec::Vec::new();
-        let mut acc = None;
-        for _ in 0..12 {
-            acc = affine_add::<C>(acc, affine_of(&g));
-            multiples.push(acc.unwrap());
-        }
-        let o = Projective::<C>::identity();
-        let ok = |got: &Projective<C>, want: Option<(C::Field, C::Field)>| match (
-            affine_of(&got.to_jacobian()),
-            want,
-        ) {
-            (None, None) => true,
-            (Some((a, b)), Some((c, d))) => bool::from(a.ct_eq(&c).and(b.ct_eq(&d))),
-            _ => false,
-        };
+    /// The scalars where the windowed loop's incomplete additions would go
+    /// wrong if the argument in `mul_scalar` did not hold, and where its last,
+    /// complete one is needed: `n - 1 .. n - 40` and `1 .. 40`, on the
+    /// generator and another point, each against the ladder. The constant-time
+    /// and variable-time multiplications, and the generator table, are all
+    /// compared, since each has its own incomplete additions.
+    fn edge_scalars_agree<C: Curve + HasGeneratorTable>() -> usize {
         let mut checked = 0;
-        for &(px, py) in &multiples {
-            let p = o.add_affine(&px, &py);
-            let ap = Some((px, py));
-            assert!(ok(&p, ap), "O + P");
-            // P again, with Z far from one: 2P - P.
-            let p_far = p.double().add_affine(&px, &py.neg());
-            assert!(ok(&p_far, ap), "2P - P");
-            for p in [p, p_far] {
-                assert!(
-                    ok(&p.add_affine(&px, &py), affine_add::<C>(ap, ap)),
-                    "P + P"
-                );
-                assert!(ok(&p.double(), affine_add::<C>(ap, ap)), "2P");
-                assert!(ok(&p.add_affine(&px, &py.neg()), None), "P + (-P)");
-                for &(qx, qy) in &multiples {
-                    assert!(
-                        ok(&p.add_affine(&qx, &qy), affine_add::<C>(ap, Some((qx, qy)))),
-                        "P + Q"
-                    );
+        let mut small = C::Scalar::ZERO;
+        let mut minus = C::Scalar::ZERO;
+        for _ in 0..40 {
+            small = small.add(&C::Scalar::ONE);
+            minus = minus.sub(&C::Scalar::ONE);
+            for k in [small, minus] {
+                for p in [Point::<C>::generator(), some_point::<C>()] {
+                    let want = p.mul_scalar_ladder(&k);
+                    assert!(bool::from(p.mul_scalar(&k).ct_eq(&want)), "mul_scalar");
+                    assert!(bool::from(p.mul_scalar_vartime(&k).ct_eq(&want)), "vartime");
+                    checked += 1;
                 }
+                let g = Point::<C>::generator().mul_scalar_ladder(&k);
+                assert!(bool::from(Point::<C>::mul_generator(&k).ct_eq(&g)), "table");
+                assert!(
+                    bool::from(Point::<C>::mul_generator_vartime(&k).ct_eq(&g)),
+                    "table, variable time"
+                );
             }
-            checked += 1;
         }
-        assert!(ok(&o, None) && ok(&o.double(), None), "O, 2O");
         checked
     }
 
+    /// A curve's own formulas against the field-operation ones, coordinate
+    /// for coordinate and including `h` and `r`: on points with `Z` far from
+    /// one, on the identity, and on `P + P` and `P + (-P)`, where the formulas
+    /// are wrong in the same way and must still agree. On P-256 under x86-64
+    /// with BMI2 and ADX these are the assembly; elsewhere both sides are the
+    /// formula and the comparison is trivially true.
+    fn own_formulas_agree<C: Curve>() -> usize {
+        let same = |a: &Point<C>, b: &Point<C>| a.x == b.x && a.y == b.y && a.z == b.z;
+        let mut points = std::vec![Point::<C>::identity(), Point::<C>::generator()];
+        let mut p = some_point::<C>();
+        for _ in 0..40 {
+            points.push(p);
+            p = p.double().add(&Point::generator());
+        }
+        let mut checked = 0;
+        for a in &points {
+            assert!(same(&a.double(), &a.double_formula()), "double");
+            let affine = a.to_affine();
+            for b in points.iter().chain([a.neg(), *a].iter()) {
+                let (s1, h1, r1) = a.add_formula(b);
+                let (s2, h2, r2) = a.add_formula_generic(b);
+                assert!(same(&s1, &s2) && h1 == h2 && r1 == r2, "add");
+                if let Some(q) = affine {
+                    let (s1, h1, r1) = b.add_affine_formula(&q.x, &q.y);
+                    let (s2, h2, r2) = b.add_affine_formula_generic(&q.x, &q.y);
+                    assert!(same(&s1, &s2) && h1 == h2 && r1 == r2, "add_affine");
+                }
+                checked += 1;
+            }
+        }
+        checked
+    }
+
+    /// The same comparison on arbitrary coordinates rather than curve points:
+    /// the formulas are polynomials, so they agree on any input, and random
+    /// field elements reach the reductions' edges -- a top word of every
+    /// value in the small multiples, a sum just above `p` -- far more often
+    /// than multiples of a point do. Coordinates near zero and near `p` are
+    /// mixed in.
     #[test]
-    fn the_projective_accumulator_agrees_with_affine_arithmetic() {
-        let checked = the_projective_accumulator_agrees_with_affine::<P256>()
-            + the_projective_accumulator_agrees_with_affine::<P384>()
-            + the_projective_accumulator_agrees_with_affine::<P521>();
-        assert_eq!(checked, 36);
+    fn own_point_formulas_agree_on_arbitrary_coordinates() {
+        arbitrary_coordinates::<P256>();
+        arbitrary_coordinates::<P384>();
+    }
+
+    fn arbitrary_coordinates<C: Curve>() {
+        let mut state = 0x0b1d_u64;
+        let mut next = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        type F<C> = <C as Curve>::Field;
+        let edges = [
+            F::<C>::ZERO,
+            F::<C>::ONE,
+            F::<C>::ONE.neg(),
+            F::<C>::ONE.double().neg(),
+        ];
+        let mut field = |i: usize| -> F<C> {
+            if i.is_multiple_of(7) {
+                return edges[(i / 7) % edges.len()];
+            }
+            let mut bytes = F::<C>::zero_bytes();
+            for chunk in bytes.as_mut().chunks_mut(8) {
+                let word = next().to_be_bytes();
+                chunk.copy_from_slice(&word[..chunk.len()]);
+            }
+            F::<C>::from_bytes_reduced(&bytes)
+        };
+        let same = |a: &Point<C>, b: &Point<C>| a.x == b.x && a.y == b.y && a.z == b.z;
+        for i in 0..50_000 {
+            let p = Point::<C> {
+                x: field(3 * i),
+                y: field(3 * i + 1),
+                z: field(3 * i + 2),
+            };
+            let q = Point::<C> {
+                x: field(3 * i + 5),
+                y: field(3 * i + 6),
+                z: field(3 * i + 9),
+            };
+            assert!(same(&p.double(), &p.double_formula()), "double");
+            let (s1, h1, r1) = p.add_formula(&q);
+            let (s2, h2, r2) = p.add_formula_generic(&q);
+            assert!(same(&s1, &s2) && h1 == h2 && r1 == r2, "add");
+            let (s1, h1, r1) = p.add_affine_formula(&q.x, &q.y);
+            let (s2, h2, r2) = p.add_affine_formula_generic(&q.x, &q.y);
+            assert!(same(&s1, &s2) && h1 == h2 && r1 == r2, "add_affine");
+        }
+    }
+
+    #[test]
+    fn own_point_formulas_agree_with_the_field_operations() {
+        #[cfg(target_arch = "x86_64")]
+        std::println!(
+            "P-256 point formulas in assembly: {}",
+            crate::nist::p256_x86::has_adx()
+        );
+        let checked = own_formulas_agree::<P256>() + own_formulas_agree::<P384>();
+        assert_eq!(checked, 2 * 42 * 44);
+    }
+
+    #[test]
+    fn edge_scalars_agree_with_the_ladder() {
+        let checked = edge_scalars_agree::<P256>()
+            + edge_scalars_agree::<P384>()
+            + edge_scalars_agree::<P521>();
+        assert_eq!(checked, 3 * 160);
+    }
+
+    /// Random scalars, against the ladder, through every multiplication.
+    #[test]
+    fn random_scalars_agree_with_the_ladder() {
+        fn run<C: Curve + HasGeneratorTable>(seed: u8) {
+            let mut state = [seed; 66];
+            for round in 0..24u8 {
+                // A simple byte stream: enough to vary every digit.
+                for (i, b) in state.iter_mut().enumerate() {
+                    *b = b
+                        .wrapping_mul(167)
+                        .wrapping_add(round ^ (i as u8))
+                        .rotate_left(3);
+                }
+                let mut bytes = C::Scalar::zero_bytes();
+                let len = bytes.as_ref().len();
+                bytes.as_mut().copy_from_slice(&state[..len]);
+                let k = C::Scalar::from_bytes_reduced(&bytes);
+                let p = some_point::<C>();
+                let want = p.mul_scalar_ladder(&k);
+                assert!(bool::from(p.mul_scalar(&k).ct_eq(&want)));
+                assert!(bool::from(p.mul_scalar_vartime(&k).ct_eq(&want)));
+                let g = Point::<C>::generator().mul_scalar_ladder(&k);
+                assert!(bool::from(Point::<C>::mul_generator(&k).ct_eq(&g)));
+                assert!(bool::from(Point::<C>::mul_generator_vartime(&k).ct_eq(&g)));
+                let both = Point::<C>::mul_double(&k, &p, &k.square());
+                let want2 = g.add(&p.mul_scalar_ladder(&k.square()));
+                assert!(bool::from(both.ct_eq(&want2)));
+            }
+        }
+        run::<P256>(1);
+        run::<P384>(2);
+        run::<P521>(3);
     }
 
     #[test]

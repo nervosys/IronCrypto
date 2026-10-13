@@ -43,9 +43,14 @@
 //! are here too: ECDSA and ECDH over P-256, P-384 and P-521, in [`p256`],
 //! [`p384`] and [`p521`].
 #![cfg_attr(not(feature = "std"), no_std)]
-// Denied rather than forbidden so that one module can allow it: `fe64`, whose
-// field multiplication is inline assembly. Nothing else here uses `unsafe`.
+// `deny` rather than `forbid`, so that the x86-64 assembly can be allowed it
+// and nothing else: `fe64` and `f51x4` for Curve25519, and `nist::p256_x86`,
+// `nist::p384_x86`, the generated `nist::p256_x86_point`,
+// `nist::p384_x86_point` and `nist::mont_x86` for P-256 and P-384. Each is
+// `asm!` and so `unsafe` by construction; everywhere else in this crate
+// `unsafe` is a compile error.
 #![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
@@ -93,6 +98,12 @@ pub(crate) mod fe64;
     not(any(ic_limb32, ic_ec_portable))
 ))]
 #[allow(unsafe_code)]
+// Its unsafe functions are `#[target_feature]` leaves, each a few lines of
+// IFMA asm, whose one contract -- the CPU has AVX-512 IFMA -- is the
+// function's own and is discharged once, by the `Ifma` token. A separate
+// `unsafe` block around each of the 149 operations inside them would restate
+// that contract and add nothing; the rest of the crate keeps the lint.
+#[allow(unsafe_op_in_unsafe_fn)]
 pub(crate) mod f51x4;
 #[cfg(not(ic_approved_only))]
 mod field_ops;

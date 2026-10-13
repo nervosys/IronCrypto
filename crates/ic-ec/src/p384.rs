@@ -16,35 +16,102 @@ use crate::nist::{ecdh, ecdsa};
 use ic_core::traits::{Algorithm, KeyAgreement, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result};
 
+/// The prime `p`, little-endian.
+const P: [u64; 6] = [
+    0x0000_0000_ffff_ffff,
+    0xffff_ffff_0000_0000,
+    0xffff_ffff_ffff_fffe,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+];
+
+/// The group order `n`, little-endian.
+const N: [u64; 6] = [
+    0xecec_196a_ccc5_2973,
+    0x581a_0db2_48b0_a77a,
+    0xc763_4d81_f437_2ddf,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_ffff_ffff,
+];
+
+// On x86-64 both rings multiply in assembly on MULX/ADX where the CPU has it
+// (`nist::mont_x86`), and by the generic word loop otherwise.
+#[cfg(target_arch = "x86_64")]
 mont_field!(
     Fp,
     6,
     48,
-    [
-        0x0000_0000_ffff_ffff,
-        0xffff_ffff_0000_0000,
-        0xffff_ffff_ffff_fffe,
-        0xffff_ffff_ffff_ffff,
-        0xffff_ffff_ffff_ffff,
-        0xffff_ffff_ffff_ffff,
-    ],
+    P,
+    "The P-384 coordinate field, GF(p) with p = 2^384 - 2^128 - 2^96 + 2^32 - 1.",
+    mul = fp_mul,
+    square = |a| fp_mul(a, a),
+    invert = Self::invert_raw,
+    add = Self::add_raw,
+    sub = Self::sub_raw
+);
+
+#[cfg(not(target_arch = "x86_64"))]
+mont_field!(
+    Fp,
+    6,
+    48,
+    P,
     "The P-384 coordinate field, GF(p) with p = 2^384 - 2^128 - 2^96 + 2^32 - 1."
 );
 
+#[cfg(target_arch = "x86_64")]
 mont_field!(
     Fn,
     6,
     48,
-    [
-        0xecec_196a_ccc5_2973,
-        0x581a_0db2_48b0_a77a,
-        0xc763_4d81_f437_2ddf,
-        0xffff_ffff_ffff_ffff,
-        0xffff_ffff_ffff_ffff,
-        0xffff_ffff_ffff_ffff,
-    ],
+    N,
+    "The P-384 scalar ring, Z/nZ where n is the order of the base point.",
+    mul = fn_mul,
+    square = |a| fn_mul(a, a),
+    invert = Self::invert_raw,
+    add = Self::add_raw,
+    sub = Self::sub_raw
+);
+
+#[cfg(not(target_arch = "x86_64"))]
+mont_field!(
+    Fn,
+    6,
+    48,
+    N,
     "The P-384 scalar ring, Z/nZ where n is the order of the base point."
 );
+
+/// The last step of Montgomery multiplication: `t` below `2m`, with its top
+/// word, made canonical by one subtraction chosen behind the barrier.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn canonical(t: [u64; 6], top: u64, m: [u64; 6]) -> [u64; 6] {
+    let (reduced, borrow) = crate::nist::arith::sbb(t, m);
+    crate::nist::arith::select_ct((top | (1 - borrow)).wrapping_neg(), reduced, t)
+}
+
+/// `a * b * 2^-384 mod p`.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn fp_mul(a: [u64; 6], b: [u64; 6]) -> [u64; 6] {
+    match crate::nist::p384_x86::mul_p(&a, &b) {
+        Some((t, top)) => canonical(t, top, P),
+        None => Fp::mont_mul_raw(a, b),
+    }
+}
+
+/// `a * b * 2^-384 mod n`.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn fn_mul(a: [u64; 6], b: [u64; 6]) -> [u64; 6] {
+    match crate::nist::p384_x86::mul_n(&a, &b) {
+        Some((t, top)) => canonical(t, top, N),
+        None => Fn::mont_mul_raw(a, b),
+    }
+}
 
 /// The P-384 curve.
 #[derive(Debug, Clone, Copy)]
@@ -52,7 +119,7 @@ pub struct P384;
 
 // Its own generator table, with its own storage; see the macro, which
 // emits the table under `std` and the windowed multiplication without it.
-crate::nist::gentable::generator_table_for!(P384);
+crate::nist::gentable::generator_table_for!(P384, 16);
 
 impl Curve for P384 {
     type Field = Fp;
@@ -113,6 +180,27 @@ impl Curve for P384 {
         }
         b.copy_from_slice(bytes);
         Fn::from_bytes(&b)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn double_fast(x: &Fp, y: &Fp, z: &Fp) -> Option<[Fp; 3]> {
+        crate::nist::p384_x86::point_double([&x.0, &y.0, &z.0])
+            .map(|[x, y, z]| [Fp(x), Fp(y), Fp(z)])
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn add_fast(p: [&Fp; 3], q: [&Fp; 3]) -> Option<([Fp; 3], Fp, Fp)> {
+        crate::nist::p384_x86::point_add([&p[0].0, &p[1].0, &p[2].0], [&q[0].0, &q[1].0, &q[2].0])
+            .map(|([x, y, z], h, r)| ([Fp(x), Fp(y), Fp(z)], Fp(h), Fp(r)))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn add_affine_fast(p: [&Fp; 3], q: [&Fp; 2]) -> Option<([Fp; 3], Fp, Fp)> {
+        crate::nist::p384_x86::point_add_affine([&p[0].0, &p[1].0, &p[2].0], [&q[0].0, &q[1].0])
+            .map(|([x, y, z], h, r)| ([Fp(x), Fp(y), Fp(z)], Fp(h), Fp(r)))
     }
 
     fn scalar_reduce_slice(bytes: &[u8]) -> Fn {

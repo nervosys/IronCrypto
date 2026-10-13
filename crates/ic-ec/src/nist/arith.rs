@@ -311,6 +311,24 @@ pub(crate) fn select_ct<const N: usize>(mask: u64, a: [u64; N], b: [u64; N]) -> 
     select(core::hint::black_box(mask), a, b)
 }
 
+/// The masks for a scan of `E` entries, for [`Field::or_masked`]: entry
+/// `i`'s mask is all ones when `i + offset == index` and zero otherwise, all
+/// of them behind one barrier. One barrier for the whole scan rather than one
+/// per entry, and the scan itself is then plain masking the compiler can
+/// vectorise.
+///
+/// The xor is zero exactly when the two are equal, and only zero minus one
+/// sets the top bit of a value below 2^32; nothing is compared.
+#[inline]
+pub(crate) fn masks_for<const E: usize>(index: u32, offset: u32) -> [u64; E] {
+    let mut masks = [0u64; E];
+    for (i, m) in masks.iter_mut().enumerate() {
+        let bit = (((i as u32 + offset) ^ index) as u64).wrapping_sub(1) >> 63;
+        *m = bit.wrapping_neg();
+    }
+    core::hint::black_box(masks)
+}
+
 /// Double `x` modulo `m`, in constant time.
 #[inline]
 const fn double_mod<const N: usize>(x: [u64; N], m: [u64; N]) -> [u64; N] {
@@ -434,6 +452,21 @@ pub trait Field: Copy + Clone + core::fmt::Debug + PartialEq + Eq + Sized {
     fn ct_eq(&self, other: &Self) -> Choice;
     /// Constant-time conditional move.
     fn cmov(a: &mut Self, b: &Self, choice: Choice);
+    /// `a |= b & mask`, word by word, for a mask that is all ones or zero and
+    /// that the caller has already put behind a barrier ([`masks_for`]).
+    ///
+    /// A table scan: start from zero, and with exactly one mask set the
+    /// accumulator ends as that entry. One mask per entry covers every
+    /// coordinate, where a barrier per coordinate would be most of the
+    /// scan's cost, and an AND and an OR per word is half a selection's work.
+    fn or_masked(a: &mut Self, b: &Self, mask: u64);
+    /// All ones when zero, zero otherwise, **without** a barrier: for a
+    /// caller that gathers several masks and puts them behind one
+    /// (`core::hint::black_box` on the array) before using any.
+    fn zero_mask(&self) -> u64;
+    /// `a` where `mask` is all ones, `b` where it is zero, without a
+    /// barrier: the mask must already be behind one.
+    fn select_mask(mask: u64, a: &Self, b: &Self) -> Self;
     /// Whether the canonical integer is odd — the SEC1 compression sign bit.
     fn is_odd(&self) -> Choice;
 }
@@ -447,13 +480,39 @@ pub trait Field: Copy + Clone + core::fmt::Debug + PartialEq + Eq + Sized {
 /// position.
 #[macro_export]
 #[doc(hidden)]
+///
+/// A field may name its own `mul`, `square`, `invert`, `add` and `sub`, each a
+/// function on `[u64; $limbs]` computing exactly what the generic one does, for
+/// a modulus whose shape allows something faster; P-256's coordinate field
+/// does. The compile-time constants always use the generic multiplication.
 macro_rules! mont_field {
     ($name:ident, $limbs:literal, $bytes:literal, $modulus:expr, $doc:literal) => {
+        $crate::mont_field!(
+            @define $name, $limbs, $bytes, $modulus, $doc,
+            mul = Self::mont_mul_raw,
+            square = Self::mont_square_raw,
+            invert = Self::invert_raw,
+            add = Self::add_raw,
+            sub = Self::sub_raw
+        );
+    };
+    ($name:ident, $limbs:literal, $bytes:literal, $modulus:expr, $doc:literal,
+     mul = $mul:expr, square = $square:expr, invert = $invert:expr,
+     add = $add:expr, sub = $sub:expr) => {
+        $crate::mont_field!(
+            @define $name, $limbs, $bytes, $modulus, $doc,
+            mul = $mul, square = $square, invert = $invert, add = $add, sub = $sub
+        );
+    };
+    (@define $name:ident, $limbs:literal, $bytes:literal, $modulus:expr, $doc:literal,
+     mul = $mul:expr, square = $square:expr, invert = $invert:expr,
+     add = $add:expr, sub = $sub:expr) => {
         #[doc = $doc]
         ///
         /// Values are held in Montgomery form (`a * R mod m`). Arithmetic is
         /// branch-free and carries no data-dependent memory access.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(transparent)]
         pub struct $name(pub [u64; $limbs]);
 
         impl $name {
@@ -483,6 +542,54 @@ macro_rules! mont_field {
             fn mont_mul_raw(a: [u64; $limbs], b: [u64; $limbs]) -> [u64; $limbs] {
                 let (reduced, lo, need) = Self::mont_mul_parts(a, b);
                 $crate::nist::arith::select_ct(need.wrapping_neg(), reduced, lo)
+            }
+
+            /// `a + b mod m`, the generic way.
+            #[inline]
+            #[allow(dead_code)]
+            fn add_raw(a: [u64; $limbs], b: [u64; $limbs]) -> [u64; $limbs] {
+                let (sum, carry) = $crate::nist::arith::adc(a, b);
+                let (reduced, borrow) = $crate::nist::arith::sbb(sum, Self::MODULUS);
+                let need = carry | (1 - borrow);
+                $crate::nist::arith::select_ct(need.wrapping_neg(), reduced, sum)
+            }
+
+            /// `a - b mod m`, the generic way.
+            #[inline]
+            #[allow(dead_code)]
+            fn sub_raw(a: [u64; $limbs], b: [u64; $limbs]) -> [u64; $limbs] {
+                let (diff, borrow) = $crate::nist::arith::sbb(a, b);
+                // On borrow, add the modulus back: add `m & mask`, which is `m`
+                // or zero. Adding the modulus as a constant and then selecting
+                // let the compiler specialise the carry chain around its limbs
+                // -- P-256's are 0 and 2^32 - 1 -- into selects, which
+                // Cortex-M0 compiles to branches on the borrow. Masking behind
+                // the barrier leaves it nothing to specialise, and is one
+                // addition where that was an addition and a selection.
+                let mask = core::hint::black_box(borrow.wrapping_neg());
+                let mut m = Self::MODULUS;
+                for limb in m.iter_mut() {
+                    *limb &= mask;
+                }
+                let (fixed, _) = $crate::nist::arith::adc(diff, m);
+                fixed
+            }
+
+            /// Montgomery squaring, the generic way: a multiplication.
+            #[inline]
+            #[allow(dead_code)]
+            fn mont_square_raw(a: [u64; $limbs]) -> [u64; $limbs] {
+                Self::mont_mul_raw(a, a)
+            }
+
+            /// `a^(m-2)`, the inverse by Fermat, through [`Self::pow`].
+            #[allow(dead_code)]
+            fn invert_raw(a: [u64; $limbs]) -> [u64; $limbs] {
+                // m - 2
+                let mut two = [0u64; $limbs];
+                two[0] = 2;
+                let (exp, _) = $crate::nist::arith::sbb(Self::MODULUS, two);
+                Self(a).pow(&exp).0
             }
 
             /// Montgomery multiplication for compile-time constants only.
@@ -523,20 +630,47 @@ macro_rules! mont_field {
                 r
             }
 
-            /// Exponentiation by a public exponent, square-and-multiply.
+            /// Exponentiation with a fixed four-bit window, branch-free in the
+            /// exponent as well as the base.
             ///
-            /// The exponent is always a fixed constant here (`m - 2` for
-            /// inversion, `(p + 1) / 4` for square roots), so branching on its
-            /// bits leaks nothing; the base stays secret throughout.
+            /// The exponent is always a public constant here (`m - 2` for
+            /// inversion, `(p + 1) / 4` for square roots), but nothing below
+            /// relies on that: every window costs four squarings and one
+            /// multiplication whatever its bits, and its power is chosen from
+            /// the table by reading all sixteen entries with conditional
+            /// moves, never by indexing or branching on the exponent. An
+            /// earlier square-and-multiply branched on each exponent bit, and
+            /// Valgrind's secret-dependence harness reported that branch in
+            /// the nonce inversion -- whether the compiler had folded the
+            /// secret into the condition or the tool was imprecise, the cure
+            /// is to have no such branch at all.
+            ///
+            /// One multiplication per four bits, where square-and-multiply
+            /// made one per set bit: nearly one per bit for an `m - 2` that is
+            /// mostly ones.
             pub fn pow(&self, exponent: &[u64; $limbs]) -> Self {
-                let mut result = <Self as $crate::nist::arith::Field>::ONE;
-                for i in (0..$limbs).rev() {
-                    for bit in (0..64).rev() {
-                        result = <Self as $crate::nist::arith::Field>::square(&result);
-                        if (exponent[i] >> bit) & 1 == 1 {
-                            result = <Self as $crate::nist::arith::Field>::mul(&result, self);
-                        }
+                use $crate::nist::arith::Field as _;
+                // table[i] = self^i.
+                let mut table = [<Self as $crate::nist::arith::Field>::ONE; 16];
+                table[1] = *self;
+                for i in 2..16 {
+                    table[i] = table[i - 1].mul(self);
+                }
+                // The window's power, by a scan with conditional moves.
+                let select = |nibble: u64| {
+                    let mut out = <Self as $crate::nist::arith::Field>::ZERO;
+                    let masks = $crate::nist::arith::masks_for::<16>(nibble as u32, 0);
+                    for (entry, mask) in table.iter().zip(masks) {
+                        <Self as $crate::nist::arith::Field>::or_masked(&mut out, entry, mask);
                     }
+                    out
+                };
+                let nibble = |i: usize| (exponent[i / 16] >> (4 * (i % 16))) & 0xf;
+                let windows = 16 * $limbs;
+                let mut result = select(nibble(windows - 1));
+                for i in (0..windows - 1).rev() {
+                    result = result.square().square().square().square();
+                    result = result.mul(&select(nibble(i)));
                 }
                 result
             }
@@ -557,43 +691,22 @@ macro_rules! mont_field {
 
             #[inline]
             fn add(&self, other: &Self) -> Self {
-                let (sum, carry) = $crate::nist::arith::adc(self.0, other.0);
-                let (reduced, borrow) = $crate::nist::arith::sbb(sum, Self::MODULUS);
-                let need = carry | (1 - borrow);
-                Self($crate::nist::arith::select_ct(
-                    need.wrapping_neg(),
-                    reduced,
-                    sum,
-                ))
+                Self(($add)(self.0, other.0))
             }
 
             #[inline]
             fn sub(&self, other: &Self) -> Self {
-                let (diff, borrow) = $crate::nist::arith::sbb(self.0, other.0);
-                // On borrow, add the modulus back: add `m & mask`, which is `m`
-                // or zero. Adding the modulus as a constant and then selecting
-                // let the compiler specialise the carry chain around its limbs
-                // -- P-256's are 0 and 2^32 - 1 -- into selects, which
-                // Cortex-M0 compiles to branches on the borrow. Masking behind
-                // the barrier leaves it nothing to specialise, and is one
-                // addition where that was an addition and a selection.
-                let mask = core::hint::black_box(borrow.wrapping_neg());
-                let mut m = Self::MODULUS;
-                for limb in m.iter_mut() {
-                    *limb &= mask;
-                }
-                let (fixed, _) = $crate::nist::arith::adc(diff, m);
-                Self(fixed)
+                Self(($sub)(self.0, other.0))
             }
 
             #[inline]
             fn mul(&self, other: &Self) -> Self {
-                Self(Self::mont_mul_raw(self.0, other.0))
+                Self(($mul)(self.0, other.0))
             }
 
             #[inline]
             fn square(&self) -> Self {
-                Self(Self::mont_mul_raw(self.0, self.0))
+                Self(($square)(self.0))
             }
 
             #[inline]
@@ -616,11 +729,7 @@ macro_rules! mont_field {
             }
 
             fn invert(&self) -> Self {
-                // m - 2
-                let mut two = [0u64; $limbs];
-                two[0] = 2;
-                let (exp, _) = $crate::nist::arith::sbb(Self::MODULUS, two);
-                self.pow(&exp)
+                Self(($invert)(self.0))
             }
 
             fn from_bytes(bytes: &Self::Bytes) -> Option<Self> {
@@ -670,6 +779,28 @@ macro_rules! mont_field {
             fn cmov(a: &mut Self, b: &Self, choice: ic_core::ct::Choice) {
                 let mask = (choice.unwrap_u8() as u64).wrapping_neg();
                 a.0 = $crate::nist::arith::select_ct(mask, b.0, a.0);
+            }
+
+            #[inline]
+            fn zero_mask(&self) -> u64 {
+                let mut acc = 0u64;
+                for limb in self.0.iter() {
+                    acc |= *limb;
+                }
+                // 1 if any bit is set, so 0 - 1 for zero and 1 - 1 otherwise.
+                ((acc | acc.wrapping_neg()) >> 63).wrapping_sub(1)
+            }
+
+            #[inline]
+            fn select_mask(mask: u64, a: &Self, b: &Self) -> Self {
+                Self($crate::nist::arith::select(mask, a.0, b.0))
+            }
+
+            #[inline]
+            fn or_masked(a: &mut Self, b: &Self, mask: u64) {
+                for (x, y) in a.0.iter_mut().zip(b.0.iter()) {
+                    *x |= y & mask;
+                }
             }
 
             #[inline]

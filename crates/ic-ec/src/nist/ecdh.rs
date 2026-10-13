@@ -93,11 +93,11 @@ pub fn agree<C: Curve>(private_key: &[u8], peer_public_key: &[u8], out: &mut [u8
     ))?;
 
     let shared = Point::<C>::from_affine(&q).mul_scalar(&d);
-    let affine = shared.to_affine().ok_or(ic_core::err!(
+    let x = shared.to_affine_x().ok_or(ic_core::err!(
         InvalidParameter,
         "ecdh key agreement produced the identity"
     ))?;
 
-    out.copy_from_slice(affine.x.to_bytes().as_ref());
+    out.copy_from_slice(x.to_bytes().as_ref());
     Ok(())
 }

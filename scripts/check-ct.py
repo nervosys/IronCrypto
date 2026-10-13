@@ -49,6 +49,17 @@ X86_ONLY = (
     "ct_ed25519_fe64_madd_ext2", "ct_ed25519_fe64_dbl_nadd",
     "ct_x25519_ifma_step", "ct_ed25519_ifma_select", "ct_ed25519_ifma_add",
     "ct_ed25519_ifma_double",
+    # P-256's field multiplication and squaring on MULX/ADCX/ADOX, chosen at
+    # run time where the CPU has BMI2 and ADX, and the point formulas that are
+    # whole blocks of that assembly; the P-256 probes above, built without
+    # `std`, compile to the baseline sequence, so these name the others.
+    # P-384's two rings' multiplications and point formulas exist only here.
+    "ct_p256_fp_mul_adx", "ct_p256_fp_square_adx",
+    "ct_p256_point_double_adx", "ct_p256_point_add_adx",
+    "ct_p256_point_add_affine_adx",
+    "ct_p384_fp_mul_adx", "ct_p384_fn_mul_adx",
+    "ct_p384_point_double_adx", "ct_p384_point_add_adx",
+    "ct_p384_point_add_affine_adx",
 )
 SYMBOLS += X86_ONLY
 
@@ -99,7 +110,7 @@ def bodies(assembly, required=SYMBOLS):
     that a call from a probe can be followed into a body in the same file.
     Every symbol in `required` must have a body.
     """
-    functions = set(SYMBOLS) | set(re.findall(
+    functions = set(required) | set(re.findall(
         r"^\s*\.type\s+([^\s,]+)\s*,\s*[@%]function", assembly, re.MULTILINE))
     result = {}
     current = None

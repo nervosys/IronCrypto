@@ -80,3 +80,9 @@ is to be rerun when they land.
   docs/CONSTANT_TIME.md. Valgrind runs the portable Curve25519 field only,
   since it hides ADX from CPUID and the MULX/ADX field is chosen by CPUID;
   that field is held by the compiled-code probes instead.
+- **P-256 and P-384, fixed.** Exponentiation is now a fixed four-bit window
+  whose table is read by masked scan, with no branch on the exponent, and on
+  64-bit targets P-256 inverts by branch-free divsteps instead. Rerun on the
+  P-256 work's branch: P-256 ECDH 3, P-256 signing 7, P-384 signing 7, each
+  report one of the classified checks in the table above; none in an
+  inversion. See `docs/CONSTANT_TIME.md`.

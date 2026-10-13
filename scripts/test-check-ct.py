@@ -23,6 +23,13 @@ class InspectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing probe"):
             audit.inspect(assembly().replace("ct_reduce_q:", "unrelated:"), audit.TARGETS[0])
 
+    def test_target_probes_are_required_on_their_target_only(self):
+        common = "\n".join(f"{name}:\n\tret\n\t.size {name}, .-{name}"
+                           for name in audit.symbols_for("thumbv7em-none-eabihf"))
+        with self.assertRaisesRegex(ValueError, "missing probe"):
+            audit.inspect(common, "x86_64-unknown-linux-gnu")
+        self.assertEqual(audit.inspect(common, "thumbv7em-none-eabihf"), [])
+
     def test_unterminated_and_duplicate_bodies_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "unterminated"):
             audit.bodies("ct_reduce_q:\n\tret")
@@ -74,7 +81,7 @@ class CallTests(unittest.TestCase):
 
     def test_a_branch_in_a_helper_is_reported_against_the_probe(self):
         found = audit.inspect(self.with_helper("jne .L1"), self.X86)
-        self.assertEqual(len(found), len(audit.SYMBOLS))
+        self.assertEqual(len(found), len(audit.symbols_for(self.X86)))
         self.assertTrue(all(" -> helper: jne .L1" in f for f in found), found)
 
     def test_tail_calls_and_other_targets_are_followed(self):
@@ -90,7 +97,7 @@ class CallTests(unittest.TestCase):
 
     def test_a_call_to_an_undefined_symbol_stays_forbidden(self):
         found = audit.inspect(self.with_helper("callq\t__multi3"), self.X86)
-        self.assertEqual(len(found), len(audit.SYMBOLS))
+        self.assertEqual(len(found), len(audit.symbols_for(self.X86)))
 
 
 
@@ -241,7 +248,7 @@ class BuildTests(unittest.TestCase):
             with mock.patch.object(audit.subprocess, "run", side_effect=compiler):
                 for _ in range(2):
                     current = audit.build_probe(audit.TARGETS[0])
-                    self.assertEqual(len(audit.inspect(current, audit.TARGETS[0])), len(audit.SYMBOLS))
+                    self.assertEqual(len(audit.inspect(current, audit.TARGETS[0])), len(audit.symbols_for(audit.TARGETS[0])))
             self.assertNotEqual(outputs[0], outputs[1])
             latest = Path(directory) / "target/ct-audit/probes" / f"{audit.TARGETS[0]}.s"
             self.assertEqual(latest.read_text(encoding="utf-8"), assembly("jne .L1"))

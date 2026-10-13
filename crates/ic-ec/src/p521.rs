@@ -68,7 +68,7 @@ pub struct P521;
 
 // Its own generator table, with its own storage; see the macro, which
 // emits the table under `std` and the windowed multiplication without it.
-crate::nist::gentable::generator_table_for!(P521);
+crate::nist::gentable::generator_table_for!(P521, 8);
 
 impl Curve for P521 {
     type Field = Fp;
