@@ -24,21 +24,30 @@
 //! # Why the group law is shaped the way it is
 //!
 //! These curves have no Montgomery ladder to fall back on, so scalar
-//! multiplication is a fixed-window loop -- four doublings and an addition per
-//! digit, the same for every scalar -- over a group law that has been made
-//! total: [`point::Point::add`] computes both the addition and the
-//! doubling and selects between them without branching. That costs roughly a
-//! third more field multiplications than a formula with exceptional cases, and
-//! buys an implementation where no input — including the identity and a point
-//! plus itself — takes a different path.
+//! multiplication is a fixed-window loop -- five doublings and an addition per
+//! digit, the same for every scalar. [`point::Point::add`] is total: it
+//! computes both the addition and the doubling and selects between them
+//! without branching. That costs roughly a third more field multiplications
+//! than a formula with exceptional cases, so the loops use it only where an
+//! exceptional case can arise; elsewhere they use the incomplete formula,
+//! with the identity handled by selection, and say in a comment why equal
+//! inputs cannot reach it (`Point::mul_scalar`, `gentable::mul`).
+//!
+//! # P-256 on x86-64
+//!
+//! [`p256_field`] specialises P-256's reduction to its prime; on x86-64 that is
+//! assembly (`p256_x86`), and with BMI2 and ADX the point formulas are each one
+//! block of it (`p256_x86_point`), selected through hooks on [`point::Curve`]
+//! that other curves leave at their default. [`safegcd`] inverts P-256's two
+//! rings on 64-bit targets.
 
 pub mod arith;
 pub mod ecdh;
 pub mod ecdsa;
 pub mod gentable;
 pub mod p256_field;
-// The one place in this crate allowed `unsafe`: inline assembly for P-256's
-// field on x86-64. See the module, and `lib.rs`, for why.
+// With the module below, the only places in this crate allowed `unsafe`:
+// inline assembly for P-256 on x86-64. See the module, and `lib.rs`, for why.
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_code)]
 pub(crate) mod p256_x86;

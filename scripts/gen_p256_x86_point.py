@@ -309,7 +309,7 @@ def mulk(dst, a, k):
 OPS = {"mul": mul, "sqr": sqr, "add": add, "sub": sub, "mulk": mulk}
 
 
-def emit(name, doc, slots, program):
+def emit(name, doc, slots, program, test_only=False):
     """slots: list of slot names in order; program: list of (op, dst, a[, b])."""
     idx = {n: i for i, n in enumerate(slots)}
     out = []
@@ -320,8 +320,10 @@ def emit(name, doc, slots, program):
     out.append("/// # Safety")
     out.append("///")
     out.append("/// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].")
+    if test_only:
+        out.append("#[cfg(test)]")
     out.append("#[inline(never)]")
-    out.append(f"pub(crate) unsafe fn {name}(buf: &mut [MaybeUninit<u64>; {4 * len(slots)}]) {{")
+    out.append(f"pub unsafe fn {name}(buf: &mut [MaybeUninit<u64>; {4 * len(slots)}]) {{")
     out.append("    // SAFETY: the caller guarantees the instructions exist. The block reads")
     out.append("    // and writes only the buffer behind `{s}`, a live, exclusive reference")
     out.append(f"    // of {32 * len(slots)} bytes, at offsets below that; it writes only the")
@@ -384,6 +386,11 @@ def main():
         "add_affine_adx",
         "Mixed addition, `madd-2007-bl`, as `Point::add_affine_formula`; also leaves `H` and `R`.",
         MADD_SLOTS, MADD))
+    for k in (3, 4, 8):
+        parts.append(emit(
+            f"times{k}_adx",
+            f"`{k} * A`, alone, for the tests: the small-multiple operation the formulas use.",
+            ["A", "OUT"], [("mulk", "OUT", "A", str(k))], test_only=True))
     text = "\n\n".join(parts) + "\n"
     if len(sys.argv) > 1:
         with open(sys.argv[1], "w", encoding="utf-8", newline="\n") as f:

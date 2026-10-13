@@ -37,6 +37,24 @@ P256 = tuple(
 )
 SYMBOLS += P256
 
+# Probes that exist on one target only. On x86-64, P-256's field multiplication
+# and squaring have a second instruction sequence, on MULX/ADCX/ADOX, chosen at
+# run time where the CPU has BMI2 and ADX; and the point formulas are whole
+# blocks of that assembly. The probes above, built without `std`, compile to
+# the baseline sequence, so these name the others directly.
+TARGET_SYMBOLS = {
+    "x86_64-unknown-linux-gnu": (
+        "ct_p256_fp_mul_adx", "ct_p256_fp_square_adx",
+        "ct_p256_point_double_adx", "ct_p256_point_add_adx",
+        "ct_p256_point_add_affine_adx",
+    ),
+}
+
+
+def symbols_for(target):
+    """Every probe `target` must have: the common ones and its own."""
+    return SYMBOLS + TARGET_SYMBOLS.get(target, ())
+
 # Runtime-library routines a probe may call on a target, because their bodies
 # are disassembled from that target's compiler_builtins and held to the same
 # rules as the probes. Cortex-M0 has no 32x32->64 multiply, so every wide
@@ -69,13 +87,13 @@ _THUMB_COND = re.compile(
 _LOCAL_LABEL = re.compile(r"\.L[\w.$]+")
 
 
-def bodies(assembly):
+def bodies(assembly, symbols=SYMBOLS):
     """Read ELF function boundaries; missing/aliased bodies fail closed.
 
     Probes, and every symbol the file declares a function with `.type`, so
     that a call from a probe can be followed into a body in the same file.
     """
-    functions = set(SYMBOLS) | set(re.findall(
+    functions = set(symbols) | set(re.findall(
         r"^\s*\.type\s+([^\s,]+)\s*,\s*[@%]function", assembly, re.MULTILINE))
     result = {}
     current = None
@@ -98,7 +116,7 @@ def bodies(assembly):
                 result[current].append(line)
     if current:
         raise ValueError(f"unterminated function {current}")
-    missing = set(SYMBOLS) - result.keys()
+    missing = set(symbols) - result.keys()
     if missing:
         raise ValueError("missing probe bodies: " + ", ".join(sorted(missing)))
     return result
@@ -288,7 +306,7 @@ def inspect(assembly, target, excused=None):
     `excuse` allowed; whether those exceed EXCUSE_CEILINGS is for the caller.
     """
     failures = []
-    functions = bodies(assembly)
+    functions = bodies(assembly, symbols_for(target))
     externals = VERIFIED_EXTERNAL.get(target, ())
     excusable = target in EXCUSE_CEILINGS
     if excused is None:
@@ -321,7 +339,7 @@ def inspect(assembly, target, excused=None):
             where = probe if name == probe else f"{probe} -> {name}"
             failures.append(f"{where}: {line.strip()}")
 
-    for name in SYMBOLS:
+    for name in symbols_for(target):
         if not instructions_of(functions[name]):
             failures.append(f"{name}: empty body")
         walk(name, name, functions[name], {name})
@@ -364,7 +382,7 @@ def main():
         excused = collections.Counter()
         found = inspect(build_probe(target), target, excused) + over_ceiling(target, excused)
         failures.extend(f"{target}: {finding}" for finding in found)
-        print(f"{target}: {len(SYMBOLS)} probes, {len(found)} failures"
+        print(f"{target}: {len(symbols_for(target))} probes, {len(found)} failures"
               + ("; excused by rule: " + ", ".join(
                   f"{rule} {count}" for rule, count in sorted(excused.items()))
                  if excused else ""), flush=True)

@@ -27,7 +27,7 @@ use core::mem::MaybeUninit;
 ///
 /// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].
 #[inline(never)]
-pub(crate) unsafe fn double_adx(buf: &mut [MaybeUninit<u64>; 56]) {
+pub unsafe fn double_adx(buf: &mut [MaybeUninit<u64>; 56]) {
     // SAFETY: the caller guarantees the instructions exist. The block reads
     // and writes only the buffer behind `{s}`, a live, exclusive reference
     // of 448 bytes, at offsets below that; it writes only the
@@ -1391,7 +1391,7 @@ pub(crate) unsafe fn double_adx(buf: &mut [MaybeUninit<u64>; 56]) {
 ///
 /// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].
 #[inline(never)]
-pub(crate) unsafe fn add_adx(buf: &mut [MaybeUninit<u64>; 84]) {
+pub unsafe fn add_adx(buf: &mut [MaybeUninit<u64>; 84]) {
     // SAFETY: the caller guarantees the instructions exist. The block reads
     // and writes only the buffer behind `{s}`, a live, exclusive reference
     // of 672 bytes, at offsets below that; it writes only the
@@ -3772,7 +3772,7 @@ pub(crate) unsafe fn add_adx(buf: &mut [MaybeUninit<u64>; 84]) {
 ///
 /// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].
 #[inline(never)]
-pub(crate) unsafe fn add_affine_adx(buf: &mut [MaybeUninit<u64>; 72]) {
+pub unsafe fn add_affine_adx(buf: &mut [MaybeUninit<u64>; 72]) {
     // SAFETY: the caller guarantees the instructions exist. The block reads
     // and writes only the buffer behind `{s}`, a live, exclusive reference
     // of 576 bytes, at offsets below that; it writes only the
@@ -5498,6 +5498,239 @@ pub(crate) unsafe fn add_affine_adx(buf: &mut [MaybeUninit<u64>; 72]) {
             "mov qword ptr [{s} + 232], {t1}",
             "mov qword ptr [{s} + 240], {t2}",
             "mov qword ptr [{s} + 248], {t3}",
+            s = in(reg) buf.as_mut_ptr(),
+            t0 = out(reg) _,
+            t1 = out(reg) _,
+            t2 = out(reg) _,
+            t3 = out(reg) _,
+            t4 = out(reg) _,
+            t5 = out(reg) _,
+            t6 = out(reg) _,
+            t7 = out(reg) _,
+            c = out(reg) _,
+            out("rax") _,
+            out("rdx") _,
+            options(nostack),
+        );
+    }
+}
+
+/// `3 * A`, alone, for the tests: the small-multiple operation the formulas use.
+///
+/// Slots, 32 bytes each, in order: `A`, `OUT`.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].
+#[cfg(test)]
+#[inline(never)]
+pub unsafe fn times3_adx(buf: &mut [MaybeUninit<u64>; 8]) {
+    // SAFETY: the caller guarantees the instructions exist. The block reads
+    // and writes only the buffer behind `{s}`, a live, exclusive reference
+    // of 64 bytes, at offsets below that; it writes only the
+    // registers it declares, and does not touch the stack. It reads no slot
+    // before writing it but the inputs, which the caller has written.
+    unsafe {
+        asm!(
+            // OUT = mulk(A, 3)
+            "mov {t0}, qword ptr [{s}]",
+            "mov {t1}, qword ptr [{s} + 8]",
+            "mov {t2}, qword ptr [{s} + 16]",
+            "mov {t3}, qword ptr [{s} + 24]",
+            "mov {t4}, {t3}",
+            "shr {t4}, 63",
+            "shld {t3}, {t2}, 1",
+            "shld {t2}, {t1}, 1",
+            "shld {t1}, {t0}, 1",
+            "shl {t0}, 1",
+            "add {t0}, qword ptr [{s}]",
+            "adc {t1}, qword ptr [{s} + 8]",
+            "adc {t2}, qword ptr [{s} + 16]",
+            "adc {t3}, qword ptr [{s} + 24]",
+            "adc {t4}, 0",
+            "mov rax, {t4}",
+            "shl rax, 32",
+            "xor {c:e}, {c:e}",
+            "add {t0}, {t4}",
+            "adc {t1}, 0",
+            "adc {t2}, 0",
+            "adc {t3}, rax",
+            "adc {c}, 0",
+            "sub {t1}, rax",
+            "sbb {t2}, 0",
+            "sbb {t3}, {t4}",
+            "sbb {c}, 0",
+            "mov {t4}, {t0}",
+            "mov {t5}, {t1}",
+            "mov {t6}, {t2}",
+            "mov {t7}, {t3}",
+            "mov eax, 0xffffffff",
+            "mov rdx, 0xffffffff00000001",
+            "sub {t4}, -1",
+            "sbb {t5}, rax",
+            "sbb {t6}, 0",
+            "sbb {t7}, rdx",
+            "sbb {c}, 0",
+            "cmovc {t4}, {t0}",
+            "cmovc {t5}, {t1}",
+            "cmovc {t6}, {t2}",
+            "cmovc {t7}, {t3}",
+            "mov qword ptr [{s} + 32], {t4}",
+            "mov qword ptr [{s} + 40], {t5}",
+            "mov qword ptr [{s} + 48], {t6}",
+            "mov qword ptr [{s} + 56], {t7}",
+            s = in(reg) buf.as_mut_ptr(),
+            t0 = out(reg) _,
+            t1 = out(reg) _,
+            t2 = out(reg) _,
+            t3 = out(reg) _,
+            t4 = out(reg) _,
+            t5 = out(reg) _,
+            t6 = out(reg) _,
+            t7 = out(reg) _,
+            c = out(reg) _,
+            out("rax") _,
+            out("rdx") _,
+            options(nostack),
+        );
+    }
+}
+
+/// `4 * A`, alone, for the tests: the small-multiple operation the formulas use.
+///
+/// Slots, 32 bytes each, in order: `A`, `OUT`.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].
+#[cfg(test)]
+#[inline(never)]
+pub unsafe fn times4_adx(buf: &mut [MaybeUninit<u64>; 8]) {
+    // SAFETY: the caller guarantees the instructions exist. The block reads
+    // and writes only the buffer behind `{s}`, a live, exclusive reference
+    // of 64 bytes, at offsets below that; it writes only the
+    // registers it declares, and does not touch the stack. It reads no slot
+    // before writing it but the inputs, which the caller has written.
+    unsafe {
+        asm!(
+            // OUT = mulk(A, 4)
+            "mov {t0}, qword ptr [{s}]",
+            "mov {t1}, qword ptr [{s} + 8]",
+            "mov {t2}, qword ptr [{s} + 16]",
+            "mov {t3}, qword ptr [{s} + 24]",
+            "mov {t4}, {t3}",
+            "shr {t4}, 62",
+            "shld {t3}, {t2}, 2",
+            "shld {t2}, {t1}, 2",
+            "shld {t1}, {t0}, 2",
+            "shl {t0}, 2",
+            "mov rax, {t4}",
+            "shl rax, 32",
+            "xor {c:e}, {c:e}",
+            "add {t0}, {t4}",
+            "adc {t1}, 0",
+            "adc {t2}, 0",
+            "adc {t3}, rax",
+            "adc {c}, 0",
+            "sub {t1}, rax",
+            "sbb {t2}, 0",
+            "sbb {t3}, {t4}",
+            "sbb {c}, 0",
+            "mov {t4}, {t0}",
+            "mov {t5}, {t1}",
+            "mov {t6}, {t2}",
+            "mov {t7}, {t3}",
+            "mov eax, 0xffffffff",
+            "mov rdx, 0xffffffff00000001",
+            "sub {t4}, -1",
+            "sbb {t5}, rax",
+            "sbb {t6}, 0",
+            "sbb {t7}, rdx",
+            "sbb {c}, 0",
+            "cmovc {t4}, {t0}",
+            "cmovc {t5}, {t1}",
+            "cmovc {t6}, {t2}",
+            "cmovc {t7}, {t3}",
+            "mov qword ptr [{s} + 32], {t4}",
+            "mov qword ptr [{s} + 40], {t5}",
+            "mov qword ptr [{s} + 48], {t6}",
+            "mov qword ptr [{s} + 56], {t7}",
+            s = in(reg) buf.as_mut_ptr(),
+            t0 = out(reg) _,
+            t1 = out(reg) _,
+            t2 = out(reg) _,
+            t3 = out(reg) _,
+            t4 = out(reg) _,
+            t5 = out(reg) _,
+            t6 = out(reg) _,
+            t7 = out(reg) _,
+            c = out(reg) _,
+            out("rax") _,
+            out("rdx") _,
+            options(nostack),
+        );
+    }
+}
+
+/// `8 * A`, alone, for the tests: the small-multiple operation the formulas use.
+///
+/// Slots, 32 bytes each, in order: `A`, `OUT`.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].
+#[cfg(test)]
+#[inline(never)]
+pub unsafe fn times8_adx(buf: &mut [MaybeUninit<u64>; 8]) {
+    // SAFETY: the caller guarantees the instructions exist. The block reads
+    // and writes only the buffer behind `{s}`, a live, exclusive reference
+    // of 64 bytes, at offsets below that; it writes only the
+    // registers it declares, and does not touch the stack. It reads no slot
+    // before writing it but the inputs, which the caller has written.
+    unsafe {
+        asm!(
+            // OUT = mulk(A, 8)
+            "mov {t0}, qword ptr [{s}]",
+            "mov {t1}, qword ptr [{s} + 8]",
+            "mov {t2}, qword ptr [{s} + 16]",
+            "mov {t3}, qword ptr [{s} + 24]",
+            "mov {t4}, {t3}",
+            "shr {t4}, 61",
+            "shld {t3}, {t2}, 3",
+            "shld {t2}, {t1}, 3",
+            "shld {t1}, {t0}, 3",
+            "shl {t0}, 3",
+            "mov rax, {t4}",
+            "shl rax, 32",
+            "xor {c:e}, {c:e}",
+            "add {t0}, {t4}",
+            "adc {t1}, 0",
+            "adc {t2}, 0",
+            "adc {t3}, rax",
+            "adc {c}, 0",
+            "sub {t1}, rax",
+            "sbb {t2}, 0",
+            "sbb {t3}, {t4}",
+            "sbb {c}, 0",
+            "mov {t4}, {t0}",
+            "mov {t5}, {t1}",
+            "mov {t6}, {t2}",
+            "mov {t7}, {t3}",
+            "mov eax, 0xffffffff",
+            "mov rdx, 0xffffffff00000001",
+            "sub {t4}, -1",
+            "sbb {t5}, rax",
+            "sbb {t6}, 0",
+            "sbb {t7}, rdx",
+            "sbb {c}, 0",
+            "cmovc {t4}, {t0}",
+            "cmovc {t5}, {t1}",
+            "cmovc {t6}, {t2}",
+            "cmovc {t7}, {t3}",
+            "mov qword ptr [{s} + 32], {t4}",
+            "mov qword ptr [{s} + 40], {t5}",
+            "mov qword ptr [{s} + 48], {t6}",
+            "mov qword ptr [{s} + 56], {t7}",
             s = in(reg) buf.as_mut_ptr(),
             t0 = out(reg) _,
             t1 = out(reg) _,

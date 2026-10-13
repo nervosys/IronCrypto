@@ -72,3 +72,10 @@ written with, Graviola 0.4.1, both x86-64, rustc 1.99.0, LTO.
 
 Both are being fixed in the P-256 and Curve25519 work streams, and this table
 is to be rerun when they land.
+
+- **P-256 and P-384, fixed.** Exponentiation is now a fixed four-bit window
+  whose table is read by masked scan, with no branch on the exponent, and on
+  64-bit targets P-256 inverts by branch-free divsteps instead. Rerun on the
+  P-256 work's branch: P-256 ECDH 3, P-256 signing 7, P-384 signing 7, each
+  report one of the classified checks in the table above; none in an
+  inversion. See `docs/CONSTANT_TIME.md`.

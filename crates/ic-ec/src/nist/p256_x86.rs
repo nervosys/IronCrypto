@@ -1,8 +1,16 @@
 //! P-256 field arithmetic in x86-64 assembly.
 //!
 //! The same functions as [`super::p256_field`], with the same reduction, in
-//! instructions every x86-64 CPU has: `mul`, `adc`, `sbb` and `cmov`. Nothing
-//! here needs a CPU feature check, so nothing here can be selected wrongly.
+//! two instruction sequences: one in what every x86-64 CPU has -- `mul`,
+//! `adc`, `sbb` and `cmov` -- and one on `mulx`, `adcx` and `adox`, chosen
+//! where the CPU has BMI2 and ADX ([`has_adx`], asked once). `mulx` leaves the
+//! flags alone, so a row's low words can ride the carry flag while its high
+//! words ride the overflow flag. Both are tested against the Rust and the
+//! generic word loop, and the faster one is asserted to be the one selected
+//! where the CPU allows it.
+//!
+//! The point formulas built from these are in `p256_x86_point`, generated;
+//! the masked table scans, in SSE2 and AVX2, are here.
 //!
 //! # Why assembly
 //!
@@ -21,9 +29,11 @@
 //!
 //! # The algorithms
 //!
-//! Multiplication is CIOS: one row of `a * b_i` at a time, each followed by a
-//! Montgomery step. Squaring forms the 512-bit square -- six cross products
-//! doubled, four squares added -- and reduces it in a four-word window.
+//! On `mulx`, multiplication is CIOS: one row of `a * b_i` at a time, each
+//! followed by a Montgomery step; on `mul` it forms the 512-bit product row
+//! by row and reduces it as squaring does. Squaring forms the 512-bit square
+//! -- six cross products doubled, four squares added -- and reduces it in a
+//! four-word window.
 //!
 //! A Montgomery step needs no multiplication on this prime. With the low word
 //! `u` as the quotient digit (`-p^-1 = 1 mod 2^64`),
@@ -43,8 +53,8 @@
 //! # Registers
 //!
 //! `rbx` and `rbp` are reserved by the compiler and `rsp` is the stack, which
-//! leaves thirteen. Multiplication uses twelve of them, squaring eleven; the
-//! compiler assigns every one but `rax` and `rdx`, which `mul` dictates.
+//! leaves thirteen. No sequence here uses more than twelve; the compiler
+//! assigns every one but `rax` and `rdx`, which `mul` and `mulx` dictate.
 
 use core::arch::asm;
 use core::mem::MaybeUninit;
@@ -430,7 +440,7 @@ pub(crate) fn square(a: &[u64; 4]) -> [u64; 4] {
 ///
 /// The CPU must support BMI2 and ADX; see [`has_adx`].
 #[inline]
-pub(crate) unsafe fn mul_adx(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+pub unsafe fn mul_adx(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     let (r0, r1, r2, r3): (u64, u64, u64, u64);
     // SAFETY: the caller guarantees the instructions exist. The block reads
     // the 32 bytes behind each of `a` and `b`, which are live references to
@@ -604,7 +614,7 @@ pub(crate) unsafe fn mul_adx(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
 ///
 /// The CPU must support BMI2 and ADX; see [`has_adx`].
 #[inline]
-pub(crate) unsafe fn square_adx(a: &[u64; 4]) -> [u64; 4] {
+pub unsafe fn square_adx(a: &[u64; 4]) -> [u64; 4] {
     let (r0, r1, r2, r3): (u64, u64, u64, u64);
     // SAFETY: the caller guarantees the instructions exist; otherwise as for
     // `mul_plain`.
@@ -1071,6 +1081,100 @@ mod tests {
         assert_eq!(square(&a), s);
         assert_eq!(add(&a, &b), rust::add(a, b), "add {a:x?} {b:x?}");
         assert_eq!(sub(&a, &b), rust::sub(a, b), "sub {a:x?} {b:x?}");
+    }
+
+    /// `k * a` by the formulas' small-multiple operation, against `k`
+    /// additions, for every value that takes each path through its fold: the
+    /// carry out of adding `q + q*2^224` with and without a borrow back from
+    /// subtracting `q*2^96 + q*2^192`, for every top word `q` the multiple can
+    /// have. Those need the low 256 bits of `k * a` within about `q * 2^224`
+    /// of `2^256`, which random values reach about once in 2^32 tries, so
+    /// they are built: `k * a = q * 2^256 + (2^256 - q * 2^224 + d)`, solved
+    /// for `a` where `k` divides it and `a < p`.
+    ///
+    /// Dropping the carry out of the addition (`adc {c}, 0`) passed every
+    /// other test in the crate, the 50,000 arbitrary-coordinate formula
+    /// comparisons included, and fails this one. Dropping the borrow out of
+    /// the subtraction passes this one too, and is not a missed bug: when it
+    /// borrows, the value is above `p` by construction and the final
+    /// subtraction happens whatever the top word says.
+    #[test]
+    fn the_small_multiples_take_every_path_through_their_fold() {
+        let times = |k: u64, a: [u64; 4]| -> [u64; 4] {
+            let mut buf = [const { MaybeUninit::uninit() }; 8];
+            for (i, w) in a.iter().enumerate() {
+                buf[i].write(*w);
+            }
+            // SAFETY: the formula reads slot 0, written above, and writes
+            // slot 1, read below; it needs no CPU feature beyond the
+            // baseline (`shld`, `adc`, `sbb`, `cmovc`).
+            unsafe {
+                match k {
+                    3 => crate::nist::p256_x86_point::times3_adx(&mut buf),
+                    4 => crate::nist::p256_x86_point::times4_adx(&mut buf),
+                    _ => crate::nist::p256_x86_point::times8_adx(&mut buf),
+                }
+                read::<8, 2>(&buf, 0)[1]
+            }
+        };
+        let below_p = |x: &[u64; 4]| {
+            (0..4)
+                .rev()
+                .find(|&i| x[i] != P[i])
+                .is_some_and(|i| x[i] < P[i])
+        };
+        let mut checked = [0usize; 9];
+        let mut inputs = std::vec::Vec::new();
+        for k in [3u64, 4, 8] {
+            for q in 1..k {
+                for (d, high) in (0..256u64).flat_map(|d| [(d, false), (d, true)]) {
+                    // T = q*2^256 + 2^256 - q*2^224 + d, where adding
+                    // q*2^224 wraps to `d + q` and subtracting q*2^192
+                    // then borrows; or with 2q*2^192 more, where it wraps
+                    // the same way and does not borrow. As five words; then
+                    // T / k.
+                    let mut t = [d, 0, 0, (q << 32).wrapping_neg(), q];
+                    if high {
+                        t[3] = t[3].wrapping_add(2 * q);
+                    }
+                    let mut rem = 0u128;
+                    let mut a = [0u64; 5];
+                    for i in (0..5).rev() {
+                        let cur = (rem << 64) | t[i] as u128;
+                        a[i] = (cur / k as u128) as u64;
+                        rem = cur % k as u128;
+                    }
+                    let a4 = [a[0], a[1], a[2], a[3]];
+                    if rem == 0 && a[4] == 0 && below_p(&a4) {
+                        inputs.push((k, a4));
+                        checked[k as usize] += 1;
+                    }
+                }
+            }
+        }
+        // Every k found inputs on both sides.
+        assert!(
+            checked[3] > 0 && checked[4] > 0 && checked[8] > 0,
+            "{checked:?}"
+        );
+        let mut state = 0x7175_u64;
+        for _ in 0..20_000 {
+            for k in [3u64, 4, 8] {
+                inputs.push((k, operand(&mut state, false)));
+            }
+        }
+        for (k, a) in [3u64, 4, 8].iter().flat_map(|k| {
+            [[0u64; 4], [1, 0, 0, 0], [P[0] - 1, P[1], P[2], P[3]]].map(move |a| (*k, a))
+        }) {
+            inputs.push((k, a));
+        }
+        for (k, a) in inputs {
+            let mut want = a;
+            for _ in 1..k {
+                want = rust::add(want, a);
+            }
+            assert_eq!(times(k, a), want, "{k} * {a:x?}");
+        }
     }
 
     #[test]
