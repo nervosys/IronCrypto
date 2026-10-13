@@ -30,6 +30,21 @@ pub use kem::MlKem768;
 pub use kem1024::MlKem1024;
 pub use kem512::MlKem512;
 
+/// [`kem::PreparedEncapsulationKey`]: an ML-KEM-768 encapsulation key
+/// checked and expanded once, for repeated encapsulation to it.
+pub type MlKem768PreparedEncapsulationKey = kem::PreparedEncapsulationKey;
+/// [`kem::PreparedDecapsulationKey`]: an ML-KEM-768 decapsulation key
+/// checked and expanded once.
+pub type MlKem768PreparedDecapsulationKey = kem::PreparedDecapsulationKey;
+/// [`kem512::PreparedEncapsulationKey`], for ML-KEM-512.
+pub type MlKem512PreparedEncapsulationKey = kem512::PreparedEncapsulationKey;
+/// [`kem512::PreparedDecapsulationKey`], for ML-KEM-512.
+pub type MlKem512PreparedDecapsulationKey = kem512::PreparedDecapsulationKey;
+/// [`kem1024::PreparedEncapsulationKey`], for ML-KEM-1024.
+pub type MlKem1024PreparedEncapsulationKey = kem1024::PreparedEncapsulationKey;
+/// [`kem1024::PreparedDecapsulationKey`], for ML-KEM-1024.
+pub type MlKem1024PreparedDecapsulationKey = kem1024::PreparedDecapsulationKey;
+
 /// What has and has not been checked.
 pub const VERIFICATION: &str = "components verified against independent oracles; \
                                 each parameter set against 50 NIST ACVP cases \

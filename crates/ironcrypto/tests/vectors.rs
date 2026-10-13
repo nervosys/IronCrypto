@@ -177,6 +177,22 @@ fn ml_kem_encap_vectors_from_file() {
 
         assert_eq!(hex(&ct), hex(&want_ct), "ciphertext, case {index}");
         assert_eq!(hex(&shared), hex(&want_k), "shared secret, case {index}");
+
+        // The same case through the prepared key, which holds `A^T` and
+        // `H(ek)` from construction rather than computing them per call.
+        let prepared = mlkem::kem::PreparedEncapsulationKey::new(ek)
+            .unwrap_or_else(|e| panic!("case {index}: prepared key refused: {e}"));
+        let mut ct = [0u8; mlkem::kem::CIPHERTEXT_LEN];
+        let mut shared = [0u8; mlkem::kem::SHARED_SECRET_LEN];
+        prepared
+            .encapsulate_deterministic(m[..].try_into().unwrap(), &mut ct, &mut shared)
+            .unwrap();
+        assert_eq!(hex(&ct), hex(&want_ct), "prepared ciphertext, case {index}");
+        assert_eq!(
+            hex(&shared),
+            hex(&want_k),
+            "prepared shared secret, case {index}"
+        );
     }
 }
 
@@ -241,6 +257,29 @@ macro_rules! ml_kem_acvp {
                     hex(&shared),
                     hex(&hex_field(case, "k")),
                     "secret, case {index}"
+                );
+
+                // And through the prepared key.
+                let prepared = mlkem::$module::PreparedEncapsulationKey::new(ek)
+                    .unwrap_or_else(|e| panic!("case {index}: prepared key refused: {e}"));
+                let mut ct = [0u8; mlkem::$module::CIPHERTEXT_LEN];
+                let mut shared = [0u8; mlkem::$module::SHARED_SECRET_LEN];
+                prepared
+                    .encapsulate_deterministic(
+                        hex_field(case, "m")[..].try_into().unwrap(),
+                        &mut ct,
+                        &mut shared,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    hex(&ct),
+                    hex(&hex_field(case, "c")),
+                    "prepared ciphertext, case {index}"
+                );
+                assert_eq!(
+                    hex(&shared),
+                    hex(&hex_field(case, "k")),
+                    "prepared secret, case {index}"
                 );
             }
         }

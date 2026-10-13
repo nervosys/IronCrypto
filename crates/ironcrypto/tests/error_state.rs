@@ -190,7 +190,14 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
             let mut ct = Box::new([0u8; m::CIPHERTEXT_LEN]);
             let mut shared = [0u8; 32];
             mlkem::$scheme::encapsulate(&mut rng, &ek, &mut ct, &mut shared).unwrap();
-            (ek, dk, ct)
+            // And each key prepared, while the module works.
+            let prepared_ek = Box::new(m::PreparedEncapsulationKey::new(&ek).unwrap());
+            let prepared_dk = Box::new(m::PreparedDecapsulationKey::new(&dk).unwrap());
+            prepared_ek
+                .encapsulate(&mut rng, &mut ct, &mut shared)
+                .unwrap();
+            prepared_dk.decapsulate(&ct, &mut shared).unwrap();
+            (ek, dk, ct, prepared_ek, prepared_dk)
         }};
     }
     let kem512 = ml_kem!(kem512, MlKem512);
@@ -900,7 +907,7 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     macro_rules! ml_kem_refuses {
         ($id:literal, $set:ident, $scheme:ident, $made:expr) => {{
             use mlkem::$set as m;
-            let (ek, dk, ct) = &$made;
+            let (ek, dk, ct, prepared_ek, prepared_dk) = &$made;
             let mut new_ek = Box::new([0u8; m::ENCAPS_KEY_LEN]);
             let mut new_dk = Box::new([0u8; m::DECAPS_KEY_LEN]);
             seen.refused(
@@ -936,6 +943,33 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
                 $id,
                 "encapsulate_deterministic",
                 mlkem::$scheme::encapsulate_deterministic(&[3u8; 32], ek, &mut new_ct, &mut shared),
+            );
+            // The prepared keys: neither can be built, and one built before
+            // the failure does nothing after it.
+            seen.refused(
+                $id,
+                "PreparedEncapsulationKey::new",
+                m::PreparedEncapsulationKey::new(ek),
+            );
+            seen.refused(
+                $id,
+                "PreparedDecapsulationKey::new",
+                m::PreparedDecapsulationKey::new(dk),
+            );
+            seen.refused(
+                $id,
+                "prepared encapsulate",
+                prepared_ek.encapsulate(&mut rng, &mut new_ct, &mut shared),
+            );
+            seen.refused(
+                $id,
+                "prepared encapsulate_deterministic",
+                prepared_ek.encapsulate_deterministic(&[3u8; 32], &mut new_ct, &mut shared),
+            );
+            seen.refused(
+                $id,
+                "prepared decapsulate",
+                prepared_dk.decapsulate(ct, &mut shared),
             );
             assert_eq!(shared, [0u8; 32], "{}: no shared secret", $id);
         }};

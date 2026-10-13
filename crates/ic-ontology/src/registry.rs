@@ -2809,7 +2809,11 @@ pub static REGISTRY: &[Entry] = &[
                 each case pins the sampler, the NTT, the compression and the whole key encoding \
                 at once. Deploy it in a hybrid with X25519 rather than alone: the risk that \
                 remains is in the scheme's age, not in this implementation's arithmetic, and a \
-                hybrid leaves the other half standing. Both of FIPS 203 section 7's input checks are enforced on the paths that need them: encapsulation runs the modulus check on the peer's key, and decapsulation runs the hash check on its own, so a caller gets them without having to know to ask.",
+                hybrid leaves the other half standing. Both of FIPS 203 section 7's input checks are enforced on the paths that need them: encapsulation runs the modulus check on the peer's key, and decapsulation runs the hash check on its own, so a caller gets them without having to know to ask. \
+                To encapsulate to one key many times, build `ic_mlkem::kem::PreparedEncapsulationKey` \
+                once: it runs the modulus check and computes `A^T` and `H(ek)` at construction, so \
+                each call does only the per-message work. `PreparedDecapsulationKey` does the same \
+                for decapsulation after the hash check, and wipes its secret when dropped.",
     },
     Entry {
         id: "ml-kem-512",
@@ -2837,7 +2841,10 @@ pub static REGISTRY: &[Entry] = &[
                 set. Checked against NIST's ACVP vectors for this set on its own account -- \
                 all 25 key-generation and all 25 encapsulation cases -- since the parameters \
                 are exactly what differs between the sets. The smallest keys and ciphertexts, at category 1, comparable to AES-128. \
-                `recommend` offers ML-KEM-768, the middle set; choose this one deliberately.",
+                `recommend` offers ML-KEM-768, the middle set; choose this one deliberately. \
+                For repeated encapsulation to one key, `ic_mlkem::kem512::PreparedEncapsulationKey` \
+                checks and expands the key once; `PreparedDecapsulationKey` does the same for \
+                decapsulation.",
     },
     Entry {
         id: "ml-kem-1024",
@@ -2865,7 +2872,10 @@ pub static REGISTRY: &[Entry] = &[
                 set. Checked against NIST's ACVP vectors for this set on its own account -- \
                 all 25 key-generation and all 25 encapsulation cases -- since the parameters \
                 are exactly what differs between the sets. The largest, at category 5, comparable to AES-256, for a policy that asks for it. \
-                `recommend` offers ML-KEM-768, the middle set; choose this one deliberately.",
+                `recommend` offers ML-KEM-768, the middle set; choose this one deliberately. \
+                For repeated encapsulation to one key, `ic_mlkem::kem1024::PreparedEncapsulationKey` \
+                checks and expands the key once; `PreparedDecapsulationKey` does the same for \
+                decapsulation.",
     },
     // -- Signatures ---------------------------------------------------------
     Entry {

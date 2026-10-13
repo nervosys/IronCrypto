@@ -226,6 +226,13 @@ macro_rules! ml_kem {
         /// decompressed and transformed, and each `s[i]` decoded, only when the
         /// sum reaches it.
         fn pke_decrypt(dk: &[u8], ct: &[u8]) -> [u8; 32] {
+            decrypt_with(|i, s| byte_decode(&dk[i * 384..(i + 1) * 384], 12, s), ct)
+        }
+
+        /// K-PKE decryption, with `s_at(i, p)` writing element `i` of the
+        /// secret `s` into `p`: decoded from the key, or copied from a
+        /// prepared one. Each copy is cleared once the sum has used it.
+        fn decrypt_with(s_at: impl Fn(usize, &mut Poly), ct: &[u8]) -> [u8; 32] {
             let du_len = encoded_len(DU);
             let mut w = Poly::ZERO;
             for i in 0..K {
@@ -233,7 +240,7 @@ macro_rules! ml_kem {
                 decode_decompress(&ct[i * du_len..(i + 1) * du_len], DU, &mut u);
                 u.ntt();
                 let mut s = Poly::ZERO;
-                byte_decode(&dk[i * 384..(i + 1) * 384], 12, &mut s);
+                s_at(i, &mut s);
                 w.basemul_add(&s, &u);
                 s.zeroize();
             }
@@ -253,6 +260,107 @@ macro_rules! ml_kem {
             out
         }
 
+        /// `k * k`, the number of entries in `A`.
+        const KK: usize = K * K;
+
+        /// Row `i` of a held matrix times `v`, reduced: `matrix_row`'s sums,
+        /// in its order.
+        fn row(m: &[Poly], i: usize, v: &[Poly]) -> Poly {
+            let mut acc = Poly::ZERO;
+            for (jj, vj) in v.iter().enumerate() {
+                acc.basemul_add(&m[i * K + jj], vj);
+            }
+            acc.reduce();
+            acc
+        }
+
+        /// K-PKE encryption given a held `A^T` (`k * k` entries) and the
+        /// `2k + 1` noise polynomials already drawn: `pke_encrypt`'s
+        /// arithmetic, in its order. `t_at(i, p)` writes element `i` of `t`
+        /// into `p`, decoded from the key or copied from a prepared one.
+        /// Clears `noise`.
+        fn encrypt_with(
+            t_at: impl Fn(usize, &mut Poly),
+            m: &[u8; 32],
+            at: &[Poly],
+            noise: &mut [Poly],
+            out: &mut [u8],
+        ) {
+            let du_len = encoded_len(DU);
+            let (y, errors) = noise.split_at_mut(K);
+            for p in y.iter_mut() {
+                p.ntt();
+            }
+
+            // u = InvNTT(A^T o y) + e1
+            for (i, e1) in errors[..K].iter().enumerate() {
+                let mut u = row(at, i, y);
+                u.inv_ntt();
+                u.add_assign(e1);
+                u.reduce();
+                u.normalize();
+                compress_encode(&u, DU, &mut out[i * du_len..(i + 1) * du_len]);
+            }
+
+            // v = InvNTT(t^T o y) + e2 + Decompress_1(m)
+            let mut v = Poly::ZERO;
+            for (i, yi) in y.iter().enumerate() {
+                let mut t = Poly::ZERO;
+                t_at(i, &mut t);
+                v.basemul_add(&t, yi);
+            }
+            v.reduce();
+            v.inv_ntt();
+            v.add_assign(&errors[K]);
+            let mut mu = Poly::ZERO;
+            decode_decompress(m, 1, &mut mu);
+            v.add_assign(&mu);
+            v.reduce();
+            v.normalize();
+            compress_encode(&v, DV, &mut out[K * du_len..]);
+
+            for p in noise.iter_mut() {
+                p.zeroize();
+            }
+            mu.zeroize();
+        }
+
+        /// The `2k + 1` encryption noise polynomials for coins `r`: `y`
+        /// (nonces 0..k, `eta1`), `e1` (k..2k, `eta2`) and `e2` (2k), four
+        /// lanes at a time where that pays and one at a time otherwise.
+        fn encryption_noise(r: &[u8; 32], noise: &mut [Poly; 2 * K + 1]) {
+            #[cfg(feature = "std")]
+            if parallel() {
+                fast::encryption_noise(r, noise);
+                return;
+            }
+            for (n, p) in noise.iter_mut().enumerate() {
+                *p = sample_noise(if n < K { ETA1 } else { ETA2 }, r, n as u8);
+            }
+        }
+
+        /// `A^T` into `at`, and `H(ek)`, for a prepared key: in one schedule
+        /// where the four-way Keccak pays, one call at a time otherwise.
+        fn transposed_matrix_and_hash(ek: &[u8; ENCAPS_KEY_LEN], at: &mut [Poly; KK]) -> [u8; 32] {
+            let mut rho = [0u8; 32];
+            rho.copy_from_slice(&ek[384 * K..]);
+            #[cfg(feature = "std")]
+            if parallel() {
+                let mut hashes = [[0u8; 32]];
+                let hash = $crate::lanes::Task::Hash {
+                    parts: [&ek[..], &[]],
+                    domain: 0x06,
+                    slot: 0,
+                };
+                fast::transposed_matrix_and_hashes(&rho, &[hash], &mut hashes, at);
+                return hashes[0];
+            }
+            for (f, p) in at.iter_mut().enumerate() {
+                *p = matrix_entry(&rho, f / K, f % K, true);
+            }
+            $crate::scheme::h(ek)
+        }
+
         /// Whether the lane-scheduled form below runs: only where the four-way
         /// Keccak is a vector permutation, since elsewhere it is four scalar
         /// ones and holding the matrix would buy nothing. A `no_std` build has
@@ -260,6 +368,12 @@ macro_rules! ml_kem {
         /// form.
         #[cfg(feature = "std")]
         fn parallel() -> bool {
+            // A test can ask for the streaming form on this thread, to check
+            // the path a `no_std` build or a CPU without AVX2 takes.
+            #[cfg(test)]
+            if held::STREAMING_ONLY.with(|s| s.get()) {
+                return false;
+            }
             ic_hash::KeccakX4::is_parallel()
         }
 
@@ -284,9 +398,6 @@ macro_rules! ml_kem {
             use super::*;
             use $crate::lanes::{run, Task};
 
-            /// `k * k`.
-            pub(super) const KK: usize = K * K;
-
             /// The task that samples `A[i][j]`, or `A^T[i][j]`, into `slot`.
             ///
             /// The same index order as `matrix_entry`: FIPS 203 seeds
@@ -304,16 +415,6 @@ macro_rules! ml_kem {
                     [jj as u8, i as u8]
                 };
                 Task::Uniform { rho, index, slot }
-            }
-
-            /// Row `i` of a held matrix times `v`, reduced: `matrix_row`'s sums.
-            fn row(m: &[Poly], i: usize, v: &[Poly]) -> Poly {
-                let mut acc = Poly::ZERO;
-                for (jj, vj) in v.iter().enumerate() {
-                    acc.basemul_add(&m[i * K + jj], vj);
-                }
-                acc.reduce();
-                acc
             }
 
             pub(super) fn pke_keygen(d: &[u8; 32], ek: &mut [u8], dk: &mut [u8]) {
@@ -427,8 +528,8 @@ macro_rules! ml_kem {
             }
 
             /// K-PKE encryption, given `A^T` (`k * k` entries) and the
-            /// `2k + 1` noise polynomials already drawn: `pke_encrypt`'s
-            /// arithmetic, in its order. Clears `noise`.
+            /// `2k + 1` noise polynomials already drawn, decoding `t` from
+            /// `ek` as the inner product reaches it. Clears `noise`.
             pub(super) fn pke_encrypt(
                 ek: &[u8],
                 m: &[u8; 32],
@@ -436,43 +537,40 @@ macro_rules! ml_kem {
                 noise: &mut [Poly],
                 out: &mut [u8],
             ) {
-                let du_len = encoded_len(DU);
-                let (y, errors) = noise.split_at_mut(K);
-                for p in y.iter_mut() {
-                    p.ntt();
-                }
+                encrypt_with(
+                    |i, t| byte_decode(&ek[i * 384..(i + 1) * 384], 12, t),
+                    m,
+                    at,
+                    noise,
+                    out,
+                );
+            }
 
-                // u = InvNTT(A^T o y) + e1
-                for (i, e1) in errors[..K].iter().enumerate() {
-                    let mut u = row(at, i, y);
-                    u.inv_ntt();
-                    u.add_assign(e1);
-                    u.reduce();
-                    u.normalize();
-                    compress_encode(&u, DU, &mut out[i * du_len..(i + 1) * du_len]);
+            /// The `2k + 1` encryption noise polynomials for coins `r`, with
+            /// up to two 32-byte hashes, in one schedule. The hashes go
+            /// first, being the longest tasks.
+            pub(super) fn noise_and_hashes(
+                r: &[u8; 32],
+                hash_tasks: &[Task<'_>],
+                hashes: &mut [[u8; 32]],
+                noise: &mut [Poly; 2 * K + 1],
+            ) {
+                let mut tasks = [Task::Hash {
+                    parts: [&[], &[]],
+                    domain: 0,
+                    slot: usize::MAX,
+                }; 2 + 2 * K + 1];
+                let n = hash_tasks.len().min(2);
+                tasks[..n].copy_from_slice(&hash_tasks[..n]);
+                for e in 0..2 * K + 1 {
+                    tasks[n + e] = Task::Noise {
+                        seed: r,
+                        nonce: e as u8,
+                        eta: if e < K { ETA1 } else { ETA2 },
+                        slot: e,
+                    };
                 }
-
-                // v = InvNTT(t^T o y) + e2 + Decompress_1(m)
-                let mut v = Poly::ZERO;
-                for (i, yi) in y.iter().enumerate() {
-                    let mut t = Poly::ZERO;
-                    byte_decode(&ek[i * 384..(i + 1) * 384], 12, &mut t);
-                    v.basemul_add(&t, yi);
-                }
-                v.reduce();
-                v.inv_ntt();
-                v.add_assign(&errors[K]);
-                let mut mu = Poly::ZERO;
-                decode_decompress(m, 1, &mut mu);
-                v.add_assign(&mu);
-                v.reduce();
-                v.normalize();
-                compress_encode(&v, DV, &mut out[K * du_len..]);
-
-                for p in noise.iter_mut() {
-                    p.zeroize();
-                }
-                mu.zeroize();
+                run(&tasks[..n + 2 * K + 1], noise, hashes);
             }
         }
 
@@ -481,6 +579,150 @@ macro_rules! ml_kem {
         #[cfg(test)]
         mod held {
             use super::*;
+
+            #[cfg(feature = "std")]
+            std::thread_local! {
+                /// Set to make `parallel()` report false on this thread.
+                pub(super) static STREAMING_ONLY: core::cell::Cell<bool> =
+                    const { core::cell::Cell::new(false) };
+            }
+
+            /// Run `f` once on whichever form `parallel()` selects here, and
+            /// once more on the streaming form if that was the other.
+            fn on_both_forms(mut f: impl FnMut(&str)) {
+                f("selected");
+                #[cfg(feature = "std")]
+                if parallel() {
+                    STREAMING_ONLY.with(|s| s.set(true));
+                    assert!(!parallel());
+                    f("streaming");
+                    STREAMING_ONLY.with(|s| s.set(false));
+                }
+            }
+
+            /// The prepared keys against the unprepared functions, byte for
+            /// byte, over random keys and messages: ciphertexts and secrets
+            /// from encapsulation, both through the RNG and with explicit
+            /// messages, and decapsulation of valid, tampered and arbitrary
+            /// ciphertexts -- on the lane-scheduled form and the streaming
+            /// one, so the path a `no_std` build takes is checked here too.
+            #[test]
+            fn prepared_keys_match_the_unprepared_functions() {
+                let mut checked = 0;
+                on_both_forms(|form| {
+                    let mut r = ic_drbg::Rng::from_entropy(&[0x6bu8; 32], form.as_bytes()).unwrap();
+                    for key in 0..16 {
+                        let mut ek = [0u8; ENCAPS_KEY_LEN];
+                        let mut dk = [0u8; DECAPS_KEY_LEN];
+                        $name::keygen(&mut r, &mut ek, &mut dk).unwrap();
+                        let prepared = PreparedEncapsulationKey::new(&ek).unwrap();
+                        let prepared_dk = PreparedDecapsulationKey::new(&dk).unwrap();
+
+                        for message in 0..8 {
+                            let what = format!("{form}, key {key}, message {message}");
+                            let mut m = [0u8; 32];
+                            r.fill(&mut m).unwrap();
+                            let mut ct = [0u8; CIPHERTEXT_LEN];
+                            let mut ss = [0u8; SHARED_SECRET_LEN];
+                            let mut ct_p = [0u8; CIPHERTEXT_LEN];
+                            let mut ss_p = [0u8; SHARED_SECRET_LEN];
+                            $name::encapsulate_deterministic(&m, &ek, &mut ct, &mut ss).unwrap();
+                            prepared
+                                .encapsulate_deterministic(&m, &mut ct_p, &mut ss_p)
+                                .unwrap();
+                            assert_eq!(ct, ct_p, "ciphertext, {what}");
+                            assert_eq!(ss, ss_p, "shared secret, {what}");
+
+                            let mut tampered = ct;
+                            tampered[(message * 131) % CIPHERTEXT_LEN] ^= 1 << (message % 8);
+                            let mut arbitrary = [0u8; CIPHERTEXT_LEN];
+                            r.fill(&mut arbitrary).unwrap();
+                            for (kind, c) in [
+                                ("valid", ct),
+                                ("tampered", tampered),
+                                ("arbitrary", arbitrary),
+                            ] {
+                                let mut a = [0u8; SHARED_SECRET_LEN];
+                                let mut b = [0u8; SHARED_SECRET_LEN];
+                                $name::decapsulate(&dk, &c, &mut a).unwrap();
+                                prepared_dk.decapsulate(&c, &mut b).unwrap();
+                                assert_eq!(a, b, "decapsulation of a {kind} ciphertext, {what}");
+                                if kind == "valid" {
+                                    assert_eq!(b, ss, "round trip, {what}");
+                                }
+                            }
+                            checked += 1;
+                        }
+
+                        // Through the RNG: the same draws give the same output.
+                        let mut r1 = ic_drbg::Rng::from_entropy(&[key as u8; 32], b"twin").unwrap();
+                        let mut r2 = ic_drbg::Rng::from_entropy(&[key as u8; 32], b"twin").unwrap();
+                        let mut ct = [0u8; CIPHERTEXT_LEN];
+                        let mut ss = [0u8; SHARED_SECRET_LEN];
+                        let mut ct_p = [0u8; CIPHERTEXT_LEN];
+                        let mut ss_p = [0u8; SHARED_SECRET_LEN];
+                        $name::encapsulate(&mut r1, &ek, &mut ct, &mut ss).unwrap();
+                        prepared.encapsulate(&mut r2, &mut ct_p, &mut ss_p).unwrap();
+                        assert_eq!(ct, ct_p, "{form}, key {key}, through the RNG");
+                        assert_eq!(ss, ss_p, "{form}, key {key}, through the RNG");
+                    }
+                });
+                #[cfg(feature = "std")]
+                let forms = if ic_hash::KeccakX4::is_parallel() {
+                    2
+                } else {
+                    1
+                };
+                #[cfg(not(feature = "std"))]
+                let forms = 1;
+                assert_eq!(checked, forms * 16 * 8, "the comparison did not run");
+            }
+
+            /// The constructors refuse what the validators refuse, with the
+            /// same error: a coefficient at or above q in an encapsulation
+            /// key, in each of its elements; and a decapsulation key whose
+            /// embedded hash, or embedded public key, has been altered.
+            #[test]
+            fn prepared_keys_refuse_invalid_keys() {
+                on_both_forms(|form| {
+                    let mut ek = [0u8; ENCAPS_KEY_LEN];
+                    let mut dk = [0u8; DECAPS_KEY_LEN];
+                    $name::keygen_deterministic(&bytes(7), &bytes(8), &mut ek, &mut dk).unwrap();
+                    assert!(PreparedEncapsulationKey::new(&ek).is_ok());
+                    assert!(PreparedDecapsulationKey::new(&dk).is_ok());
+
+                    for element in 0..K {
+                        // The first twelve-bit field of the element set to q.
+                        let mut bad = ek;
+                        let at = element * 384;
+                        bad[at] = (3329 & 0xff) as u8;
+                        bad[at + 1] = (bad[at + 1] & 0xf0) | (3329 >> 8) as u8;
+                        assert!($name::validate_encapsulation_key(&bad).is_err());
+                        let refused = PreparedEncapsulationKey::new(&bad).unwrap_err();
+                        assert_eq!(
+                            refused.kind(),
+                            ic_core::ErrorKind::MalformedEncoding,
+                            "{form}, element {element}"
+                        );
+                    }
+
+                    for at in [
+                        384 * K + ENCAPS_KEY_LEN,
+                        384 * K + 5,
+                        384 * K + ENCAPS_KEY_LEN - 1,
+                    ] {
+                        let mut bad = dk;
+                        bad[at] ^= 1;
+                        assert!($name::validate_decapsulation_key(&bad).is_err());
+                        let refused = PreparedDecapsulationKey::new(&bad).unwrap_err();
+                        assert_eq!(
+                            refused.kind(),
+                            ic_core::ErrorKind::MalformedEncoding,
+                            "{form}, byte {at}"
+                        );
+                    }
+                });
+            }
 
             #[allow(clippy::needless_range_loop)]
             fn expand_matrix(rho: &[u8; 32], transposed: bool) -> [[Poly; K]; K] {
@@ -778,7 +1020,7 @@ macro_rules! ml_kem {
                 time("encapsulate_lanes", || {
                     $name::encapsulate_lanes(&m, &ek, &mut ct, &mut ss)
                 });
-                let mut at = [Poly::ZERO; super::fast::KK];
+                let mut at = [Poly::ZERO; super::KK];
                 let mut noise = [Poly::ZERO; 2 * K + 1];
                 time("  H(ek) and A^T, scheduled", || {
                     let mut h = [[0u8; 32]];
@@ -1055,6 +1297,9 @@ macro_rules! ml_kem {
             /// is used. Without that, a key with coefficients at or above `q` is
             /// silently reinterpreted as a different key, and the peer that supplied it
             /// controls the reinterpretation.
+            ///
+            /// Encapsulating to the same key many times? [`PreparedEncapsulationKey`]
+            /// makes the check and expands the key once, and gives the same output.
             pub fn encapsulate<R: RandomSource + ?Sized>(
                 rng: &mut R,
                 ek: &[u8; ENCAPS_KEY_LEN],
@@ -1138,7 +1383,7 @@ macro_rules! ml_kem {
                     domain: 0x06,
                     slot: 0,
                 };
-                let mut at = [Poly::ZERO; fast::KK];
+                let mut at = [Poly::ZERO; KK];
                 fast::transposed_matrix_and_hashes(&rho, &[hash], &mut hashes, &mut at);
                 let (mut k, mut r) = $crate::scheme::g(&[m, &hashes[0]]);
                 let mut noise = [Poly::ZERO; 2 * K + 1];
@@ -1277,10 +1522,10 @@ macro_rules! ml_kem {
                     },
                 ];
                 let mut hashes = [[0u8; 32]; 2];
-                let mut polys = [Poly::ZERO; fast::KK + 2 * K + 1];
+                let mut polys = [Poly::ZERO; KK + 2 * K + 1];
                 fast::matrix_noise_and_hashes(&rho, &r, &tasks, &mut hashes, &mut polys);
                 let [computed, mut reject] = hashes;
-                let (at, noise) = polys.split_at_mut(fast::KK);
+                let (at, noise) = polys.split_at_mut(KK);
                 if let Err(e) = Self::check_embedded_hash(dk, &computed) {
                     for p in noise.iter_mut() {
                         p.zeroize();
@@ -1352,6 +1597,262 @@ macro_rules! ml_kem {
                     "encapsulation key is not canonically encoded"
                 );
                 Ok(())
+            }
+        }
+
+        /// An encapsulation key checked and expanded once, for encapsulating
+        /// to the same key many times.
+        ///
+        #[doc = concat!("[`", stringify!($name), "::encapsulate`]")]
+        /// takes the key as bytes, so every call repeats the work that depends
+        /// only on the key: FIPS 203's modulus check, `H(ek)`, decoding `t`,
+        /// and expanding the matrix `A^T` from `rho`, which is most of the
+        /// Keccak an encapsulation does. This type does it in [`Self::new`]
+        /// and keeps the results, so [`Self::encapsulate`] does only the
+        /// per-call work: draw `m`, `G`, the noise, and the encryption.
+        ///
+        /// The output is byte for byte what the unprepared functions produce
+        /// for the same key and message.
+        ///
+        /// # Size
+        ///
+        /// It holds `A^T` and `t` in the transform domain, `k * k + k`
+        /// polynomials of 512 bytes, and `H(ek)`: about 6 KiB for ML-KEM-768,
+        /// 3 KiB for ML-KEM-512 and 10 KiB for ML-KEM-1024. Nothing is
+        /// allocated; where that is too much stack, box it or use the
+        /// unprepared functions, which never hold the matrix.
+        pub struct PreparedEncapsulationKey {
+            /// `t`, decoded from the key; in the transform domain as stored.
+            t: [Poly; K],
+            /// `A^T`, row-major, in the transform domain.
+            at: [Poly; KK],
+            /// `H(ek)`.
+            hash: [u8; 32],
+        }
+
+        impl PreparedEncapsulationKey {
+            /// Check and expand an encapsulation key.
+            ///
+            /// Refuses a key that fails FIPS 203 section 7.2's modulus check,
+            #[doc = concat!("as [`", stringify!($name), "::validate_encapsulation_key`] does,")]
+            /// with `MalformedEncoding`; refuses with `ModuleErrorState` once
+            /// the module has failed.
+            pub fn new(ek: &[u8; ENCAPS_KEY_LEN]) -> Result<Self> {
+                ic_core::module::operational()?;
+                $name::validate_encapsulation_key(ek)?;
+                let mut key = Self {
+                    t: [Poly::ZERO; K],
+                    at: [Poly::ZERO; KK],
+                    hash: [0u8; 32],
+                };
+                for (i, p) in key.t.iter_mut().enumerate() {
+                    byte_decode(&ek[i * 384..(i + 1) * 384], 12, p);
+                }
+                key.hash = transposed_matrix_and_hash(ek, &mut key.at);
+                Ok(key)
+            }
+
+            /// Encapsulate to this key, producing a shared secret and a
+            /// ciphertext.
+            pub fn encapsulate<R: RandomSource + ?Sized>(
+                &self,
+                rng: &mut R,
+                ct: &mut [u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) -> Result<()> {
+                ic_core::module::operational()?;
+                let mut m = [0u8; 32];
+                let drawn = rng.fill(&mut m);
+                if drawn.is_ok() {
+                    self.encapsulate_inner(&m, ct, shared);
+                }
+                m.zeroize();
+                drawn
+            }
+
+            /// Encapsulate with an explicit message, for tests and vectors.
+            /// Production callers want [`Self::encapsulate`]. Refuses with
+            /// `ModuleErrorState` once the module has failed.
+            pub fn encapsulate_deterministic(
+                &self,
+                m: &[u8; 32],
+                ct: &mut [u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) -> Result<()> {
+                ic_core::module::operational()?;
+                self.encapsulate_inner(m, ct, shared);
+                Ok(())
+            }
+
+            fn encapsulate_inner(
+                &self,
+                m: &[u8; 32],
+                ct: &mut [u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) {
+                let (mut k, mut r) = $crate::scheme::g(&[m, &self.hash]);
+                let mut noise = [Poly::ZERO; 2 * K + 1];
+                encryption_noise(&r, &mut noise);
+                encrypt_with(|i, t| *t = self.t[i], m, &self.at, &mut noise, ct);
+                shared.copy_from_slice(&k);
+                k.zeroize();
+                r.zeroize();
+            }
+        }
+
+        impl core::fmt::Debug for PreparedEncapsulationKey {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.debug_struct("PreparedEncapsulationKey")
+                    .field("set", &$display)
+                    .finish_non_exhaustive()
+            }
+        }
+
+        /// A decapsulation key checked and expanded once, for decapsulating
+        /// many ciphertexts with the same key.
+        ///
+        /// [`Self::new`] makes FIPS 203 section 7.3's hash check once,
+        /// decodes the secret vector `s` and the public `t`, and expands
+        /// `A^T`, which
+        #[doc = concat!("[`", stringify!($name), "::decapsulate`]")]
+        /// repeats on every call. [`Self::decapsulate`] then does only what
+        /// depends on the ciphertext. Implicit rejection is unchanged: a
+        /// ciphertext that does not re-encrypt to itself yields `J(z || c)`,
+        /// never an error, and the result is byte for byte the unprepared
+        /// function's.
+        ///
+        /// # Secret material
+        ///
+        /// It holds `s` and the rejection seed `z`, and clears both when
+        /// dropped. It implements neither `Clone` nor a `Debug` that shows
+        /// them.
+        ///
+        /// # Size
+        ///
+        /// `k * k + 2k` polynomials of 512 bytes and 64 bytes besides: about
+        /// 7.5 KiB for ML-KEM-768, 4 KiB for ML-KEM-512 and 12 KiB for
+        /// ML-KEM-1024. Nothing is allocated.
+        pub struct PreparedDecapsulationKey {
+            /// `s`, in the transform domain as stored. Secret.
+            s: [Poly; K],
+            /// The implicit-rejection seed. Secret.
+            z: [u8; 32],
+            /// `t`, decoded from the embedded encapsulation key.
+            t: [Poly; K],
+            /// `A^T`, row-major, in the transform domain.
+            at: [Poly; KK],
+            /// `H(ek)`, checked against the key's stored copy.
+            hash: [u8; 32],
+        }
+
+        impl PreparedDecapsulationKey {
+            /// Check and expand a decapsulation key.
+            ///
+            /// Refuses a key whose embedded hash does not match its embedded
+            /// encapsulation key,
+            #[doc = concat!("as [`", stringify!($name), "::validate_decapsulation_key`] does,")]
+            /// with `MalformedEncoding`; refuses with `ModuleErrorState` once
+            /// the module has failed.
+            pub fn new(dk: &[u8; DECAPS_KEY_LEN]) -> Result<Self> {
+                ic_core::module::operational()?;
+                let ek: &[u8; ENCAPS_KEY_LEN] = dk[384 * K..384 * K + ENCAPS_KEY_LEN]
+                    .try_into()
+                    .map_err(|_| ic_core::err!(Internal, "decapsulation key layout"))?;
+                let mut key = Self {
+                    s: [Poly::ZERO; K],
+                    z: [0u8; 32],
+                    t: [Poly::ZERO; K],
+                    at: [Poly::ZERO; KK],
+                    hash: [0u8; 32],
+                };
+                // The hash check first, by the comparison the unprepared
+                // decapsulation makes, and before any secret is decoded.
+                key.hash = transposed_matrix_and_hash(ek, &mut key.at);
+                $name::check_embedded_hash(dk, &key.hash)?;
+                for (i, p) in key.t.iter_mut().enumerate() {
+                    byte_decode(&ek[i * 384..(i + 1) * 384], 12, p);
+                }
+                for (i, p) in key.s.iter_mut().enumerate() {
+                    byte_decode(&dk[i * 384..(i + 1) * 384], 12, p);
+                }
+                key.z.copy_from_slice(&dk[384 * K + ENCAPS_KEY_LEN + 32..]);
+                Ok(key)
+            }
+
+            /// Decapsulate.
+            ///
+            /// Never fails on a malformed ciphertext: one that does not
+            /// re-encrypt to itself yields a pseudorandom secret derived from
+            /// `z`. The only error is `ModuleErrorState`, once the module has
+            /// failed.
+            pub fn decapsulate(
+                &self,
+                ct: &[u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) -> Result<()> {
+                ic_core::module::operational()?;
+                let mut m = decrypt_with(|i, s| *s = self.s[i], ct);
+                let (mut k, mut r) = $crate::scheme::g(&[&m, &self.hash]);
+                let mut noise = [Poly::ZERO; 2 * K + 1];
+                let mut reject = self.rejection_key_and_noise(ct, &r, &mut noise);
+
+                let mut recomputed = [0u8; CIPHERTEXT_LEN];
+                encrypt_with(
+                    |i, t| *t = self.t[i],
+                    &m,
+                    &self.at,
+                    &mut noise,
+                    &mut recomputed,
+                );
+
+                $name::select_shared_secret(ct, &recomputed, &k, &reject, shared);
+                // As in the unprepared decapsulation: all key material, and
+                // `noise` cleared by `encrypt_with`.
+                recomputed.zeroize();
+                m.zeroize();
+                k.zeroize();
+                r.zeroize();
+                reject.zeroize();
+                Ok(())
+            }
+
+            /// `J(z || c)`, and the re-encryption noise for coins `r`.
+            fn rejection_key_and_noise(
+                &self,
+                ct: &[u8; CIPHERTEXT_LEN],
+                r: &[u8; 32],
+                noise: &mut [Poly; 2 * K + 1],
+            ) -> [u8; 32] {
+                #[cfg(feature = "std")]
+                if parallel() {
+                    let mut hashes = [[0u8; 32]];
+                    let task = $crate::lanes::Task::Hash {
+                        parts: [&self.z[..], &ct[..]],
+                        domain: 0x1f,
+                        slot: 0,
+                    };
+                    fast::noise_and_hashes(r, &[task], &mut hashes, noise);
+                    return hashes[0];
+                }
+                encryption_noise(r, noise);
+                $crate::scheme::j(&[&self.z, ct])
+            }
+        }
+
+        impl Drop for PreparedDecapsulationKey {
+            fn drop(&mut self) {
+                for p in self.s.iter_mut() {
+                    p.zeroize();
+                }
+                self.z.zeroize();
+            }
+        }
+
+        impl core::fmt::Debug for PreparedDecapsulationKey {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.debug_struct("PreparedDecapsulationKey")
+                    .field("set", &$display)
+                    .finish_non_exhaustive()
             }
         }
     };

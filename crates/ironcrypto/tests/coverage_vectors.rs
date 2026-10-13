@@ -242,6 +242,13 @@ macro_rules! mlkem_case {
                 let mut k = [0u8; m::SHARED_SECRET_LEN];
                 mlkem::$ty::decapsulate(&dk, c[..].try_into().unwrap(), &mut k)
                     .map_err(|e| format!("{e:?}"))?;
+                // The prepared key must agree, case by case, valid or not.
+                let mut k_prepared = [0u8; m::SHARED_SECRET_LEN];
+                m::PreparedDecapsulationKey::new(&dk)
+                    .map_err(|e| format!("{e:?}"))?
+                    .decapsulate(c[..].try_into().unwrap(), &mut k_prepared)
+                    .map_err(|e| format!("{e:?}"))?;
+                assert_eq!(k, k_prepared, "{} prepared decapsulation", case["tcId"]);
                 (hex(&k) == case["K"])
                     .then_some(())
                     .ok_or("shared secret".into())
@@ -251,19 +258,52 @@ macro_rules! mlkem_case {
                     return Err("key length".into());
                 };
                 let ek: [u8; m::ENCAPS_KEY_LEN] = ek[..].try_into().unwrap();
-                mlkem::$ty::validate_encapsulation_key(&ek).map_err(|e| format!("{e:?}"))?;
+                // The prepared key's constructor must refuse exactly what the
+                // validator refuses.
+                let prepared = m::PreparedEncapsulationKey::new(&ek);
+                let validated = mlkem::$ty::validate_encapsulation_key(&ek);
+                assert_eq!(
+                    prepared.is_ok(),
+                    validated.is_ok(),
+                    "{} prepared key and validator disagree",
+                    case["tcId"]
+                );
+                validated.map_err(|e| format!("{e:?}"))?;
+                let prepared = prepared.map_err(|e| format!("{e:?}"))?;
                 let msg: [u8; 32] = hex_field(case, "m")[..].try_into().unwrap();
                 let mut c = [0u8; m::CIPHERTEXT_LEN];
                 let mut k = [0u8; m::SHARED_SECRET_LEN];
                 mlkem::$ty::encapsulate_deterministic(&msg, &ek, &mut c, &mut k)
                     .map_err(|e| format!("{e:?}"))?;
                 assert_eq!(hex(&c), case["c"], "{} c", case["tcId"]);
+                let mut c_prepared = [0u8; m::CIPHERTEXT_LEN];
+                let mut k_prepared = [0u8; m::SHARED_SECRET_LEN];
+                prepared
+                    .encapsulate_deterministic(&msg, &mut c_prepared, &mut k_prepared)
+                    .map_err(|e| format!("{e:?}"))?;
+                assert_eq!(hex(&c_prepared), case["c"], "{} prepared c", case["tcId"]);
+                assert_eq!(k, k_prepared, "{} prepared K", case["tcId"]);
                 (hex(&k) == case["K"])
                     .then_some(())
                     .ok_or("shared secret".into())
             }
             other => panic!("unknown file {other}"),
         })();
+        // A key with a coefficient at or above q is refused when the prepared
+        // key is built, not later.
+        if file == "encaps_test" && case["flags"] == "ModulusOverflow" {
+            let ek: [u8; m::ENCAPS_KEY_LEN] = hex_field(case, "ek")[..].try_into().unwrap();
+            let refused = m::PreparedEncapsulationKey::new(&ek).unwrap_err();
+            assert_eq!(
+                refused.kind(),
+                ErrorKind::MalformedEncoding,
+                "{}",
+                case["tcId"]
+            );
+            *$tally
+                .entry(format!("{} prepared modulus overflow refused", case["set"]))
+                .or_default() += 1;
+        }
         match (valid, outcome) {
             (true, Ok(())) => {
                 *$tally
@@ -313,6 +353,20 @@ fn wycheproof_ml_kem_all_parameter_sets() {
                 "{set} {file}: {tally:?}"
             );
         }
+        // Wycheproof has 4k modulus-overflow keys per set, each refused by
+        // the prepared key's constructor.
+        let overflows = match set {
+            "ML-KEM-512" => 8,
+            "ML-KEM-768" => 12,
+            _ => 16,
+        };
+        assert_eq!(
+            tally
+                .get(&format!("{set} prepared modulus overflow refused"))
+                .copied(),
+            Some(overflows),
+            "{set}: {tally:?}"
+        );
         // The modulus check and the length checks were each reached.
         assert!(
             tally
