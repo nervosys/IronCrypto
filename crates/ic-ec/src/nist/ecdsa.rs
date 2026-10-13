@@ -31,8 +31,9 @@ use ic_core::{ensure, Result, Zeroize};
 pub trait EcdsaCurve: Curve + crate::nist::gentable::HasGeneratorTable {
     /// The message digest, at the curve's security level.
     type Digest: Digest;
-    /// HMAC over the same digest, for RFC 6979.
-    type Hmac: Mac;
+    /// HMAC over the same digest, for RFC 6979. `Clone`, so a key set up
+    /// once serves the two MACs RFC 6979 computes under each `K`.
+    type Hmac: Mac + Clone;
 }
 
 /// Widest scalar this module handles, for stack buffers.
@@ -95,18 +96,25 @@ fn rfc6979_nonce<C: EcdsaCurve>(
     mac.update(private_key);
     mac.update(e_octets);
     k.copy_from_slice(mac.finalize().as_ref());
-    let t = C::Hmac::mac(k, v)?;
-    v.copy_from_slice(t.as_ref());
+    // Each K is used for two MACs in a row: V = HMAC_K(V), then the next K
+    // or a block of T. Its key setup -- two compressions -- is done once
+    // and the keyed state cloned for each.
+    let mut keyed = C::Hmac::new(k)?;
+    let mut mac = keyed.clone();
+    mac.update(v);
+    v.copy_from_slice(mac.finalize().as_ref());
 
     // K = HMAC_K(V || 0x01 || int2octets(x) || bits2octets(h1))
-    let mut mac = C::Hmac::new(k)?;
+    let mut mac = keyed.clone();
     mac.update(v);
     mac.update(&[0x01]);
     mac.update(private_key);
     mac.update(e_octets);
     k.copy_from_slice(mac.finalize().as_ref());
-    let t = C::Hmac::mac(k, v)?;
-    v.copy_from_slice(t.as_ref());
+    keyed = C::Hmac::new(k)?;
+    let mut mac = keyed.clone();
+    mac.update(v);
+    v.copy_from_slice(mac.finalize().as_ref());
 
     let mut found = 0usize;
     let mut t_buf = [0u8; MAX_T];
@@ -120,8 +128,9 @@ fn rfc6979_nonce<C: EcdsaCurve>(
         // SHA-512 gives 512 bits against a 521-bit order.
         let mut tlen = 0usize;
         while tlen * 8 < C::ORDER_BITS {
-            let block = C::Hmac::mac(k, v)?;
-            v.copy_from_slice(block.as_ref());
+            let mut mac = keyed.clone();
+            mac.update(v);
+            v.copy_from_slice(mac.finalize().as_ref());
             let take = core::cmp::min(tag_len, MAX_T - tlen);
             t_buf[tlen..tlen + take].copy_from_slice(&v[..take]);
             tlen += take;
@@ -143,12 +152,14 @@ fn rfc6979_nonce<C: EcdsaCurve>(
         }
 
         // K = HMAC_K(V || 0x00); V = HMAC_K(V)
-        let mut mac = C::Hmac::new(k)?;
+        let mut mac = keyed.clone();
         mac.update(v);
         mac.update(&[0x00]);
         k.copy_from_slice(mac.finalize().as_ref());
-        let t = C::Hmac::mac(k, v)?;
-        v.copy_from_slice(t.as_ref());
+        keyed = C::Hmac::new(k)?;
+        let mut mac = keyed.clone();
+        mac.update(v);
+        v.copy_from_slice(mac.finalize().as_ref());
     }
 
     k_buf.zeroize();
@@ -242,10 +253,10 @@ pub fn sign<C: EcdsaCurve>(private_key: &[u8], message: &[u8], signature: &mut [
     for attempt in 0..8 {
         let k = rfc6979_nonce::<C>(private_key, h1, attempt)?;
 
-        let point = Point::<C>::mul_generator(&k)
-            .to_affine()
+        let x = Point::<C>::mul_generator(&k)
+            .to_affine_x()
             .ok_or(ic_core::err!(Internal, "kG is the identity"))?;
-        let r = C::scalar_reduce_slice(point.x.to_bytes().as_ref());
+        let r = C::scalar_reduce_slice(x.to_bytes().as_ref());
         if bool::from(r.is_zero()) {
             continue;
         }
@@ -359,16 +370,44 @@ fn verify_digest<C: EcdsaCurve>(public_key: &[u8], digest: &[u8], signature: &[u
     let u2 = r.mul(&w);
 
     let point = Point::<C>::mul_double(&u1, &Point::<C>::from_affine(&q), &u2);
-    let affine = point
-        .to_affine()
-        .ok_or(ic_core::err!(AuthenticationFailed, "ecdsa"))?;
 
-    let v = C::scalar_reduce_slice(affine.x.to_bytes().as_ref());
-    if bool::from(v.ct_eq(&r)) {
+    // The signature is valid when x(point) mod n = r, x in [0, p). Every
+    // curve here has n < p < 2n, so that is x = r, or x = r + n where r + n
+    // is below p; both are checked against the Jacobian X as x * Z^2 = X,
+    // which saves the inversion to affine. Everything here is public.
+    let r_bytes = r.to_bytes();
+    let mut xs = [C::Field::ZERO; 2];
+    let mut count = 0;
+    if let Some(x) = C::field_from_slice(r_bytes.as_ref()) {
+        xs[count] = x;
+        count += 1;
+    }
+    if let Some(x) = r_plus_n::<C>(r_bytes.as_ref()).and_then(|b| C::field_from_slice(&b[..n])) {
+        xs[count] = x;
+        count += 1;
+    }
+    if point.x_is_one_of_vartime(&xs[..count]) {
         Ok(())
     } else {
         Err(ic_core::err!(AuthenticationFailed, "ecdsa"))
     }
+}
+
+/// `r + n` as big-endian bytes of the scalar width, or `None` if it does not
+/// fit. `n` is `-1 + 1` in the scalar ring's encoding, added back by hand.
+fn r_plus_n<C: Curve>(r: &[u8]) -> Option<[u8; MAX_SCALAR]> {
+    let len = r.len();
+    let n_minus_1 = C::Scalar::ZERO.sub(&C::Scalar::ONE).to_bytes();
+    let n_minus_1 = n_minus_1.as_ref();
+    let mut out = [0u8; MAX_SCALAR];
+    // r + (n - 1) + 1, least significant byte first.
+    let mut carry = 1u16;
+    for i in (0..len).rev() {
+        let s = r[i] as u16 + n_minus_1[i] as u16 + carry;
+        out[i] = s as u8;
+        carry = s >> 8;
+    }
+    (carry == 0).then_some(out)
 }
 
 /// Whether `s` is above `n/2`.
@@ -430,4 +469,69 @@ pub fn has_low_s<C: EcdsaCurve>(signature: &[u8]) -> Result<bool> {
         "ecdsa s is not less than n"
     ))?;
     Ok(!is_high_s::<C>(&s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::p256::P256;
+    use crate::p384::P384;
+
+    /// RFC 6979 section 3.2, steps b to h, transcribed for widths where the
+    /// HMAC output is the order's (P-256, P-384): every MAC set up from its
+    /// key afresh, as the text reads, and the candidate after `attempt`
+    /// rejections returned as bytes. It shares nothing with `rfc6979_nonce`
+    /// but the HMAC.
+    fn reference<C: EcdsaCurve>(x: &[u8], h1: &[u8], attempt: usize) -> std::vec::Vec<u8> {
+        let mac = |key: &[u8], parts: &[&[u8]]| -> std::vec::Vec<u8> {
+            let mut m = C::Hmac::new(key).unwrap();
+            for p in parts {
+                m.update(p);
+            }
+            m.finalize().as_ref().to_vec()
+        };
+        let hlen = <C::Hmac as Mac>::TAG_LEN;
+        let e = C::scalar_reduce_slice(h1).to_bytes();
+        let mut v = std::vec![0x01u8; hlen];
+        let mut k = std::vec![0x00u8; hlen];
+        k = mac(&k, &[&v, &[0x00], x, e.as_ref()]);
+        v = mac(&k, &[&v]);
+        k = mac(&k, &[&v, &[0x01], x, e.as_ref()]);
+        v = mac(&k, &[&v]);
+        let mut seen = 0;
+        loop {
+            v = mac(&k, &[&v]);
+            let candidate = v.clone();
+            let ok = C::scalar_from_slice(&candidate).is_some_and(|c| !bool::from(c.is_zero()));
+            if ok {
+                if seen == attempt {
+                    return candidate;
+                }
+                seen += 1;
+            }
+            k = mac(&k, &[&v, &[0x00]]);
+            v = mac(&k, &[&v]);
+        }
+    }
+
+    /// The nonce, and the nonces after one, two and three rejections --
+    /// which signing asks for only when `r` or `s` is zero, and so which no
+    /// published vector reaches -- against the transcription.
+    fn nonces_agree<C: EcdsaCurve>() {
+        let x = std::vec![0x5au8; C::SCALAR_BYTES];
+        for msg in [&b"sample"[..], b"test", b""] {
+            let h1 = C::Digest::digest(msg);
+            for attempt in 0..4 {
+                let got = rfc6979_nonce::<C>(&x, h1.as_ref(), attempt).unwrap();
+                let want = reference::<C>(&x, h1.as_ref(), attempt);
+                assert_eq!(got.to_bytes().as_ref(), &want[..], "attempt {attempt}");
+            }
+        }
+    }
+
+    #[test]
+    fn nonces_after_rejection_follow_rfc_6979() {
+        nonces_agree::<P256>();
+        nonces_agree::<P384>();
+    }
 }

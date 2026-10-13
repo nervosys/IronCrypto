@@ -823,6 +823,28 @@ impl<C: Curve> Point<C> {
         })
     }
 
+    /// Whether this point's affine x-coordinate is one of `xs`, compared as
+    /// `X == x * Z^2`, without an inversion; `false` for the identity.
+    /// **Variable time**: for verification, where every value is public.
+    pub(crate) fn x_is_one_of_vartime(&self, xs: &[C::Field]) -> bool {
+        if bool::from(self.is_identity()) {
+            return false;
+        }
+        let z2 = self.z.square();
+        xs.iter().any(|x| x.mul(&z2) == self.x)
+    }
+
+    /// The affine x-coordinate alone, or `None` for the identity: what
+    /// ECDSA's `r` needs, two multiplications fewer than [`Self::to_affine`].
+    /// The identity test is the same one, on the same value.
+    pub fn to_affine_x(self) -> Option<C::Field> {
+        if bool::from(self.is_identity()) {
+            return None;
+        }
+        let z_inv = self.z.invert();
+        Some(self.x.mul(&z_inv.square()))
+    }
+
     /// Constant-time equality, comparing through the projective scaling.
     pub fn ct_eq(&self, other: &Self) -> Choice {
         // X1*Z2^2 == X2*Z1^2 and Y1*Z2^3 == Y2*Z1^3
