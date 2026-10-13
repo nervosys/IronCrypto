@@ -848,6 +848,9 @@ without your having to read this paragraph.
 | [AGENTS.md](AGENTS.md) | instructions for agents working in this repo |
 | [SECURITY.md](SECURITY.md) | threat model, side-channel posture, reporting |
 | [CONSTANT_TIME.md](docs/CONSTANT_TIME.md) | compiled probes, target coverage and limits |
+| [CTGRIND.md](docs/CTGRIND.md) | secret-dependence under Valgrind, against Graviola too |
+| [PROOFS.md](docs/PROOFS.md) | what Kani proves, and what it does not |
+| [GRAVIOLA.md](docs/GRAVIOLA.md) | this library against Graviola: speed, proofs, side channels, misuse, agents |
 | [bench/README.md](bench/README.md) | benchmark reproduction and controlled comparisons |
 | [RELEASING.md](docs/RELEASING.md) | why nothing goes public before the export notification |
 | [EXPORT.md](docs/EXPORT.md) | that notification, ready to send, and what to record |

@@ -218,43 +218,6 @@ every caller of a hash function uses.
   four with the barriers removed. One new, narrow rule excuses Cortex-M0's
   jumps over literal pools in those two probes, with a ceiling.
 
-### Performance
-
-- **X25519 and Ed25519 are faster than Graviola 0.4.1 on x86-64.** Two
-  backends for GF(2^255 - 19), chosen at run time on the CPU's features alone,
-  with the portable field as fallback and reference:
-  - four 64-bit limbs on `MULX`/`ADCX`/`ADOX` (`ic-ec/src/fe64.rs`), with
-    X25519's ladder step and each Edwards group operation one assembly
-    block, and a constant-time Bernstein-Yang divstep inversion in place of
-    Fermat's chain;
-  - four field elements at once on AVX-512 IFMA (`ic-ec/src/f51x4.rs`):
-    a doubling is one four-lane squaring and one four-lane multiplication,
-    a mixed addition two multiplications, X25519's step three.
-
-  Also: X25519's ladder chooses its doubling input by selection instead of
-  swapping both points; signing runs its odd and even digits as two
-  accumulators; one-shot verification decompresses the key and R with their
-  exponentiations interleaved. Ryzen 9 9900X (Zen 5, IFMA), `bench/`'s
-  `graviola` mode, master and this build alternated four rounds each, best
-  and worst, the machine shared with other builds throughout:
-
-  | | before | after | Graviola 0.4.1 |
-  |---|---|---|---|
-  | X25519 agreement | 22.0-23.7 us | 11.7-12.2 us | 13.2-13.6 us |
-  | Ed25519 sign, cached key | 11.7-13.1 us | 4.6-4.8 us | 5.3-6.0 us |
-  | Ed25519 verify, from bytes | 35.0-37.8 us | 17.3-17.6 us | 22.4-24.1 us |
-
-  On a quieter run earlier the day, before: 21.6-21.9, 8.6-8.7 and
-  27.6-28.4 us against Graviola's 12.8-12.9, 4.2 and 17.2. Every operation is
-  compared with the portable field's (millions of random and edge-value
-  field operations; every ladder against RFC 7748's 1,000-iteration vector;
-  each assembly block against the formula it transcribes), and the whole
-  suite also passes with both backends removed by `--cfg ic_ec_portable`.
-  Thirteen x86-64 compiled-code probes hold the new secret-handling code to
-  having no branch. `ic-ec` is `deny(unsafe_code)` rather than `forbid`,
-  allowed in `fe64` and `f51x4` only. `ic_ec::curve25519_backend()` reports
-  which backend runs, and `ic_core::cpu::has_bmi2_adx()` is new.
-
 ### Changed
 
 - **The constant-time gate covers P-256's field and scalar arithmetic.**
@@ -408,14 +371,41 @@ every caller of a hash function uses.
   lane-scheduled path is compared with the streaming one and the held-matrix
   reference, through the whole KEM, for every set.
 
-### Fixed
+- **X25519 and Ed25519 are faster than Graviola 0.4.1 on x86-64.** Two
+  backends for GF(2^255 - 19), chosen at run time on the CPU's features alone,
+  with the portable field as fallback and reference:
+  - four 64-bit limbs on `MULX`/`ADCX`/`ADOX` (`ic-ec/src/fe64.rs`), with
+    X25519's ladder step and each Edwards group operation one assembly
+    block, and a constant-time Bernstein-Yang divstep inversion in place of
+    Fermat's chain;
+  - four field elements at once on AVX-512 IFMA (`ic-ec/src/f51x4.rs`):
+    a doubling is one four-lane squaring and one four-lane multiplication,
+    a mixed addition two multiplications, X25519's step three.
 
-- **ML-KEM's 12-bit decode reduced modulo q with `%`**, on what is, in a
-  decapsulation key, the secret vector. It is now a subtraction and a sign
-  mask, and `scripts/check-ct.py` has probes for it and six other scalar
-  ML-KEM helpers. Its first run found Cortex-M0 compiling the new mask
-  into a branch; the barriers `compress` already uses removed it, and all
-  twenty-six probes pass on all four targets.
+  Also: X25519's ladder chooses its doubling input by selection instead of
+  swapping both points; signing runs its odd and even digits as two
+  accumulators; one-shot verification decompresses the key and R with their
+  exponentiations interleaved. Ryzen 9 9900X (Zen 5, IFMA), `bench/`'s
+  `graviola` mode, master and this build alternated four rounds each, best
+  and worst, the machine shared with other builds throughout:
+
+  | | before | after | Graviola 0.4.1 |
+  |---|---|---|---|
+  | X25519 agreement | 22.0-23.7 us | 11.7-12.2 us | 13.2-13.6 us |
+  | Ed25519 sign, cached key | 11.7-13.1 us | 4.6-4.8 us | 5.3-6.0 us |
+  | Ed25519 verify, from bytes | 35.0-37.8 us | 17.3-17.6 us | 22.4-24.1 us |
+
+  On a quieter run earlier the day, before: 21.6-21.9, 8.6-8.7 and
+  27.6-28.4 us against Graviola's 12.8-12.9, 4.2 and 17.2. Every operation is
+  compared with the portable field's (millions of random and edge-value
+  field operations; every ladder against RFC 7748's 1,000-iteration vector;
+  each assembly block against the formula it transcribes), and the whole
+  suite also passes with both backends removed by `--cfg ic_ec_portable`.
+  Thirteen x86-64 compiled-code probes hold the new secret-handling code to
+  having no branch. `ic-ec` is `deny(unsafe_code)` rather than `forbid`,
+  allowed in `fe64` and `f51x4` only. `ic_ec::curve25519_backend()` reports
+  which backend runs, and `ic_core::cpu::has_bmi2_adx()` is new.
+
 - **RSA-2048 signing is about five times faster, and verification about
   four.** The private exponentiation uses a fixed four-bit window, a quarter
   of the multiplications, with the multiplier read from its table by a
@@ -496,6 +486,16 @@ every caller of a hash function uses.
   the ECDSA nonce inversion, and reports nothing in an inversion now. Ten
   x86-64 compiled-code probes cover the new assembly (`scripts/check-ct.py`),
   all passing; see `docs/CONSTANT_TIME.md`.
+
+### Fixed
+
+- **ML-KEM's 12-bit decode reduced modulo q with `%`**, on what is, in a
+  decapsulation key, the secret vector. It is now a subtraction and a sign
+  mask, and `scripts/check-ct.py` has probes for it and six other scalar
+  ML-KEM helpers. Its first run found Cortex-M0 compiling the new mask
+  into a branch; the barriers `compress` already uses removed it, and all
+  twenty-six probes pass on all four targets.
+
 
 ## 0.2.24
 

@@ -36,8 +36,9 @@ probes on four targets, and `ic timing`, which measures.
 
 ## Results, 2026-10-13
 
-Branches and addresses reported, IronCrypto at the commit this file was
-written with, Graviola 0.4.1, both x86-64, rustc 1.99.0, LTO.
+Branches and addresses reported, IronCrypto at master 5f369cc (after the
+Curve25519, P-256 and P-384 work merged), Graviola 0.4.1, both x86-64, rustc
+1.99.0, LTO. Both positive controls were reported.
 
 | operation | IronCrypto | Graviola | classification |
 |---|---|---|---|
@@ -49,13 +50,13 @@ written with, Graviola 0.4.1, both x86-64, rustc 1.99.0, LTO.
 | SHA-256, SHA-512, SHA3-256 | 0 | 0 (SHA-256) | |
 | X25519 | 1 | 1 | both: the all-zero shared secret check, a refusal that is public |
 | P-256 ECDH | 3 | 3 | both: the private scalar's range check, and the result's identity check; IronCrypto also the zero check |
-| P-256 ECDSA sign | 8 | 6 | range and zero checks on key and nonce candidates, and r = 0, s = 0, as RFC 6979 and FIPS 186-5 allow; **and one in the nonce inversion, below** |
+| P-256 ECDSA sign | 7 (8 before the fix) | 6 | range and zero checks on key and nonce candidates, and r = 0, s = 0, as RFC 6979 and FIPS 186-5 allow; the eighth was in the nonce inversion, below, and is gone |
 | P-384 ECDSA sign | 7 | -- | as P-256 |
 | Ed25519 sign | 0 (9 before the fix) | 0 | the finding below, fixed |
-| ML-KEM-768 key generation | 27 | -- | sampling the matrix from its seed, which is public: it is in the encapsulation key |
+| ML-KEM-768 key generation | 7 + 6 address | -- | all in `rej_uniform`, sampling the matrix from rho: derived from the secret seed, so marked, but published in the encapsulation key |
 | ML-KEM-768 encapsulate, decapsulate | 0, 0 | 45 + 27 address (decapsulate) | Graviola's are the same matrix sampling, reached because its decapsulation key could only be marked through the seed it is made from |
 | ML-DSA-65 sign | 11 + 1 address | -- | the rejection loop and the packing of the hint, which FIPS 204 treats as public; sampling the matrix from its public seed; sampling the challenge, which is published in the signature |
-| RSA-2048 sign | 371 + 59 address | -- | not yet classifiable: the harness can only mark the whole key, public modulus included, and almost all are loops bounded by the modulus length |
+| RSA-2048 sign | 315 + 15 address | -- | not yet classifiable: the harness can only mark the whole key, public modulus included, and almost all are loops bounded by the modulus length |
 
 ### Findings
 
@@ -70,9 +71,6 @@ written with, Graviola 0.4.1, both x86-64, rustc 1.99.0, LTO.
   from secret data or memcheck is imprecise about `bt`; the inversion is to
   be made branch-free by construction either way.
 
-Both are being fixed in the P-256 and Curve25519 work streams, and this table
-is to be rerun when they land.
-
 - **Ed25519, fixed 2026-10-13.** The borrow and the mask now pass through
   `black_box`, and the reduction is straight-line; rerun, Ed25519 signing
   reports 0. `scripts/check-ct.py` now probes the reduction on all four
@@ -82,7 +80,8 @@ is to be rerun when they land.
   that field is held by the compiled-code probes instead.
 - **P-256 and P-384, fixed.** Exponentiation is now a fixed four-bit window
   whose table is read by masked scan, with no branch on the exponent, and on
-  64-bit targets P-256 inverts by branch-free divsteps instead. Rerun on the
-  P-256 work's branch: P-256 ECDH 3, P-256 signing 7, P-384 signing 7, each
-  report one of the classified checks in the table above; none in an
-  inversion. See `docs/CONSTANT_TIME.md`.
+  64-bit targets P-256 inverts by branch-free divsteps instead. Rerun on master
+  after the merge: P-256 ECDH 3, P-256 signing 7, P-384 signing 7, each
+  report one of the classified checks in the table above. One of P-256's
+  is in `to_affine_x`, which also inverts; its line is the identity test on
+  the result, not the inversion. See `docs/CONSTANT_TIME.md`.
