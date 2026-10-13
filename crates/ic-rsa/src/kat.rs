@@ -250,6 +250,23 @@ mod tests {
         PssSha512::self_test().expect("rsa-pss-sha512");
     }
 
+    /// The same pinned signatures with every multiplication forced onto the
+    /// portable path. The test above runs whichever backend this CPU selects
+    /// (`uint::tests::the_fast_backends_are_selected_where_the_cpu_has_them`
+    /// says which), so between them both paths reproduce the bytes.
+    #[test]
+    fn every_self_test_passes_on_the_portable_path() {
+        crate::uint::with_portable(|| {
+            assert_eq!(crate::uint::backend_for(16), crate::uint::Backend::Portable);
+            Pkcs1Sha256::self_test().expect("rsa-pkcs1-sha256");
+            Pkcs1Sha384::self_test().expect("rsa-pkcs1-sha384");
+            Pkcs1Sha512::self_test().expect("rsa-pkcs1-sha512");
+            PssSha256::self_test().expect("rsa-pss-sha256");
+            PssSha384::self_test().expect("rsa-pss-sha384");
+            PssSha512::self_test().expect("rsa-pss-sha512");
+        });
+    }
+
     /// Regenerate the pinned signatures. Ignored; run with
     /// `cargo test -p ic-rsa -- --ignored --nocapture print_kat`.
     #[test]
