@@ -144,12 +144,18 @@ impl Fe {
     //   calls are 48.7ns against the 73.8ns of field work they replace, so
     //   even a shuffle cost of 20ns -- optimistic -- leaves a doubling at
     //   68.7ns against 96ns, and verification at about 24us against dalek's
-    //   19.8. It narrows the gap and does not close it, and it would cost this
-    //   crate its `forbid(unsafe_code)`, which no other crate here has.
+    //   19.8. It narrows the gap and does not close it.
     //
     //   What dalek gets from its own AVX2 backend is 19.8 -> 16.6us, so the
     //   target moves too. Closing this properly means their whole point layer,
     //   not a faster multiply.
+    //
+    //   That is what was done later, on x86-64, and this field stayed the
+    //   fallback and the reference: `fe64.rs`, four 64-bit limbs on MULX/ADX
+    //   with each group operation one assembly block, and `f51x4.rs`, the
+    //   whole point layer four lanes wide on AVX-512 IFMA, where 52-bit
+    //   multiply-accumulate makes the lanes pay as AVX2's 32-bit multiplies
+    //   did not.
     //
     // Where the time is: 160 `mul` instructions in a doubling against 775
     // `mov`. Five `u128` accumulators and two five-limb operands do not fit in
@@ -337,7 +343,9 @@ impl Fe {
         out
     }
 
-    /// Constant-time conditional swap.
+    /// Constant-time conditional swap. The ladders select rather than
+    /// swap now; this stays for the tests that compare the fields.
+    #[cfg(test)]
     #[inline]
     pub fn cswap(a: &mut Fe, b: &mut Fe, choice: Choice) {
         let mask = (choice.unwrap_u8() as u64).wrapping_neg();

@@ -89,3 +89,76 @@ pub fn ed25519_reduce_wide(x: &[u8; 64]) -> [u8; 32] {
 pub fn ed25519_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
     crate::scalar::mul_add(a, b, c)
 }
+
+/// The x86-64 Curve25519 backends: the four-limb field, X25519's ladder step
+/// and the Edwards blocks on it, and the four-lane IFMA operations. Each is
+/// straight-line by construction; these hold the compiled code to it.
+///
+/// The four-limb functions execute `MULX`/`ADX` and the four-lane ones need
+/// AVX-512 IFMA: the probes are for reading compiled code, and calling them
+/// on a CPU without those faults, as calling the field directly would.
+#[cfg(all(
+    not(ic_approved_only),
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable))
+))]
+pub mod x86 {
+    use crate::fe64::edwards;
+    pub use crate::fe64::edwards::{Ws, Ws2};
+    use crate::fe64::Fe64;
+
+    /// The four-lane IFMA operations; `unsafe` because they need the CPU
+    /// features `Ifma::get` checks for.
+    pub use crate::f51x4::probes as ifma;
+
+    /// `a * b`.
+    #[inline(always)]
+    pub fn fe64_mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        Fe64::from_bytes(a).mul(&Fe64::from_bytes(b)).to_bytes()
+    }
+    /// `a^2`.
+    #[inline(always)]
+    pub fn fe64_square(a: &[u8; 32]) -> [u8; 32] {
+        Fe64::from_bytes(a).square().to_bytes()
+    }
+    /// `a + b`.
+    #[inline(always)]
+    pub fn fe64_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        Fe64::from_bytes(a).add(&Fe64::from_bytes(b)).to_bytes()
+    }
+    /// `a - b`.
+    #[inline(always)]
+    pub fn fe64_sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        Fe64::from_bytes(a).sub(&Fe64::from_bytes(b)).to_bytes()
+    }
+    /// `121666 a`.
+    #[inline(always)]
+    pub fn fe64_mul121666(a: &[u8; 32]) -> [u8; 32] {
+        Fe64::from_bytes(a).mul121666().to_bytes()
+    }
+    /// `a^-1`, by divsteps.
+    #[inline(always)]
+    pub fn fe64_invert(a: &[u8; 32]) -> [u8; 32] {
+        Fe64::from_bytes(a).invert().to_bytes()
+    }
+    /// One X25519 ladder step, the secret bit in `swap`.
+    #[inline(always)]
+    pub fn x25519_step(ws: &mut [u64; 76], swap: u64) {
+        crate::fe64::ladder_step(ws, swap & 1)
+    }
+    /// Signing's step: two mixed additions, interleaved.
+    #[inline(always)]
+    pub fn ed25519_madd_ext2(ws: &mut Ws2) {
+        edwards::madd_ext2(ws);
+    }
+    /// Signing's doublings and final addition.
+    #[inline(always)]
+    pub fn ed25519_dbl_nadd(ws: &mut Ws) {
+        edwards::dbl(ws);
+        edwards::to_proj(ws);
+        edwards::dbl(ws);
+        edwards::to_ext(ws);
+        edwards::nadd(ws);
+        edwards::to_ext(ws);
+    }
+}

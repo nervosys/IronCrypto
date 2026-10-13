@@ -1,7 +1,6 @@
 //! RFC 7748 X25519 key agreement.
 
-use crate::field::Fe;
-use ic_core::ct::Choice;
+use crate::field_ops::Field;
 use ic_core::traits::{Algorithm, KeyAgreement, SelfTest};
 use ic_core::{ensure, Result};
 
@@ -31,23 +30,119 @@ fn clamp(scalar: &[u8], out: &mut [u8; 32]) {
     out[31] |= 64;
 }
 
-/// The Montgomery ladder: compute `scalar * u`.
-///
-/// The loop is fixed at 255 iterations with a constant-time conditional swap,
-/// so neither the number of operations nor their operands depend on the scalar.
+/// The Montgomery ladder: compute `scalar * u`, on the fastest field this
+/// CPU runs. See [`ladder_in`].
 fn ladder(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
-    let x1 = Fe::from_bytes(u);
-    let mut x2 = Fe::ONE;
-    let mut z2 = Fe::ZERO;
-    let mut x3 = x1;
-    let mut z3 = Fe::ONE;
-    let mut swap = Choice::FALSE;
+    // On the four-limb field each step is one assembly block, which is what
+    // makes that field pay; see `fe64::ladder_step`. It computes what
+    // `ladder_in` does, and the tests hold the two to the same answers.
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    {
+        // Four lanes at a time on AVX-512 IFMA; see `f51x4`.
+        if let Some(t) = crate::f51x4::Ifma::get() {
+            return t.x25519_ladder(scalar, u);
+        }
+        if crate::fe64::available() {
+            return crate::fe64::x25519_ladder(scalar, u);
+        }
+    }
+    ladder_in::<crate::field::Fe>(scalar, u)
+}
+
+/// The Montgomery ladder over the field `F`.
+///
+/// RFC 7748's ladder with its conditional swaps taken out of the loop.
+///
+/// Each RFC step swaps the two points `(x2, z2)` and `(x3, z3)` on the
+/// scalar bit, doubles the first and adds the two. The addition is symmetric
+/// in its operands -- swapping them negates `DA - CB` and leaves `DA + CB`,
+/// and the first is only ever squared -- so it does not need to know which
+/// point is which. Only the doubling does. So this keeps the doubled point in
+/// one slot (`n`) and the sum in the other (`m`) every step, and chooses the
+/// doubling's input with one constant-time selection of its sum and
+/// difference: two field-element selections a step where the RFC form makes
+/// four swaps, and the addition's multiplications no longer wait for them.
+///
+/// Slot `n` always holds what the RFC calls `(x2, z2)` before its swap, and
+/// `m` holds `(x3, z3)`; the RFC's swap flag says which of the two it then
+/// doubles, and that is the selection here. The test
+/// `the_ladder_agrees_with_the_rfc_form` compares this against the RFC's own
+/// form, which is kept for that purpose.
+///
+/// The loop is fixed at 255 iterations and selects in constant time, so
+/// neither the number of operations nor their operands depend on the scalar.
+fn ladder_in<F: Field>(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
+    let x1 = F::from_bytes(u);
+    // The RFC's initial state: (x2, z2) = (1, 0) in n, (x3, z3) = (u, 1) in m.
+    let (mut xn, mut zn) = (F::ONE, F::ZERO);
+    let (mut xm, mut zm) = (x1, F::ONE);
+    // The secret bits are carried as integers, 0 or 1, and turned into masks
+    // only inside the field's `select_bit`, behind its barrier.
+    let mut prev = 0u64;
 
     for pos in (0..255).rev() {
-        let bit = Choice::from_u8((scalar[pos / 8] >> (pos & 7)) & 1);
-        swap = Choice::from_u8(swap.unwrap_u8() ^ bit.unwrap_u8());
-        Fe::cswap(&mut x2, &mut x3, swap);
-        Fe::cswap(&mut z2, &mut z3, swap);
+        let bit = u64::from((scalar[pos / 8] >> (pos & 7)) & 1);
+        let swap = bit ^ prev;
+        prev = bit;
+
+        let sm = xm.add(&zm);
+        let dm = xm.sub(&zm);
+        let sn = xn.add(&zn);
+        let dn = xn.sub(&zn);
+
+        // Addition, symmetric in m and n.
+        let dmsn = dm.mul(&sn);
+        let dnsm = sm.mul(&dn);
+
+        // Doubling of whichever point the RFC would have swapped into
+        // (x2, z2): n, or m when the swap flag is set.
+        let s = F::select_bit(&sn, &sm, swap);
+        let d = F::select_bit(&dn, &dm, swap);
+        let ss = s.square();
+        let dd = d.square();
+        // E = AA - BB, and RFC 7748's E * (AA + 121665 * E) rewritten as
+        // E * (BB + 121666 * E): the same value, since AA = BB + E.
+        let e = ss.sub(&dd);
+        xn = ss.mul(&dd);
+        zn = e.mul(&dd.add(&e.mul121666()));
+
+        xm = dmsn.add(&dnsm).square();
+        zm = x1.mul(&dmsn.sub(&dnsm).square());
+    }
+
+    // The RFC's last swap: its (x2, z2) is n, or m when the final flag is set.
+    let x = F::select_bit(&xn, &xm, prev);
+    let z = F::select_bit(&zn, &zm, prev);
+    x.mul(&z.invert()).to_bytes()
+}
+
+/// The field inversion X25519 ends with, on the field this CPU selects:
+/// for `bench/` to separate it from the ladder. Not API.
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub fn invert_for_bench(x: &[u8; 32]) -> [u8; 32] {
+    fn inv<F: Field>(x: &[u8; 32]) -> [u8; 32] {
+        F::from_bytes(x).invert().to_bytes()
+    }
+    crate::field_ops::dispatch!(inv(x))
+}
+
+/// RFC 7748 section 5's ladder exactly as written, with its swaps: the
+/// reference [`ladder_in`] is compared against.
+#[cfg(test)]
+fn ladder_rfc_in<F: Field>(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
+    let x1 = F::from_bytes(u);
+    let mut x2 = F::ONE;
+    let mut z2 = F::ZERO;
+    let mut x3 = x1;
+    let mut z3 = F::ONE;
+    let mut swap = 0u64;
+
+    for pos in (0..255).rev() {
+        let bit = u64::from((scalar[pos / 8] >> (pos & 7)) & 1);
+        swap ^= bit;
+        (x2, x3) = (F::select_bit(&x2, &x3, swap), F::select_bit(&x3, &x2, swap));
+        (z2, z3) = (F::select_bit(&z2, &z3, swap), F::select_bit(&z3, &z2, swap));
         swap = bit;
 
         let a = x2.add(&z2);
@@ -63,14 +158,11 @@ fn ladder(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
         x3 = da.add(&cb).square();
         z3 = x1.mul(&da.sub(&cb).square());
         x2 = aa.mul(&bb);
-        // RFC 7748 writes this as E * (AA + 121665*E). Expanding both forms
-        // gives 121666*AA - 121665*BB, so the 121666 variant below is the same
-        // value with the multiplier the field module already provides.
         z2 = e.mul(&bb.add(&e.mul121666()));
     }
 
-    Fe::cswap(&mut x2, &mut x3, swap);
-    Fe::cswap(&mut z2, &mut z3, swap);
+    let x2 = F::select_bit(&x2, &x3, swap);
+    let z2 = F::select_bit(&z2, &z3, swap);
     x2.mul(&z2.invert()).to_bytes()
 }
 
@@ -260,5 +352,140 @@ mod tests {
     #[test]
     fn self_test_passes() {
         X25519::self_test().unwrap();
+    }
+
+    type Ladder = fn(&[u8; 32], &[u8; 32]) -> [u8; 32];
+
+    /// Every ladder this build has: the one `ladder` dispatches to, the
+    /// generic one on the portable field, the RFC's own form, and on x86-64
+    /// the four-limb field's block ladder and the generic ladder on that field.
+    fn ladders() -> std::vec::Vec<(&'static str, Ladder)> {
+        let mut v: std::vec::Vec<(&'static str, Ladder)> = std::vec![
+            ("dispatched", ladder),
+            ("generic, portable field", ladder_in::<crate::field::Fe>),
+            (
+                "RFC form, portable field",
+                ladder_rfc_in::<crate::field::Fe>
+            ),
+        ];
+        #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+        if crate::fe64::available() {
+            v.push(("block, four-limb field", crate::fe64::x25519_ladder));
+            v.push(("generic, four-limb field", ladder_in::<crate::fe64::Fe64>));
+        }
+        #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+        if crate::f51x4::Ifma::get().is_some() {
+            fn four_lane(s: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
+                match crate::f51x4::Ifma::get() {
+                    Some(t) => t.x25519_ladder(s, u),
+                    None => unreachable!("checked above"),
+                }
+            }
+            v.push(("four lanes, IFMA", four_lane));
+        }
+        v
+    }
+
+    /// RFC 7748 section 5.2's iterated test: `k = u = 9`, then repeatedly
+    /// `(k, u) = (X25519(k, u), k)`. Checked after 1 and 1000 iterations,
+    /// through every ladder: a thousand chained multiplications, each one's
+    /// output the next one's scalar, so a single wrong carry anywhere
+    /// diverges.
+    #[test]
+    fn rfc7748_iterated_vectors_through_every_ladder() {
+        for (name, f) in ladders() {
+            let mut k = [0u8; 32];
+            k[0] = 9;
+            let mut u = k;
+            for i in 1..=1000 {
+                let mut clamped = [0u8; 32];
+                clamp(&k, &mut clamped);
+                let r = f(&clamped, &u);
+                u = k;
+                k = r;
+                if i == 1 {
+                    assert_eq!(
+                        hex(&k),
+                        "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079",
+                        "{name}, 1 iteration"
+                    );
+                }
+            }
+            assert_eq!(
+                hex(&k),
+                "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51",
+                "{name}, 1000 iterations"
+            );
+        }
+    }
+
+    /// All the ladders against each other on scalars and points from a
+    /// counter: clamped and unclamped scalars, u with the top bit set (which
+    /// is ignored), u at and above p, and the small-order points.
+    #[test]
+    fn the_ladders_agree() {
+        use ic_core::traits::internal::Digest;
+        let ladders = ladders();
+        let mut special: std::vec::Vec<[u8; 32]> = std::vec![[0u8; 32], [0xffu8; 32]];
+        let mut p = [0xffu8; 32];
+        p[0] = 0xed;
+        p[31] = 0x7f;
+        special.push(p); // p, non-canonical zero
+        let mut p1 = p;
+        p1[0] = 0xee;
+        special.push(p1); // p + 1
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        special.push(one);
+        let mut checked = 0;
+        for i in 0u32..400 {
+            let mut k = ic_hash::Sha256::digest(&i.to_le_bytes());
+            if i % 2 == 0 {
+                let raw = k;
+                clamp(&raw, &mut k);
+            }
+            let u = if (i as usize) < special.len() {
+                special[i as usize]
+            } else {
+                ic_hash::Sha256::digest(&(i ^ 0x8000_0000).to_le_bytes())
+            };
+            let want = ladder_rfc_in::<crate::field::Fe>(&k, &u);
+            for (name, f) in &ladders {
+                assert_eq!(f(&k, &u), want, "{name} differs for k={k:02x?} u={u:02x?}");
+                checked += 1;
+            }
+        }
+        assert!(checked >= 1200, "only {checked} comparisons");
+    }
+
+    /// On a CPU with BMI2 and ADX the dispatch must pick the four-limb
+    /// field, or every vector above would be testing the fallback twice.
+    #[test]
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    fn this_cpu_takes_the_fast_path() {
+        use crate::Curve25519Backend as B;
+        let backend = crate::curve25519_backend();
+        if crate::fe64::available() {
+            assert!(crate::field_ops::selected().ends_with("Fe64"));
+        } else {
+            assert!(crate::field_ops::selected().ends_with("field::Fe"));
+        }
+        let expect = match (crate::f51x4::Ifma::get(), crate::fe64::available()) {
+            (Some(_), _) => B::Ifma,
+            (None, true) => B::MulxAdx,
+            (None, false) => B::Portable,
+        };
+        assert_eq!(backend, expect);
+        // And the dispatched ladder is the one the report names: the same
+        // answer as that backend's ladder called directly.
+        let k = [0x5au8; 32];
+        let u = [9u8; 32];
+        let direct = match backend {
+            B::Ifma => crate::f51x4::Ifma::get().map(|t| t.x25519_ladder(&k, &u)),
+            B::MulxAdx => Some(crate::fe64::x25519_ladder(&k, &u)),
+            B::Portable => Some(ladder_in::<crate::field::Fe>(&k, &u)),
+        };
+        assert_eq!(direct, Some(ladder(&k, &u)));
+        std::eprintln!("curve25519 backend on this CPU: {backend:?}");
     }
 }

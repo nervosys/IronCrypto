@@ -27,8 +27,10 @@ ct-probes = []
 # permit; see docs/FIPS.md.
 # `ic_limb32` selects the 32-bit-limb Curve25519 field on any target; see
 # `src/field32.rs`.
+# `ic_ec_portable` leaves out the x86-64 MULX/ADX Curve25519 field, so that the
+# whole test suite runs on the portable one; see `src/fe64.rs`.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)", "cfg(ic_approved_only)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)", "cfg(ic_approved_only)", "cfg(ic_ec_portable)"] }
 
 [[test]]
 # Its own process, without the harness: it counts allocations, and only the

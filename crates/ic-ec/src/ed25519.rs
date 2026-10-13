@@ -8,16 +8,39 @@
 //! no timing signal from the shape of the scalar.
 
 use crate::field::Fe;
+use crate::field_ops::{dispatch, Field};
 use crate::scalar;
 use ic_core::ct::Choice;
 
 // The precomputed basepoint table. See the module for why it is `std` only.
 #[cfg(feature = "std")]
 mod basepoint_table;
+// The four-limb field's basepoint and double-scalar multiplications, one
+// assembly block per group operation; see the module.
+#[cfg(all(
+    feature = "std",
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable))
+))]
+mod fast;
+// The same, four lanes at a time on AVX-512 IFMA; see the module.
+#[cfg(all(
+    feature = "std",
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable))
+))]
+mod vector;
 use ic_core::traits::internal::Digest;
 use ic_core::traits::{Algorithm, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Sha512;
+
+#[cfg(not(feature = "std"))]
+pub(crate) use self::EdField as Curve;
+/// What a field must provide for the operations on whole scalars here:
+/// [`EdField`], and under `std` the precomputed basepoint tables too.
+#[cfg(feature = "std")]
+pub(crate) use basepoint_table::TableField as Curve;
 
 /// The compressed encoding of the Ed25519 base point.
 #[cfg(test)]
@@ -27,39 +50,129 @@ const BASEPOINT_COMPRESSED: [u8; 32] = [
 ];
 
 /// The curve constant `d = -121665/121666`, as 51-bit limbs.
-const D: Fe = Fe::from_limbs51([
+const D_LIMBS: [u64; 5] = [
     929_955_233_495_203,
     466_365_720_129_213,
     1_662_059_464_998_953,
     2_033_849_074_728_123,
     1_442_794_654_840_575,
-]);
+];
 
 /// `2*d`, used directly by the addition formula.
-const D2: Fe = Fe::from_limbs51([
+const D2_LIMBS: [u64; 5] = [
     1_859_910_466_990_425,
     932_731_440_258_426,
     1_072_319_116_312_658,
     1_815_898_335_770_999,
     633_789_495_995_903,
-]);
+];
 
 /// A square root of -1 in GF(2^255-19), needed for point decompression.
-const SQRT_M1: Fe = Fe::from_limbs51([
+const SQRT_M1_LIMBS: [u64; 5] = [
     1_718_705_420_411_056,
     234_908_883_556_509,
     2_233_514_472_574_048,
     2_117_202_627_021_982,
     765_476_049_583_133,
-]);
+];
 
-/// A point in extended twisted Edwards coordinates.
+/// A field the curve arithmetic runs on: [`Field`] and the curve's constants
+/// in its representation.
+///
+/// Two implement it, the portable field and, on x86-64 with BMI2 and ADX, the
+/// four-limb one; every operation below is written once against this and
+/// instantiated for each, and [`dispatch!`] picks one per scalar
+/// multiplication.
+pub(crate) trait EdField: Field + core::fmt::Debug + 'static {
+    /// `d`.
+    const D: Self;
+    /// `2d`.
+    const D2: Self;
+    /// `sqrt(-1)`.
+    const SQRT_M1: Self;
+
+    /// The same element in the portable field.
+    #[cfg(feature = "std")]
+    fn to_portable(self) -> Fe {
+        Fe::from_bytes(&self.to_bytes())
+    }
+
+    /// The same element in this field.
+    #[cfg(feature = "std")]
+    fn from_portable(x: &Fe) -> Self {
+        Self::from_bytes(&x.to_bytes())
+    }
+}
+
+impl EdField for Fe {
+    const D: Fe = Fe::from_limbs51(D_LIMBS);
+    const D2: Fe = Fe::from_limbs51(D2_LIMBS);
+    const SQRT_M1: Fe = Fe::from_limbs51(SQRT_M1_LIMBS);
+
+    #[cfg(feature = "std")]
+    fn to_portable(self) -> Fe {
+        self
+    }
+
+    #[cfg(feature = "std")]
+    fn from_portable(x: &Fe) -> Self {
+        *x
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+impl EdField for crate::fe64::Fe64 {
+    const D: Self = crate::fe64::Fe64::from_limbs51(D_LIMBS);
+    const D2: Self = crate::fe64::Fe64::from_limbs51(D2_LIMBS);
+    const SQRT_M1: Self = crate::fe64::Fe64::from_limbs51(SQRT_M1_LIMBS);
+}
+
+/// A point on the curve, in extended twisted Edwards coordinates.
+///
+/// The public face of [`Ext`] on the portable field. The signing and
+/// verification paths do not go through it: they run on whichever field the
+/// CPU selects, and this is for callers who want the group itself.
 #[derive(Clone, Copy, Debug)]
-pub struct Point {
-    x: Fe,
-    y: Fe,
-    z: Fe,
-    t: Fe,
+pub struct Point(Ext<Fe>);
+
+impl Point {
+    /// The neutral element `(0, 1)`.
+    pub const IDENTITY: Point = Point(Ext::IDENTITY);
+
+    /// The complete `add-2008-hwcd-3` group law for `a = -1`.
+    pub fn add(&self, other: &Point) -> Point {
+        Point(self.0.add(&other.0))
+    }
+
+    /// Point doubling, `dbl-2008-hwcd` for `a = -1`.
+    pub fn double(&self) -> Point {
+        Point(self.0.double())
+    }
+
+    /// Scalar multiplication, constant-time in the scalar.
+    pub fn mul_scalar(&self, s: &[u8; 32]) -> Point {
+        Point(self.0.mul_scalar(s))
+    }
+
+    /// Compress to the 32-byte RFC 8032 encoding.
+    pub fn compress(&self) -> [u8; 32] {
+        self.0.compress()
+    }
+
+    /// Decompress a 32-byte encoding, rejecting non-curve points and
+    /// non-canonical encodings.
+    pub fn decompress(bytes: &[u8; 32]) -> Option<Point> {
+        Ext::decompress(bytes).map(Point)
+    }
+}
+
+/// A point in extended twisted Edwards coordinates, on the field `F`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Ext<F> {
+    x: F,
+    y: F,
+    z: F,
+    t: F,
 }
 
 /// A point part-way through a group operation: `(X : Y : Z : T)` standing for
@@ -72,21 +185,21 @@ pub struct Point {
 /// another doubling the `T` those four multiplications would produce is never
 /// read, and three of them suffice instead of four.
 #[derive(Clone, Copy)]
-pub(crate) struct Completed {
-    x: Fe,
-    y: Fe,
-    z: Fe,
-    t: Fe,
+pub(crate) struct Completed<F> {
+    x: F,
+    y: F,
+    z: F,
+    t: F,
 }
 
 /// `(X : Y : Z)`, standing for `(X/Z, Y/Z)`. No `T`.
 ///
 /// What a doubling needs and all it needs.
 #[derive(Clone, Copy)]
-pub(crate) struct Projective {
-    x: Fe,
-    y: Fe,
-    z: Fe,
+pub(crate) struct Projective<F> {
+    x: F,
+    y: F,
+    z: F,
 }
 
 /// A point rearranged for addition: `(Y+X, Y-X, Z, 2d·T)`.
@@ -97,11 +210,11 @@ pub(crate) struct Projective {
 /// multiplications into four: the two sums and differences are already formed,
 /// and `2d·T` has already been scaled.
 #[derive(Clone, Copy)]
-pub(crate) struct Niels {
-    ypx: Fe,
-    ymx: Fe,
-    z: Fe,
-    t2d: Fe,
+pub(crate) struct Niels<F> {
+    ypx: F,
+    ymx: F,
+    z: F,
+    t2d: F,
 }
 
 /// A point with `Z = 1`, rearranged for addition: `(y+x, y-x, 2d·x·y)`.
@@ -111,23 +224,23 @@ pub(crate) struct Niels {
 /// will be added sixty-four times per signature and never changes.
 #[cfg(feature = "std")]
 #[derive(Clone, Copy)]
-pub(crate) struct AffineNiels {
-    ypx: Fe,
-    ymx: Fe,
-    t2d: Fe,
+pub(crate) struct AffineNiels<F> {
+    ypx: F,
+    ymx: F,
+    t2d: F,
 }
 
 /// The constant-time table operations the windowed multiplication needs. They
 /// mirror [`AffineNiels`]'s, for a table built per call and so never worth the
 /// inversions that would make it affine.
 #[cfg(any(not(feature = "std"), test))]
-impl Niels {
+impl<F: EdField> Niels<F> {
     /// The neutral element: `Y + X = Y - X = Z = 1`, `2d·T = 0`.
-    const IDENTITY: Niels = Niels {
-        ypx: Fe::ONE,
-        ymx: Fe::ONE,
-        z: Fe::ONE,
-        t2d: Fe::ZERO,
+    const IDENTITY: Self = Niels {
+        ypx: F::ONE,
+        ymx: F::ONE,
+        z: F::ONE,
+        t2d: F::ZERO,
     };
 
     /// Negation swaps the sums and differences and negates `2d·T`; `Z` is
@@ -136,49 +249,53 @@ impl Niels {
         let swapped_p = self.ymx;
         let swapped_m = self.ypx;
         let nt = self.t2d.neg();
-        Fe::cmov(&mut self.ypx, &swapped_p, choice);
-        Fe::cmov(&mut self.ymx, &swapped_m, choice);
-        Fe::cmov(&mut self.t2d, &nt, choice);
+        F::cmov(&mut self.ypx, &swapped_p, choice);
+        F::cmov(&mut self.ymx, &swapped_m, choice);
+        F::cmov(&mut self.t2d, &nt, choice);
     }
 
-    fn cmov(&mut self, other: &Niels, choice: Choice) {
-        Fe::cmov(&mut self.ypx, &other.ypx, choice);
-        Fe::cmov(&mut self.ymx, &other.ymx, choice);
-        Fe::cmov(&mut self.z, &other.z, choice);
-        Fe::cmov(&mut self.t2d, &other.t2d, choice);
+    fn cmov(&mut self, other: &Niels<F>, choice: Choice) {
+        F::cmov(&mut self.ypx, &other.ypx, choice);
+        F::cmov(&mut self.ymx, &other.ymx, choice);
+        F::cmov(&mut self.z, &other.z, choice);
+        F::cmov(&mut self.t2d, &other.t2d, choice);
     }
 }
 
 #[cfg(feature = "std")]
-impl AffineNiels {
+impl<F: EdField> AffineNiels<F> {
     /// The neutral element: `x = 0`, `y = 1`.
-    pub(crate) const IDENTITY: AffineNiels = AffineNiels {
-        ypx: Fe::ONE,
-        ymx: Fe::ONE,
-        t2d: Fe::ZERO,
+    pub(crate) const IDENTITY: Self = AffineNiels {
+        ypx: F::ONE,
+        ymx: F::ONE,
+        t2d: F::ZERO,
     };
 
     /// Negation swaps the sums and differences and negates `2d·x·y`, which is
     /// what `-(x, y) = (-x, y)` comes to in this form.
-    pub(crate) fn conditional_negate(&mut self, choice: Choice) {
+    ///
+    /// `bit` is secret, 0 or 1; it becomes a mask only inside the field's
+    /// `cmov_bit`, behind that field's barrier.
+    pub(crate) fn conditional_negate(&mut self, bit: u64) {
         let swapped_p = self.ymx;
         let swapped_m = self.ypx;
         let nt = self.t2d.neg();
-        Fe::cmov(&mut self.ypx, &swapped_p, choice);
-        Fe::cmov(&mut self.ymx, &swapped_m, choice);
-        Fe::cmov(&mut self.t2d, &nt, choice);
+        F::cmov_bit(&mut self.ypx, &swapped_p, bit);
+        F::cmov_bit(&mut self.ymx, &swapped_m, bit);
+        F::cmov_bit(&mut self.t2d, &nt, bit);
     }
 
-    pub(crate) fn cmov(&mut self, other: &AffineNiels, choice: Choice) {
-        Fe::cmov(&mut self.ypx, &other.ypx, choice);
-        Fe::cmov(&mut self.ymx, &other.ymx, choice);
-        Fe::cmov(&mut self.t2d, &other.t2d, choice);
+    /// `self = other` when the secret `bit`, 0 or 1, is 1.
+    pub(crate) fn cmov(&mut self, other: &AffineNiels<F>, bit: u64) {
+        F::cmov_bit(&mut self.ypx, &other.ypx, bit);
+        F::cmov_bit(&mut self.ymx, &other.ymx, bit);
+        F::cmov_bit(&mut self.t2d, &other.t2d, bit);
     }
 }
 
-impl Completed {
+impl<F: EdField> Completed<F> {
     /// Drop to `(X : Y : Z)`, which is three multiplications.
-    fn to_projective(self) -> Projective {
+    fn to_projective(self) -> Projective<F> {
         Projective {
             x: self.x.mul(&self.t),
             y: self.y.mul(&self.z),
@@ -190,8 +307,8 @@ impl Completed {
     ///
     /// Only needed before an addition, since that is the only operation that
     /// reads `T`.
-    fn to_extended(self) -> Point {
-        Point {
+    fn to_extended(self) -> Ext<F> {
+        Ext {
             x: self.x.mul(&self.t),
             y: self.y.mul(&self.z),
             z: self.z.mul(&self.t),
@@ -200,19 +317,19 @@ impl Completed {
     }
 }
 
-impl Projective {
+impl<F: EdField> Projective<F> {
     /// Recover extended coordinates from projective ones.
     ///
     /// `(X : Y : Z)` stands for `(X/Z, Y/Z)`, and extended coordinates want
     /// `T` with `X*Y = T*Z`, so `T = X*Y/Z`. Only needed once, at the end.
-    fn to_extended_from_projective(self) -> Point {
+    fn to_extended_from_projective(self) -> Ext<F> {
         // Four multiplications, not an inversion. `(X : Y : Z)` stands for
         // `(X/Z, Y/Z)`, and extended coordinates want `T` with `X*Y = T*Z`;
         // scaling every coordinate by `Z` gives `(XZ : YZ : Z^2 : XY)`, which
         // satisfies that directly. Dividing through by `Z` instead would be an
         // exponentiation -- about two hundred and fifty squarings -- to reach
         // the same point in a representation nothing here needs.
-        Point {
+        Ext {
             x: self.x.mul(&self.z),
             y: self.y.mul(&self.z),
             z: self.z.square(),
@@ -229,7 +346,7 @@ impl Projective {
     /// spilling and reloading it is pure traffic. This is the path taken at
     /// every position where the recoding has nothing to add, which is most of
     /// them.
-    fn double_projective(self) -> Projective {
+    fn double_projective(self) -> Projective<F> {
         let xx = self.x.square();
         let yy = self.y.square();
         let zz2 = {
@@ -257,7 +374,7 @@ impl Projective {
     /// Four squarings and no multiplications at all: every multiplication in a
     /// doubling belongs to the conversion out of the completed form, which is
     /// why it is worth not doing that conversion in full.
-    fn double(&self) -> Completed {
+    fn double(&self) -> Completed<F> {
         let xx = self.x.square();
         let yy = self.y.square();
         let zz2 = {
@@ -276,20 +393,42 @@ impl Projective {
     }
 }
 
-impl Point {
+impl<F: EdField> Ext<F> {
     /// The neutral element `(0, 1)`.
-    pub const IDENTITY: Point = Point {
-        x: Fe::ZERO,
-        y: Fe::ONE,
-        z: Fe::ONE,
-        t: Fe::ZERO,
+    /// `(x, y)` with `Z = 1`.
+    pub(crate) fn from_affine(x: F, y: F) -> Ext<F> {
+        Ext {
+            x,
+            y,
+            z: F::ONE,
+            t: x.mul(&y),
+        }
+    }
+
+    /// The same point on another field.
+    #[cfg(feature = "std")]
+    pub(crate) fn convert<G: EdField>(&self) -> Ext<G> {
+        let c = |v: &F| G::from_portable(&v.to_portable());
+        Ext {
+            x: c(&self.x),
+            y: c(&self.y),
+            z: c(&self.z),
+            t: c(&self.t),
+        }
+    }
+
+    pub const IDENTITY: Self = Ext {
+        x: F::ZERO,
+        y: F::ONE,
+        z: F::ONE,
+        t: F::ZERO,
     };
 
     /// The complete `add-2008-hwcd-3` group law for `a = -1`.
-    pub fn add(&self, other: &Point) -> Point {
+    pub fn add(&self, other: &Ext<F>) -> Ext<F> {
         let a = self.y.sub(&self.x).mul(&other.y.sub(&other.x));
         let b = self.y.add(&self.x).mul(&other.y.add(&other.x));
-        let c = self.t.mul(&D2).mul(&other.t);
+        let c = self.t.mul(&F::D2).mul(&other.t);
         let d = self.z.mul(&other.z);
         let d = d.add(&d);
 
@@ -298,7 +437,7 @@ impl Point {
         let g = d.add(&c);
         let h = b.add(&a);
 
-        Point {
+        Ext {
             x: e.mul(&f),
             y: g.mul(&h),
             t: e.mul(&h),
@@ -316,7 +455,7 @@ impl Point {
     /// Worth the separate formula because scalar multiplication is doublings
     /// almost entirely: the non-adjacent form leaves about forty additions
     /// against two hundred and fifty-six doublings.
-    pub fn double(&self) -> Point {
+    pub fn double(&self) -> Ext<F> {
         let aa = self.x.square();
         let bb = self.y.square();
         let c = self.z.square();
@@ -330,7 +469,7 @@ impl Point {
         let f = g.sub(&c);
         let h = d.sub(&bb);
 
-        Point {
+        Ext {
             x: e.mul(&f),
             y: g.mul(&h),
             t: e.mul(&h),
@@ -339,7 +478,7 @@ impl Point {
     }
 
     /// Drop `T`, which a doubling does not read.
-    fn to_projective(self) -> Projective {
+    fn to_projective(self) -> Projective<F> {
         Projective {
             x: self.x,
             y: self.y,
@@ -348,12 +487,12 @@ impl Point {
     }
 
     /// Rearrange for repeated addition. See [`Niels`].
-    fn to_niels(self) -> Niels {
+    fn to_niels(self) -> Niels<F> {
         Niels {
             ypx: self.y.add(&self.x),
             ymx: self.y.sub(&self.x),
             z: self.z,
-            t2d: self.t.mul(&D2),
+            t2d: self.t.mul(&F::D2),
         }
     }
 
@@ -363,7 +502,7 @@ impl Point {
     /// rather than nine because `other` arrives with its sums, differences and
     /// `2d·T` already formed, and because the result is left completed rather
     /// than converted back.
-    fn add_niels(&self, other: &Niels) -> Completed {
+    fn add_niels(&self, other: &Niels<F>) -> Completed<F> {
         let pp = self.y.add(&self.x).mul(&other.ypx);
         let mm = self.y.sub(&self.x).mul(&other.ymx);
         let tt2d = self.t.mul(&other.t2d);
@@ -382,7 +521,7 @@ impl Point {
     /// Negating a Niels point swaps its sums and differences and negates
     /// `2d·T`, which is cheaper than negating the point it came from and
     /// rebuilding it.
-    fn sub_niels(&self, other: &Niels) -> Completed {
+    fn sub_niels(&self, other: &Niels<F>) -> Completed<F> {
         let pp = self.y.add(&self.x).mul(&other.ymx);
         let mm = self.y.sub(&self.x).mul(&other.ypx);
         let tt2d = self.t.mul(&other.t2d);
@@ -402,14 +541,14 @@ impl Point {
     /// Costs a field inversion, which is why it is done when a table is built
     /// and never on a hot path.
     #[cfg(feature = "std")]
-    pub(crate) fn to_affine_niels(self) -> AffineNiels {
+    pub(crate) fn to_affine_niels(self) -> AffineNiels<F> {
         let z_inv = self.z.invert();
         let x = self.x.mul(&z_inv);
         let y = self.y.mul(&z_inv);
         AffineNiels {
             ypx: y.add(&x),
             ymx: y.sub(&x),
-            t2d: x.mul(&y).mul(&D2),
+            t2d: x.mul(&y).mul(&F::D2),
         }
     }
 
@@ -418,7 +557,7 @@ impl Point {
     /// One fewer than [`Point::add_niels`]: `other` has `Z = 1`, so the
     /// product of the two `Z`s is just this one's, doubled.
     #[cfg(feature = "std")]
-    pub(crate) fn add_affine_niels(&self, other: &AffineNiels) -> Completed {
+    pub(crate) fn add_affine_niels(&self, other: &AffineNiels<F>) -> Completed<F> {
         let pp = self.y.add(&self.x).mul(&other.ypx);
         let mm = self.y.sub(&self.x).mul(&other.ymx);
         let tt2d = self.t.mul(&other.t2d);
@@ -440,7 +579,7 @@ impl Point {
     /// field elements, and the variable-time path has no reason to touch it
     /// with conditional moves.
     #[cfg(feature = "std")]
-    pub(crate) fn sub_affine_niels(&self, other: &AffineNiels) -> Completed {
+    pub(crate) fn sub_affine_niels(&self, other: &AffineNiels<F>) -> Completed<F> {
         let pp = self.y.add(&self.x).mul(&other.ymx);
         let mm = self.y.sub(&self.x).mul(&other.ypx);
         let tt2d = self.t.mul(&other.t2d);
@@ -454,11 +593,11 @@ impl Point {
     }
 
     /// Constant-time conditional move.
-    fn cmov(&mut self, other: &Point, choice: Choice) {
-        Fe::cmov(&mut self.x, &other.x, choice);
-        Fe::cmov(&mut self.y, &other.y, choice);
-        Fe::cmov(&mut self.z, &other.z, choice);
-        Fe::cmov(&mut self.t, &other.t, choice);
+    fn cmov(&mut self, other: &Ext<F>, choice: Choice) {
+        F::cmov(&mut self.x, &other.x, choice);
+        F::cmov(&mut self.y, &other.y, choice);
+        F::cmov(&mut self.z, &other.z, choice);
+        F::cmov(&mut self.t, &other.t, choice);
     }
 
     /// Scalar multiplication, constant-time in the scalar.
@@ -466,8 +605,8 @@ impl Point {
     /// Every iteration performs a doubling *and* an addition, selecting between
     /// the two results with a conditional move, so the instruction trace is
     /// identical for every scalar.
-    pub fn mul_scalar(&self, s: &[u8; 32]) -> Point {
-        let mut acc = Point::IDENTITY;
+    pub fn mul_scalar(&self, s: &[u8; 32]) -> Ext<F> {
+        let mut acc = Ext::IDENTITY;
         for i in (0..256).rev() {
             acc = acc.double();
             let sum = acc.add(self);
@@ -478,8 +617,8 @@ impl Point {
     }
 
     /// Negate: `-(x, y, z, t)` is `(-x, y, z, -t)`.
-    fn negate(&self) -> Point {
-        Point {
+    fn negate(&self) -> Ext<F> {
+        Ext {
             x: self.x.neg(),
             y: self.y,
             z: self.z,
@@ -507,10 +646,10 @@ impl Point {
         self.double()
             .double()
             .double()
-            .eq_projective(&Point::IDENTITY)
+            .eq_projective(&Ext::<F>::IDENTITY)
     }
 
-    fn eq_projective(&self, other: &Point) -> bool {
+    fn eq_projective(&self, other: &Ext<F>) -> bool {
         self.x.mul(&other.z).to_bytes() == other.x.mul(&self.z).to_bytes()
             && self.y.mul(&other.z).to_bytes() == other.y.mul(&self.z).to_bytes()
     }
@@ -533,11 +672,49 @@ impl Point {
     /// modulo p it would name a curve point, under an encoding no correct
     /// encoder produces; nineteen such aliases exist, and accepting them makes
     /// one point answer to two encodings.
-    pub fn decompress(bytes: &[u8; 32]) -> Option<Point> {
+    pub fn decompress(bytes: &[u8; 32]) -> Option<Ext<F>> {
+        let start = Decompression::<F>::start(bytes)?;
+        let pow = start.uv7.pow22523();
+        start.finish(&pow)
+    }
+
+    /// Two decompressions, their exponentiations run side by side.
+    ///
+    /// The exponentiation is 252 squarings in a single dependency chain, and
+    /// two of them interleaved cost little more than one: each squaring has
+    /// the other chain's to overlap with. One-shot verification decompresses
+    /// both the public key and R, and this is how.
+    fn decompress_pair(a: &[u8; 32], b: &[u8; 32]) -> (Option<Ext<F>>, Option<Ext<F>>) {
+        match (Decompression::<F>::start(a), Decompression::<F>::start(b)) {
+            (Some(sa), Some(sb)) => {
+                let (pa, pb) = F::pow22523_pair(&sa.uv7, &sb.uv7);
+                (sa.finish(&pa), sb.finish(&pb))
+            }
+            (sa, sb) => (
+                sa.and_then(|s| s.finish(&s.uv7.pow22523())),
+                sb.and_then(|s| s.finish(&s.uv7.pow22523())),
+            ),
+        }
+    }
+}
+
+/// A decompression up to its exponentiation: what comes before and after
+/// `(u v^7)^((p-5)/8)`, separated so two can share it.
+struct Decompression<F> {
+    y: F,
+    u: F,
+    v: F,
+    uv3: F,
+    uv7: F,
+    sign: Choice,
+}
+
+impl<F: EdField> Decompression<F> {
+    fn start(bytes: &[u8; 32]) -> Option<Self> {
         let sign = Choice::from_u8(bytes[31] >> 7);
         let mut y_bytes = *bytes;
         y_bytes[31] &= 0x7f;
-        let y = Fe::from_bytes(&y_bytes);
+        let y = F::from_bytes(&y_bytes);
         // The encoding is public, so comparing it in variable time is fine.
         if y.to_bytes() != y_bytes {
             return None;
@@ -545,13 +722,26 @@ impl Point {
 
         // Solve x^2 = (y^2 - 1) / (d*y^2 + 1).
         let y2 = y.square();
-        let u = y2.sub(&Fe::ONE);
-        let v = y2.mul(&D).add(&Fe::ONE);
+        let u = y2.sub(&F::ONE);
+        let v = y2.mul(&F::D).add(&F::ONE);
 
         // x = u*v^3 * (u*v^7)^((p-5)/8)
         let v3 = v.square().mul(&v);
         let v7 = v3.square().mul(&v);
-        let mut x = u.mul(&v3).mul(&u.mul(&v7).pow22523());
+        Some(Self {
+            y,
+            u,
+            v,
+            uv3: u.mul(&v3),
+            uv7: u.mul(&v7),
+            sign,
+        })
+    }
+
+    /// The rest, given `pow = (u v^7)^((p-5)/8)`.
+    fn finish(&self, pow: &F) -> Option<Ext<F>> {
+        let (y, u, v, sign) = (self.y, self.u, self.v, self.sign);
+        let mut x = self.uv3.mul(pow);
 
         let check = v.mul(&x.square());
         let correct = check.ct_eq(&u);
@@ -561,8 +751,8 @@ impl Point {
             return None;
         }
         // When only the flipped case matched, multiply by sqrt(-1).
-        let alt = x.mul(&SQRT_M1);
-        Fe::cmov(&mut x, &alt, flipped.and(correct.not()));
+        let alt = x.mul(&F::SQRT_M1);
+        F::cmov(&mut x, &alt, flipped.and(correct.not()));
 
         // x = 0 with a set sign bit is the one non-canonical encoding.
         if bool::from(x.is_zero()) && bool::from(sign) {
@@ -571,21 +761,25 @@ impl Point {
         // Match the requested sign.
         let neg = x.neg();
         let wrong_sign = Choice::from_u8(x.is_negative().unwrap_u8() ^ sign.unwrap_u8());
-        Fe::cmov(&mut x, &neg, wrong_sign);
+        F::cmov(&mut x, &neg, wrong_sign);
 
-        Some(Point {
+        Some(Ext {
             x,
             y,
-            z: Fe::ONE,
+            z: F::ONE,
             t: x.mul(&y),
         })
     }
 }
 
-/// Fill the basepoint tables now; see [`crate::prepare`].
+/// Fill the basepoint tables now, for the field this CPU selects; see
+/// [`crate::prepare`].
 #[cfg(feature = "std")]
 pub(crate) fn prepare_tables() {
-    basepoint_table::prepare();
+    fn prepare<F: Curve>() {
+        basepoint_table::prepare::<F>();
+    }
+    dispatch!(prepare())
 }
 
 /// `scalar * B`, through the precomputed table where there is one.
@@ -593,15 +787,24 @@ pub(crate) fn prepare_tables() {
 /// Every basepoint multiplication in this module goes through here rather than
 /// calling `mul_scalar` on the basepoint directly, so the two paths cannot
 /// drift apart and a caller cannot accidentally take the slow one.
-fn mul_basepoint(scalar: &[u8; 32]) -> Point {
+fn mul_basepoint<F: Curve>(scalar: &[u8; 32]) -> Ext<F> {
     #[cfg(feature = "std")]
     {
-        basepoint_table::mul(scalar)
+        basepoint_table::mul::<F>(scalar)
     }
     #[cfg(not(feature = "std"))]
     {
-        mul_scalar_windowed(&basepoint(), scalar)
+        mul_scalar_windowed(&basepoint::<F>(), scalar)
     }
+}
+
+/// `scalar * B`, compressed, on the field this CPU selects: what signing and
+/// key derivation want, and the one place they choose the field.
+fn mul_basepoint_compressed(scalar: &[u8; 32]) -> [u8; 32] {
+    fn on<F: Curve>(scalar: &[u8; 32]) -> [u8; 32] {
+        mul_basepoint::<F>(scalar).compress()
+    }
+    dispatch!(on(scalar))
 }
 
 /// `[k]A + [s]B`, in one pass, variable time in both scalars.
@@ -630,7 +833,10 @@ fn mul_basepoint(scalar: &[u8; 32]) -> Point {
 #[cfg(feature = "bench-internals")]
 #[doc(hidden)]
 pub fn double_scalar_mul_vartime_for_bench(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
-    double_scalar_mul_vartime(a, k, s)
+    fn on<F: Curve>(a: &Ext<Fe>, k: &[u8; 32], s: &[u8; 32]) -> Point {
+        Point(double_scalar_mul_vartime(&a.convert::<F>(), k, s).convert::<Fe>())
+    }
+    dispatch!(on(&a.0, k, s))
 }
 
 /// `scalar * p` in constant time, four bits at a time, for scalars below
@@ -649,15 +855,15 @@ pub fn double_scalar_mul_vartime_for_bench(a: &Point, k: &[u8; 32], s: &[u8; 32]
 /// group order, which is what [`signed_digits`] needs. [`Point::mul_scalar`]
 /// remains the public operation and takes any 32 bytes.
 #[cfg(any(not(feature = "std"), test))]
-fn mul_scalar_windowed(p: &Point, scalar: &[u8; 32]) -> Point {
+fn mul_scalar_windowed<F: EdField>(p: &Ext<F>, scalar: &[u8; 32]) -> Ext<F> {
     let mut multiples = [*p; 8];
     for i in 1..8 {
         multiples[i] = multiples[i - 1].add(p);
     }
-    let table: [Niels; 8] = core::array::from_fn(|i| multiples[i].to_niels());
+    let table: [Niels<F>; 8] = core::array::from_fn(|i| multiples[i].to_niels());
 
     // `digit * p` for a digit in `[-8, 8]`, without indexing by the digit.
-    let select = |digit: i8| -> Niels {
+    let select = |digit: i8| -> Niels<F> {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
         let mut out = Niels::IDENTITY;
@@ -669,7 +875,7 @@ fn mul_scalar_windowed(p: &Point, scalar: &[u8; 32]) -> Point {
     };
 
     let digits = signed_digits(scalar);
-    let mut acc = Point::IDENTITY.add_niels(&select(digits[63])).to_extended();
+    let mut acc = Ext::IDENTITY.add_niels(&select(digits[63])).to_extended();
     for i in (0..63).rev() {
         // Times sixteen: three doublings that never need `T`, then one that
         // does, since the addition after it reads `T`.
@@ -684,7 +890,7 @@ fn mul_scalar_windowed(p: &Point, scalar: &[u8; 32]) -> Point {
 }
 
 /// `1, 3, 5 .. 15` times `p`, in Niels form.
-fn odd_multiples(p: &Point) -> [Niels; 8] {
+fn odd_multiples<F: EdField>(p: &Ext<F>) -> [Niels<F>; 8] {
     let twice = p.double();
     let mut odd = [*p; 8];
     for i in 1..8 {
@@ -729,10 +935,17 @@ fn signed_digits(scalar: &[u8; 32]) -> [i8; 64] {
 }
 
 #[cfg(feature = "std")]
-fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
-    basepoint_table::prepare();
+fn double_scalar_mul_vartime<F: Curve>(a: &Ext<F>, k: &[u8; 32], s: &[u8; 32]) -> Ext<F> {
+    F::double_mul(a, k, s)
+}
+
+/// [`double_scalar_mul_vartime`] in the field's own arithmetic, one method
+/// call per operation.
+#[cfg(feature = "std")]
+fn double_scalar_mul_vartime_generic<F: Curve>(a: &Ext<F>, k: &[u8; 32], s: &[u8; 32]) -> Ext<F> {
+    basepoint_table::prepare::<F>();
     shared_doublings(a, k, &wnaf(s, 8), |e, digit| {
-        let n = basepoint_table::odd_multiple((digit.unsigned_abs() as usize) / 2);
+        let n = basepoint_table::odd_multiple::<F>((digit.unsigned_abs() as usize) / 2);
         if digit > 0 {
             e.add_affine_niels(n)
         } else {
@@ -749,8 +962,12 @@ fn double_scalar_mul_vartime(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
 /// separately would run two -- and gives up only the wider window, which is
 /// the part that needs storage.
 #[cfg(any(not(feature = "std"), test))]
-fn double_scalar_mul_vartime_no_table(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> Point {
-    let odd_b = odd_multiples(&basepoint());
+fn double_scalar_mul_vartime_no_table<F: EdField>(
+    a: &Ext<F>,
+    k: &[u8; 32],
+    s: &[u8; 32],
+) -> Ext<F> {
+    let odd_b = odd_multiples(&basepoint::<F>());
     shared_doublings(a, k, &wnaf(s, 5), |e, digit| {
         let n = &odd_b[(digit.unsigned_abs() as usize) / 2];
         if digit > 0 {
@@ -764,12 +981,12 @@ fn double_scalar_mul_vartime_no_table(a: &Point, k: &[u8; 32], s: &[u8; 32]) -> 
 /// The loop both of those share: `[k]A` at width 5, plus whatever `add_b` adds
 /// at each non-zero digit of `naf_b`, over a single chain of doublings.
 #[inline(always)]
-fn shared_doublings(
-    a: &Point,
+fn shared_doublings<F: EdField>(
+    a: &Ext<F>,
     k: &[u8; 32],
     naf_b: &[i8; 258],
-    add_b: impl Fn(&Point, i8) -> Completed,
-) -> Point {
+    add_b: impl Fn(&Ext<F>, i8) -> Completed<F>,
+) -> Ext<F> {
     // 1A, 3A, 5A .. 15A, in Niels form, built for this call.
     let odd_a = odd_multiples(a);
     let naf_a = wnaf(k, 5);
@@ -785,7 +1002,7 @@ fn shared_doublings(
     // doubling reads only X, Y and Z, and an addition is the only thing that
     // reads T. So a position with no addition pays three multiplications to
     // come out of the completed form instead of four.
-    let mut acc = Point::IDENTITY.to_projective();
+    let mut acc = Ext::IDENTITY.to_projective();
     loop {
         // Nothing to add here, which is the common case: double straight back
         // to projective without materialising the completed form.
@@ -823,11 +1040,20 @@ fn shared_doublings(
 #[cfg(feature = "bench-internals")]
 #[doc(hidden)]
 pub fn mul_basepoint_for_bench(scalar: &[u8; 32]) -> Point {
-    mul_basepoint(scalar)
+    fn on<F: Curve>(scalar: &[u8; 32]) -> Point {
+        Point(mul_basepoint::<F>(scalar).convert::<Fe>())
+    }
+    dispatch!(on(scalar))
 }
 
-fn basepoint() -> Point {
-    BASEPOINT
+/// The basepoint in `F`.
+fn basepoint<F: EdField>() -> Ext<F> {
+    Ext {
+        x: F::from_limbs51(BASEPOINT_X),
+        y: F::from_limbs51(BASEPOINT_Y),
+        z: F::ONE,
+        t: F::from_limbs51(BASEPOINT_T),
+    }
 }
 
 /// The basepoint in extended coordinates, `Z = 1` and `T = XY`.
@@ -838,30 +1064,27 @@ fn basepoint() -> Point {
 /// from `y = 4/5` and the curve equation, and
 /// `the_basepoint_constant_is_the_decompressed_encoding` holds them to what
 /// decompressing the RFC 8032 encoding gives.
-const BASEPOINT: Point = Point {
-    x: Fe::from_limbs51([
-        1_738_742_601_995_546,
-        1_146_398_526_822_698,
-        2_070_867_633_025_821,
-        562_264_141_797_630,
-        587_772_402_128_613,
-    ]),
-    y: Fe::from_limbs51([
-        1_801_439_850_948_184,
-        1_351_079_888_211_148,
-        450_359_962_737_049,
-        900_719_925_474_099,
-        1_801_439_850_948_198,
-    ]),
-    z: Fe::ONE,
-    t: Fe::from_limbs51([
-        1_841_354_044_333_475,
-        16_398_895_984_059,
-        755_974_180_946_558,
-        900_171_276_175_154,
-        1_821_297_809_914_039,
-    ]),
-};
+const BASEPOINT_X: [u64; 5] = [
+    1_738_742_601_995_546,
+    1_146_398_526_822_698,
+    2_070_867_633_025_821,
+    562_264_141_797_630,
+    587_772_402_128_613,
+];
+const BASEPOINT_Y: [u64; 5] = [
+    1_801_439_850_948_184,
+    1_351_079_888_211_148,
+    450_359_962_737_049,
+    900_719_925_474_099,
+    1_801_439_850_948_198,
+];
+const BASEPOINT_T: [u64; 5] = [
+    1_841_354_044_333_475,
+    16_398_895_984_059,
+    755_974_180_946_558,
+    900_171_276_175_154,
+    1_821_297_809_914_039,
+];
 
 /// RFC 8032 Ed25519 (PureEdDSA over Curve25519 with SHA-512).
 pub struct Ed25519;
@@ -1020,7 +1243,7 @@ impl Ed25519Key {
         ic_core::module::operational()?;
         ensure!(seed.len() == 32, InvalidLength, "ed25519 seed");
         let (scalar, prefix) = expand_seed(seed);
-        let public = mul_basepoint(&scalar).compress();
+        let public = mul_basepoint_compressed(&scalar);
         Ok(Self {
             scalar,
             prefix,
@@ -1045,7 +1268,7 @@ impl Ed25519Key {
         // r = H(prefix || M), deterministic -- Ed25519 needs no RNG at signing
         // time, which removes an entire class of nonce-reuse failures.
         let mut r = hash_to_scalar(&[&self.prefix, message]);
-        let big_r = mul_basepoint(&r).compress();
+        let big_r = mul_basepoint_compressed(&r);
 
         let k = hash_to_scalar(&[&big_r, &self.public, message]);
         let s = scalar::mul_add(&k, &self.scalar, &r);
@@ -1067,7 +1290,7 @@ impl SignatureScheme for Ed25519 {
         ensure!(private_key.len() == 32, InvalidLength, "ed25519 seed");
         ensure!(out.len() == 32, InvalidLength, "ed25519 public key buffer");
         let (mut a, mut prefix) = expand_seed(private_key);
-        out.copy_from_slice(&mul_basepoint(&a).compress());
+        out.copy_from_slice(&mul_basepoint_compressed(&a));
         a.zeroize();
         prefix.zeroize();
         Ok(())
@@ -1090,9 +1313,36 @@ impl SignatureScheme for Ed25519 {
 
     fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
         ic_core::module::operational()?;
-        // One shot: recover the point, verify, discard. A caller verifying
-        // more than once against the same key should hold an
-        // `Ed25519VerifyKey` and pay the decompression once.
+        // One shot: the key and R are decompressed together, their
+        // exponentiations interleaved. Only for well-formed lengths and a
+        // canonical S; anything else takes the two-step path below, which
+        // reports exactly the error it always has. A caller verifying more
+        // than once against the same key should hold an `Ed25519VerifyKey`
+        // and pay the key's decompression once.
+        if public_key.len() == 32 && signature.len() == 64 {
+            let mut pk = [0u8; 32];
+            pk.copy_from_slice(public_key);
+            let mut big_r = [0u8; 32];
+            big_r.copy_from_slice(&signature[..32]);
+            let mut s = [0u8; 32];
+            s.copy_from_slice(&signature[32..]);
+            if scalar::is_canonical(&s) {
+                let k = hash_to_scalar(&[&big_r, &pk, message]);
+                // The key's errors before R's, as the two-step path orders
+                // them.
+                return match dispatch!(check_one_shot(&pk, &big_r, &k, &s)) {
+                    OneShot::Key(KeyDecode::Malformed) => Err(ic_core::err!(
+                        MalformedEncoding,
+                        "ed25519 public key is not on the curve or not canonical"
+                    )),
+                    OneShot::Key(_) => Err(ic_core::err!(
+                        InvalidParameter,
+                        "ed25519 public key has small order"
+                    )),
+                    OneShot::Signature(c) => c.into_result(),
+                };
+            }
+        }
         Ed25519VerifyKey::from_bytes(public_key)?.verify(message, signature)
     }
 }
@@ -1113,8 +1363,128 @@ impl SignatureScheme for Ed25519 {
 pub struct Ed25519VerifyKey {
     /// The compressed encoding, which the challenge hash needs verbatim.
     compressed: [u8; 32],
-    /// `-A`, decompressed once.
-    neg_a: Point,
+    /// `-A`, decompressed once, as its canonical affine coordinates: the form
+    /// either field reads directly.
+    neg_a: ([u8; 32], [u8; 32]),
+}
+
+/// What decoding a public key found.
+enum KeyDecode {
+    /// Not on the curve, or not canonically encoded.
+    Malformed,
+    /// Of order dividing 8.
+    SmallOrder,
+    /// `-A`, as canonical affine `(x, y)`.
+    Negated([u8; 32], [u8; 32]),
+}
+
+/// Decode and check a public key on the field `F`.
+fn decode_key<F: Curve>(bytes: &[u8; 32]) -> KeyDecode {
+    match Ext::<F>::decompress(bytes) {
+        None => KeyDecode::Malformed,
+        Some(a) if a.has_small_order() => KeyDecode::SmallOrder,
+        // Decompression leaves Z = 1, so X and Y are the affine coordinates.
+        Some(a) => {
+            let n = a.negate();
+            KeyDecode::Negated(n.x.to_bytes(), n.y.to_bytes())
+        }
+    }
+}
+
+/// What checking a signature's equation found.
+#[derive(PartialEq, Eq, Debug)]
+enum Check {
+    /// R is not on the curve, or not canonically encoded.
+    RMalformed,
+    /// R is of order dividing 8.
+    RSmallOrder,
+    /// `[S]B + [k](-A) != R`.
+    Mismatch,
+    /// `[S]B + [k](-A) == R`.
+    Holds,
+}
+
+impl Check {
+    fn into_result(self) -> Result<()> {
+        match self {
+            Check::RMalformed => Err(ic_core::err!(
+                MalformedEncoding,
+                "ed25519 signature R is not on the curve or not canonical"
+            )),
+            Check::RSmallOrder => Err(ic_core::err!(
+                MalformedEncoding,
+                "ed25519 signature R has small order"
+            )),
+            Check::Mismatch => Err(ic_core::err!(AuthenticationFailed, "ed25519")),
+            Check::Holds => Ok(()),
+        }
+    }
+}
+
+/// What one-shot verification found: a problem with the key, or the
+/// signature's verdict.
+enum OneShot {
+    Key(KeyDecode),
+    Signature(Check),
+}
+
+/// One-shot verification on the field `F`: the key and R decompressed
+/// together, then the key's checks, then the signature's.
+fn check_one_shot<F: Curve>(
+    pk: &[u8; 32],
+    big_r: &[u8; 32],
+    k: &[u8; 32],
+    s: &[u8; 32],
+) -> OneShot {
+    let (a, r) = Ext::<F>::decompress_pair(pk, big_r);
+    let a = match a {
+        None => return OneShot::Key(KeyDecode::Malformed),
+        Some(a) if a.has_small_order() => return OneShot::Key(KeyDecode::SmallOrder),
+        Some(a) => a,
+    };
+    OneShot::Signature(equation_holds(&a.negate(), r, k, s))
+}
+
+/// `[S]B + [k](-A) == R`, on the field `F`, everything public.
+fn check_equation<F: Curve>(
+    neg_a: &([u8; 32], [u8; 32]),
+    big_r: &[u8; 32],
+    k: &[u8; 32],
+    s: &[u8; 32],
+) -> Check {
+    let a = Ext::from_affine(F::from_bytes(&neg_a.0), F::from_bytes(&neg_a.1));
+    equation_holds(&a, Ext::<F>::decompress(big_r), k, s)
+}
+
+/// `[S]B + [k](-A) == R` for `-A` and a decompressed R.
+fn equation_holds<F: Curve>(
+    neg_a: &Ext<F>,
+    r_point: Option<Ext<F>>,
+    k: &[u8; 32],
+    s: &[u8; 32],
+) -> Check {
+    let r_point = match r_point {
+        None => return Check::RMalformed,
+        Some(p) => p,
+    };
+    // An R of small order is what a signature made without a private key
+    // looks like; a correct signer's R is a multiple of the basepoint and
+    // never has one. Refused as dalek's verify_strict and libsodium do.
+    if r_point.has_small_order() {
+        return Check::RSmallOrder;
+    }
+    // [S]B + [k](-A) == R, in one interleaved pass sharing a single chain of
+    // doublings. Everything here is public, so neither multiplication is
+    // constant time.
+    #[cfg(feature = "std")]
+    let lhs = double_scalar_mul_vartime(neg_a, k, s);
+    #[cfg(not(feature = "std"))]
+    let lhs = double_scalar_mul_vartime_no_table(neg_a, k, s);
+    if lhs.eq_projective(&r_point) {
+        Check::Holds
+    } else {
+        Check::Mismatch
+    }
 }
 
 impl Ed25519VerifyKey {
@@ -1132,19 +1502,20 @@ impl Ed25519VerifyKey {
         ensure!(public_key.len() == 32, InvalidLength, "ed25519 public key");
         let mut compressed = [0u8; 32];
         compressed.copy_from_slice(public_key);
-        let a = Point::decompress(&compressed).ok_or(ic_core::err!(
-            MalformedEncoding,
-            "ed25519 public key is not on the curve or not canonical"
-        ))?;
-        ensure!(
-            !a.has_small_order(),
-            InvalidParameter,
-            "ed25519 public key has small order"
-        );
-        Ok(Self {
-            compressed,
-            neg_a: a.negate(),
-        })
+        match dispatch!(decode_key(&compressed)) {
+            KeyDecode::Malformed => Err(ic_core::err!(
+                MalformedEncoding,
+                "ed25519 public key is not on the curve or not canonical"
+            )),
+            KeyDecode::SmallOrder => Err(ic_core::err!(
+                InvalidParameter,
+                "ed25519 public key has small order"
+            )),
+            KeyDecode::Negated(x, y) => Ok(Self {
+                compressed,
+                neg_a: (x, y),
+            }),
+        }
     }
 
     /// The key as it was given.
@@ -1171,34 +1542,8 @@ impl Ed25519VerifyKey {
             "ed25519 signature S is not reduced"
         );
 
-        let r_point = Point::decompress(&big_r).ok_or(ic_core::err!(
-            MalformedEncoding,
-            "ed25519 signature R is not on the curve or not canonical"
-        ))?;
-        // An R of small order is what a signature made without a private key
-        // looks like; a correct signer's R is a multiple of the basepoint and
-        // never has one. Refused as dalek's verify_strict and libsodium do.
-        ensure!(
-            !r_point.has_small_order(),
-            MalformedEncoding,
-            "ed25519 signature R has small order"
-        );
-
         let k = hash_to_scalar(&[&big_r, &self.compressed, message]);
-
-        // [S]B + [k](-A) == R, in one interleaved pass sharing a single chain
-        // of doublings. Everything here is public, so neither multiplication
-        // is constant time.
-        #[cfg(feature = "std")]
-        let lhs = double_scalar_mul_vartime(&self.neg_a, &k, &s);
-        #[cfg(not(feature = "std"))]
-        let lhs = double_scalar_mul_vartime_no_table(&self.neg_a, &k, &s);
-
-        if lhs.eq_projective(&r_point) {
-            Ok(())
-        } else {
-            Err(ic_core::err!(AuthenticationFailed, "ed25519"))
-        }
+        dispatch!(check_equation(&self.neg_a, &big_r, &k, &s)).into_result()
     }
 }
 
@@ -1253,6 +1598,25 @@ impl SelfTest for Ed25519 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The curve on the portable field, which these tests were written for.
+    type P = Ext<Fe>;
+    const D: Fe = <Fe as EdField>::D;
+    const D2: Fe = <Fe as EdField>::D2;
+    const SQRT_M1: Fe = <Fe as EdField>::SQRT_M1;
+
+    fn basepoint() -> P {
+        super::basepoint::<Fe>()
+    }
+
+    fn mul_basepoint(s: &[u8; 32]) -> P {
+        super::mul_basepoint::<Fe>(s)
+    }
+
+    /// `-A` as the verify key holds it, as a point.
+    fn neg_a(vk: &Ed25519VerifyKey) -> P {
+        P::from_affine(Fe::from_bytes(&vk.neg_a.0), Fe::from_bytes(&vk.neg_a.1))
+    }
     use ic_core::codec::{hex, unhex};
 
     #[test]
@@ -1307,10 +1671,7 @@ mod tests {
 
         // The identity doubles to itself, which the formula has to get right
         // without a special case.
-        assert_eq!(
-            Point::IDENTITY.double().compress(),
-            Point::IDENTITY.compress()
-        );
+        assert_eq!(P::IDENTITY.double().compress(), P::IDENTITY.compress());
     }
 
     /// Projective equality must agree with comparing compressed encodings.
@@ -1323,7 +1684,7 @@ mod tests {
     #[test]
     fn projective_equality_agrees_with_compressed_equality() {
         let b = basepoint();
-        let mut points = std::vec![Point::IDENTITY, b];
+        let mut points = std::vec![P::IDENTITY, b];
         let mut p = b;
         for _ in 0..6 {
             p = p.double();
@@ -1346,7 +1707,7 @@ mod tests {
 
         // The case that matters: the same point with a different Z. Adding the
         // identity re-scales the representation without moving the point.
-        let scaled = b.add(&Point::IDENTITY);
+        let scaled = b.add(&P::IDENTITY);
         assert!(b.eq_projective(&scaled), "equal points with different Z");
         assert_eq!(b.compress(), scaled.compress());
     }
@@ -1355,7 +1716,7 @@ mod tests {
     fn group_law_is_consistent() {
         let b = basepoint();
         // P + 0 == P
-        assert_eq!(hex(&b.add(&Point::IDENTITY).compress()), hex(&b.compress()));
+        assert_eq!(hex(&b.add(&P::IDENTITY).compress()), hex(&b.compress()));
         // 2P via doubling equals 2P via scalar multiplication.
         let mut two = [0u8; 32];
         two[0] = 2;
@@ -1377,7 +1738,7 @@ mod tests {
         // [L]B must be the identity.
         assert_eq!(
             hex(&basepoint().mul_scalar(&scalar::L).compress()),
-            hex(&Point::IDENTITY.compress())
+            hex(&P::IDENTITY.compress())
         );
     }
 
@@ -1389,7 +1750,7 @@ mod tests {
             s[0] = k;
             let p = b.mul_scalar(&s);
             let c = p.compress();
-            let d = Point::decompress(&c).expect("valid point");
+            let d = P::decompress(&c).expect("valid point");
             assert_eq!(hex(&d.compress()), hex(&c), "k = {k}");
         }
     }
@@ -1400,14 +1761,14 @@ mod tests {
     /// and the key is refused before it is consulted.
     #[test]
     fn a_signature_under_the_identity_key_is_refused() {
-        let identity = Point::IDENTITY.compress();
+        let identity = P::IDENTITY.compress();
         let s = scalar::reduce(&[7u8; 32]);
         let r = mul_basepoint(&s).compress();
         let k = hash_to_scalar(&[&r, &identity, b"any message"]);
-        let neg_a = Point::IDENTITY.negate();
+        let neg_a = P::IDENTITY.negate();
         let lhs = double_scalar_mul_vartime(&neg_a, &k, &s);
         assert!(
-            lhs.eq_projective(&Point::decompress(&r).unwrap()),
+            lhs.eq_projective(&P::decompress(&r).unwrap()),
             "the forgery satisfies the equation"
         );
 
@@ -1425,7 +1786,7 @@ mod tests {
     #[test]
     fn a_signature_with_an_identity_r_is_refused() {
         let key = Ed25519Key::from_seed(&[0x42u8; 32]).unwrap();
-        let r = Point::IDENTITY.compress();
+        let r = P::IDENTITY.compress();
         let message = b"identity R";
         let k = hash_to_scalar(&[&r, &key.public, message]);
         let s = scalar::mul_add(&k, &key.scalar, &[0u8; 32]);
@@ -1434,9 +1795,9 @@ mod tests {
         sig[32..].copy_from_slice(&s);
 
         let vk = Ed25519VerifyKey::from_bytes(&key.public).unwrap();
-        let lhs = double_scalar_mul_vartime(&vk.neg_a, &k, &s);
+        let lhs = double_scalar_mul_vartime(&neg_a(&vk), &k, &s);
         assert!(
-            lhs.eq_projective(&Point::IDENTITY),
+            lhs.eq_projective(&P::IDENTITY),
             "the signature satisfies the equation"
         );
         let err = vk.verify(message, &sig).unwrap_err();
@@ -1452,13 +1813,13 @@ mod tests {
             let mut canonical = [0u8; 32];
             canonical[0] = 3;
             canonical[31] |= sign;
-            let point = Point::decompress(&canonical).expect("y = 3 is on the curve");
+            let point = P::decompress(&canonical).expect("y = 3 is on the curve");
             assert!(!point.has_small_order());
             // p + 3 = 2^255 - 16, little-endian.
             let mut alias = [0xffu8; 32];
             alias[0] = 0xf0;
             alias[31] = 0x7f | sign;
-            assert!(Point::decompress(&alias).is_none(), "sign {sign:#x}");
+            assert!(P::decompress(&alias).is_none(), "sign {sign:#x}");
         }
     }
 
@@ -1467,7 +1828,7 @@ mod tests {
         // A y value with no corresponding x.
         let mut bad = [0u8; 32];
         bad[0] = 2;
-        assert!(Point::decompress(&bad).is_none());
+        assert!(P::decompress(&bad).is_none());
     }
 
     /// RFC 8032 §7.1 test vectors.
@@ -1626,12 +1987,12 @@ mod tests {
     /// and would corrupt every addition that reads it.
     #[test]
     fn the_basepoint_constant_is_the_decompressed_encoding() {
-        let decoded = Point::decompress(&BASEPOINT_COMPRESSED).expect("the RFC 8032 basepoint");
+        let decoded = P::decompress(&BASEPOINT_COMPRESSED).expect("the RFC 8032 basepoint");
         let zinv = decoded.z.invert();
         for (name, constant, from_encoding) in [
-            ("x", BASEPOINT.x, decoded.x.mul(&zinv)),
-            ("y", BASEPOINT.y, decoded.y.mul(&zinv)),
-            ("t", BASEPOINT.t, decoded.t.mul(&zinv)),
+            ("x", basepoint().x, decoded.x.mul(&zinv)),
+            ("y", basepoint().y, decoded.y.mul(&zinv)),
+            ("t", basepoint().t, decoded.t.mul(&zinv)),
         ] {
             assert_eq!(
                 constant.to_bytes(),
@@ -1639,8 +2000,8 @@ mod tests {
                 "{name} differs"
             );
         }
-        assert_eq!(BASEPOINT.z.to_bytes(), Fe::ONE.to_bytes());
-        assert_eq!(BASEPOINT.compress(), BASEPOINT_COMPRESSED);
+        assert_eq!(basepoint().z.to_bytes(), Fe::ONE.to_bytes());
+        assert_eq!(basepoint().compress(), BASEPOINT_COMPRESSED);
     }
 
     #[test]
@@ -1757,7 +2118,7 @@ mod tests {
     }
 
     /// A few points on the curve, for the formula tests below.
-    fn sample_points(n: usize) -> Vec<Point> {
+    fn sample_points(n: usize) -> Vec<P> {
         let mut out = Vec::new();
         let mut p = basepoint();
         for _ in 0..n {
@@ -1825,7 +2186,7 @@ mod tests {
 
                 // And the negated form, which the table's sign handling uses.
                 let mut n = q.to_affine_niels();
-                n.conditional_negate(ic_core::ct::Choice::from_u8(1));
+                n.conditional_negate(1);
                 let want_neg = p.add(&q.negate());
                 let got_neg = p.add_affine_niels(&n).to_extended();
                 assert!(got_neg.eq_projective(&want_neg), "negated form disagrees");
@@ -1873,7 +2234,7 @@ mod tests {
             best
         };
 
-        let a_point = Point::decompress(&pk).unwrap();
+        let a_point = P::decompress(&pk).unwrap();
         let k = hash_to_scalar(&[&big_r, &pk, msg]);
 
         println!(
@@ -1881,7 +2242,7 @@ mod tests {
 ed25519 verify, cost breakdown:"
         );
         let d = time("decompress (x2 per verify)", &mut || {
-            core::hint::black_box(Point::decompress(&pk));
+            core::hint::black_box(P::decompress(&pk));
         });
         let h = time("hash_to_scalar", &mut || {
             core::hint::black_box(hash_to_scalar(&[&big_r, &pk, msg]));
@@ -1902,7 +2263,7 @@ ed25519 verify, cost breakdown:"
             for i in 1..8 {
                 odd[i] = odd[i - 1].add(&twice);
             }
-            let t: [Niels; 8] = core::array::from_fn(|i| odd[i].to_niels());
+            let t: [Niels<Fe>; 8] = core::array::from_fn(|i| odd[i].to_niels());
             core::hint::black_box(t);
         });
         time("  of which: 255 doublings", &mut || {
@@ -1980,15 +2341,15 @@ field and point primitives, nanoseconds:"
         ns("Completed::to_extended (4M)", &mut || {
             core::hint::black_box(core::hint::black_box(&comp).to_extended());
         });
-        ns("Point::add_affine_niels (3M)", &mut || {
+        ns("P::add_affine_niels (3M)", &mut || {
             core::hint::black_box(
                 core::hint::black_box(&a_point).add_affine_niels(core::hint::black_box(&an)),
             );
         });
-        ns("Point::double", &mut || {
+        ns("P::double", &mut || {
             core::hint::black_box(core::hint::black_box(&a_point).double());
         });
-        ns("Point::add", &mut || {
+        ns("P::add", &mut || {
             core::hint::black_box(
                 core::hint::black_box(&a_point).add(core::hint::black_box(&a_point)),
             );

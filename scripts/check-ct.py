@@ -39,6 +39,24 @@ SYMBOLS += P256
 # Ed25519 scalar arithmetic modulo L, on the secret nonce and S.
 ED25519 = ("ct_ed25519_reduce_wide", "ct_ed25519_mul_add")
 SYMBOLS += ED25519
+# The x86-64 Curve25519 backends: the MULX/ADX field, X25519's ladder step and
+# signing's group operations on it, and the AVX-512 IFMA four-lane forms.
+# They compile for x86-64 only, so they are required there and nowhere else.
+X86_ONLY = (
+    "ct_fe64_mul", "ct_fe64_square", "ct_fe64_add", "ct_fe64_sub",
+    "ct_fe64_mul121666", "ct_fe64_invert", "ct_x25519_fe64_step",
+    "ct_ed25519_fe64_madd_ext2", "ct_ed25519_fe64_dbl_nadd",
+    "ct_x25519_ifma_step", "ct_ed25519_ifma_select", "ct_ed25519_ifma_add",
+    "ct_ed25519_ifma_double",
+)
+SYMBOLS += X86_ONLY
+
+
+def symbols_for(target):
+    """The probes `target` must have."""
+    if target.startswith("x86_64"):
+        return SYMBOLS
+    return tuple(s for s in SYMBOLS if s not in X86_ONLY)
 
 # Runtime-library routines a probe may call on a target, because their bodies
 # are disassembled from that target's compiler_builtins and held to the same
@@ -73,11 +91,12 @@ _THUMB_COND = re.compile(
 _LOCAL_LABEL = re.compile(r"\.L[\w.$]+")
 
 
-def bodies(assembly):
+def bodies(assembly, required=SYMBOLS):
     """Read ELF function boundaries; missing/aliased bodies fail closed.
 
     Probes, and every symbol the file declares a function with `.type`, so
     that a call from a probe can be followed into a body in the same file.
+    Every symbol in `required` must have a body.
     """
     functions = set(SYMBOLS) | set(re.findall(
         r"^\s*\.type\s+([^\s,]+)\s*,\s*[@%]function", assembly, re.MULTILINE))
@@ -102,7 +121,7 @@ def bodies(assembly):
                 result[current].append(line)
     if current:
         raise ValueError(f"unterminated function {current}")
-    missing = set(SYMBOLS) - result.keys()
+    missing = set(required) - result.keys()
     if missing:
         raise ValueError("missing probe bodies: " + ", ".join(sorted(missing)))
     return result
@@ -326,7 +345,7 @@ def inspect(assembly, target, excused=None):
     `excuse` allowed; whether those exceed EXCUSE_CEILINGS is for the caller.
     """
     failures = []
-    functions = bodies(assembly)
+    functions = bodies(assembly, symbols_for(target))
     externals = VERIFIED_EXTERNAL.get(target, ())
     excusable = target in EXCUSE_CEILINGS
     if excused is None:
@@ -364,7 +383,7 @@ def inspect(assembly, target, excused=None):
             where = probe if name == probe else f"{probe} -> {name}"
             failures.append(f"{where}: {line.strip()}")
 
-    for name in SYMBOLS:
+    for name in symbols_for(target):
         if not instructions_of(functions[name]):
             failures.append(f"{name}: empty body")
         walk(name, name, functions[name], {name})
@@ -407,7 +426,7 @@ def main():
         excused = collections.Counter()
         found = inspect(build_probe(target), target, excused) + over_ceiling(target, excused)
         failures.extend(f"{target}: {finding}" for finding in found)
-        print(f"{target}: {len(SYMBOLS)} probes, {len(found)} failures"
+        print(f"{target}: {len(symbols_for(target))} probes, {len(found)} failures"
               + ("; excused by rule: " + ", ".join(
                   f"{rule} {count}" for rule, count in sorted(excused.items()))
                  if excused else ""), flush=True)

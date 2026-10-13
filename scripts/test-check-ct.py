@@ -44,7 +44,8 @@ class InspectionTests(unittest.TestCase):
         for target, instructions in cases.items():
             for instruction in instructions:
                 with self.subTest(target=target, instruction=instruction):
-                    self.assertEqual(len(audit.inspect(assembly(instruction), target)), len(audit.SYMBOLS))
+                    self.assertEqual(len(audit.inspect(assembly(instruction), target)),
+                                     len(audit.symbols_for(target)))
 
     def test_returns_directives_and_comments_are_not_branches(self):
         cases = {
@@ -91,6 +92,22 @@ class CallTests(unittest.TestCase):
         found = audit.inspect(self.with_helper("callq\t__multi3"), self.X86)
         self.assertEqual(len(found), len(audit.SYMBOLS))
 
+
+
+class TargetSymbolTests(unittest.TestCase):
+    """The x86-64-only probes are required there and nowhere else."""
+
+    def test_x86_only_probes_are_required_on_x86(self):
+        asm = assembly().replace(f"{audit.X86_ONLY[0]}:", "unrelated:")
+        with self.assertRaisesRegex(ValueError, "missing probe"):
+            audit.inspect(asm, "x86_64-unknown-linux-gnu")
+
+    def test_and_not_elsewhere(self):
+        asm = "\n".join(f"{name}:\n\tbx lr\n\t.size {name}, .-{name}"
+                        for name in audit.symbols_for("thumbv7em-none-eabihf"))
+        self.assertEqual(audit.inspect(asm, "thumbv7em-none-eabihf"), [])
+        self.assertTrue(set(audit.X86_ONLY) <= set(audit.symbols_for("x86_64-unknown-linux-gnu")))
+        self.assertFalse(set(audit.X86_ONLY) & set(audit.symbols_for("riscv32imac-unknown-none-elf")))
 
 
 class LiteralPoolTests(unittest.TestCase):

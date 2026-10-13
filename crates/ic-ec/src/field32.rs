@@ -461,7 +461,9 @@ impl Fe {
         out
     }
 
-    /// Constant-time conditional swap.
+    /// Constant-time conditional swap. The ladders select rather than
+    /// swap now; this stays for the tests that compare the fields.
+    #[cfg(test)]
     #[inline]
     pub fn cswap(a: &mut Fe, b: &mut Fe, choice: Choice) {
         let mask = (choice.unwrap_u8() as u32).wrapping_neg();
