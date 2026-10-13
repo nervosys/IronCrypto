@@ -24,7 +24,8 @@ TARGETS = (
 SYMBOLS = (
     "ct_reduce_q", "ct_power2round", "ct_decompose_32", "ct_decompose_88",
     "ct_compress_1", "ct_compress_4", "ct_compress_5", "ct_compress_10",
-    "ct_compress_11", "ct_select_u32", "ct_select_u64", "ct_hex_encode",
+    "ct_compress_11", "ct_cbd2", "ct_cbd3", "ct_reduce_12", "ct_unpack8_12",
+    "ct_pack8_12", "ct_barrett_reduce", "ct_montgomery_reduce", "ct_select_u32", "ct_select_u64", "ct_hex_encode",
     "ct_base64_encode",
     "ct_select_u8", "ct_eq_4", "ct_zero_4", "ct_lt_be_4", "ct_cmov_4", "ct_cswap_4",
 )

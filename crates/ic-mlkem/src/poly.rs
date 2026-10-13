@@ -89,7 +89,9 @@ pub fn montgomery_reduce(a: i32) -> i16 {
 /// whole input range costs nothing and removes a precondition nobody can see.
 #[inline]
 pub fn barrett_reduce(a: i16) -> i16 {
-    // 20159 = round(2^26 / q), so this is a multiply-shift division.
+    // 20158 = floor(2^26 / q), so this is a multiply-shift division. (This
+    // said round, which is 20159; the AVX2 copy took the comment at its word
+    // and disagreed with this function at one input in 3329.)
     const V: i32 = (1i32 << 26) / (Q as i32);
     let t = (V * (a as i32) + (1 << 25)) >> 26;
     (a as i32 - t * (Q as i32)) as i16
@@ -99,6 +101,27 @@ pub fn barrett_reduce(a: i16) -> i16 {
 #[inline]
 fn fqmul(a: i16, b: i16) -> i16 {
     montgomery_reduce((a as i32) * (b as i32))
+}
+
+/// Whether this CPU has AVX2, asked once.
+///
+/// Only under `std`, because the detection needs it: a `no_std` build has no
+/// way to ask, and guessing wrong is an illegal instruction rather than a
+/// wrong answer.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+pub(crate) fn avx2() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    // 0 not yet asked, 1 yes, 2 no.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have = std::is_x86_feature_detected!("avx2");
+            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+            have
+        }
+    }
 }
 
 /// A ring element.
@@ -140,9 +163,105 @@ impl Poly {
         out
     }
 
+    /// Forward NTT, in place.
+    ///
+    /// Seven layers of Cooley-Tukey butterflies. The result is *not* a
+    /// polynomial any more: it is 128 pairs of values, each pair a degree-one
+    /// polynomial modulo `X^2 - zeta`, which is why multiplication afterwards
+    /// is [`Poly::basemul`] rather than a plain product.
+    ///
+    /// With AVX2 it runs sixteen coefficients at a time and produces the same
+    /// integers, coefficient for coefficient; see `crate::avx2`.
+    #[allow(unsafe_code)]
+    pub fn ntt(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::ntt` requires.
+            unsafe { crate::avx2::ntt(&mut self.c) };
+            return;
+        }
+        self.ntt_portable();
+    }
+
+    /// Inverse NTT, in place, including the `1/128` scaling.
+    #[allow(unsafe_code)]
+    pub fn inv_ntt(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::inv_ntt` requires.
+            unsafe { crate::avx2::inv_ntt(&mut self.c) };
+            return;
+        }
+        self.inv_ntt_portable();
+    }
+
+    /// `self += a o b`: [`Poly::basemul`] accumulated in place.
+    ///
+    /// The sums are the ones `acc.add(&a.basemul(b))` forms, coefficient for
+    /// coefficient, without the two polynomials that expression holds for the
+    /// product and the sum. A matrix-vector row is `k` of these.
+    #[allow(unsafe_code)]
+    pub(crate) fn basemul_add(&mut self, a: &Poly, b: &Poly) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::basemul_add` requires.
+            unsafe { crate::avx2::basemul_add(&mut self.c, &a.c, &b.c) };
+            return;
+        }
+        self.basemul_add_portable(a, b);
+    }
+
+    /// Reduce every coefficient into `[-q/2, q/2]`.
+    #[allow(unsafe_code)]
+    pub fn reduce(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::reduce` requires.
+            unsafe { crate::avx2::reduce(&mut self.c) };
+            return;
+        }
+        self.reduce_portable();
+    }
+
     /// Coefficient-wise addition, in place: [`Poly::add`] without a second
     /// 512-byte polynomial for the result.
+    #[allow(unsafe_code)]
     pub(crate) fn add_assign(&mut self, other: &Poly) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::add_assign` requires.
+            unsafe { crate::avx2::add_assign(&mut self.c, &other.c) };
+            return;
+        }
+        self.add_assign_portable(other);
+    }
+
+    /// Bring every coefficient into `[0, q)`.
+    #[allow(unsafe_code)]
+    pub fn normalize(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::normalize` requires.
+            unsafe { crate::avx2::normalize(&mut self.c) };
+            return;
+        }
+        self.normalize_portable();
+    }
+
+    /// Convert every coefficient into Montgomery form.
+    #[allow(unsafe_code)]
+    pub fn to_mont(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::to_mont` requires.
+            unsafe { crate::avx2::to_mont(&mut self.c) };
+            return;
+        }
+        self.montgomery_form_portable();
+    }
+
+    /// [`Poly::add_assign`], one coefficient at a time.
+    pub(crate) fn add_assign_portable(&mut self, other: &Poly) {
         for i in 0..N {
             self.c[i] += other.c[i];
         }
@@ -153,7 +272,7 @@ impl Poly {
     /// The sums are the ones `acc.add(&a.basemul(b))` forms, coefficient for
     /// coefficient, without the two polynomials that expression holds for the
     /// product and the sum. A matrix-vector row is `k` of these.
-    pub(crate) fn basemul_add(&mut self, a: &Poly, b: &Poly) {
+    pub(crate) fn basemul_add_portable(&mut self, a: &Poly, b: &Poly) {
         let mut pair = [0i16; 2];
         for i in 0..N / 4 {
             let zeta = ZETAS[64 + i];
@@ -176,14 +295,14 @@ impl Poly {
     }
 
     /// Reduce every coefficient into `[-q/2, q/2]`.
-    pub fn reduce(&mut self) {
+    pub(crate) fn reduce_portable(&mut self) {
         for c in self.c.iter_mut() {
             *c = barrett_reduce(*c);
         }
     }
 
     /// Bring every coefficient into `[0, q)`.
-    pub fn normalize(&mut self) {
+    pub(crate) fn normalize_portable(&mut self) {
         for c in self.c.iter_mut() {
             let v = barrett_reduce(*c);
             *c = v + ((v >> 15) & Q);
@@ -196,7 +315,7 @@ impl Poly {
     /// polynomial any more: it is 128 pairs of values, each pair a degree-one
     /// polynomial modulo `X^2 - zeta`, which is why multiplication afterwards
     /// is [`Poly::basemul`] rather than a plain product.
-    pub fn ntt(&mut self) {
+    pub(crate) fn ntt_portable(&mut self) {
         let mut k = 1usize;
         let mut len = 128usize;
         while len >= 2 {
@@ -213,11 +332,11 @@ impl Poly {
             }
             len >>= 1;
         }
-        self.reduce();
+        self.reduce_portable();
     }
 
     /// Inverse NTT, in place, including the `1/128` scaling.
-    pub fn inv_ntt(&mut self) {
+    pub(crate) fn inv_ntt_portable(&mut self) {
         // 1441 = 2^16 * 2^-7 mod q, the Montgomery-form scaling factor.
         const F: i16 = 1441;
 
@@ -281,7 +400,7 @@ impl Poly {
     }
 
     /// Convert every coefficient into Montgomery form.
-    pub fn to_mont(&mut self) {
+    pub(crate) fn montgomery_form_portable(&mut self) {
         // 1353 = 2^32 mod q, so multiplying by it and reducing gives a * 2^16.
         const R2: i16 = 1353;
         for c in self.c.iter_mut() {
@@ -346,6 +465,181 @@ mod tests {
             }
             p
         }
+    }
+
+    /// Inputs for the differential tests: random coefficients in `[-q, q]`,
+    /// then the extremes of that range in patterns a lane or shuffle error
+    /// would disturb -- constant, alternating, a single spike at each end,
+    /// and a ramp.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    fn awkward_polys(rng: &mut Rng, random: usize) -> Vec<Poly> {
+        let mut out = Vec::new();
+        for _ in 0..random {
+            let mut p = Poly::ZERO;
+            for c in p.c.iter_mut() {
+                *c = (rng.next() % (2 * Q as u64 + 1)) as i16 - Q;
+            }
+            out.push(p);
+        }
+        for v in [Q, -Q, Q - 1, -(Q - 1), 1, -1, 0] {
+            out.push(Poly { c: [v; N] });
+            let mut alt = Poly::ZERO;
+            for (i, c) in alt.c.iter_mut().enumerate() {
+                *c = if i % 2 == 0 { v } else { -v };
+            }
+            out.push(alt);
+        }
+        for at in [0, 1, 15, 16, 127, 128, 254, 255] {
+            let mut spike = Poly::ZERO;
+            spike.c[at] = Q;
+            out.push(spike);
+        }
+        let mut ramp = Poly::ZERO;
+        for (i, c) in ramp.c.iter_mut().enumerate() {
+            *c = (i as i16 * 26) - Q;
+        }
+        out.push(ramp);
+        out
+    }
+
+    /// The AVX2 transform, inverse transform, base multiplication and
+    /// reduction produce the same integers as the portable ones -- not the
+    /// same values modulo `q`, the same coefficients -- on every input here.
+    ///
+    /// The NTT tests below pass whichever path runs, so on their own they
+    /// cannot see the two disagree. This runs both explicitly, and says so
+    /// when the CPU cannot run the vector path rather than passing silently.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx2_arithmetic_matches_the_portable_arithmetic_exactly() {
+        if !avx2() {
+            println!("no AVX2 on this CPU; the vector arithmetic was not exercised");
+            return;
+        }
+        let mut rng = Rng(0x0a5f_2c3e_9b71_d804);
+        let inputs = awkward_polys(&mut rng, 400);
+        let mut checked = 0;
+        for (n, p) in inputs.iter().enumerate() {
+            let mut want = *p;
+            want.ntt_portable();
+            let mut got = *p;
+            // SAFETY: guarded by the `avx2()` check above, as is every call
+            // into `crate::avx2` in this test.
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::ntt(&mut got.c)
+            };
+            assert_eq!(got, want, "ntt, input {n}");
+
+            let mut want = *p;
+            want.inv_ntt_portable();
+            let mut got = *p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::inv_ntt(&mut got.c)
+            };
+            assert_eq!(got, want, "inv_ntt, input {n}");
+
+            // Accumulate four products, as a rank-4 matrix row does, onto a
+            // starting value that is itself not zero.
+            let other = &inputs[(n * 7 + 3) % inputs.len()];
+            let mut want = inputs[(n + 1) % inputs.len()];
+            let mut got = want;
+            for _ in 0..4 {
+                want.basemul_add_portable(p, other);
+                #[allow(unsafe_code)]
+                unsafe {
+                    crate::avx2::basemul_add(&mut got.c, &p.c, &other.c)
+                };
+            }
+            assert_eq!(got, want, "basemul_add, input {n}");
+            checked += 1;
+        }
+        assert_eq!(checked, inputs.len(), "the comparison did not run");
+
+        // Barrett reduction, normalisation and conversion to Montgomery form
+        // over every sixteen-bit value.
+        for chunk in 0..256 {
+            let mut p = Poly::ZERO;
+            for (i, c) in p.c.iter_mut().enumerate() {
+                *c = (chunk * 256 + i) as u16 as i16;
+            }
+            let mut want = p;
+            want.reduce_portable();
+            let mut got = p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::reduce(&mut got.c)
+            };
+            assert_eq!(got, want, "reduce, chunk {chunk}");
+
+            let mut want = p;
+            want.normalize_portable();
+            let mut got = p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::normalize(&mut got.c)
+            };
+            assert_eq!(got, want, "normalize, chunk {chunk}");
+
+            let mut want = p;
+            want.montgomery_form_portable();
+            let mut got = p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::to_mont(&mut got.c)
+            };
+            assert_eq!(got, want, "to_mont, chunk {chunk}");
+        }
+
+        // Addition, on sums that stay inside sixteen bits as the scheme's do.
+        for (n, p) in inputs.iter().enumerate() {
+            let other = &inputs[(n * 5 + 1) % inputs.len()];
+            let mut want = *p;
+            want.add_assign_portable(other);
+            let mut got = *p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::add_assign(&mut got.c, &other.c)
+            };
+            assert_eq!(got, want, "add_assign, input {n}");
+        }
+    }
+
+    /// The portable arithmetic multiplies correctly on its own, whatever
+    /// this CPU selects for [`Poly::ntt`]: the schoolbook comparison, run
+    /// against the portable functions by name.
+    #[test]
+    fn the_portable_transform_multiplies_correctly() {
+        let mut rng = Rng(0x7777_1234_5678_9abc);
+        for round in 0..8 {
+            let a = rng.poly();
+            let b = rng.poly();
+            let mut want = schoolbook(&a, &b);
+            want.normalize();
+            let mut fa = a;
+            let mut fb = b;
+            fa.ntt_portable();
+            fb.ntt_portable();
+            let mut got = Poly::ZERO;
+            got.basemul_add_portable(&fa, &fb);
+            got.inv_ntt_portable();
+            got.normalize();
+            assert_eq!(got, want, "round {round}");
+        }
+    }
+
+    /// Which path [`Poly::ntt`] takes on this CPU.
+    #[test]
+    fn the_active_arithmetic_path_is_reported() {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        let vector = avx2();
+        #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
+        let vector = false;
+        println!(
+            "ml-kem arithmetic: {}",
+            if vector { "AVX2" } else { "portable" }
+        );
     }
 
     #[test]

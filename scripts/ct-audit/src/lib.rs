@@ -44,6 +44,44 @@ compress!(ct_compress_5, 5);
 compress!(ct_compress_10, 10);
 compress!(ct_compress_11, 11);
 
+// ML-KEM's secret-handling scalar helpers: the noise sampler a word at a
+// time, the decapsulation key's twelve-bit decode and its reduction, and the
+// two reductions every NTT coefficient passes through.
+#[no_mangle]
+pub fn ct_cbd2(w: u32) -> [i16; 8] {
+    ic_mlkem::sample::cbd2(w)
+}
+
+#[no_mangle]
+pub fn ct_cbd3(w: u32) -> [i16; 4] {
+    ic_mlkem::sample::cbd3(w)
+}
+
+#[no_mangle]
+pub fn ct_reduce_12(x: u16) -> i16 {
+    ic_mlkem::encode::reduce_12(x)
+}
+
+#[no_mangle]
+pub fn ct_unpack8_12(bytes: &[u8; 16]) -> [u16; 8] {
+    ic_mlkem::encode::unpack8::<12>(bytes)
+}
+
+#[no_mangle]
+pub fn ct_pack8_12(v: &[i16; 8]) -> [u8; 16] {
+    ic_mlkem::encode::pack8::<12>(v)
+}
+
+#[no_mangle]
+pub fn ct_barrett_reduce(a: i16) -> i16 {
+    ic_mlkem::poly::barrett_reduce(a)
+}
+
+#[no_mangle]
+pub fn ct_montgomery_reduce(a: i32) -> i16 {
+    ic_mlkem::poly::montgomery_reduce(a)
+}
+
 #[no_mangle]
 pub fn ct_select_u32(flag: u8, a: u32, b: u32) -> u32 {
     ic_core::ct::select_u32(ic_core::ct::Choice::from_u8(flag), a, b)

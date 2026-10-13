@@ -58,30 +58,60 @@ pub fn sample_ntt(seed: &[u8; 32], i: u8, j: u8) -> Poly {
 
     while filled < N {
         reader.read_unchecked(&mut buf);
-        let mut offset = 0;
-        while offset + 3 <= SQUEEZE_CHUNK && filled < N {
-            // Three bytes carry two twelve-bit candidates: the first takes a
-            // whole byte plus the low nibble of the second, the other takes the
-            // high nibble plus the third byte.
-            let b0 = buf[offset] as u16;
-            let b1 = buf[offset + 1] as u16;
-            let b2 = buf[offset + 2] as u16;
-            offset += 3;
-
-            let d1 = b0 | ((b1 & 0x0f) << 8);
-            let d2 = (b1 >> 4) | (b2 << 4);
-
-            if d1 < Q as u16 {
-                out.c[filled] = d1 as i16;
-                filled += 1;
-            }
-            if d2 < Q as u16 && filled < N {
-                out.c[filled] = d2 as i16;
-                filled += 1;
-            }
-        }
+        filled = rej_uniform(&mut out, filled, &buf);
     }
     out
+}
+
+/// Append the candidates in `buf` that are below `q` to `out`, which already
+/// holds `filled` coefficients, stopping at `N`; return the new count.
+///
+/// Branches on the candidates, which are public: they come from the public
+/// seed `rho`. `buf` should be a whole number of three-byte groups; a
+/// trailing partial group is ignored, as a stream read in whole rate blocks
+/// never has one.
+///
+/// Coefficients at and above the returned count are not yet sampled, and may
+/// have been overwritten with scratch: the AVX2 form stores eight candidates
+/// at a time and advances by however many it kept. Every caller samples until
+/// the count reaches `N`, at which point every coefficient holds an accepted
+/// value.
+#[allow(unsafe_code)]
+pub(crate) fn rej_uniform(out: &mut Poly, filled: usize, buf: &[u8]) -> usize {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if crate::poly::avx2() {
+        // SAFETY: `avx2()` is the feature test `avx2::rej_uniform` requires.
+        return unsafe { crate::avx2::rej_uniform(&mut out.c, filled, buf) };
+    }
+    rej_uniform_scalar(&mut out.c, filled, buf)
+}
+
+/// [`rej_uniform`] three bytes at a time.
+pub(crate) fn rej_uniform_scalar(out: &mut [i16; N], mut filled: usize, buf: &[u8]) -> usize {
+    for group in buf.chunks_exact(3) {
+        if filled >= N {
+            break;
+        }
+        // Three bytes carry two twelve-bit candidates: the first takes a
+        // whole byte plus the low nibble of the second, the other takes the
+        // high nibble plus the third byte.
+        let b0 = group[0] as u16;
+        let b1 = group[1] as u16;
+        let b2 = group[2] as u16;
+
+        let d1 = b0 | ((b1 & 0x0f) << 8);
+        let d2 = (b1 >> 4) | (b2 << 4);
+
+        if d1 < Q as u16 {
+            out[filled] = d1 as i16;
+            filled += 1;
+        }
+        if d2 < Q as u16 && filled < N {
+            out[filled] = d2 as i16;
+            filled += 1;
+        }
+    }
+    filled
 }
 
 /// `PRF_eta(s, b)`: SHAKE-256 over the seed and one counter byte.
@@ -101,8 +131,72 @@ pub fn prf(eta: usize, seed: &[u8; 32], nonce: u8, out: &mut [u8]) {
 /// analysable.
 ///
 /// Constant time: every bit is read and counted regardless of value.
+///
+/// For the two widths ML-KEM uses the bits are counted a word at a time, by
+/// adding masked shifts of the word to itself, rather than one at a time
+/// with a division and a remainder to find each. The counts are the same
+/// sums; `cbd_matches_the_specification` holds both forms to the
+/// specification's bit array.
+#[allow(unsafe_code)]
 pub fn sample_poly_cbd(eta: usize, data: &[u8], out: &mut Poly) {
     debug_assert_eq!(data.len(), 64 * eta);
+    match eta {
+        2 => {
+            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            if let (true, Ok(bytes)) = (crate::poly::avx2(), <&[u8; 128]>::try_from(data)) {
+                // SAFETY: `avx2()` is the feature test `avx2::cbd2` requires.
+                unsafe { crate::avx2::cbd2(bytes, &mut out.c) };
+                return;
+            }
+            for (bytes, group) in data.chunks_exact(4).zip(out.c.chunks_exact_mut(8)) {
+                let mut w = [0u8; 4];
+                w.copy_from_slice(bytes);
+                group.copy_from_slice(&cbd2(u32::from_le_bytes(w)));
+            }
+        }
+        3 => {
+            for (bytes, group) in data.chunks_exact(3).zip(out.c.chunks_exact_mut(4)) {
+                let w = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], 0]);
+                group.copy_from_slice(&cbd3(w));
+            }
+        }
+        _ => cbd_bits(eta, data, out),
+    }
+}
+
+/// Eight `eta = 2` coefficients from 32 bits: each is the count of two bits
+/// less the count of the next two.
+///
+/// Public only so that `scripts/check-ct.py` can inspect it; not API.
+#[doc(hidden)]
+#[inline]
+pub fn cbd2(w: u32) -> [i16; 8] {
+    // Each two-bit field of `d` holds the sum of the two bits above it in `w`.
+    let d = (w & 0x5555_5555) + ((w >> 1) & 0x5555_5555);
+    core::array::from_fn(|k| {
+        let x = (d >> (4 * k)) & 3;
+        let y = (d >> (4 * k + 2)) & 3;
+        x as i16 - y as i16
+    })
+}
+
+/// Four `eta = 3` coefficients from the low 24 bits of `w`.
+///
+/// Public only so that `scripts/check-ct.py` can inspect it; not API.
+#[doc(hidden)]
+#[inline]
+pub fn cbd3(w: u32) -> [i16; 4] {
+    // Each three-bit field of `d` holds the sum of the three bits above it.
+    let d = (w & 0x0024_9249) + ((w >> 1) & 0x0024_9249) + ((w >> 2) & 0x0024_9249);
+    core::array::from_fn(|k| {
+        let x = (d >> (6 * k)) & 7;
+        let y = (d >> (6 * k + 3)) & 7;
+        x as i16 - y as i16
+    })
+}
+
+/// The width-generic form, one bit at a time.
+fn cbd_bits(eta: usize, data: &[u8], out: &mut Poly) {
     for (i, coefficient) in out.c.iter_mut().enumerate() {
         let base = 2 * i * eta;
         let mut x = 0i16;
@@ -305,6 +399,97 @@ mod tests {
         two.read_unchecked(&mut b[7..200]);
         two.read_unchecked(&mut b[200..]);
         assert_eq!(a, b, "the xof stream depends on how it is read");
+    }
+
+    /// The AVX2 eta = 2 sampler against the scalar one and the
+    /// specification's bit array: SHAKE output, all-zero and all-one bytes,
+    /// and every byte value in every position.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx2_cbd_matches_the_scalar_one() {
+        if !crate::poly::avx2() {
+            println!("no AVX2 on this CPU; the vector sampler was not exercised");
+            return;
+        }
+        let mut inputs: Vec<[u8; 128]> = vec![[0u8; 128], [0xffu8; 128]];
+        for nonce in 0..8u8 {
+            let mut buf = [0u8; 128];
+            prf(2, &[0x3cu8; 32], nonce, &mut buf);
+            inputs.push(buf);
+        }
+        for start in (0..256usize).step_by(128) {
+            let mut buf = [0u8; 128];
+            for (i, b) in buf.iter_mut().enumerate() {
+                *b = (start + i) as u8;
+            }
+            inputs.push(buf);
+        }
+        for (n, bytes) in inputs.iter().enumerate() {
+            let mut want = Poly::ZERO;
+            for (bytes4, group) in bytes.chunks_exact(4).zip(want.c.chunks_exact_mut(8)) {
+                let mut w = [0u8; 4];
+                w.copy_from_slice(bytes4);
+                group.copy_from_slice(&cbd2(u32::from_le_bytes(w)));
+            }
+            assert_eq!(want, reference_cbd(2, bytes), "the scalar form, input {n}");
+            let mut got = Poly::ZERO;
+            // SAFETY: guarded by the `avx2()` check above.
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::cbd2(bytes, &mut got.c)
+            };
+            assert_eq!(got, want, "input {n}");
+        }
+    }
+
+    /// The AVX2 rejection step against the scalar one: whole SHAKE blocks
+    /// and lengths that leave a scalar tail, buffers that accept everything
+    /// and reject everything and mixtures, and starting counts either side of
+    /// the point where the vector loop must hand over to the scalar one.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx2_rejection_step_matches_the_scalar_one() {
+        if !crate::poly::avx2() {
+            println!("no AVX2 on this CPU; the vector rejection step was not exercised");
+            return;
+        }
+        let mut stream = matrix_xof(&[0x2bu8; 32], 3, 1);
+        let mut checked = 0;
+        for len in [0usize, 3, 24, 27, 48, 100, 168, 504] {
+            for fill in [0u8, 0xff, 0x0c, 0xd0] {
+                let mut buf = vec![fill; len];
+                if fill == 0xd0 {
+                    // Random bytes, about one candidate in five rejected.
+                    stream.read(&mut buf).unwrap();
+                }
+                for start in [0usize, 1, 100, 223, 239, 240, 241, 248, 255, 256] {
+                    let mut want = [0i16; N];
+                    let mut got = [0i16; N];
+                    for (i, (w, g)) in want.iter_mut().zip(got.iter_mut()).enumerate() {
+                        *w = i as i16 - 7;
+                        *g = *w;
+                    }
+                    let n_want = rej_uniform_scalar(&mut want, start, &buf);
+                    // SAFETY: guarded by the `avx2()` check above.
+                    #[allow(unsafe_code)]
+                    let n_got = unsafe { crate::avx2::rej_uniform(&mut got, start, &buf) };
+                    assert_eq!(
+                        n_got, n_want,
+                        "count: len {len}, fill {fill:#x}, start {start}"
+                    );
+                    // The accepted prefix, including what was there before
+                    // `start`; above the count is scratch the vector form
+                    // may have written.
+                    assert_eq!(
+                        got[..n_got],
+                        want[..n_want],
+                        "coefficients: len {len}, fill {fill:#x}, start {start}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 8 * 4 * 10, "the comparison did not run");
     }
 
     #[test]

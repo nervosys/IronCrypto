@@ -270,6 +270,67 @@ every caller of a hash function uses.
   length to 600 bytes and beyond, and the portable path, `no_std` builds and
   the failure behaviour of opening -- nothing released on a bad tag -- are
   unchanged.
+- **ML-KEM is five to nine times faster on x86-64**, at every parameter
+  set. Best of nine batches on a Ryzen 9 9900X (Zen 5), the old and new
+  builds run alternately minutes apart, in microseconds:
+
+  | | before | after | Graviola 0.4.1 |
+  |---|---|---|---|
+  | ML-KEM-768 keygen, no pairwise test | 27.5 | 6.0 | 7.6 |
+  | ML-KEM-768 keygen, with it | 106 | 18.7 | -- |
+  | ML-KEM-768 encapsulate | 40.4 | 5.4 | 4.6 |
+  | ML-KEM-768 decapsulate | 46.8 | 6.1 | 5.8 |
+  | ML-KEM-512 keygen / encapsulate / decapsulate | 18.6 / 25.9 / 30.6 | 4.0 / 4.1 / 4.2 | -- |
+  | ML-KEM-1024 keygen / encapsulate / decapsulate | 45.8 / 72.0 / 72.5 | 8.3 / 7.9 / 8.7 | -- |
+
+  `keygen` runs the FIPS 140-3 pairwise consistency test, an encapsulation
+  and a decapsulation, and Graviola's does not; `keygen_deterministic` is
+  the comparable row. Graviola's encapsulation key holds `A^T`, expanded
+  once when the key is parsed, and its decapsulation neither expands the
+  matrix nor checks `H(ek)`; this API takes key bytes and does all of it on
+  every call. Graviola parsing the key on every call encapsulates in 8.7.
+  Decapsulation landed either side of Graviola's across runs and is parity.
+
+  Where the time went, and what replaced it:
+
+  - Keccak was most of it. `ic-hash` gains a four-way Keccak-f[1600] -- four
+    states in AVX2 registers, with AVX-512VL's rotate and three-input logic
+    where present, emitted with `asm!` because their intrinsics postdate the
+    1.87 MSRV -- as a hidden, internal type, `KeccakX4`. ML-KEM runs every
+    Keccak call an operation makes through a lane scheduler, a queue per
+    lane: in encapsulation `H(ek)` occupies one lane while the other three
+    expand all of `A^T` in the same permutations, and decapsulation's hash
+    check, `J(z || c)`, `A^T` and the re-encryption noise share one schedule.
+  - The NTT, inverse NTT, base multiplication, reductions, compression, the
+    12-bit decode, CBD for eta 2 and the SampleNTT rejection step have AVX2
+    forms, each producing the portable code's integers coefficient for
+    coefficient and compared exactly against it.
+  - Portable gains, for every target: byte encoding and decoding eight
+    coefficients at a time instead of a bit at a time, CBD a word at a time,
+    the sponge squeezing whole lanes instead of a byte per loop trip, the
+    scalar permutation compiled for BMI1/BMI2 where present, and the
+    encapsulation key's modulus check as a test of every 12-bit field
+    against `q`, the same predicate as FIPS 203's round trip.
+
+  The vector paths need `std`, for runtime detection; `no_std` builds keep
+  the streaming code, which never holds the matrix. Hosted x86-64 builds now
+  hold `A^T` and the noise during an operation: peak stack for ML-KEM-768
+  decapsulation went from 8.7 to 12.9 KiB, and for key generation with its
+  pairwise test from 13.6 to 17.6 KiB.
+
+  No result changes. The ACVP key-generation and encapsulation vectors for
+  all three sets and the OpenSSL interoperability cases pass, and the
+  lane-scheduled path is compared with the streaming one and the held-matrix
+  reference, through the whole KEM, for every set.
+
+### Fixed
+
+- **ML-KEM's 12-bit decode reduced modulo q with `%`**, on what is, in a
+  decapsulation key, the secret vector. It is now a subtraction and a sign
+  mask, and `scripts/check-ct.py` has probes for it and six other scalar
+  ML-KEM helpers. Its first run found Cortex-M0 compiling the new mask
+  into a branch; the barriers `compress` already uses removed it, and all
+  twenty-six probes pass on all four targets.
 
 ## 0.2.24
 

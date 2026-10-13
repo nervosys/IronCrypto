@@ -25,7 +25,7 @@ mod avx2_512;
 
 /// Whether this CPU has AVX2, asked once.
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
-fn avx2() -> bool {
+pub(crate) fn avx2() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
     // 0 not yet asked, 1 yes, 2 no.
     static CACHED: AtomicU8 = AtomicU8::new(0);
