@@ -1,7 +1,8 @@
-# Updated notification for 0.2.25: draft
+# Updated notification for 0.3.0: draft
 
 The text of an updated notification under 15 CFR §742.15(b), drafted by this
-agent on 2026-10-12 for the maintainer to complete and send. The contact
+agent on 2026-10-12 for a version then numbered 0.2.25, and renumbered on
+2026-10-13 for 0.3.0, for the maintainer to complete and send. The contact
 fields and the date of the previous notification are left blank: they are the
 maintainer's to fill in, and are not inferred here.
 `docs/export/notification.md` records what happens to it.
@@ -10,8 +11,14 @@ maintainer's to fill in, and are not inferred here.
 
 ## Why an update
 
-The maintainer decided on 2026-10-12 that 0.2.25 is notified before it is
-published, rather than relying on the earlier notice. What 0.2.25 changes:
+The maintainer decided on 2026-10-12 that this release is notified before it
+is published, rather than relying on the earlier notice. On 2026-10-13, asked
+what should happen with the notice for 0.3.0, they chose "Print an updated
+notice"; asked in the same question whether to prepare 0.3.0 now, they chose
+"Keep it on master". So this text is printed for a release not yet made, and
+nothing here records it as sent. The version became 0.3.0 because hash
+functions now return errors, a breaking change to the API. What 0.3.0
+changes:
 
 - **No new location.** It adds no package. The twenty-two crates.io packages
   and the GitHub repository are the ones in the previous notification.
@@ -60,6 +67,13 @@ published, rather than relying on the earlier notice. What 0.2.25 changes:
   (RFC 2986).
 - **No change in kind:** PBKDF2 is faster with the same output, and Ed25519
   verification refuses degenerate keys and signatures it used to accept.
+  Added after the 2026-10-12 draft, none of it a new algorithm: faster
+  implementations of AES-GCM, ChaCha20-Poly1305, SHA-3, HMAC, X25519,
+  Ed25519, P-256, P-384, RSA and ML-KEM, with the same outputs; ML-KEM keys
+  that can be parsed once and reused; a build option that leaves out the
+  algorithms FIPS approved mode does not allow; hash functions that refuse
+  to work after a failed self-test; and a correction to ChaCha20, which on
+  some CPUs could reuse keystream past its 2^32-block limit and now refuses.
 
 The text below is complete in itself apart from its blanks.
 
@@ -74,7 +88,7 @@ Coordinator:
 
 This updates a previous notification under 15 CFR 742.15(b) concerning
 IronCrypto, to give its complete current set of internet locations and
-cryptographic functionality as of version 0.2.25.
+cryptographic functionality as of version 0.3.0.
 
 SUBMITTER
   Entity:          Nervosys
@@ -88,7 +102,7 @@ PREVIOUS NOTIFICATION
 
 ITEM
   Name:            IronCrypto
-  Version:         0.2.25
+  Version:         0.3.0
   Description:     An open-source cryptographic library written in Rust,
                    distributed as source code, with a command-line tool.
   Classification:  ECCN 5D002 (encryption source code)
