@@ -295,6 +295,17 @@ macro_rules! aes_variant {
                 self.0.backend()
             }
 
+            /// The AES-NI round keys, when that is the live backend: what the
+            /// fused AES-GCM kernels in `gcm_x86` run their rounds on.
+            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            #[inline]
+            pub(crate) fn aesni_keys(&self) -> Option<&x86::Keys> {
+                match &self.0 {
+                    Keys::Aesni(k) => Some(k),
+                    _ => None,
+                }
+            }
+
             /// Force the portable backend, whatever the CPU supports.
             ///
             /// Exists so the accelerated path can be differentially tested
