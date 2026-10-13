@@ -15,7 +15,7 @@ Neither library is CMVP validated.
 | Speed, x86-64 | AES-GCM, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH | P-384 ECDH; ChaCha20-Poly1305 on long messages (see below) |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers and ML-DSA's rounding only |
-| Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA signing not yet classified here |
+| Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's accelerated paths are not yet checked by either tool here |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
 | Test vectors | every suite Graviola runs, plus ACVP for ML-KEM, ML-DSA, SLH-DSA | | |
 | For agents | ontology, `ic recommend`, `ic lint`, MCP server with rules | | Graviola has none |
@@ -133,10 +133,14 @@ Beyond Valgrind, which only sees the build and CPU it runs on:
 - `ic timing` measures operations with a fixed against a random secret,
   interleaved at random.
 
-Open: RSA-2048 signing reports 315 branches and 15 addresses, which cannot be
-classified until the harness can mark the private key without the public
-modulus. Graviola's RSA is not in the harness either, and its README states
-that its RSA key generation is not side-channel safe.
+RSA-2048 signing, with only the private key marked (d, the primes and their
+Montgomery constants, dP, dQ, qInv), reports one branch: the verdict of the
+check after signing that `m^e = c`, which decides only whether the
+signature is released. That run exercises the portable exponentiation; the
+MULX/ADX and IFMA paths are chosen by CPUID, which Valgrind hides, and no
+compiled-code probe covers them yet. Graviola's RSA is not in the harness,
+and its README states that its RSA key generation is not side-channel
+safe.
 
 ## Misuse resistance
 
