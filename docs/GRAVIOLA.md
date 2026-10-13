@@ -178,8 +178,10 @@ HMAC response files in full, Monte chains included, and Wycheproof's
 ECDSA, ML-KEM (all three parameter sets, where Graviola runs ML-KEM-768)
 and AES-GMAC, about 12,000 cases pinned by SHA-256 (`crates/ironcrypto/tests/coverage_vectors.rs`). In
 addition: NIST's ACVP vectors for ML-KEM, ML-DSA and SLH-DSA, and the
-published vectors of every other algorithm listed in the README. Not yet:
-Wycheproof's primality cases, which need a hook into RSA's Miller-Rabin.
+published vectors of every other algorithm listed in the README. Wycheproof's
+primality cases also run, against RSA key generation's Miller-Rabin test
+through a test-only entry point: 317 cases, of which 20 composites that the
+fixed bases accept are listed by tcId as known failures rather than skipped.
 
 ## For agents
 

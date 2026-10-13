@@ -476,6 +476,10 @@ impl RsaPrivateKey {
 // Key generation
 // ---------------------------------------------------------------------------
 
+/// Miller-Rabin rounds key generation runs on each candidate: the first this
+/// many primes are the bases.
+const KEYGEN_ROUNDS: usize = 8;
+
 /// Primes below 256, for trial division.
 ///
 /// Rejecting candidates with a small factor before the first Miller-Rabin round
@@ -522,13 +526,17 @@ fn mul_vartime(a: &Uint, b: &Uint, a_limbs: usize, b_limbs: usize) -> Uint {
 /// never run through this function — [`RsaPublicKey::from_components`] does not
 /// attempt to factor what it is given.
 ///
-/// Composites survive a single round with probability at most 1/4, so `rounds`
-/// prime bases put the failure probability below 4^-rounds for a random
-/// candidate — far below the 2^-100 that FIPS 186-5 Table B.1 asks for by the
-/// time `rounds` reaches 8, and in practice much lower still, since no
-/// composite is known that fools even the first twelve prime bases.
+/// This argument rests entirely on the candidate being random rather than
+/// chosen. The fixed bases carry no per-round bound of their own: a composite
+/// that passes every base in use exists, and Wycheproof's `primality_test.json`
+/// contains composites that pass the first twelve prime bases (cases 109 and
+/// 112, for two). Such a composite is never a key-generation candidate unless
+/// the DRBG is adversarial, which is outside this module's threat model. The
+/// test-only entry point [`probable_prime_be`] is how those cases are checked.
 fn is_probable_prime(candidate: &Uint, limbs: usize, rounds: usize) -> bool {
-    if !candidate.is_odd() {
+    // Zero is even. One is odd, and below would never terminate on it: n - 1 is
+    // zero, and the loop that strips factors of two never ends.
+    if !candidate.is_odd() || candidate.bits() < 2 {
         return false;
     }
     for p in SMALL_PRIMES {
@@ -581,6 +589,41 @@ fn is_probable_prime(candidate: &Uint, limbs: usize, rounds: usize) -> bool {
     true
 }
 
+/// Test-only access to the primality decision key generation makes, for the
+/// Wycheproof primality vectors. Hidden from the docs and not API: it may change
+/// or disappear in any release.
+///
+/// `candidate_be` is an unsigned big-endian integer; leading zero bytes are
+/// ignored. The decision is the one key generation makes: trial division by
+/// [`SMALL_PRIMES`], then [`KEYGEN_ROUNDS`] fixed-base Miller-Rabin rounds. The
+/// one difference is that 2 is reported prime, since this is a decision on
+/// integers and not on the odd candidates key generation draws.
+///
+/// Returns `Some(true)` or `Some(false)` for every value that fits in
+/// [`MAX_BYTES`] bytes, including zero and one, which are not prime. Returns
+/// `None` when the value is wider than that: the fixed-width `Uint` cannot hold
+/// it, so no decision is made.
+#[doc(hidden)]
+pub fn probable_prime_be(candidate_be: &[u8]) -> Option<bool> {
+    let start = candidate_be
+        .iter()
+        .position(|&b| b != 0)
+        .unwrap_or(candidate_be.len());
+    let bytes = &candidate_be[start..];
+    if bytes.len() > MAX_BYTES {
+        return None;
+    }
+    if bytes.is_empty() {
+        return Some(false);
+    }
+    let candidate = Uint::from_be_bytes(bytes)?;
+    if candidate.cmp_vartime(&Uint::from_u64(2)) == core::cmp::Ordering::Equal {
+        return Some(true);
+    }
+    let limbs = candidate.bits().div_ceil(64).max(1);
+    Some(is_probable_prime(&candidate, limbs, KEYGEN_ROUNDS))
+}
+
 /// Draw a random odd candidate of exactly `bits` bits.
 ///
 /// The top two bits are set, which is what guarantees that a product of two
@@ -620,7 +663,7 @@ pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<Rs
     let half = bits / 2;
     let half_limbs = half / 64;
     let full_limbs = bits / 64;
-    let rounds = 8;
+    let rounds = KEYGEN_ROUNDS;
     let one = Uint::one();
     let e = Uint::from_u64(PUBLIC_EXPONENT);
 
@@ -1003,6 +1046,32 @@ mod tests {
                 "{c} is composite"
             );
         }
+    }
+
+    /// Every input the test-only entry point can get: none may panic or hang,
+    /// and the wide value is refused as undecidable rather than as composite.
+    #[test]
+    fn probable_prime_be_handles_edge_inputs() {
+        assert_eq!(probable_prime_be(&[]), Some(false), "empty is zero");
+        assert_eq!(probable_prime_be(&[0, 0]), Some(false), "zero");
+        assert_eq!(probable_prime_be(&[1]), Some(false), "one");
+        assert_eq!(probable_prime_be(&[0, 0, 2]), Some(true), "two");
+        assert_eq!(probable_prime_be(&[4]), Some(false), "four");
+        assert_eq!(
+            probable_prime_be(&[0, 0, 0, 13]),
+            Some(true),
+            "leading zeros"
+        );
+        assert_eq!(probable_prime_be(&[0x3f]), Some(false), "63");
+        let wide = [0x01u8; MAX_BYTES + 1];
+        assert_eq!(probable_prime_be(&wide), None, "wider than the capacity");
+        let mut zero_padded = [0u8; MAX_BYTES + 1];
+        zero_padded[MAX_BYTES] = 7;
+        assert_eq!(
+            probable_prime_be(&zero_padded),
+            Some(true),
+            "leading zeros do not count toward the capacity"
+        );
     }
 
     /// A Carmichael number passes a naive Fermat test but must fail

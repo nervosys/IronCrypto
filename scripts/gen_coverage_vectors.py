@@ -35,6 +35,9 @@ Written:
   the DER files for the curve/hash pairs wycheproof-ecdsa.json lacks:
   P-256 with SHA-512, P-384 with SHA-256 and SHA-512.
 - wycheproof-gmac.json: AES-GMAC, every case.
+- wycheproof-primality.json: Wycheproof's primality cases, every case, with
+  the value as Wycheproof gives it: a signed big-endian integer, so a
+  negative value starts with a byte of 0x80 or more.
 
 Nothing here computes a cryptographic value; Monte tests carry the seed and
 NIST's checkpoints, and the test computes the chain.
@@ -75,6 +78,10 @@ ECDSA_P1363 = ["ecdsa_secp256r1_sha256_p1363_test", "ecdsa_secp384r1_sha384_p136
 ECDSA_DER = ["ecdsa_secp256r1_sha512_test", "ecdsa_secp384r1_sha256_test",
              "ecdsa_secp384r1_sha512_test"]
 GMAC = ["aes_gmac_test"]
+PRIMALITY = ["primality_test"]
+# testvectors_v1/primality_test.json at WP_COMMIT. Unlike the other Wycheproof
+# files, which only record their digest, this one is checked.
+PRIMALITY_SHA256 = "31ec21fb04bffef38d42a04339932be806d679fbb33714d16c6bed3748dbd8d8"
 
 
 def sha256_file(path):
@@ -266,6 +273,22 @@ def gmac(directory, out):
           WP_SOURCE.format(names=pin(GMAC, digests)), cases)
 
 
+def primality(directory, out):
+    cases, digests = [], []
+    for name in PRIMALITY:
+        j, digest = wp(directory, name)
+        if digest != PRIMALITY_SHA256:
+            raise SystemExit(f"{name}.json: SHA-256 {digest}, expected {PRIMALITY_SHA256}")
+        digests.append(digest)
+        for g in j["testGroups"]:
+            for t in g["tests"]:
+                cases.append({"tcId": str(t["tcId"]), "result": t["result"],
+                              "flags": " ".join(t.get("flags", [])),
+                              "comment": t.get("comment", ""), "value": t["value"]})
+    write(out, "wycheproof-primality.json", "primality",
+          WP_SOURCE.format(names=pin(PRIMALITY, digests)), cases)
+
+
 def main():
     if len(sys.argv) != 4:
         raise SystemExit(__doc__)
@@ -276,6 +299,7 @@ def main():
     mlkem(wycheproof, out)
     ecdsa_extra(wycheproof, out)
     gmac(wycheproof, out)
+    primality(wycheproof, out)
 
 
 if __name__ == "__main__":

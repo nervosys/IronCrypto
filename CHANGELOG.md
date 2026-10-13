@@ -36,6 +36,11 @@ every caller of a hash function uses.
 
 ### Added
 
+- **Wycheproof's primality cases** run against RSA key generation's
+  Miller-Rabin test, through a hidden test-only `ic_rsa::key::probable_prime_be`:
+  283 of 317 agree with their label, 14 signed values are skipped and counted,
+  and 20 composites that the fixed bases accept are listed by tcId as known
+  failures, since key generation's candidates come from the DRBG.
 - **Prepared ML-KEM keys**, for every parameter set:
   `PreparedEncapsulationKey` and `PreparedDecapsulationKey` in
   `ic_mlkem::{kem512, kem, kem1024}`, aliased at the crate root as

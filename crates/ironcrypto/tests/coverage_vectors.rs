@@ -10,7 +10,9 @@
 //!   all three parameter sets, Graviola runs ML-KEM-768 only;
 //! - ECDSA with IEEE P1363 signatures, and the curve and hash pairs
 //!   `wycheproof-ecdsa.json` lacks;
-//! - AES-GMAC.
+//! - AES-GMAC;
+//! - Wycheproof's primality cases, against ic-rsa's Miller-Rabin test. The
+//!   composites it accepts are listed by tcId, not skipped.
 //!
 //! Each test tallies what it saw and asserts a floor, so a file that loses
 //! cases, or a parser that silently matches none, fails rather than passes.
@@ -563,4 +565,90 @@ fn wycheproof_aes_gmac() {
             "{key}: {tally:?}"
         );
     }
+}
+
+/// Wycheproof composites that the fixed-base Miller-Rabin test accepts, so
+/// they disagree with their `invalid` label. Each is built to pass the bases
+/// the test uses: 22 to 25 and 105 to 116 pass the first twelve prime bases,
+/// for example. Key generation does not see them, since its candidates come
+/// from the DRBG and an adversary who controls the DRBG is outside its threat
+/// model; the doc comment on `ic_rsa::key::is_probable_prime` gives the
+/// argument. They are listed here rather than skipped, so that any new
+/// disagreement fails the test and a fix to one of these also fails it.
+const PRIMALITY_FIXED_BASE_FAILURES: &[&str] = &[
+    "22", "23", "24", "25", "31", "32", "38", "87", "105", "106", "107", "108", "109", "110",
+    "111", "112", "113", "114", "115", "116",
+];
+
+/// Wycheproof's primality cases against `ic_rsa`'s key-generation primality
+/// decision. `valid` must be accepted, `invalid` refused, `acceptable` either
+/// way. Values are signed big-endian in Wycheproof, so a negative one (first
+/// byte 0x80 or more) is skipped and counted: the API takes unsigned integers
+/// and a negative has no unsigned reading. A value wider than the 4096-bit
+/// capacity is skipped and counted too.
+#[test]
+fn wycheproof_primality_every_case() {
+    let Some(file) = VectorFile::load_or_report("wycheproof-primality") else {
+        return;
+    };
+    let mut tally = BTreeMap::<String, usize>::new();
+    for key in [
+        "valid agrees",
+        "invalid agrees",
+        "acceptable, either answer",
+        "negative, skipped",
+        "wider than 4096 bits, skipped",
+    ] {
+        tally.insert(key.to_string(), 0);
+    }
+    let mut disagreements: Vec<(String, String, String, &str, bool)> = Vec::new();
+    for case in &file.cases {
+        let value = hex_field(case, "value");
+        if value.first().is_some_and(|b| *b >= 0x80) {
+            *tally.get_mut("negative, skipped").unwrap() += 1;
+            continue;
+        }
+        let Some(got) = ic_rsa::key::probable_prime_be(&value) else {
+            *tally.get_mut("wider than 4096 bits, skipped").unwrap() += 1;
+            continue;
+        };
+        let result = case["result"].as_str();
+        let agrees = match result {
+            "valid" => got,
+            "invalid" => !got,
+            "acceptable" => {
+                *tally.get_mut("acceptable, either answer").unwrap() += 1;
+                continue;
+            }
+            other => panic!("result {other}"),
+        };
+        if agrees {
+            *tally.get_mut(&format!("{result} agrees")).unwrap() += 1;
+        } else {
+            disagreements.push((
+                case["tcId"].clone(),
+                case["comment"].clone(),
+                hex(&value),
+                result,
+                got,
+            ));
+        }
+    }
+    println!("{tally:#?}");
+    for (tc, comment, value, result, got) in &disagreements {
+        println!(
+            "disagreement tcId {tc}: {comment}; value {value}; result {result}; library says prime = {got}"
+        );
+    }
+    // Every case is in exactly one bucket.
+    let counted: usize = tally.values().sum::<usize>() + disagreements.len();
+    assert_eq!(counted, file.cases.len(), "{tally:?}");
+    // The known list is exact: a new disagreement, or a known one that starts
+    // agreeing, fails.
+    let found: Vec<&str> = disagreements.iter().map(|d| d.0.as_str()).collect();
+    assert_eq!(found, PRIMALITY_FIXED_BASE_FAILURES, "disagreements");
+    // Every prime was accepted and most composites refused, so a test that
+    // always says prime, or never does, cannot pass.
+    assert!(tally["valid agrees"] >= 60, "{tally:?}");
+    assert!(tally["invalid agrees"] >= 200, "{tally:?}");
 }
