@@ -42,4 +42,10 @@ pub mod p256_field;
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_code)]
 pub(crate) mod p256_x86;
+// The same, for whole point formulas; generated.
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod p256_x86_point;
 pub mod point;
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+pub(crate) mod safegcd;

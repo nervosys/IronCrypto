@@ -164,6 +164,83 @@ pub(crate) fn has_adx() -> bool {
     }
 }
 
+/// Copy field elements into a formula's slots.
+#[inline(always)]
+fn load<const N: usize>(buf: &mut [u64; N], values: &[&[u64; 4]]) {
+    for (i, v) in values.iter().enumerate() {
+        buf[4 * i..4 * i + 4].copy_from_slice(&v[..]);
+    }
+}
+
+/// A field element from slot `slot`.
+#[inline(always)]
+fn slot<const N: usize>(buf: &[u64; N], slot: usize) -> [u64; 4] {
+    [
+        buf[4 * slot],
+        buf[4 * slot + 1],
+        buf[4 * slot + 2],
+        buf[4 * slot + 3],
+    ]
+}
+
+/// Jacobian doubling as one block of assembly, where the CPU has BMI2 and
+/// ADX; `None` where it does not.
+#[inline(always)]
+pub(crate) fn point_double(x: &[u64; 4], y: &[u64; 4], z: &[u64; 4]) -> Option<[[u64; 4]; 3]> {
+    if !has_adx() {
+        return None;
+    }
+    let mut buf = [0u64; 56];
+    load(&mut buf, &[x, y, z]);
+    // SAFETY: the CPU has BMI2 and ADX.
+    unsafe { super::p256_x86_point::double_adx(&mut buf) };
+    Some([slot(&buf, 3), slot(&buf, 4), slot(&buf, 5)])
+}
+
+/// The Jacobian addition formula as one block of assembly, with `h` and `r`;
+/// `None` without BMI2 and ADX.
+#[inline(always)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn point_add(
+    p: [&[u64; 4]; 3],
+    q: [&[u64; 4]; 3],
+) -> Option<([[u64; 4]; 3], [u64; 4], [u64; 4])> {
+    if !has_adx() {
+        return None;
+    }
+    let mut buf = [0u64; 84];
+    load(&mut buf, &[p[0], p[1], p[2], q[0], q[1], q[2]]);
+    // SAFETY: the CPU has BMI2 and ADX.
+    unsafe { super::p256_x86_point::add_adx(&mut buf) };
+    Some((
+        [slot(&buf, 6), slot(&buf, 7), slot(&buf, 8)],
+        slot(&buf, 9),
+        slot(&buf, 10),
+    ))
+}
+
+/// The mixed addition formula as one block of assembly, with `h` and `r`;
+/// `None` without BMI2 and ADX.
+#[inline(always)]
+#[allow(clippy::type_complexity)]
+pub(crate) fn point_add_affine(
+    p: [&[u64; 4]; 3],
+    q: [&[u64; 4]; 2],
+) -> Option<([[u64; 4]; 3], [u64; 4], [u64; 4])> {
+    if !has_adx() {
+        return None;
+    }
+    let mut buf = [0u64; 72];
+    load(&mut buf, &[p[0], p[1], p[2], q[0], q[1]]);
+    // SAFETY: the CPU has BMI2 and ADX.
+    unsafe { super::p256_x86_point::add_affine_adx(&mut buf) };
+    Some((
+        [slot(&buf, 5), slot(&buf, 6), slot(&buf, 7)],
+        slot(&buf, 8),
+        slot(&buf, 9),
+    ))
+}
+
 /// `a * b * 2^-256 mod p`, on `mulx`/`adcx`/`adox` where the CPU has them.
 #[inline(always)]
 pub(crate) fn mul(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {

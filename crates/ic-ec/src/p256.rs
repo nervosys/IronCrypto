@@ -22,7 +22,7 @@ mont_field!(
     "The P-256 coordinate field, GF(p) with p = 2^256 - 2^224 + 2^192 + 2^96 - 1.",
     mul = crate::nist::p256_field::active::mul,
     square = crate::nist::p256_field::active::square,
-    invert = crate::nist::p256_field::active::invert,
+    invert = invert_field,
     add = crate::nist::p256_field::active::add,
     sub = crate::nist::p256_field::active::sub
 );
@@ -36,18 +36,61 @@ mont_field!(
     "The P-256 coordinate field, GF(p) with p = 2^256 - 2^224 + 2^192 + 2^96 - 1."
 );
 
+/// The group order `n`, little-endian.
+const N: [u64; 4] = [
+    0xf3b9_cac2_fc63_2551,
+    0xbce6_faad_a717_9e84,
+    0xffff_ffff_ffff_ffff,
+    0xffff_ffff_0000_0000,
+];
+
+// On 64-bit targets the scalar ring inverts by Bernstein-Yang divsteps rather
+// than by Fermat; see `nist::safegcd`. Everything else is the generic ring.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
 mont_field!(
     Fn,
     4,
     32,
-    [
-        0xf3b9_cac2_fc63_2551,
-        0xbce6_faad_a717_9e84,
-        0xffff_ffff_ffff_ffff,
-        0xffff_ffff_0000_0000,
-    ],
+    N,
+    "The P-256 scalar ring, Z/nZ where n is the order of the base point.",
+    mul = Self::mont_mul_raw,
+    square = Self::mont_square_raw,
+    invert = invert_scalar,
+    add = Self::add_raw,
+    sub = Self::sub_raw
+);
+
+#[cfg(not(all(target_pointer_width = "64", not(ic_limb32))))]
+mont_field!(
+    Fn,
+    4,
+    32,
+    N,
     "The P-256 scalar ring, Z/nZ where n is the order of the base point."
 );
+
+/// `a^-1` in the coordinate field, as [`invert_scalar`] does it: 1.0
+/// microseconds against 1.6 for the addition chain in `p256_field`, which
+/// stays as the tests' reference.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+fn invert_field(a: [u64; 4]) -> [u64; 4] {
+    const INFO: crate::nist::safegcd::ModInfo =
+        crate::nist::safegcd::ModInfo::new(crate::nist::p256_field::P);
+    const R3: [u64; 4] = Fp::mont_mul_const(Fp::R2, Fp::R2);
+    crate::nist::p256_field::active::mul(crate::nist::safegcd::invert(&a, &INFO), R3)
+}
+
+/// `a^-1` in the scalar ring, Montgomery form in and out, by divsteps.
+///
+/// The divsteps invert the integer they are given, so a Montgomery `a * R`
+/// comes back as `a^-1 * R^-1`; one Montgomery multiplication by `R^3`
+/// makes that `a^-1 * R`.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+fn invert_scalar(a: [u64; 4]) -> [u64; 4] {
+    const INFO: crate::nist::safegcd::ModInfo = crate::nist::safegcd::ModInfo::new(N);
+    const R3: [u64; 4] = Fn::mont_mul_const(Fn::R2, Fn::R2);
+    Fn::mont_mul_raw(crate::nist::safegcd::invert(&a, &INFO), R3)
+}
 
 /// The P-256 curve.
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +98,7 @@ pub struct P256;
 
 // Its own generator table, with its own storage; see the macro, which
 // emits the table under `std` and the windowed multiplication without it.
-crate::nist::gentable::generator_table_for!(P256);
+crate::nist::gentable::generator_table_for!(P256, 32);
 
 impl Curve for P256 {
     type Field = Fp;
@@ -113,6 +156,26 @@ impl Curve for P256 {
         }
         b.copy_from_slice(bytes);
         Fn::from_bytes(&b)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn double_fast(x: &Fp, y: &Fp, z: &Fp) -> Option<[Fp; 3]> {
+        crate::nist::p256_x86::point_double(&x.0, &y.0, &z.0).map(|[x, y, z]| [Fp(x), Fp(y), Fp(z)])
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn add_fast(p: [&Fp; 3], q: [&Fp; 3]) -> Option<([Fp; 3], Fp, Fp)> {
+        crate::nist::p256_x86::point_add([&p[0].0, &p[1].0, &p[2].0], [&q[0].0, &q[1].0, &q[2].0])
+            .map(|([x, y, z], h, r)| ([Fp(x), Fp(y), Fp(z)], Fp(h), Fp(r)))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn add_affine_fast(p: [&Fp; 3], q: [&Fp; 2]) -> Option<([Fp; 3], Fp, Fp)> {
+        crate::nist::p256_x86::point_add_affine([&p[0].0, &p[1].0, &p[2].0], [&q[0].0, &q[1].0])
+            .map(|([x, y, z], h, r)| ([Fp(x), Fp(y), Fp(z)], Fp(h), Fp(r)))
     }
 
     fn scalar_reduce_slice(bytes: &[u8]) -> Fn {
@@ -353,6 +416,13 @@ mod tests {
         ns("point add (complete)", 200_000, || {
             black_box(black_box(p).add(&black_box(g)));
         });
+        ns("point add (unequal)", 200_000, || {
+            black_box(black_box(p).add_unequal(&black_box(g)));
+        });
+        let ga = g.to_affine().unwrap();
+        ns("point add (affine, unequal)", 200_000, || {
+            black_box(black_box(p).add_affine_unequal(&black_box(ga.x), &black_box(ga.y)));
+        });
         let k = Fn::to_mont([0x1234_5678, 0x9abc_def0, 0x1357_9bdf, 0x2468_ace0]);
         ns("scalar invert", 2_000, || {
             black_box(black_box(k).invert());
@@ -368,6 +438,18 @@ mod tests {
         });
         ns("to_affine", 2_000, || {
             black_box(black_box(p).to_affine());
+        });
+        let mut pk = [0u8; 65];
+        EcdhP256::public_key(&[0x5a; 32], &mut pk).unwrap();
+        let mut shared = [0u8; 32];
+        ns("ecdh agree", 500, || {
+            EcdhP256::agree(&[0x5a; 32], &pk, &mut shared).unwrap();
+        });
+        ns("decode point", 2_000, || {
+            black_box(AffinePoint::from_sec1(black_box(&pk)));
+        });
+        ns("operational", 2_000, || {
+            black_box(ic_core::module::operational()).unwrap();
         });
         let mut sig = [0u8; 64];
         ns("ecdsa sign", 500, || {
@@ -409,6 +491,40 @@ mod tests {
             assert_eq!(scalar(v).mul(&scalar(v).invert()), Fn::ONE, "1/{v} in Fn");
         }
         assert_eq!(Fp::ZERO.invert(), Fp::ZERO);
+        assert_eq!(Fn::ZERO.invert(), Fn::ZERO);
+    }
+
+    /// Both rings' inversion -- divsteps on 64-bit targets -- against the
+    /// generic Fermat exponentiation, value for value in Montgomery form, on
+    /// the edges and on a spread of values from repeated squaring.
+    #[test]
+    fn inversion_matches_fermat() {
+        let mut x = fp(0x1234_5678_9abc_def1);
+        let mut k = scalar(0x0fed_cba9_8765_4321);
+        let mut fps = std::vec![
+            Fp::ONE,
+            Fp::ONE.neg(),
+            Fp::ONE.double(),
+            Fp::ONE.neg().double()
+        ];
+        let mut fns = std::vec![
+            Fn::ONE,
+            Fn::ONE.neg(),
+            Fn::ONE.double(),
+            Fn::ONE.neg().double()
+        ];
+        for _ in 0..300 {
+            x = x.square().add(&Fp::ONE);
+            k = k.square().add(&Fn::ONE);
+            fps.push(x);
+            fns.push(k);
+        }
+        for v in fps {
+            assert_eq!(v.invert().0, Fp::invert_raw(v.0), "{v:?}");
+        }
+        for v in fns {
+            assert_eq!(v.invert().0, Fn::invert_raw(v.0), "{v:?}");
+        }
     }
 
     #[test]

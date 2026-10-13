@@ -221,6 +221,7 @@ pub(crate) fn sub(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
 ///
 /// Over whichever multiplication and squaring it is given, so the chain is
 /// written once for the Rust and the assembly.
+#[cfg(test)]
 #[inline(always)]
 fn invert_with(
     a: [u64; 4],
@@ -252,6 +253,7 @@ fn invert_with(
 }
 
 /// The inversion over the Rust arithmetic above.
+#[cfg(test)]
 pub(crate) fn invert(a: [u64; 4]) -> [u64; 4] {
     invert_with(a, mul, square)
 }
@@ -307,7 +309,9 @@ pub(crate) mod active {
         return super::sub(a, b);
     }
 
-    /// `a^-1 mod p`, `0` for `0`.
+    /// `a^-1 mod p`, `0` for `0`, by the addition chain: the reference the
+    /// divsteps inversion `p256.rs` uses is tested against.
+    #[cfg(test)]
     pub(crate) fn invert(a: [u64; 4]) -> [u64; 4] {
         super::invert_with(a, mul, square)
     }

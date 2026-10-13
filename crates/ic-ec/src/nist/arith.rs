@@ -311,6 +311,17 @@ pub(crate) fn select_ct<const N: usize>(mask: u64, a: [u64; N], b: [u64; N]) -> 
     select(core::hint::black_box(mask), a, b)
 }
 
+/// All ones when `a == b`, zero otherwise, behind the barrier: the mask for
+/// one entry of a table scan, for [`Field::cmov_mask`].
+///
+/// The xor is zero exactly when the two are equal, and only zero minus one
+/// sets the top bit of a value below 2^32; nothing is compared.
+#[inline]
+pub(crate) fn mask_of(a: u32, b: u32) -> u64 {
+    let bit = ((a ^ b) as u64).wrapping_sub(1) >> 63;
+    core::hint::black_box(bit.wrapping_neg())
+}
+
 /// Double `x` modulo `m`, in constant time.
 #[inline]
 const fn double_mod<const N: usize>(x: [u64; N], m: [u64; N]) -> [u64; N] {
@@ -434,6 +445,11 @@ pub trait Field: Copy + Clone + core::fmt::Debug + PartialEq + Eq + Sized {
     fn ct_eq(&self, other: &Self) -> Choice;
     /// Constant-time conditional move.
     fn cmov(a: &mut Self, b: &Self, choice: Choice);
+    /// Conditional move under a mask that is all ones or zero and that the
+    /// caller has already put behind a barrier ([`mask_of`]): for a table
+    /// scan, where one mask per entry covers every coordinate and a barrier
+    /// per coordinate would be most of the scan's cost.
+    fn cmov_mask(a: &mut Self, b: &Self, mask: u64);
     /// Whether the canonical integer is odd — the SEC1 compression sign bit.
     fn is_odd(&self) -> Choice;
 }
@@ -626,13 +642,10 @@ macro_rules! mont_field {
                 let select = |nibble: u64| {
                     let mut out = table[0];
                     for (j, entry) in table.iter().enumerate() {
-                        // 1 when j == nibble: both are below 16, so the xor is
-                        // zero exactly then, and zero minus one sets bit 63.
-                        let hit = ((j as u64 ^ nibble).wrapping_sub(1) >> 63) as u8;
-                        <Self as $crate::nist::arith::Field>::cmov(
+                        <Self as $crate::nist::arith::Field>::cmov_mask(
                             &mut out,
                             entry,
-                            ic_core::ct::Choice::from_u8(hit),
+                            $crate::nist::arith::mask_of(j as u32, nibble as u32),
                         );
                     }
                     out
@@ -751,6 +764,11 @@ macro_rules! mont_field {
             fn cmov(a: &mut Self, b: &Self, choice: ic_core::ct::Choice) {
                 let mask = (choice.unwrap_u8() as u64).wrapping_neg();
                 a.0 = $crate::nist::arith::select_ct(mask, b.0, a.0);
+            }
+
+            #[inline]
+            fn cmov_mask(a: &mut Self, b: &Self, mask: u64) {
+                a.0 = $crate::nist::arith::select(mask, b.0, a.0);
             }
 
             #[inline]
