@@ -270,6 +270,14 @@ mod x86 {
     }
 }
 
+// RSA's windowed-exponentiation table read (ic-rsa) at 2048 bits: the masked
+// scan, written through `out`. Compiled on every target; check-ct.py requires it
+// on x86-64 only.
+#[no_mangle]
+pub fn ct_rsa_select_2048(table: &[[u64; 64]; 16], digit: u64, out: &mut [u64; 64]) {
+    ic_rsa::ct_probes::select_2048(table, digit, out)
+}
+
 // x86-64: P-256's MULX/ADX field sequences and the point formulas made of
 // them. Compiled to be read, never run: they need BMI2 and ADX.
 #[cfg(target_arch = "x86_64")]

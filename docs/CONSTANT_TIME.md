@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and twenty-seven more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and twenty-eight more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -93,7 +93,8 @@ Encoding probes do not automatically detect a return to lookup tables.
 The four-byte helper probes do not cover all buffer lengths or loop forms.
 
 Decoding, KWP authentication, coefficient sampling, signing rejection loops,
-curve/RSA arithmetic and other functions are outside this gate. Some of their
+curve arithmetic and other functions are outside this gate, and so are RSA's
+Montgomery products and exponentiation (see the end of this file). Some of their
 branches are permitted because the inputs are public or because the standard
 allows the rejection to be observable. Extending coverage needs explicit rules
 for each such case rather than a blanket branch-count allowance.
@@ -404,3 +405,28 @@ branch either.
 Probe count: twenty-seven on x86-64 alone, where there were twenty-three.
 All seventy-one pass on x86-64, and the forty-four on each 32-bit target
 are unchanged.
+
+RSA, 2026-10-13: one probe was added for RSA's windowed-exponentiation table
+read at 2048 bits, `ct_rsa_select_2048` (`ic-rsa/src/uint.rs`, `select`, called
+through `ic_rsa::ct_probes::select_2048`). The masked scan is unrolled on
+x86-64, so the gate reads it there, and it is listed in `X86_ONLY`. On the
+32-bit targets and RISC-V LLVM keeps the entry loop rolled, a loop over a
+public count, so the probe is not required there, and no rule excuses it.
+Probe count: twenty-eight on x86-64 alone, where there were twenty-seven. All
+seventy-two pass on x86-64, and the forty-four on each 32-bit target are
+unchanged.
+
+Three RSA probes were tried and dropped from the gate. Each contains loops
+over the public width, which the gate rejects on every target, and the rule
+for this gate is not to reshape library code to pass it:
+
+- `ct_rsa_adx_mont_mul_2048`: the MULX/ADCX/ADOX product. Its row and pass
+  loops end on `jrcxz`, `jmp` and `jne` on the width.
+- `ct_rsa_ifma_amm_2048`: the IFMA product. Its row loop is `jnz` on the
+  word count, and `Ctx::amm`'s carry loop adds `je`, `jne` and `ja`.
+- `ct_rsa_cios_2048`: the portable CIOS product. Its i and j loops end on
+  `b`, `bne` and `beq` on every target.
+
+The MULX/ADX path is covered by `ic-rsa-2048-sign-adx` in ctgrind instead,
+which forces that backend under Valgrind (docs/CTGRIND.md). The IFMA path is
+covered by neither tool.

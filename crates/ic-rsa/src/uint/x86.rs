@@ -58,6 +58,9 @@ use core::arch::asm;
 /// Whether this CPU has `MULX` (BMI2) and `ADCX`/`ADOX` (ADX), asked once.
 pub(crate) fn available() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
+    if super::adx_forced() {
+        return true;
+    }
     // 0 not yet asked, 1 yes, 2 no.
     static CACHED: AtomicU8 = AtomicU8::new(0);
     match CACHED.load(Ordering::Relaxed) {

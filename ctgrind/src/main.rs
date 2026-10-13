@@ -298,23 +298,33 @@ fn ic_cases() -> Vec<Case> {
             public(&ok);
             assert!(ok);
         }),
-        ("ic-rsa-2048-sign", || {
-            let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x41u8; 48], b"ctgrind").unwrap();
-            let key = ic_rsa::generate(2048, &mut rng).unwrap();
-            // Only the private state is marked: d, the primes p and q with
-            // their Montgomery constants, and the CRT values dP, dQ, qInv,
-            // which are derived from the primes. The public modulus n and
-            // exponent e stay defined, and so does the active width of each
-            // prime, which the code documents as public (a function of the
-            // key size). Marking the whole key, as this case once did, made
-            // loops bounded by the public modulus width report as secret.
-            key.for_each_secret_region(vg::secret_region);
-            let mut sig = vec![0u8; 256];
-            let r = ironcrypto::rsa::Pkcs1Sha256::sign(&key, b"message", &mut sig);
-            public(&r);
-            r.unwrap();
-        }),
+        ("ic-rsa-2048-sign", || rsa_2048_sign(false)),
+        ("ic-rsa-2048-sign-adx", || rsa_2048_sign(true)),
     ]
+}
+
+/// RSA-2048 PKCS#1 v1.5 signing with only the private state marked. With `adx`
+/// the MULX/ADX Montgomery backend is taken whatever CPUID says, which is the
+/// path Valgrind would otherwise never run; see `ct_probes::with_forced_adx`.
+fn rsa_2048_sign(adx: bool) {
+    let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x41u8; 48], b"ctgrind").unwrap();
+    let key = ic_rsa::generate(2048, &mut rng).unwrap();
+    // Only the private state is marked: d, the primes p and q with their
+    // Montgomery constants, and the CRT values dP, dQ, qInv, which are derived
+    // from the primes. The public modulus n and exponent e stay defined, and so
+    // does the active width of each prime, which the code documents as public
+    // (a function of the key size). Marking the whole key, as this case once
+    // did, made loops bounded by the public modulus width report as secret.
+    key.for_each_secret_region(vg::secret_region);
+    let mut sig = vec![0u8; 256];
+    let mut sign = || ironcrypto::rsa::Pkcs1Sha256::sign(&key, b"message", &mut sig);
+    let r = if adx {
+        ic_rsa::ct_probes::with_forced_adx(sign)
+    } else {
+        sign()
+    };
+    public(&r);
+    r.unwrap();
 }
 
 fn graviola_cases() -> Vec<Case> {

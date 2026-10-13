@@ -288,6 +288,27 @@ mod x86;
 #[allow(unsafe_code)]
 mod ifma;
 
+/// Under `ct-probes`, set by `ct_probes::with_forced_adx`: the MULX/ADX backend
+/// is taken whatever CPUID reports, and IFMA is declined. Valgrind executes ADX
+/// but hides the bit from CPUID, so the harness reaches that path this way.
+#[cfg(feature = "ct-probes")]
+pub(crate) static FORCE_ADX: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Whether [`FORCE_ADX`] is set. Always false outside `ct-probes`.
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
+#[inline(always)]
+fn adx_forced() -> bool {
+    #[cfg(feature = "ct-probes")]
+    {
+        FORCE_ADX.load(core::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "ct-probes"))]
+    {
+        false
+    }
+}
+
 /// Which implementation of Montgomery arithmetic this process uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
@@ -603,7 +624,7 @@ fn window(exp: &Uint, w: usize) -> u64 {
 ///
 /// Every entry is read and masked; which one survives is arithmetic on
 /// `digit`, which is secret, and the addresses are not.
-fn select(table: &[Limbs; 16], limbs: usize, digit: u64, out: &mut Limbs) {
+pub(crate) fn select(table: &[Limbs; 16], limbs: usize, digit: u64, out: &mut Limbs) {
     let digit = core::hint::black_box(digit);
     let mut masks = [0u64; 16];
     for (k, mask) in masks.iter_mut().enumerate() {

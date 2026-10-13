@@ -51,6 +51,9 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+#[cfg(feature = "ct-probes")]
+#[doc(hidden)]
+pub mod ct_probes;
 mod kat;
 pub mod key;
 pub mod pkcs1;
