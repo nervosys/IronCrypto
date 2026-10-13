@@ -23,10 +23,12 @@ bench-internals = ["std"]
 # compiled code. Also not API and not covered by semver.
 ct-probes = []
 
+# `ic_approved_only` leaves out every algorithm FIPS approved mode does not
+# permit; see docs/FIPS.md.
 # `ic_limb32` selects the 32-bit-limb Curve25519 field on any target; see
 # `src/field32.rs`.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)", "cfg(ic_approved_only)"] }
 
 [[test]]
 # Its own process, without the harness: it counts allocations, and only the

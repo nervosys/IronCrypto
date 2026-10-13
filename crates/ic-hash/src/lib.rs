@@ -28,7 +28,11 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
+// Each `not(ic_approved_only)` below is an algorithm FIPS approved mode does
+// not permit, left out of that build; see `ic_core::APPROVED_ONLY`.
+#[cfg(not(ic_approved_only))]
 pub mod blake2;
+#[cfg(not(ic_approved_only))]
 pub mod blake3;
 // SHA-NI, behind runtime detection. See `sha2::x86`.
 #[allow(unsafe_code)]
@@ -36,7 +40,9 @@ mod sha2;
 mod sha3;
 pub mod sp800_185;
 
+#[cfg(not(ic_approved_only))]
 pub use blake2::{blake2b_long, Blake2b, Blake2s};
+#[cfg(not(ic_approved_only))]
 pub use blake3::{Blake3, Blake3Reader};
 pub use sha2::{Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
 pub use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256, XofReader};
@@ -46,8 +52,11 @@ pub use sp800_185::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256
 /// Dynamic identifiers for the digests in this crate, as used by the ontology
 /// and the agent-facing dispatch layer.
 pub const DIGEST_IDS: &[&str] = &[
+    #[cfg(not(ic_approved_only))]
     "blake2b",
+    #[cfg(not(ic_approved_only))]
     "blake2s",
+    #[cfg(not(ic_approved_only))]
     "blake3",
     "sha2-224",
     "sha2-256",

@@ -12,7 +12,12 @@ use ic_fips::{check, enter_error_state, initialize, mode, set_mode, state, Mode,
 #[test]
 fn the_error_state_latches_and_reaches_the_primitives() {
     initialize().unwrap();
-    assert_eq!(state(), State::Operational(Mode::Unrestricted));
+    let first = if cfg!(ic_approved_only) {
+        Mode::Approved
+    } else {
+        Mode::Unrestricted
+    };
+    assert_eq!(state(), State::Operational(first));
     let cipher = ic_cipher::Aes256Gcm::new(&[7u8; 32]).unwrap();
     let mut tag = [0u8; 16];
     cipher

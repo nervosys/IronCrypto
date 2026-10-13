@@ -11,12 +11,15 @@ use crate::{aead, hash, hmac, quic};
 pub static ALL: &[SupportedCipherSuite] = &[
     TLS13_AES_256_GCM_SHA384,
     TLS13_AES_128_GCM_SHA256,
+    #[cfg(not(ic_approved_only))]
     TLS13_CHACHA20_POLY1305_SHA256,
     TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
     TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+    #[cfg(not(ic_approved_only))]
     TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
     TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
     TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    #[cfg(not(ic_approved_only))]
     TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 ];
 
@@ -54,6 +57,7 @@ pub static TLS13_AES_128_GCM_SHA256: SupportedCipherSuite =
 /// runs on has AES instructions, where AES-GCM is faster. On hardware without
 /// them the position in this list is what stops the connection failing
 /// outright, which is the case for offering it at all.
+#[cfg(not(ic_approved_only))]
 pub static TLS13_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
     SupportedCipherSuite::Tls13(&rustls::Tls13CipherSuite {
         common: CipherSuiteCommon {
@@ -105,6 +109,7 @@ pub static TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256: SupportedCipherSuite =
 ///
 /// RFC 7905. Note that this one is not framed like the AES-GCM suites above --
 /// it sends no explicit nonce -- which `aead` handles and tests.
+#[cfg(not(ic_approved_only))]
 pub static TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
     SupportedCipherSuite::Tls12(&rustls::Tls12CipherSuite {
         common: CipherSuiteCommon {
@@ -154,6 +159,7 @@ pub static TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: SupportedCipherSuite =
     });
 
 /// TLS 1.2 with ECDHE, RSA, ChaCha20-Poly1305 and SHA-256.
+#[cfg(not(ic_approved_only))]
 pub static TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
     SupportedCipherSuite::Tls12(&rustls::Tls12CipherSuite {
         common: CipherSuiteCommon {
@@ -177,6 +183,7 @@ pub static TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
 /// certificate negotiates one of these. rustls's own provider lists it first,
 /// and this follows.
 static TLS12_ECDSA_SCHEMES: &[SignatureScheme] = &[
+    #[cfg(not(ic_approved_only))]
     SignatureScheme::ED25519,
     SignatureScheme::ECDSA_NISTP384_SHA384,
     SignatureScheme::ECDSA_NISTP256_SHA256,
@@ -228,8 +235,13 @@ mod tests {
                 checked += 1;
             }
         }
-        // Three ECDSA suites at three schemes each, three RSA suites at six.
-        assert!(checked >= 27, "only {checked} advertised schemes examined");
+        // Three ECDSA suites at three schemes each, three RSA suites at six;
+        // under `ic_approved_only`, two at two and two at six.
+        let floor = if cfg!(ic_approved_only) { 16 } else { 27 };
+        assert!(
+            checked >= floor,
+            "only {checked} advertised schemes examined"
+        );
     }
 
     /// Each suite's hash must match the one its name promises, because the key
@@ -251,7 +263,9 @@ mod tests {
                 &TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
                 HashAlgorithm::SHA256,
             ),
+            #[cfg(not(ic_approved_only))]
             (&TLS13_CHACHA20_POLY1305_SHA256, HashAlgorithm::SHA256),
+            #[cfg(not(ic_approved_only))]
             (
                 &TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
                 HashAlgorithm::SHA256,
@@ -264,6 +278,7 @@ mod tests {
                 &TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
                 HashAlgorithm::SHA256,
             ),
+            #[cfg(not(ic_approved_only))]
             (
                 &TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
                 HashAlgorithm::SHA256,
@@ -279,6 +294,7 @@ mod tests {
 
     /// The list must be ordered strongest first, since rustls offers it in
     /// order and the peer picks the first it accepts.
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn the_suites_are_ordered_and_distinct() {
         let names: alloc::vec::Vec<CipherSuite> = ALL.iter().map(|s| s.suite()).collect();

@@ -8,6 +8,9 @@
 //! evaluated element, proof, output -- is compared, in all three modes and
 //! for the batches.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::traits::RandomSource;
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::ec::hash_to_curve::{expand_message_xmd, hash_to_curve};

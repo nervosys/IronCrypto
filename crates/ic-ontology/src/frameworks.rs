@@ -421,7 +421,7 @@ pub static CONTROLS: &[Control] = &[
         description: "Cryptography used to protect Controlled Unclassified Information must be FIPS-validated, meaning it carries a CMVP certificate.",
         bearing: "This is the practice IronCrypto cannot satisfy, and the most important entry in this module. Validation is a process with a laboratory and a certificate number; it is not a property of source code and no amount of correctness evidence substitutes for it.",
         compliance: Compliance::Unmet {
-            why: "IronCrypto has no CMVP certificate and is not FIPS-validated. Do not use it where this practice applies. The library implements FIPS 140-3's operational discipline -- approved-mode policy, self-tests before first use, a latching error state, service indicators -- which is a prerequisite for pursuing validation and is not validation. has(\"fips-validated\") returns false and is asserted to keep returning false until a certificate exists.",
+            why: "IronCrypto has no CMVP certificate and is not FIPS-validated. Do not use it where this practice applies. The library implements FIPS 140-3's operational discipline -- approved-mode policy, self-tests before first use, a latching error state, service indicators, and a build that contains only approved algorithms (--cfg ic_approved_only) -- which is a prerequisite for pursuing validation and is not validation. has(\"fips-validated\") returns false and is asserted to keep returning false until a certificate exists.",
         },
         algorithms: &[],
         standards: &["FIPS 140-3"],

@@ -48,14 +48,17 @@ fn measure() {
     );
 
     // ChaCha20-Poly1305 for comparison.
-    let cc = ic_cipher::ChaCha20Poly1305::new(&[0x2a; 32]).unwrap();
-    let t = Instant::now();
-    cc.seal_detached(&[0u8; 12], b"", &mut data, &mut tag)
-        .unwrap();
-    println!(
-        "chacha20-poly1305: {:.1} MiB/s",
-        mbps(size, t.elapsed().as_secs_f64())
-    );
+    #[cfg(not(ic_approved_only))]
+    {
+        let cc = ic_cipher::ChaCha20Poly1305::new(&[0x2a; 32]).unwrap();
+        let t = Instant::now();
+        cc.seal_detached(&[0u8; 12], b"", &mut data, &mut tag)
+            .unwrap();
+        println!(
+            "chacha20-poly1305: {:.1} MiB/s",
+            mbps(size, t.elapsed().as_secs_f64())
+        );
+    }
 
     println!("aes backend: {:?}", ic_cipher::aes::active_backend());
     println!("ghash accelerated: {}", ic_cipher::gcm::ghash_accelerated());

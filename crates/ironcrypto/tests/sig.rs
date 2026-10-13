@@ -33,6 +33,23 @@ fn kind<T: std::fmt::Debug>(r: ic_core::Result<T>) -> ErrorKind {
     r.expect_err("must be refused").kind()
 }
 
+/// Whether `alg` is one an approved-only build leaves out, after checking that
+/// this case is refused for that reason and no other.
+///
+/// Ed25519 arrives as data, so the build cannot refuse it at compile time; it
+/// refuses it by name, and these cases are where that is checked against real
+/// keys and signatures.
+fn left_out(alg: SignatureAlgorithm, spki: &[u8], message: &[u8], signature: &[u8]) -> bool {
+    if cfg!(ic_approved_only) && alg == SignatureAlgorithm::Ed25519 {
+        assert_eq!(
+            kind(verify_spki(alg, spki, message, signature)),
+            ErrorKind::NotApprovedInFipsMode
+        );
+        return true;
+    }
+    false
+}
+
 /// One valid case, and the rule turned against it: it verifies, and a changed
 /// message, a changed or shortened signature and every other algorithm are
 /// each refused as the failure they are.
@@ -108,6 +125,9 @@ fn openssl_signatures_verify_and_altered_ones_do_not() {
             hex_field(case, "message"),
             hex_field(case, "signature"),
         );
+        if left_out(alg, &spki, &message, &signature) {
+            continue;
+        }
         verifies_and_altered_does_not(alg, &spki, &message, &signature);
         seen.insert(alg.id());
     }
@@ -124,7 +144,10 @@ fn openssl_signatures_verify_and_altered_ones_do_not() {
             "rsa-pss-sha256",
             "rsa-pss-sha384",
             "rsa-pss-sha512",
-        ],
+        ]
+        .into_iter()
+        .filter(|a| !(cfg!(ic_approved_only) && *a == "ed25519"))
+        .collect::<Vec<_>>(),
         "the cases did not cover every classical algorithm"
     );
 }
@@ -167,6 +190,9 @@ fn openssl_issued_certificates_verify_under_their_issuer() {
         let (ca, leaf) = (hex_field(case, "ca_der"), hex_field(case, "leaf_der"));
         let (ca_tbs, ca_spki, ca_sig) = certificate_parts(&ca);
         let (leaf_tbs, leaf_spki, leaf_sig) = certificate_parts(&leaf);
+        if left_out(alg, ca_spki, ca_tbs, ca_sig) {
+            continue;
+        }
 
         verify_spki(alg, ca_spki, ca_tbs, ca_sig).expect("the CA's own signature");
         verify_spki(alg, ca_spki, leaf_tbs, leaf_sig).expect("the leaf, under the CA");
@@ -184,7 +210,11 @@ fn openssl_issued_certificates_verify_under_their_issuer() {
         );
         seen.push(alg.id());
     }
-    assert_eq!(seen, ["ed25519", "ml-dsa-65", "ml-dsa-87"]);
+    if cfg!(ic_approved_only) {
+        assert_eq!(seen, ["ml-dsa-65", "ml-dsa-87"]);
+    } else {
+        assert_eq!(seen, ["ed25519", "ml-dsa-65", "ml-dsa-87"]);
+    }
 }
 
 /// Certificates PyCA signed, each verified as the algorithm it names.
@@ -212,6 +242,12 @@ fn pyca_certificate_signatures_are_judged_as_the_algorithm_they_name() {
         let (tbs, spki, signature) = certificate_parts(&certificate);
         // Self-signed: the key in the certificate is the key that signed it.
         assert_eq!(spki, &issuer_spki[..], "{}", case["name"]);
+        if left_out(alg, &issuer_spki, tbs, signature) {
+            // Counted, so the totals below hold in both builds: the refusal
+            // just checked is what this case comes to here.
+            *tally.entry(case["expected"].clone()).or_insert(0usize) += 1;
+            continue;
+        }
         let result = verify_spki(alg, &issuer_spki, tbs, signature);
         match case["expected"].as_str() {
             "valid" => {

@@ -6,6 +6,9 @@
 //! equation and each refused by libsodium. Here, every one is refused as a
 //! public key, and as the R of a signature under a real key.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::ErrorKind;
 use ic_vectors::{hex_field, VectorFile};
 use ironcrypto::ec::{Ed25519Key, Ed25519VerifyKey};

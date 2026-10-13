@@ -216,7 +216,9 @@ impl<A: Aead> fmt::Debug for Opener<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Aes128Gcm, Aes256Gcm, Aes256GcmSiv, ChaCha20Poly1305};
+    use crate::{Aes128Gcm, Aes256Gcm};
+    #[cfg(not(ic_approved_only))]
+    use crate::{Aes256GcmSiv, ChaCha20Poly1305};
     use ic_core::ErrorKind;
 
     const KEY: [u8; 32] = [7; 32];
@@ -272,7 +274,9 @@ mod tests {
         }
         round::<Aes128Gcm>();
         round::<Aes256Gcm>();
+        #[cfg(not(ic_approved_only))]
         round::<ChaCha20Poly1305>();
+        #[cfg(not(ic_approved_only))]
         round::<Aes256GcmSiv>();
     }
 

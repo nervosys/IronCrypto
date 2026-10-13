@@ -117,6 +117,11 @@ impl KeyProvider for Keys {
                 let key = rsa_key_from(modulus, public_exponent, private_exponent, prime1, prime2)?;
                 Ok(Arc::new(RsaSigningKey { key: Arc::new(key) }))
             }
+            #[cfg(ic_approved_only)]
+            ic_pkix::PrivateKeyInfo::Ed25519(_) => Err(Error::General(
+                "Ed25519 is not in this build: it was compiled with ic_approved_only".into(),
+            )),
+            #[cfg(not(ic_approved_only))]
             ic_pkix::PrivateKeyInfo::Ed25519(seed) => {
                 // `ic_pkix` already refuses any length but 32, in the parser as
                 // well as the writer, so this cannot fire today. It is kept
@@ -269,6 +274,7 @@ impl Signer for EcdsaSigner {
 ///
 /// The scheme fixes the hash and the curve together, so there is nothing to
 /// choose: one key, one scheme, one 64-byte signature.
+#[cfg(not(ic_approved_only))]
 struct Ed25519SigningKey {
     /// The expanded key, with its public key already derived.
     ///
@@ -279,12 +285,14 @@ struct Ed25519SigningKey {
     key: Arc<ic_ec::Ed25519Key>,
 }
 
+#[cfg(not(ic_approved_only))]
 impl core::fmt::Debug for Ed25519SigningKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Ed25519SigningKey(..)")
     }
 }
 
+#[cfg(not(ic_approved_only))]
 impl SigningKey for Ed25519SigningKey {
     fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
         offered.contains(&SignatureScheme::ED25519).then(|| {
@@ -299,16 +307,19 @@ impl SigningKey for Ed25519SigningKey {
     }
 }
 
+#[cfg(not(ic_approved_only))]
 struct Ed25519Signer {
     key: Arc<ic_ec::Ed25519Key>,
 }
 
+#[cfg(not(ic_approved_only))]
 impl core::fmt::Debug for Ed25519Signer {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("Ed25519Signer(..)")
     }
 }
 
+#[cfg(not(ic_approved_only))]
 impl Signer for Ed25519Signer {
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         // Ed25519 hashes the message itself, twice, as part of the scheme. As
@@ -692,6 +703,7 @@ mod tests {
     /// down rather than assume it: there is nothing here to go subtly wrong,
     /// so a failure would mean something plainly wrong, like a seed used where
     /// an expanded scalar was wanted.
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn an_ed25519_signature_verifies_through_this_providers_verifier() {
         use rustls::pki_types::SignatureVerificationAlgorithm;

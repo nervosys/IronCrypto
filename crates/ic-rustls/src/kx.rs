@@ -14,6 +14,7 @@ use ic_core::Zeroize;
 use rustls::crypto::{ActiveKeyExchange, SharedSecret, SupportedKxGroup};
 use rustls::{Error, NamedGroup};
 
+#[cfg(not(ic_approved_only))]
 pub(crate) static X25519: X25519Group = X25519Group;
 pub(crate) static SECP256R1: NistGroup = NistGroup {
     group: NamedGroup::secp256r1,
@@ -41,8 +42,10 @@ fn random_scalar(len: usize) -> Result<Vec<u8>, Error> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
+#[cfg(not(ic_approved_only))]
 pub(crate) struct X25519Group;
 
+#[cfg(not(ic_approved_only))]
 impl SupportedKxGroup for X25519Group {
     fn start(&self) -> Result<Box<dyn ActiveKeyExchange>, Error> {
         let secret = random_scalar(32)?;
@@ -64,17 +67,20 @@ impl SupportedKxGroup for X25519Group {
     }
 }
 
+#[cfg(not(ic_approved_only))]
 struct X25519Exchange {
     secret: Vec<u8>,
     public: Vec<u8>,
 }
 
+#[cfg(not(ic_approved_only))]
 impl Drop for X25519Exchange {
     fn drop(&mut self) {
         self.secret.zeroize();
     }
 }
 
+#[cfg(not(ic_approved_only))]
 impl ActiveKeyExchange for X25519Exchange {
     fn complete(self: Box<Self>, peer: &[u8]) -> Result<SharedSecret, Error> {
         let mut shared = [0u8; 32];
@@ -193,7 +199,8 @@ mod tests {
     #[test]
     fn each_group_agrees_with_itself() {
         for group in [
-            &X25519 as &dyn SupportedKxGroup,
+            #[cfg(not(ic_approved_only))]
+            (&X25519 as &dyn SupportedKxGroup),
             &SECP256R1 as &dyn SupportedKxGroup,
             &SECP384R1 as &dyn SupportedKxGroup,
         ] {
@@ -254,13 +261,17 @@ mod tests {
 
         // X25519 takes any 32 bytes as a u-coordinate by design, but must
         // refuse the low-order ones: they force the shared secret to zero.
-        let low_order = [0u8; 32];
-        assert!(X25519.start().unwrap().complete(&low_order).is_err());
-        assert!(X25519.start().unwrap().complete(&[]).is_err());
+        #[cfg(not(ic_approved_only))]
+        {
+            let low_order = [0u8; 32];
+            assert!(X25519.start().unwrap().complete(&low_order).is_err());
+            assert!(X25519.start().unwrap().complete(&[]).is_err());
+        }
     }
 
     #[test]
     fn the_groups_name_themselves_correctly() {
+        #[cfg(not(ic_approved_only))]
         assert_eq!(X25519.name(), NamedGroup::X25519);
         assert_eq!(SECP256R1.name(), NamedGroup::secp256r1);
         assert_eq!(SECP384R1.name(), NamedGroup::secp384r1);
@@ -268,6 +279,7 @@ mod tests {
 
     #[test]
     fn no_group_claims_fips_validation() {
+        #[cfg(not(ic_approved_only))]
         assert!(!X25519.fips());
         assert!(!SECP256R1.fips());
         assert!(!SECP384R1.fips());

@@ -88,6 +88,11 @@ else
     printf 'install with `rustup toolchain install %s --profile minimal`\n' "$msrv"
 fi
 
+step "approved-only build"
+# The same crates built with --cfg ic_approved_only, which nothing above
+# builds. See scripts/approved-only.sh.
+"$(dirname "${BASH_SOURCE[0]}")/approved-only.sh"
+
 step "compiled-code constant-time probes"
 # Fail if a required target is absent: a skipped probe is not verification.
 # The isolated harness uses LTO over the real library implementations.

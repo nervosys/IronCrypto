@@ -55,8 +55,12 @@
 #[allow(unsafe_code)]
 pub mod aes;
 
+// Each `not(ic_approved_only)` below is an algorithm FIPS approved mode does
+// not permit, left out of that build; see `ic_core::APPROVED_ONLY`.
+//
 // AVX2 for the ChaCha20 keystream, behind runtime detection.
 #[allow(unsafe_code)]
+#[cfg(not(ic_approved_only))]
 pub mod chacha;
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 // The carry-less multiply instruction.
@@ -65,17 +69,22 @@ mod clmul;
 // GHASH via CLMUL when the CPU has it.
 #[allow(unsafe_code)]
 pub mod gcm;
+#[cfg(not(ic_approved_only))]
 pub mod gcm_siv;
 pub mod gf;
 pub mod keywrap;
 pub mod modes;
+#[cfg(not(ic_approved_only))]
 pub mod polyval;
 pub mod sealer;
+#[cfg(not(ic_approved_only))]
 pub mod shamir;
 
 pub use aes::{Aes128, Aes192, Aes256};
+#[cfg(not(ic_approved_only))]
 pub use chacha::{chacha20_xor, ChaCha20Poly1305, Poly1305, XChaCha20Poly1305};
 pub use gcm::{Aes128Gcm, Aes192Gcm, Aes256Gcm, GcmLimits};
+#[cfg(not(ic_approved_only))]
 pub use gcm_siv::{Aes128GcmSiv, Aes256GcmSiv};
 pub use keywrap::{Aes128Kw, Aes128Kwp, Aes192Kw, Aes192Kwp, Aes256Kw, Aes256Kwp};
 pub use modes::{cbc_decrypt, cbc_encrypt, ctr_xor, pkcs7_pad, pkcs7_unpad};
@@ -86,7 +95,9 @@ pub const AEAD_IDS: &[&str] = &[
     "aes-128-gcm",
     "aes-192-gcm",
     "aes-256-gcm",
+    #[cfg(not(ic_approved_only))]
     "chacha20-poly1305",
+    #[cfg(not(ic_approved_only))]
     "xchacha20-poly1305",
 ];
 

@@ -6,6 +6,9 @@
 //! give the reference's shares byte for byte, then recombine from several
 //! subsets -- including the last shares, which index 255 reaches.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::cipher::shamir;
 use ironcrypto::core_types::traits::RandomSource;

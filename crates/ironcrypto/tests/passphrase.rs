@@ -7,6 +7,9 @@
 //! self-test's, is refused through the public API, as anything under the
 //! floor must be.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::ErrorKind;
 use ic_vectors::{hex_field, VectorFile};
 use ironcrypto::drbg;

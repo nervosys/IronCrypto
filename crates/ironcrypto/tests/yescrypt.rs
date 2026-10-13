@@ -8,6 +8,9 @@
 //! lanes and t = 1), classic scrypt, empty and 64-byte salts, and `$7$`
 //! (also with a `p` that takes two characters). Every verdict must match.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::ErrorKind;
 use ic_vectors::{hex_field, VectorFile};
 use ironcrypto::kdf::yescrypt;

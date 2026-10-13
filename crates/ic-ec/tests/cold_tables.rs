@@ -90,7 +90,7 @@ fn agree<K: KeyAgreement>() {
 }
 
 fn main() {
-    let cases: [(&str, fn()); 8] = [
+    let cases: &[(&str, fn())] = &[
         (
             "ECDSA P-256",
             sign_and_verify::<ic_ec::p256::EcdsaP256Sha256>,
@@ -103,10 +103,12 @@ fn main() {
             "ECDSA P-521",
             sign_and_verify::<ic_ec::p521::EcdsaP521Sha512>,
         ),
+        #[cfg(not(ic_approved_only))]
         ("Ed25519", sign_and_verify::<ic_ec::ed25519::Ed25519>),
         ("ECDH P-256", agree::<ic_ec::p256::EcdhP256>),
         ("ECDH P-384", agree::<ic_ec::p384::EcdhP384>),
         ("ECDH P-521", agree::<ic_ec::p521::EcdhP521>),
+        #[cfg(not(ic_approved_only))]
         ("X25519", agree::<ic_ec::x25519::X25519>),
     ];
 
@@ -116,7 +118,7 @@ fn main() {
     assert!(control >= 1, "the counting allocator counted nothing");
 
     let mut failed = 0;
-    for (name, case) in cases {
+    for &(name, case) in cases {
         let n = allocations_in(case);
         println!("{name:<12} first use: {n} allocations");
         if n != 0 {

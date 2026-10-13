@@ -39,6 +39,14 @@ fn the_software_signer_reads_openssl_keys_and_signs_what_verify_accepts() {
             hex_field(case, "spki"),
             hex_field(case, "message"),
         );
+        if cfg!(ic_approved_only) && name == "ed25519" {
+            // Not in this build, and refused as that rather than as a bad key.
+            assert_eq!(
+                SoftwareSigner::from_pkcs8(&pkcs8).unwrap_err().kind(),
+                ErrorKind::NotApprovedInFipsMode
+            );
+            continue;
+        }
         let signer = SoftwareSigner::from_pkcs8(&pkcs8).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         assert_eq!(hex(signer.public_key()), case["spki"], "{name}: public key");
         assert_eq!(signer.custody(), Custody::Software);
@@ -92,7 +100,9 @@ fn the_software_signer_reads_openssl_keys_and_signs_what_verify_accepts() {
     }
     // Nine classical and ML-DSA keys, six fast SLH-DSA sets, and the six
     // small-signature sets when asked.
-    assert_eq!(ran.len(), if slow { 21 } else { 15 }, "{ran:?}");
+    // Ed25519 is not among them under `ic_approved_only`.
+    let left_out = usize::from(cfg!(ic_approved_only));
+    assert_eq!(ran.len(), if slow { 21 } else { 15 } - left_out, "{ran:?}");
     if !slow {
         println!("{skipped} SLH-DSA s-set keys skipped; set IC_SLOW_SLH_DSA to run them");
     }

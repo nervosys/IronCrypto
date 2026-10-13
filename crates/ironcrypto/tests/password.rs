@@ -5,6 +5,9 @@
 //! formats are checked against other implementations in their own tests.
 //! What is under test is the dispatch and the rehash decision.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::ErrorKind;
 use ironcrypto::drbg::Rng;
 use ironcrypto::kdf::argon2::{phc, Argon2Params, Variant};

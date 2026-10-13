@@ -12,6 +12,11 @@ keywords = ["cryptography", "tls", "rustls", "fips"]
 categories = ["cryptography", "network-programming"]
 publish.workspace = true
 
+# `ic_approved_only` leaves out every algorithm FIPS approved mode does not
+# permit; see docs/FIPS.md.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)"] }
+
 [dependencies]
 ic-core = { workspace = true, features = ["std"] }
 ic-hash = { workspace = true, features = ["std"] }

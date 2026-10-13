@@ -29,6 +29,9 @@ pub use cmac::{CmacAes128, CmacAes192, CmacAes256};
 pub use hmac::{
     Hmac, HmacSha256, HmacSha384, HmacSha3_256, HmacSha3_512, HmacSha512, HmacSha512_256,
 };
+// Each `not(ic_approved_only)` below is an algorithm FIPS approved mode does
+// not permit, left out of that build; see `ic_core::APPROVED_ONLY`.
+#[cfg(not(ic_approved_only))]
 pub use ic_cipher::Poly1305;
 pub use kmac::{Kmac128, Kmac256};
 
@@ -43,5 +46,6 @@ pub const MAC_IDS: &[&str] = &[
     "cmac-aes-128",
     "cmac-aes-192",
     "cmac-aes-256",
+    #[cfg(not(ic_approved_only))]
     "poly1305",
 ];

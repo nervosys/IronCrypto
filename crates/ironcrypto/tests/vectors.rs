@@ -9,6 +9,7 @@
 //! so that when someone drops in an ACVP file the only new thing is the data.
 
 use ic_vectors::{hex, hex_field, optional_hex_field, VectorFile};
+#[cfg(not(ic_approved_only))]
 use ironcrypto::prelude::*;
 use ironcrypto::{cipher, mldsa, mlkem};
 
@@ -54,6 +55,7 @@ fn aes_key_wrap_vectors_from_file() {
 ///
 /// This is the file that would move AES-GCM-SIV from `experimental` to
 /// `available`. Everything beneath it is verified; only the assembly is not.
+#[cfg(not(ic_approved_only))]
 #[test]
 fn aes_gcm_siv_vectors_from_file() {
     let Some(file) = VectorFile::load_or_report("aes-gcm-siv") else {

@@ -11,6 +11,9 @@
 //! sequence 0, 1, ..., 250. Each is also checked fed one way in pieces and
 //! read back in pieces, since the tree and the reader both buffer.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_vectors::{hex_field, VectorFile};
 use ironcrypto::hash::{Blake2s, Blake3};
 

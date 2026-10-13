@@ -17,13 +17,16 @@
 use std::collections::BTreeMap;
 
 use ic_core::sig::SignatureAlgorithm;
-use ic_core::traits::{Aead, Kdf, KeyAgreement, Mac, SignatureScheme};
+use ic_core::traits::{Aead, Kdf, Mac};
+#[cfg(not(ic_approved_only))]
+use ic_core::traits::{KeyAgreement, SignatureScheme};
 use ic_core::ErrorKind;
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::cipher::{
-    Aes128Gcm, Aes128GcmSiv, Aes128Kw, Aes128Kwp, Aes192Gcm, Aes192Kw, Aes192Kwp, Aes256Gcm,
-    Aes256GcmSiv, Aes256Kw, Aes256Kwp, ChaCha20Poly1305, XChaCha20Poly1305,
+    Aes128Gcm, Aes128Kw, Aes128Kwp, Aes192Gcm, Aes192Kw, Aes192Kwp, Aes256Gcm, Aes256Kw, Aes256Kwp,
 };
+#[cfg(not(ic_approved_only))]
+use ironcrypto::cipher::{Aes128GcmSiv, Aes256GcmSiv, ChaCha20Poly1305, XChaCha20Poly1305};
 use ironcrypto::kdf::Hkdf;
 use ironcrypto::mac::{CmacAes128, CmacAes192, CmacAes256, HmacSha256, HmacSha384, HmacSha512};
 use ironcrypto::sig::{verify, PublicKey};
@@ -85,6 +88,7 @@ fn ecdsa_der_verification_matches_wycheproof() {
     }
 }
 
+#[cfg(not(ic_approved_only))]
 #[test]
 fn ed25519_verification_matches_wycheproof() {
     let Some(file) = VectorFile::load_or_report("wycheproof-eddsa") else {
@@ -105,6 +109,7 @@ fn ed25519_verification_matches_wycheproof() {
     assert_eq!(tally["ed25519 invalid refused"], 63);
 }
 
+#[cfg(not(ic_approved_only))]
 #[test]
 fn x25519_matches_wycheproof() {
     let Some(file) = VectorFile::load_or_report("wycheproof-x25519") else {
@@ -170,11 +175,16 @@ fn the_aeads_match_wycheproof() {
             ("aes-gcm", 16) => run!(Aes128Gcm),
             ("aes-gcm", 24) => run!(Aes192Gcm),
             ("aes-gcm", 32) => run!(Aes256Gcm),
+            #[cfg(not(ic_approved_only))]
             ("chacha20-poly1305", 32) => run!(ChaCha20Poly1305),
+            #[cfg(not(ic_approved_only))]
             ("xchacha20-poly1305", 32) => run!(XChaCha20Poly1305),
+            #[cfg(not(ic_approved_only))]
             ("aes-gcm-siv", 16) => run!(Aes128GcmSiv),
+            #[cfg(not(ic_approved_only))]
             ("aes-gcm-siv", 32) => run!(Aes256GcmSiv),
-            // A key length this library has no type for.
+            // A key length this library has no type for, or under
+            // `ic_approved_only` a cipher it has left out.
             (_, bits) => {
                 count(
                     &mut tally,
@@ -220,10 +230,15 @@ fn the_aeads_match_wycheproof() {
         judge(&mut tally, cipher, case, open.is_ok());
     }
     println!("{tally:#?}");
+    // One cipher under `ic_approved_only`, which the loop does not mind.
+    #[cfg_attr(ic_approved_only, allow(clippy::single_element_loop))]
     for cipher in [
         "aes-gcm",
+        #[cfg(not(ic_approved_only))]
         "chacha20-poly1305",
+        #[cfg(not(ic_approved_only))]
         "xchacha20-poly1305",
+        #[cfg(not(ic_approved_only))]
         "aes-gcm-siv",
     ] {
         assert!(tally[&format!("{cipher} valid accepted")] > 50, "{cipher}");

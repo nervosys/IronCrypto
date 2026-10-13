@@ -56,7 +56,10 @@ What that leaves:
 
 - **Nothing makes a direct caller run the self-tests.** A primitive called
   before `initialize()` works. Self-tests before first use, and approved mode,
-  hold only for services requested through `ic_fips::check` or `guarded`.
+  hold only for services requested through `ic_fips::check` or `guarded` --
+  except that a build with `--cfg ic_approved_only` (below) does not contain
+  the algorithms approved mode refuses, so for those it holds however they
+  would have been called.
 - **What has no error to return cannot refuse.** Hash functions and XOFs
   (`Sha256::new`, `update`, `finalize`, and BLAKE2b, BLAKE2s and BLAKE3, with
   or without a key, BLAKE3's key derivation included);
@@ -93,7 +96,10 @@ A validated module would have to close the three gaps above, which needs
 fallible constructors; see the list below.
 
 The module comes up *unrestricted*. Entering approved mode is an explicit
-operator decision, never a default a caller might not have noticed.
+operator decision, never a default a caller might not have noticed. A build
+with `--cfg ic_approved_only` is the exception: that decision was made when the
+build was configured, so it comes up approved and `set_mode(Unrestricted)` is
+refused.
 
 ### Approved mode of operation
 
@@ -113,6 +119,57 @@ fn main() -> ic_core::Result<()> {
     Ok(())
 }
 ```
+
+### A build with only the approved algorithms
+
+`check` refuses a non-approved algorithm only when it is asked. Building with
+`--cfg ic_approved_only`, in `RUSTFLAGS` and in `RUSTDOCFLAGS`, removes them
+instead:
+
+```toml
+# The application's .cargo/config.toml
+[build]
+rustflags = ["--cfg", "ic_approved_only"]
+rustdocflags = ["--cfg", "ic_approved_only"]
+```
+
+- **Every algorithm approved mode does not permit is left out of the build**:
+  ChaCha20-Poly1305, XChaCha20-Poly1305, Poly1305, AES-GCM-SIV, Shamir
+  sharing, BLAKE2b, BLAKE2s, BLAKE3, Argon2, scrypt, bcrypt, yescrypt,
+  passphrase sealing, `ic_kdf::password`, X25519, Ed25519, hashing to P-256,
+  the OPRF, OPAQUE and HPKE. A call to one does not compile. The documentation
+  of the `ironcrypto` crate carries three examples that compile in the default
+  build and are `compile_fail` in this one, and the documentation tests run
+  both ways.
+- **The ontology agrees.** Each of those entries reports `excluded` with no
+  Rust path, `ic_ontology::runtime::has("approved-only")` is true, and
+  `recommend` answers every policy as `FIPS_APPROVED` does. An entry that is
+  not approved takes its status from one constant, and a test that runs only
+  in this build fails if any entry not approved still says `available`.
+- **The self-tests agree.** The CAST table drops the same twenty-one entries:
+  64 tests rather than 85, with an integrity tag of its own. A test checks that
+  a row is behind the cfg exactly when the ontology says its algorithm is not
+  approved.
+- **`ic_fips::check`** refuses those algorithms with `NotApprovedInFipsMode`,
+  the reason, rather than `Unsupported`.
+- **What arrives as data cannot be refused at compile time.** An Ed25519 public
+  key in a certificate, or an Ed25519 private key handed to `ic_sig`'s signer
+  or to `ic_rustls`'s key provider, is refused with `NotApprovedInFipsMode` at
+  run time. `ic_rustls` offers only its six AES-GCM suites, P-256 and P-384
+  for key exchange, and ECDSA and RSA signatures.
+- **`ic-cli` is not part of it.** It is a tool that offers every algorithm.
+
+A cfg rather than a Cargo feature. Removing API is not additive, and Cargo
+unifies features across a dependency graph, so a feature any dependency turned
+on would remove these algorithms from every other crate in the build, and
+`--all-features` -- which this repository's checks use, as does much tooling --
+would build only this configuration. A cfg is set by whoever builds the final
+binary, which is who decides where the boundary lies. `scripts/approved-only.sh`
+checks this build in the local gate and in CI.
+
+It does not make the module validated, and nothing in it says otherwise:
+`has("fips-validated")` is false in this build as in every other, and
+`ic_rustls` still reports `fips() == false`.
 
 ### Service indicator
 
@@ -340,11 +397,12 @@ In rough order of effort:
 5. **Laboratory testing and CMVP submission** against a specific binary on
    specific operational environments.
 6. **An enforced module boundary.** The error state now reaches every
-   operation that can report an error, however it is called. The self-tests
-   before first use and approved mode still gate only services requested
-   through `ic_fips::check` or `guarded`, and what cannot report an error --
-   hashing above all -- cannot refuse at all. Validation needs every service
-   behind one gate, which means constructors that can fail.
+   operation that can report an error, however it is called, and a build
+   with `--cfg ic_approved_only` contains no algorithm approved mode refuses.
+   The self-tests before first use still gate only services requested through
+   `ic_fips::check` or `guarded`, and what cannot report an error -- hashing
+   above all -- cannot refuse at all. Validation needs every service behind
+   one gate, which means constructors that can fail.
 7. **Continuous health tests on the DRBGs** and pairwise-consistency tests on
    every generated key pair. ML-KEM, ML-DSA and RSA key generation check their
    pairs, and so does HPKE's `KeyPair::generate` for both KEMs, by computing

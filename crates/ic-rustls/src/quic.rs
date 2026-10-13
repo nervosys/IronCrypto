@@ -73,6 +73,7 @@ pub(crate) static AES_256_GCM: IcQuic = IcQuic {
 /// RFC 9001 section 6.6: the confidentiality limit exceeds the number of
 /// packets a connection can carry, so there is nothing to enforce and rustls
 /// spells that `u64::MAX`. The integrity limit is real.
+#[cfg(not(ic_approved_only))]
 pub(crate) static CHACHA20_POLY1305: IcQuic = IcQuic {
     suite: Suite::ChaCha20,
     confidentiality_limit: u64::MAX,
@@ -191,6 +192,7 @@ enum IcHeaderKey {
     /// As above with a 256-bit key.
     Aes256(ic_cipher::Aes256),
     /// The raw ChaCha20 block function. RFC 9001 section 5.4.4.
+    #[cfg(not(ic_approved_only))]
     ChaCha20([u8; 32]),
 }
 
@@ -204,6 +206,7 @@ impl IcHeaderKey {
             Suite::Aes256 => Self::Aes256(
                 ic_cipher::Aes256::new(key).expect("rustls supplied a key this suite does not use"),
             ),
+            #[cfg(not(ic_approved_only))]
             Suite::ChaCha20 => {
                 let mut k = [0u8; 32];
                 k.copy_from_slice(key);
@@ -232,11 +235,13 @@ impl IcHeaderKey {
                 match self {
                     Self::Aes128(c) => c.encrypt_block(&mut block),
                     Self::Aes256(c) => c.encrypt_block(&mut block),
+                    #[cfg(not(ic_approved_only))]
                     Self::ChaCha20(_) => unreachable!("matched on AES above"),
                 }
                 .map_err(|_| Error::General("header protection block failed".into()))?;
                 mask.copy_from_slice(&block[..MASK_LEN]);
             }
+            #[cfg(not(ic_approved_only))]
             Self::ChaCha20(key) => {
                 // Section 5.4.4: the first four bytes are the block counter,
                 // little-endian, and the remaining twelve are the nonce. The
@@ -365,6 +370,7 @@ mod tests {
     /// sample rather than a block encryption -- and a short header, so the
     /// five-bit mask applies rather than the four-bit one. Nothing in the AES
     /// vectors above would catch either being wrong.
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn the_chacha20_short_header_matches_rfc9001() {
         let key = hex("25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4");
@@ -469,7 +475,12 @@ mod tests {
     #[test]
     fn a_packet_round_trips_and_is_bound_to_its_context() {
         let mut checked = 0;
-        for alg in [&AES_256_GCM, &CHACHA20_POLY1305] {
+        #[cfg_attr(ic_approved_only, allow(clippy::single_element_loop))]
+        for alg in [
+            &AES_256_GCM,
+            #[cfg(not(ic_approved_only))]
+            &CHACHA20_POLY1305,
+        ] {
             assert_eq!(alg.aead_key_len(), 32, "only the 32-byte suites fit here");
             let pk = alg.packet_key(AeadKey::from([0x3au8; 32]), Iv::copy(&[0x5cu8; 12]));
 
@@ -497,7 +508,7 @@ mod tests {
             assert_eq!(opened, &[0x7eu8; 32][..]);
             checked += 1;
         }
-        assert_eq!(checked, 2);
+        assert_eq!(checked, if cfg!(ic_approved_only) { 1 } else { 2 });
     }
 
     /// Each algorithm's key length must be the one its ciphers accept.
@@ -509,15 +520,26 @@ mod tests {
     fn the_key_lengths_match_the_suites() {
         assert_eq!(AES_128_GCM.aead_key_len(), 16);
         assert_eq!(AES_256_GCM.aead_key_len(), 32);
+        #[cfg(not(ic_approved_only))]
         assert_eq!(CHACHA20_POLY1305.aead_key_len(), 32);
 
         // The header protection key is built from a raw slice, so every suite
         // including AES-128 can be constructed here. None of these may panic.
-        for suite in [Suite::Aes128, Suite::Aes256, Suite::ChaCha20] {
+        for suite in [
+            Suite::Aes128,
+            Suite::Aes256,
+            #[cfg(not(ic_approved_only))]
+            Suite::ChaCha20,
+        ] {
             let _ = IcHeaderKey::new(suite, &alloc::vec![0u8; suite.key_len()]);
         }
 
-        for alg in [&AES_128_GCM, &AES_256_GCM, &CHACHA20_POLY1305] {
+        for alg in [
+            &AES_128_GCM,
+            &AES_256_GCM,
+            #[cfg(not(ic_approved_only))]
+            &CHACHA20_POLY1305,
+        ] {
             assert!(!alg.fips());
         }
     }
@@ -535,14 +557,17 @@ mod tests {
         assert_eq!(AES_128_GCM.confidentiality_limit, 1 << 23);
         assert_eq!(AES_128_GCM.integrity_limit, 1 << 52);
 
-        let pk = CHACHA20_POLY1305.packet_key(AeadKey::from([0u8; 32]), Iv::copy(&[0u8; 12]));
-        assert_eq!(pk.confidentiality_limit(), u64::MAX, "RFC 9001 6.6");
-        assert_eq!(pk.integrity_limit(), 1 << 36, "RFC 9001 6.6");
+        #[cfg(not(ic_approved_only))]
+        {
+            let pk = CHACHA20_POLY1305.packet_key(AeadKey::from([0u8; 32]), Iv::copy(&[0u8; 12]));
+            assert_eq!(pk.confidentiality_limit(), u64::MAX, "RFC 9001 6.6");
+            assert_eq!(pk.integrity_limit(), 1 << 36, "RFC 9001 6.6");
 
-        // The two AEADs must not have been given the same limits by accident.
-        assert_ne!(
-            AES_256_GCM.integrity_limit,
-            CHACHA20_POLY1305.integrity_limit
-        );
+            // The two AEADs must not have been given the same limits by accident.
+            assert_ne!(
+                AES_256_GCM.integrity_limit,
+                CHACHA20_POLY1305.integrity_limit
+            );
+        }
     }
 }

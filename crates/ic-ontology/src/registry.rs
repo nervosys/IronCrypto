@@ -8,6 +8,31 @@
 
 use crate::types::*;
 
+/// The status of an algorithm that is implemented here but not permitted in
+/// FIPS approved mode.
+///
+/// `Available`, except in a build with `--cfg ic_approved_only`, where the
+/// code for every such algorithm is left out and the entry says so. Every
+/// entry that is not approved and is implemented uses this rather than
+/// `ImplStatus::Available`, so the ontology cannot offer, and `ic_fips::check`
+/// cannot pass, an algorithm the build does not contain.
+const NOT_APPROVED_STATUS: ImplStatus = if cfg!(ic_approved_only) {
+    ImplStatus::Excluded
+} else {
+    ImplStatus::Available
+};
+
+/// An entry's `rust_path` or `example`, or `""` where `ic_approved_only` has
+/// left that code out: a path to something the build does not
+/// contain would send a caller looking for it.
+const fn if_built(text: &'static str) -> &'static str {
+    if cfg!(ic_approved_only) {
+        ""
+    } else {
+        text
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared constraints
 // ---------------------------------------------------------------------------
@@ -1620,14 +1645,14 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Authentication],
         strength: Strength::symmetric(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 8439"],
         params: &[P_KEY_32, P_TAG_16],
         constraints: &[ONE_TIME_KEY, CT_COMPARE],
         edges: &[Edge { relation: Relation::PairsWith, target: "chacha20-poly1305" }],
         performance: Performance::Fast,
-        rust_path: "ic_cipher::Poly1305",
-        example: "use ic_core::traits::Mac;\nlet tag = ic_cipher::Poly1305::mac(one_time_key, msg)?;",
+        rust_path: if_built("ic_cipher::Poly1305"),
+        example: if_built("use ic_core::traits::Mac;\nlet tag = ic_cipher::Poly1305::mac(one_time_key, msg)?;"),
         notes: "Almost always the wrong thing to call directly; use the AEAD, which derives a fresh \
                 one-time key per message.",
     },
@@ -1805,14 +1830,14 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::Authentication, Purpose::Integrity],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 8439"],
         params: &[P_KEY_32, P_NONCE_12, P_TAG_16],
         constraints: &[UNIQUE_NONCE],
         edges: &[Edge { relation: Relation::BuiltOn, target: "poly1305" }],
         performance: Performance::Fast,
-        rust_path: "ic_cipher::ChaCha20Poly1305",
-        example: "let mut tx = ic_cipher::Sealer::<ic_cipher::ChaCha20Poly1305>::new(key, *b\"c->s\")?;\nlet nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
+        rust_path: if_built("ic_cipher::ChaCha20Poly1305"),
+        example: if_built("let mut tx = ic_cipher::Sealer::<ic_cipher::ChaCha20Poly1305>::new(key, *b\"c->s\")?;\nlet nonce = tx.seal(aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext"),
         notes: "The right answer without AES hardware, and much faster than this build's portable \
                 AES. Blocked in FIPS approved mode.",
     },
@@ -1827,7 +1852,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::Authentication, Purpose::Integrity],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["draft-irtf-cfrg-xchacha-03", "RFC 8439"],
         params: &[P_KEY_32, P_NONCE_24, P_TAG_16],
         constraints: &[UNIQUE_NONCE],
@@ -1837,8 +1862,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::BuiltOn, target: "poly1305" },
         ],
         performance: Performance::Fast,
-        rust_path: "ic_cipher::XChaCha20Poly1305",
-        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::XChaCha20Poly1305::new(key)?;\nlet nonce = c.seal_with_random_nonce(&mut rng, aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext",
+        rust_path: if_built("ic_cipher::XChaCha20Poly1305"),
+        example: if_built("use ic_core::traits::Aead;\nlet c = ic_cipher::XChaCha20Poly1305::new(key)?;\nlet nonce = c.seal_with_random_nonce(&mut rng, aad, &mut buf, &mut tag)?; // send the nonce with the ciphertext"),
         notes: "For when nothing can keep a nonce counter: many senders under one key, or keys \
                 that outlive a process. A random 96-bit nonce collides often enough to matter \
                 after about 2^32 messages; a random 192-bit one does not in any realistic \
@@ -1988,7 +2013,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::PasswordHashing, Purpose::KeyDerivation],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 7914"],
         params: &NO_PARAMS,
         constraints: &[Constraint {
@@ -2006,8 +2031,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::SupersededBy, target: "argon2id" },
         ],
         performance: Performance::Slow,
-        rust_path: "ic_kdf::scrypt",
-        example: "let params = ic_kdf::scrypt::ScryptParams::RECOMMENDED;\nlet stored = ic_kdf::scrypt::phc::hash_password(&params, password, &mut rng)?;\nic_kdf::scrypt::phc::verify_password(password, &stored)?;",
+        rust_path: if_built("ic_kdf::scrypt"),
+        example: if_built("let params = ic_kdf::scrypt::ScryptParams::RECOMMENDED;\nlet stored = ic_kdf::scrypt::phc::hash_password(&params, password, &mut rng)?;\nic_kdf::scrypt::phc::verify_password(password, &stored)?;"),
         notes: "The IETF's password-storage guidance recommends it where Argon2 is not \
                 available, at N = 2^17, r = 8, p = 1 or more, the RECOMMENDED constant. Also for \
                 interoperating with what already uses it. PHC strings in ic_kdf::scrypt::phc, \
@@ -2103,7 +2128,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::PasswordHashing],
         strength: Strength::symmetric(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["Provos-Mazieres 1999", "Schneier 1994"],
         params: &NO_PARAMS,
         constraints: &[VERIFY_ONLY_MIGRATE, PASSWORD_INDEXED_TABLES],
@@ -2112,8 +2137,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::SupersededBy, target: "argon2id" },
         ],
         performance: Performance::DeliberatelySlow,
-        rust_path: "ic_kdf::bcrypt",
-        example: "ic_kdf::bcrypt::verify_password(password, stored)?;",
+        rust_path: if_built("ic_kdf::bcrypt"),
+        example: if_built("ic_kdf::bcrypt::verify_password(password, stored)?;"),
         notes: "$2a$, $2b$ and $2y$ are verified alike; $2x$, which marks hashes made by a \
                 broken implementation, is refused as unsupported. Only the first 72 bytes of a \
                 password count, as in every bcrypt. A stored cost above 16 is refused, since 31 \
@@ -2132,7 +2157,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::PasswordHashing],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["yescrypt 1.1"],
         params: &NO_PARAMS,
         constraints: &[VERIFY_ONLY_MIGRATE, PASSWORD_INDEXED_TABLES],
@@ -2143,8 +2168,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::SupersededBy, target: "argon2id" },
         ],
         performance: Performance::DeliberatelySlow,
-        rust_path: "ic_kdf::yescrypt",
-        example: "ic_kdf::yescrypt::verify_password(password, stored)?;",
+        rust_path: if_built("ic_kdf::yescrypt"),
+        example: if_built("ic_kdf::yescrypt::verify_password(password, stored)?;"),
         notes: "The default flavor (j, read-write with pwxform), WORM, classic scrypt in $y$ \
                 form, the p and t parameters, and $7$. A ROM and hash upgrades are refused as \
                 unsupported; libxcrypt writes neither. A hash naming more than 4 GiB, or \
@@ -2162,7 +2187,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::PasswordHashing],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 9106"],
         params: &ARGON2_P,
         constraints: &[SALT_REQUIRED],
@@ -2171,8 +2196,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::BuiltOn, target: "blake2b" },
         ],
         performance: Performance::DeliberatelySlow,
-        rust_path: "ic_kdf::argon2",
-        example: "use ic_kdf::argon2::{argon2, Argon2Params, Variant};\nargon2(Variant::Argon2id, &Argon2Params::INTERACTIVE, password, salt, &mut key)?;",
+        rust_path: if_built("ic_kdf::argon2"),
+        example: if_built("use ic_kdf::argon2::{argon2, Argon2Params, Variant};\nargon2(Variant::Argon2id, &Argon2Params::INTERACTIVE, password, salt, &mut key)?;"),
         notes: "Memory is the parameter that matters: raising the pass count over a small arena \
                 buys far less than raising the memory. RFC 9106 recommends 2 GiB with t=1 for \
                 offline use and 64 MiB with t=3 for interactive logins, both available as \
@@ -2199,14 +2224,14 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Integrity, Purpose::Authentication, Purpose::Commitment],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 7693"],
         params: &BLAKE2B_P,
         constraints: &[NOT_FOR_PASSWORDS],
         edges: &[Edge { relation: Relation::PairsWith, target: "argon2id" }],
         performance: Performance::Fast,
-        rust_path: "ic_hash::Blake2b",
-        example: "let mut out = [0u8; 32];\nic_hash::Blake2b::hash(b\"message\", &mut out)?;",
+        rust_path: if_built("ic_hash::Blake2b"),
+        example: if_built("let mut out = [0u8; 32];\nic_hash::Blake2b::hash(b\"message\", &mut out)?;"),
         notes: "Present because Argon2 is defined in terms of it. Faster than SHA-512 on 64-bit \
                 hardware and keyed without needing HMAC, but not approved — under a FIPS policy \
                 use SHA-2 or SHA-3 instead. The output length is bound into the digest, so a short \
@@ -2223,7 +2248,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::Authentication],
         strength: Strength::symmetric(256),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 9106", "draft-irtf-cfrg-xchacha-03"],
         params: &NO_PARAMS,
         constraints: &[Constraint {
@@ -2239,9 +2264,9 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::BuiltOn, target: "xchacha20-poly1305" },
         ],
         performance: Performance::Slow,
-        rust_path: "ic_kdf::passphrase",
-        example: "let n = ic_kdf::passphrase::seal(passphrase, &params, &mut rng, secret, &mut out)?;\n\
-                  let m = ic_kdf::passphrase::open(passphrase, &out[..n], &mut back)?;",
+        rust_path: if_built("ic_kdf::passphrase"),
+        example: if_built("let n = ic_kdf::passphrase::seal(passphrase, &params, &mut rng, secret, &mut out)?;\n\
+                  let m = ic_kdf::passphrase::open(passphrase, &out[..n], &mut back)?;"),
         notes: "For a key at rest that only a person's passphrase unlocks, such as a CA's \
                 signing key. Pass Argon2Params::INTERACTIVE or RECOMMENDED. The format is \
                 this library's own, version 1, described in ic_kdf::passphrase and \
@@ -2264,14 +2289,14 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::KeyEstablishment],
         strength: Strength::classical_only(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 9380"],
         params: &NO_PARAMS,
         constraints: &[],
         edges: &[Edge { relation: Relation::BuiltOn, target: "sha2-256" }],
         performance: Performance::Fast,
-        rust_path: "ic_ec::hash_to_curve",
-        example: "let point = ic_ec::hash_to_curve::hash_to_curve(msg, b\"MYAPP-V1-P256_XMD:SHA-256_SSWU_RO_\")?;",
+        rust_path: if_built("ic_ec::hash_to_curve"),
+        example: if_built("let point = ic_ec::hash_to_curve::hash_to_curve(msg, b\"MYAPP-V1-P256_XMD:SHA-256_SSWU_RO_\")?;"),
         notes: "The building block of the OPRF and of OPAQUE. expand_message_xmd with SHA-256, \
                 hash_to_field with 48 bytes per element, and the simplified SWU map, which runs \
                 in constant time because the input is usually a password. Every domain \
@@ -2289,7 +2314,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::KeyDerivation, Purpose::PasswordHashing],
         strength: Strength::classical_only(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 9497", "RFC 9380"],
         params: &NO_PARAMS,
         constraints: &[Constraint {
@@ -2305,8 +2330,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::BuiltOn, target: "sha2-256" },
         ],
         performance: Performance::Moderate,
-        rust_path: "ic_ec::oprf",
-        example: "let (state, blinded) = ic_ec::oprf::blind(ic_ec::oprf::Mode::Oprf, input, b\"\", None, &mut rng)?;\nlet (evaluated, _) = server.blind_evaluate(&blinded, b\"\", &mut rng)?;\nlet output = ic_ec::oprf::finalize(input, b\"\", &state, &blinded, &evaluated, None)?;",
+        rust_path: if_built("ic_ec::oprf"),
+        example: if_built("let (state, blinded) = ic_ec::oprf::blind(ic_ec::oprf::Mode::Oprf, input, b\"\", None, &mut rng)?;\nlet (evaluated, _) = server.blind_evaluate(&blinded, b\"\", &mut rng)?;\nlet output = ic_ec::oprf::finalize(input, b\"\", &state, &blinded, &evaluated, None)?;"),
         notes: "All three of RFC 9497's modes, with batching and the batched DLEQ proof. The \
                 POPRF's public info is how a pepper service tweaks its key per user or per \
                 epoch. Elements are validated on receipt: compressed, on the curve, never the \
@@ -2324,7 +2349,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Authentication, Purpose::KeyEstablishment, Purpose::PasswordHashing],
         strength: Strength::classical_only(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 9807", "RFC 9497"],
         params: &NO_PARAMS,
         constraints: &[
@@ -2349,8 +2374,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::PairsWith, target: "argon2id" },
         ],
         performance: Performance::Moderate,
-        rust_path: "ic_hpke::opaque",
-        example: "let (client, ke1) = ic_hpke::opaque::login_start(password, &mut rng)?;\nlet (pending, ke2) = server.login_respond(&record, id, &ke1, None, None, context, &mut rng)?;\nlet (ke3, session_key, export_key) = client.finish(&ksf, password, &ke2, None, None, context)?;\nlet server_key = pending.finish(&ke3)?;",
+        rust_path: if_built("ic_hpke::opaque"),
+        example: if_built("let (client, ke1) = ic_hpke::opaque::login_start(password, &mut rng)?;\nlet (pending, ke2) = server.login_respond(&record, id, &ke1, None, None, context, &mut rng)?;\nlet (ke3, session_key, export_key) = client.finish(&ksf, password, &ke2, None, None, context)?;\nlet server_key = pending.finish(&ke3)?;"),
         notes: "RFC 9807's OPAQUE-3DH over P-256 with HKDF, HMAC and SHA-256, the second of \
                 its recommended configurations; the key stretching function is the caller's: \
                 Argon2idKsf (RFC 9807's parameters, 2 GiB, as RECOMMENDED) or ScryptKsf. \
@@ -2370,14 +2395,14 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Integrity, Purpose::Authentication],
         strength: Strength::symmetric(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 7693"],
         params: &NO_PARAMS,
         constraints: &[NOT_FOR_PASSWORDS],
         edges: &[Edge { relation: Relation::PairsWith, target: "blake2b" }],
         performance: Performance::Fast,
-        rust_path: "ic_hash::Blake2s",
-        example: "let mut out = [0u8; 32];\nic_hash::Blake2s::hash(b\"message\", &mut out)?;",
+        rust_path: if_built("ic_hash::Blake2s"),
+        example: if_built("let mut out = [0u8; 32];\nic_hash::Blake2s::hash(b\"message\", &mut out)?;"),
         notes: "BLAKE2b's 32-bit sibling: outputs of 1 to 32 bytes and keys up to 32, both \
                 bound into the hash, so a short output is not a prefix of a long one. For \
                 interoperating with a protocol that names it; otherwise BLAKE2b or SHA-256 \
@@ -2395,7 +2420,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Integrity, Purpose::Authentication, Purpose::Commitment],
         strength: Strength::symmetric(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["BLAKE3 2020"],
         params: &NO_PARAMS,
         constraints: &[NOT_FOR_PASSWORDS],
@@ -2404,8 +2429,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::PairsWith, target: "blake2b" },
         ],
         performance: Performance::Fast,
-        rust_path: "ic_hash::Blake3",
-        example: "let digest = ic_hash::Blake3::hash(b\"message\");",
+        rust_path: if_built("ic_hash::Blake3"),
+        example: if_built("let digest = ic_hash::Blake3::hash(b\"message\");"),
         notes: "Blake3::hash, keyed_hash with a 32-byte key, and derive_key under a \
                 hard-coded context string, each with an extendable output through \
                 finalize_xof. This is the portable serial form, transcribed from the authors' \
@@ -2496,14 +2521,14 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::KeyEstablishment],
         strength: Strength::classical_only(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 7748"],
         params: &X25519_P,
         constraints: &[VALIDATE_PEER_KEY, HASH_TRANSCRIPT],
         edges: &[Edge { relation: Relation::PairsWith, target: "hkdf-sha2-256" }],
         performance: Performance::Moderate,
-        rust_path: "ic_ec::X25519",
-        example: "use ic_core::traits::KeyAgreement;\nic_ec::X25519::agree(&my_sk, &peer_pk, &mut shared)?;",
+        rust_path: if_built("ic_ec::X25519"),
+        example: if_built("use ic_core::traits::KeyAgreement;\nic_ec::X25519::agree(&my_sk, &peer_pk, &mut shared)?;"),
         notes: "Shor breaks this outright; pair it with ML-KEM in a hybrid once that lands.",
     },
     Entry {
@@ -2517,7 +2542,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality],
         strength: Strength { classical: 256, quantum: 256 },
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["Shamir 1979"],
         params: &SHAMIR_P,
         constraints: &[
@@ -2539,8 +2564,8 @@ pub static REGISTRY: &[Entry] = &[
         ],
         edges: &[],
         performance: Performance::Fast,
-        rust_path: "ic_cipher::shamir::Shamir",
-        example: "ic_cipher::shamir::split(&key, 3, 5, &mut rng, &mut shares)?;",
+        rust_path: if_built("ic_cipher::shamir::Shamir"),
+        example: if_built("ic_cipher::shamir::split(&key, 3, 5, &mut rng, &mut shares)?;"),
         notes: "Information-theoretically secret below the threshold, so its strength is not a \
                 key length: an attacker with fewer shares learns nothing at any computational \
                 cost. Indices and the threshold travel with each share in the caller's format.",
@@ -2556,7 +2581,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::KeyEstablishment],
         strength: Strength::classical_only(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 9180"],
         params: &HPKE_P,
         constraints: &[
@@ -2593,9 +2618,9 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::BuiltOn, target: "chacha20-poly1305" },
         ],
         performance: Performance::Moderate,
-        rust_path: "ic_hpke::Hpke",
-        example: "let (enc, mut tx) = ic_hpke::setup_sender(&recipient_pk, b\"app/v1\", \
-                  ic_hpke::Aead::Aes128Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;",
+        rust_path: if_built("ic_hpke::Hpke"),
+        example: if_built("let (enc, mut tx) = ic_hpke::setup_sender(&recipient_pk, b\"app/v1\", \
+                  ic_hpke::Aead::Aes128Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;"),
         notes: "Base mode only: no PSK, auth or auth-PSK modes, and one KEM. Not FIPS-approved, \
                 because X25519 is not. Contexts refuse rather than reuse a nonce once the \
                 64-bit sequence number would wrap.",
@@ -2611,7 +2636,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::KeyEstablishment],
         strength: Strength::classical_only(192),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 9180", "SP 800-56A"],
         params: &HPKE_P384_P,
         constraints: &[
@@ -2649,9 +2674,9 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::BuiltOn, target: "chacha20-poly1305" },
         ],
         performance: Performance::Moderate,
-        rust_path: "ic_hpke::p384::HpkeP384",
-        example: "let (enc, mut tx) = ic_hpke::p384::setup_sender(&recipient_pk, b\"app/v1\", \
-                  ic_hpke::Aead::Aes256Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;",
+        rust_path: if_built("ic_hpke::p384::HpkeP384"),
+        example: if_built("let (enc, mut tx) = ic_hpke::p384::setup_sender(&recipient_pk, b\"app/v1\", \
+                  ic_hpke::Aead::Aes256Gcm, &mut rng)?;\ntx.seal_in_place(b\"aad\", &mut msg, &mut tag)?;"),
         notes: "Base mode only. Keys and encapsulations are uncompressed points, each checked \
                 on the curve. No published HPKE vector uses P-384; this is checked against an \
                 independent implementation that reproduces the CFRG's P-256 and P-521 vectors \
@@ -2853,7 +2878,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Authentication, Purpose::NonRepudiation, Purpose::Integrity],
         strength: Strength::classical_only(128),
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 8032"],
         params: &ED25519_P,
         constraints: &[Constraint {
@@ -2865,8 +2890,8 @@ pub static REGISTRY: &[Entry] = &[
         }],
         edges: &[Edge { relation: Relation::BuiltOn, target: "sha2-512" }],
         performance: Performance::Moderate,
-        rust_path: "ic_ec::Ed25519",
-        example: "use ic_core::traits::SignatureScheme;\nic_ec::Ed25519::sign(&seed, msg, &mut sig)?;\nic_ec::Ed25519::verify(&pk, msg, &sig)?;",
+        rust_path: if_built("ic_ec::Ed25519"),
+        example: if_built("use ic_core::traits::SignatureScheme;\nic_ec::Ed25519::sign(&seed, msg, &mut sig)?;\nic_ec::Ed25519::verify(&pk, msg, &sig)?;"),
         notes: "Signing needs no RNG, which removes the nonce-reuse failure that has broken ECDSA \
                 deployments. FIPS 186-5 approves EdDSA, but this implementation is not validated; \
                 the ontology reports it as not-approved so approved mode blocks it rather than \
@@ -3022,7 +3047,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::Authentication],
         strength: Strength { classical: 256, quantum: 128 },
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 8452"],
         params: &GCM_SIV_P,
         constraints: &[
@@ -3041,8 +3066,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::Supersedes, target: "aes-256-gcm" },
         ],
         performance: Performance::Moderate,
-        rust_path: "ic_cipher::Aes256GcmSiv",
-        example: "use ic_core::traits::Aead;\nlet c = ic_cipher::Aes256GcmSiv::new(key)?;\nc.seal_detached(nonce, aad, &mut buf, &mut tag)?;",
+        rust_path: if_built("ic_cipher::Aes256GcmSiv"),
+        example: if_built("use ic_core::traits::Aead;\nlet c = ic_cipher::Aes256GcmSiv::new(key)?;\nc.seal_detached(nonce, aad, &mut buf, &mut tag)?;"),
         notes: "Reach for this when nonces come from somewhere you do not control. GCM loses \
                 everything on a repeated nonce — the keystream and the authentication key both \
                 — while GCM-SIV leaks only whether two plaintexts were equal. The cost is two \
@@ -3062,7 +3087,7 @@ pub static REGISTRY: &[Entry] = &[
         purposes: &[Purpose::Confidentiality, Purpose::Authentication],
         strength: Strength { classical: 128, quantum: 64 },
         fips: FipsStatus::NotApproved,
-        status: ImplStatus::Available,
+        status: NOT_APPROVED_STATUS,
         standards: &["RFC 8452"],
         params: &GCM_SIV_P,
         constraints: &[
@@ -3073,8 +3098,8 @@ pub static REGISTRY: &[Entry] = &[
             Edge { relation: Relation::SupersededBy, target: "aes-256-gcm-siv" },
         ],
         performance: Performance::Moderate,
-        rust_path: "ic_cipher::Aes128GcmSiv",
-        example: "let c = ic_cipher::Aes128GcmSiv::new(key)?;",
+        rust_path: if_built("ic_cipher::Aes128GcmSiv"),
+        example: if_built("let c = ic_cipher::Aes128GcmSiv::new(key)?;"),
         notes: "See aes-256-gcm-siv. Same construction, smaller key.",
     },
     Entry {
@@ -3873,6 +3898,25 @@ mod tests {
         {
             assert!(!e.rust_path.is_empty(), "{} has no rust_path", e.id);
             assert!(!e.example.is_empty(), "{} has no example", e.id);
+        }
+    }
+
+    /// Under `ic_approved_only` nothing that approved mode refuses may still be
+    /// listed as available: the code for it is not in the build. An entry
+    /// that is not approved has to take its status from
+    /// `NOT_APPROVED_STATUS`, and this is what finds one that does not.
+    #[cfg(ic_approved_only)]
+    #[test]
+    fn approved_only_leaves_nothing_unapproved_available() {
+        for e in REGISTRY
+            .iter()
+            .filter(|e| e.status == ImplStatus::Available)
+        {
+            assert!(
+                e.fips.permitted_in_approved_mode(),
+                "{} is not approved but still available in an approved-only build",
+                e.id
+            );
         }
     }
 

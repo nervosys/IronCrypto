@@ -46,16 +46,25 @@
 // builds for bare-metal targets that provide a global allocator.
 extern crate alloc;
 
+// Each `not(ic_approved_only)` below is an algorithm FIPS approved mode does
+// not permit, left out of that build; see `ic_core::APPROVED_ONLY`.
+#[cfg(not(ic_approved_only))]
 pub mod argon2;
+#[cfg(not(ic_approved_only))]
 pub mod bcrypt;
 pub mod hkdf;
 pub mod kbkdf;
+#[cfg(not(ic_approved_only))]
 pub mod passphrase;
+#[cfg(not(ic_approved_only))]
 pub mod password;
 pub mod pbkdf2;
+#[cfg(not(ic_approved_only))]
 pub mod scrypt;
+#[cfg(not(ic_approved_only))]
 pub mod yescrypt;
 
+#[cfg(not(ic_approved_only))]
 pub use argon2::{argon2, Argon2Params, Variant};
 pub use hkdf::Hkdf;
 pub use kbkdf::kbkdf_counter;
@@ -63,15 +72,19 @@ pub use pbkdf2::pbkdf2;
 
 /// Ontology identifiers for the KDFs this crate provides.
 pub const KDF_IDS: &[&str] = &[
+    #[cfg(not(ic_approved_only))]
     "argon2id",
+    #[cfg(not(ic_approved_only))]
     "bcrypt",
     "hkdf-sha2-256",
     "hkdf-sha2-384",
     "hkdf-sha2-512",
     "pbkdf2-hmac-sha2-256",
     "pbkdf2-hmac-sha2-512",
+    #[cfg(not(ic_approved_only))]
     "scrypt",
     "sp800-108-counter-hmac-sha2-256",
+    #[cfg(not(ic_approved_only))]
     "yescrypt",
 ];
 

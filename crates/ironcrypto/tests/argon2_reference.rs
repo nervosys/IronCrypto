@@ -8,6 +8,9 @@
 //! crypto_pwhash_str. RFC 9106's three vectors fix one shape; these vary the
 //! ones it does not.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::ErrorKind;
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::kdf::argon2::{

@@ -82,9 +82,13 @@ static CASTS: &[Cast] = &[
     ("cmac-aes-256", ic_mac::CmacAes256::self_test),
     ("kmac128", ic_mac::Kmac128::self_test),
     ("kmac256", ic_mac::Kmac256::self_test),
+    #[cfg(not(ic_approved_only))]
     ("poly1305", ic_cipher::Poly1305::self_test),
+    #[cfg(not(ic_approved_only))]
     ("blake2b", blake2b_self_test),
+    #[cfg(not(ic_approved_only))]
     ("blake2s", blake2s_self_test),
+    #[cfg(not(ic_approved_only))]
     ("blake3", blake3_self_test),
     // Block ciphers and AEADs
     ("aes-128", ic_cipher::Aes128::self_test),
@@ -93,12 +97,16 @@ static CASTS: &[Cast] = &[
     ("aes-128-gcm", ic_cipher::Aes128Gcm::self_test),
     ("aes-192-gcm", ic_cipher::Aes192Gcm::self_test),
     ("aes-256-gcm", ic_cipher::Aes256Gcm::self_test),
+    #[cfg(not(ic_approved_only))]
     ("chacha20-poly1305", ic_cipher::ChaCha20Poly1305::self_test),
+    #[cfg(not(ic_approved_only))]
     (
         "xchacha20-poly1305",
         ic_cipher::XChaCha20Poly1305::self_test,
     ),
+    #[cfg(not(ic_approved_only))]
     ("aes-128-gcm-siv", ic_cipher::Aes128GcmSiv::self_test),
+    #[cfg(not(ic_approved_only))]
     ("aes-256-gcm-siv", ic_cipher::Aes256GcmSiv::self_test),
     ("aes-128-kw", ic_cipher::Aes128Kw::self_test),
     ("aes-256-kw", ic_cipher::Aes256Kw::self_test),
@@ -109,13 +117,21 @@ static CASTS: &[Cast] = &[
         "hkdf-sha2-256",
         ic_kdf::Hkdf::<ic_mac::HmacSha256>::self_test,
     ),
+    #[cfg(not(ic_approved_only))]
     ("argon2id", argon2id_self_test),
+    #[cfg(not(ic_approved_only))]
     ("scrypt", ic_kdf::scrypt::self_test),
+    #[cfg(not(ic_approved_only))]
     ("yescrypt", ic_kdf::yescrypt::self_test),
+    #[cfg(not(ic_approved_only))]
     ("bcrypt", ic_kdf::bcrypt::self_test),
+    #[cfg(not(ic_approved_only))]
     ("oprf-p256-sha256", ic_ec::oprf::self_test),
+    #[cfg(not(ic_approved_only))]
     ("opaque-3dh-p256", ic_hpke::opaque::self_test),
+    #[cfg(not(ic_approved_only))]
     ("hash-to-curve-p256", hash_to_curve_p256_self_test),
+    #[cfg(not(ic_approved_only))]
     ("passphrase-seal", ic_kdf::passphrase::self_test),
     ("pbkdf2-hmac-sha2-256", pbkdf2_hmac_sha2_256_self_test),
     (
@@ -133,7 +149,9 @@ static CASTS: &[Cast] = &[
     ("hmac-drbg-sha2-256", ic_drbg::HmacDrbgSha256::self_test),
     ("ctr-drbg-aes-256", ic_drbg::CtrDrbg::self_test),
     // Elliptic curve
+    #[cfg(not(ic_approved_only))]
     ("x25519", ic_ec::X25519::self_test),
+    #[cfg(not(ic_approved_only))]
     ("ed25519", ic_ec::Ed25519::self_test),
     ("ecdh-p256", ic_ec::p256::EcdhP256::self_test),
     ("ecdsa-p256-sha256", ic_ec::p256::EcdsaP256Sha256::self_test),
@@ -142,10 +160,13 @@ static CASTS: &[Cast] = &[
     ("ecdh-p521", ic_ec::p521::EcdhP521::self_test),
     ("ecdsa-p521-sha512", ic_ec::p521::EcdsaP521Sha512::self_test),
     // Constructions
+    #[cfg(not(ic_approved_only))]
     ("hpke-x25519-sha256", ic_hpke::Hpke::self_test),
+    #[cfg(not(ic_approved_only))]
     ("hpke-p384-sha384", ic_hpke::p384::HpkeP384::self_test),
     ("hss-lms", ic_lms::HssLms::self_test),
     ("slh-dsa", ic_slhdsa::SlhDsa::self_test),
+    #[cfg(not(ic_approved_only))]
     ("shamir-gf256", ic_cipher::shamir::Shamir::self_test),
     // RSA
     //
@@ -220,6 +241,7 @@ fn sp800_108_counter_hmac_sha2_256_self_test() -> Result<()> {
 ///
 /// BLAKE2b has a variable output length and so does not fit the fixed-size
 /// `Digest`/`SelfTest` pair; its CAST is spelled out here instead.
+#[cfg(not(ic_approved_only))]
 fn blake2b_self_test() -> Result<()> {
     let mut got = [0u8; 64];
     ic_hash::Blake2b::hash(b"abc", &mut got)?;
@@ -233,6 +255,7 @@ fn blake2b_self_test() -> Result<()> {
 }
 
 /// BLAKE2s known-answer test: RFC 7693 Appendix B, BLAKE2s-256 of "abc".
+#[cfg(not(ic_approved_only))]
 fn blake2s_self_test() -> Result<()> {
     let mut got = [0u8; 32];
     ic_hash::Blake2s::hash(b"abc", &mut got)?;
@@ -247,6 +270,7 @@ fn blake2s_self_test() -> Result<()> {
 
 /// BLAKE3 known-answer test: the one-byte input 0x00 from the BLAKE3 team's
 /// `test_vectors.json`.
+#[cfg(not(ic_approved_only))]
 fn blake3_self_test() -> Result<()> {
     let got = ic_hash::Blake3::hash(&[0u8]);
     let mut want = [0u8; 32];
@@ -260,6 +284,7 @@ fn blake3_self_test() -> Result<()> {
 
 /// Hash-to-curve known-answer test: RFC 9380 appendix J.1.1, the message
 /// "abc", the point's x-coordinate.
+#[cfg(not(ic_approved_only))]
 fn hash_to_curve_p256_self_test() -> Result<()> {
     let p = ic_ec::hash_to_curve::hash_to_curve(
         b"abc",
@@ -686,6 +711,7 @@ fn ml_dsa_65_self_test() -> Result<()> {
 }
 
 /// Argon2id known-answer test: RFC 9106 section 5.3.
+#[cfg(not(ic_approved_only))]
 fn argon2id_self_test() -> Result<()> {
     use ic_kdf::argon2::{argon2_full, Argon2Params, Variant};
 
@@ -714,7 +740,17 @@ fn argon2id_self_test() -> Result<()> {
 }
 
 /// The number of known-answer tests in the suite.
+///
+/// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
+/// algorithms approved mode does not permit and their tests with them.
+#[cfg(not(ic_approved_only))]
 pub const TEST_COUNT: usize = 85;
+/// The number of known-answer tests in the suite.
+///
+/// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
+/// algorithms approved mode does not permit and their tests with them.
+#[cfg(ic_approved_only)]
+pub const TEST_COUNT: usize = 64;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -812,7 +848,12 @@ pub fn integrity_check() -> Result<()> {
 const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
+#[cfg(not(ic_approved_only))]
 const INTEGRITY_TAG: &str = "c9ee7b277499134385238fa0d406a4458a7b267d0cc07d0807c7b423e88f53ee";
+/// The expected integrity tag over the CAST table of an `ic_approved_only` build,
+/// which is a different table.
+#[cfg(ic_approved_only)]
+const INTEGRITY_TAG: &str = "3c506ce68b33d48abd41bfcd4c043c3775bbac73c1df3add5610c59be4beebed";
 
 #[cfg(test)]
 mod tests {
@@ -901,9 +942,15 @@ mod tests {
         // Flattened first: rustfmt wraps a row whose path is long, and
         // `hkdf-sha2-256` is spread over four lines. Reading line by line
         // silently skipped it.
+        //
+        // A row behind `ic_approved_only` is marked rather than dropped: it is
+        // in the compiled table of a build without the cfg and not of one with
+        // it, and which rows carry the mark is itself checked below.
+        const GATE: &str = "#[cfg(not(ic_approved_only))]";
         let flat: String = table
             .lines()
             .map(|l| l.split("//").next().unwrap_or("").trim())
+            .map(|l| if l == GATE { "@gated@" } else { l })
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -924,6 +971,22 @@ mod tests {
             }
             let entry =
                 ic_ontology::get(id).unwrap_or_else(|| panic!("{id} has no ontology entry"));
+
+            // Behind the feature exactly when approved mode does not permit the
+            // algorithm: one gated by mistake goes missing from an approved
+            // build, and one left ungated fails to compile in it at best.
+            let is_gated = row.contains("@gated@");
+            assert_eq!(
+                is_gated,
+                !entry.fips.permitted_in_approved_mode(),
+                "the CAST for {id} should be behind ic_approved_only exactly when {id} is not \
+                 approved"
+            );
+            if is_gated && cfg!(ic_approved_only) {
+                // Not compiled into this build's table, and its entry has no
+                // path to compare with.
+                continue;
+            }
 
             if let Some(ty) = function.strip_suffix("::self_test") {
                 // The usual form: the trait method on the type itself. The

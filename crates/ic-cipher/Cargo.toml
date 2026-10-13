@@ -26,5 +26,10 @@ std = ["ic-core/std"]
 # arm64 job has actually passed.
 aarch64-crypto = []
 
+# `ic_approved_only` leaves out every algorithm FIPS approved mode does not
+# permit; see docs/FIPS.md.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)"] }
+
 [dependencies]
 ic-core = { workspace = true }

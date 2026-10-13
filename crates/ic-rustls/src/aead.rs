@@ -46,6 +46,7 @@ const TLS12_FIXED_IV_LEN: usize = 4;
 
 /// The whole of a TLS 1.2 ChaCha20-Poly1305 nonce comes from the key block.
 /// RFC 7905 section 2.
+#[cfg(not(ic_approved_only))]
 const TLS12_CHACHA_IV_LEN: usize = 12;
 
 pub(crate) static TLS13_AES_128_GCM: Tls13Aead = Tls13Aead {
@@ -54,6 +55,7 @@ pub(crate) static TLS13_AES_128_GCM: Tls13Aead = Tls13Aead {
 pub(crate) static TLS13_AES_256_GCM: Tls13Aead = Tls13Aead {
     suite: Suite::Aes256,
 };
+#[cfg(not(ic_approved_only))]
 pub(crate) static TLS13_CHACHA20_POLY1305: Tls13Aead = Tls13Aead {
     suite: Suite::ChaCha20,
 };
@@ -63,6 +65,7 @@ pub(crate) static TLS12_AES_128_GCM: Tls12Aead = Tls12Aead {
 pub(crate) static TLS12_AES_256_GCM: Tls12Aead = Tls12Aead {
     suite: Suite::Aes256,
 };
+#[cfg(not(ic_approved_only))]
 pub(crate) static TLS12_CHACHA20_POLY1305: Tls12Aead = Tls12Aead {
     suite: Suite::ChaCha20,
 };
@@ -78,6 +81,7 @@ pub(crate) static TLS12_CHACHA20_POLY1305: Tls12Aead = Tls12Aead {
 pub(crate) enum Suite {
     Aes128,
     Aes256,
+    #[cfg(not(ic_approved_only))]
     ChaCha20,
 }
 
@@ -85,7 +89,9 @@ impl Suite {
     pub(crate) fn key_len(self) -> usize {
         match self {
             Self::Aes128 => 16,
-            Self::Aes256 | Self::ChaCha20 => 32,
+            Self::Aes256 => 32,
+            #[cfg(not(ic_approved_only))]
+            Self::ChaCha20 => 32,
         }
     }
 
@@ -103,6 +109,7 @@ impl Suite {
         Ok(match self {
             Self::Aes128 => Cipher::Aes128(ic_cipher::Aes128Gcm::new(key).map_err(bad)?),
             Self::Aes256 => Cipher::Aes256(ic_cipher::Aes256Gcm::new(key).map_err(bad)?),
+            #[cfg(not(ic_approved_only))]
             Self::ChaCha20 => Cipher::ChaCha20(ic_cipher::ChaCha20Poly1305::new(key).map_err(bad)?),
         })
     }
@@ -112,6 +119,7 @@ impl Suite {
         match self {
             Self::Aes128 => ConnectionTrafficSecrets::Aes128Gcm { key, iv },
             Self::Aes256 => ConnectionTrafficSecrets::Aes256Gcm { key, iv },
+            #[cfg(not(ic_approved_only))]
             Self::ChaCha20 => ConnectionTrafficSecrets::Chacha20Poly1305 { key, iv },
         }
     }
@@ -121,6 +129,7 @@ impl Suite {
 pub(crate) enum Cipher {
     Aes128(ic_cipher::Aes128Gcm),
     Aes256(ic_cipher::Aes256Gcm),
+    #[cfg(not(ic_approved_only))]
     ChaCha20(ic_cipher::ChaCha20Poly1305),
 }
 
@@ -135,6 +144,7 @@ impl Cipher {
         match self {
             Self::Aes128(c) => c.seal_detached(nonce, aad, in_out, tag),
             Self::Aes256(c) => c.seal_detached(nonce, aad, in_out, tag),
+            #[cfg(not(ic_approved_only))]
             Self::ChaCha20(c) => c.seal_detached(nonce, aad, in_out, tag),
         }
         .map_err(|_| ())
@@ -150,6 +160,7 @@ impl Cipher {
         match self {
             Self::Aes128(c) => c.open_detached(nonce, aad, in_out, tag),
             Self::Aes256(c) => c.open_detached(nonce, aad, in_out, tag),
+            #[cfg(not(ic_approved_only))]
             Self::ChaCha20(c) => c.open_detached(nonce, aad, in_out, tag),
         }
         .map_err(|_| ())
@@ -314,6 +325,7 @@ impl Tls12AeadAlgorithm for Tls12Aead {
             .cipher(key.as_ref())
             .expect("rustls supplied a key this suite does not use");
 
+        #[cfg(not(ic_approved_only))]
         if self.suite == Suite::ChaCha20 {
             // RFC 7905 section 2: the nonce is the whole 12-byte key block IV
             // xored with the sequence number, exactly as in TLS 1.3. `extra` is
@@ -354,6 +366,7 @@ impl Tls12AeadAlgorithm for Tls12Aead {
             .cipher(key.as_ref())
             .expect("rustls supplied a key this suite does not use");
 
+        #[cfg(not(ic_approved_only))]
         if self.suite == Suite::ChaCha20 {
             let mut fixed = [0u8; TLS12_CHACHA_IV_LEN];
             fixed.copy_from_slice(iv);
@@ -369,6 +382,7 @@ impl Tls12AeadAlgorithm for Tls12Aead {
     }
 
     fn key_block_shape(&self) -> KeyBlockShape {
+        #[cfg(not(ic_approved_only))]
         if self.suite == Suite::ChaCha20 {
             // RFC 7905 section 2: twelve bytes of IV drawn from the key block,
             // nothing explicit.
@@ -498,11 +512,13 @@ impl MessageDecrypter for Tls12Decrypter {
 /// RFC 7905 section 2. The record is ciphertext and tag, nothing more: the
 /// nonce is reconstructed by the receiver from its own key block and the
 /// sequence number, as in TLS 1.3. The additional data is still TLS 1.2's.
+#[cfg(not(ic_approved_only))]
 struct Tls12ChaChaEncrypter {
     cipher: Cipher,
     iv: Iv,
 }
 
+#[cfg(not(ic_approved_only))]
 impl MessageEncrypter for Tls12ChaChaEncrypter {
     fn encrypt(
         &mut self,
@@ -530,11 +546,13 @@ impl MessageEncrypter for Tls12ChaChaEncrypter {
     }
 }
 
+#[cfg(not(ic_approved_only))]
 struct Tls12ChaChaDecrypter {
     cipher: Cipher,
     iv: Iv,
 }
 
+#[cfg(not(ic_approved_only))]
 impl MessageDecrypter for Tls12ChaChaDecrypter {
     fn decrypt<'a>(
         &mut self,
@@ -573,7 +591,12 @@ mod tests {
     /// never hand over the wrong length, which is what this pins.
     #[test]
     fn each_suite_binds_the_key_length_it_advertises() {
-        for suite in [Suite::Aes128, Suite::Aes256, Suite::ChaCha20] {
+        for suite in [
+            Suite::Aes128,
+            Suite::Aes256,
+            #[cfg(not(ic_approved_only))]
+            Suite::ChaCha20,
+        ] {
             let key = alloc::vec![0x42u8; suite.key_len()];
             assert!(suite.cipher(&key).is_ok(), "{suite:?} rejected its own key");
 
@@ -587,6 +610,7 @@ mod tests {
         }
 
         // The distinction that cannot be made from the key length alone.
+        #[cfg(not(ic_approved_only))]
         assert_eq!(Suite::Aes256.key_len(), Suite::ChaCha20.key_len());
     }
 
@@ -606,20 +630,25 @@ mod tests {
         assert_eq!(gcm.explicit_nonce_len, 8);
         assert_eq!(gcm.enc_key_len, 16);
 
-        let chacha = Tls12Aead {
-            suite: Suite::ChaCha20,
-        }
-        .key_block_shape();
-        assert_eq!(
-            chacha.fixed_iv_len, 12,
-            "RFC 7905: the whole nonce is implicit"
-        );
-        assert_eq!(chacha.explicit_nonce_len, 0, "RFC 7905: nothing is sent");
-        assert_eq!(chacha.enc_key_len, 32);
+        assert_eq!(gcm.fixed_iv_len + gcm.explicit_nonce_len, 12);
 
-        // Whatever the split, a nonce is twelve bytes.
-        for shape in [gcm, chacha] {
-            assert_eq!(shape.fixed_iv_len + shape.explicit_nonce_len, 12);
+        #[cfg(not(ic_approved_only))]
+        {
+            let chacha = Tls12Aead {
+                suite: Suite::ChaCha20,
+            }
+            .key_block_shape();
+            assert_eq!(
+                chacha.fixed_iv_len, 12,
+                "RFC 7905: the whole nonce is implicit"
+            );
+            assert_eq!(chacha.explicit_nonce_len, 0, "RFC 7905: nothing is sent");
+            assert_eq!(chacha.enc_key_len, 32);
+
+            // Whatever the split, a nonce is twelve bytes.
+            for shape in [gcm, chacha] {
+                assert_eq!(shape.fixed_iv_len + shape.explicit_nonce_len, 12);
+            }
         }
     }
 }

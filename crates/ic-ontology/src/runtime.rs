@@ -108,6 +108,17 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
                    not represent it as validated.",
         },
         Capability {
+            id: "approved-only",
+            present: cfg!(ic_approved_only),
+            note: "Built with --cfg ic_approved_only: every algorithm FIPS 140-3 approved \
+                   mode does not permit is left out of the build, so a call to one does not \
+                   compile, its ontology entry reports excluded, and the module comes up in \
+                   approved mode and cannot leave it. Without it, approved mode is a \
+                   policy that ic_fips::check and ic_fips::guarded enforce at run time, and a \
+                   direct call to a non-approved algorithm is not refused. Neither makes the \
+                   module validated.",
+        },
+        Capability {
             id: "post-quantum",
             present: true,
             note: "All three parameter sets of ML-KEM and of ML-DSA, each checked against \
@@ -128,8 +139,8 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
             note: "AES-GCM, SHA-2, HMAC, HKDF, ECDSA verification and ECDH, wired to rustls as a \
                    CryptoProvider by the ic-rustls crate, for TLS 1.3 and TLS 1.2. That crate is \
                    the one here that depends on anything outside the workspace, because a rustls \
-                   provider must depend on rustls. It verifies signatures and does not make them, \
-                   so it has no signing key provider and cannot present a certificate.",
+                   provider must depend on rustls. It also signs, with ECDSA, RSA and Ed25519 \
+                   private keys given as DER, so it can present a certificate.",
         },
         Capability {
             id: "key-encoding",

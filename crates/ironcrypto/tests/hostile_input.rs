@@ -37,6 +37,13 @@
 //! matters in each module; measuring it reliably needs a quieter machine than a
 //! test suite runs on, and a flaky timing test is worse than none.
 
+// Not built under `ic_approved_only`. These cover approved and non-approved
+// algorithms side by side, and the feature only removes code: what they test
+// of the approved algorithms is the same code in both builds, and runs in the
+// default one. What the feature itself changes is tested where it changes it,
+// in ic-fips, ic-ontology, ic-sig and ic-rustls.
+#![cfg(not(ic_approved_only))]
+
 use ironcrypto::core_types::traits::{Aead, KeyAgreement, SignatureScheme};
 use ironcrypto::{cipher, drbg, ec, hpke, kdf, mlkem, pkix, rsa};
 

@@ -18,6 +18,13 @@
 //! and never left: this file is a process of its own for that reason, and has
 //! one test.
 
+// Not built under `ic_approved_only`. These cover approved and non-approved
+// algorithms side by side, and the feature only removes code: what they test
+// of the approved algorithms is the same code in both builds, and runs in the
+// default one. What the feature itself changes is tested where it changes it,
+// in ic-fips, ic-ontology, ic-sig and ic-rustls.
+#![cfg(not(ic_approved_only))]
+
 use std::collections::BTreeSet;
 
 use ironcrypto::core_types::module;

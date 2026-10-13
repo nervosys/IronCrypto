@@ -5,6 +5,9 @@
 //! do not vary -- N, r and p independently, empty and odd-length inputs,
 //! outputs either side of a SHA-256 block.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::kdf::scrypt::{scrypt, ScryptParams};
 

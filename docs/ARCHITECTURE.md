@@ -165,7 +165,7 @@ behaviour can reproduce it from a shell.
 | `ic-ontology` | vocabulary, registry, query, selector, exports, runtime capabilities |
 | `ic-ontology::standards` | The standards knowledgebase: the documents the registry cites, and the obligations they impose. Coupled to the code by tests - a met requirement names a file and a symbol, and both must exist |
 | `ironcrypto/tests/hostile_input.rs` | Every public entry point that parses attacker-chosen bytes, held to three properties: total (never panics), sound (never accepts a forgery) and deep (enough input reaches the cryptography for the first two to mean something) |
-| `ic-fips` | state machine, approved-mode policy, CAST table, service indicator |
+| `ic-fips` | state machine, approved-mode policy, CAST table, service indicator. Under `--cfg ic_approved_only` the non-approved algorithms are not compiled, in any crate, and the module starts, and stays, in approved mode |
 | `ironcrypto` | facade, prelude, and the ontology/implementation agreement tests |
 | `ic-cli` | shared ops, CLI, MCP server, SBOM, timing harness |
 | `ic-rustls` | IronCrypto as a rustls `CryptoProvider`: TLS 1.2 and 1.3, QUIC packet and header protection, signing and verification. The one crate that depends on something outside the workspace |

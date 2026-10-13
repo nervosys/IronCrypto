@@ -6,6 +6,9 @@
 //! from both sides, every encryption is sealed by the sender at its sequence
 //! number and opened by the receiver, and every export is compared.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_vectors::{hex, hex_field, VectorFile};
 use ironcrypto::hpke::{self, Aead, Context, KeyPair, TAG_LEN};
 

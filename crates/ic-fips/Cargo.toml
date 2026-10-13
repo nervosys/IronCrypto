@@ -16,6 +16,11 @@ publish.workspace = true
 default = ["std"]
 std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std", "ic-drbg/std", "ic-ec/std", "ic-rsa/std", "ic-mlkem/std", "ic-mldsa/std", "ic-ontology/std", "ic-hpke/std", "ic-lms/std", "ic-slhdsa/std"]
 
+# `ic_approved_only` leaves out every algorithm FIPS approved mode does not
+# permit; see docs/FIPS.md.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)"] }
+
 [dependencies]
 ic-core = { workspace = true }
 ic-hash = { workspace = true }

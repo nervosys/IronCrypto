@@ -8,6 +8,7 @@
 //! call, for every algorithm in [`SignatureAlgorithm`].
 //!
 //! ```
+//! # #[cfg(not(ic_approved_only))]
 //! # fn main() -> ic_core::Result<()> {
 //! use ic_core::sig::SignatureAlgorithm;
 //! use ic_core::traits::SignatureScheme;
@@ -29,6 +30,8 @@
 //! assert!(ic_sig::verify(SignatureAlgorithm::Ed25519, &key, b"other", &signature).is_err());
 //! # Ok(())
 //! # }
+//! # #[cfg(ic_approved_only)]
+//! # fn main() {}
 //! ```
 //!
 //! # Signing
@@ -438,9 +441,21 @@ fn verify_p521(pk: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
     rejected(ic_ec::p521::EcdsaP521Sha512::verify(pk, message, &fixed))
 }
 
+#[cfg(not(ic_approved_only))]
 #[inline(never)]
 fn verify_ed25519(pk: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
     rejected(ic_ec::Ed25519::verify(pk, message, signature))
+}
+
+/// An Ed25519 key arrives as data, so an approved-only build cannot refuse it
+/// at compile time; it refuses it here, by name rather than as a signature that
+/// failed to verify.
+#[cfg(ic_approved_only)]
+fn verify_ed25519(_pk: &[u8], _message: &[u8], _signature: &[u8]) -> Result<()> {
+    Err(err!(
+        NotApprovedInFipsMode,
+        "Ed25519 is not in this build: it was compiled with ic_approved_only"
+    ))
 }
 
 macro_rules! ml_dsa_verifier {

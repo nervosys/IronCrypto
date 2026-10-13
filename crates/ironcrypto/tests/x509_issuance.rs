@@ -15,11 +15,14 @@
 //! `docs/FIPS.md` records that those were verified by OpenSSL instead.
 
 use ic_vectors::{hex, hex_field, VectorFile};
-use ironcrypto::{ec, mldsa, pkix};
+#[cfg(not(ic_approved_only))]
+use ironcrypto::ec;
+use ironcrypto::{mldsa, pkix};
 use pkix::cert::{
     write_certificate, write_ml_dsa_public_key, write_tbs_certificate, BasicConstraints,
     CertificateParams, ExtendedKeyUsage, KeyUsage, SignatureAlgorithm, SubjectAltName,
 };
+#[cfg(not(ic_approved_only))]
 use pkix::csr::{write_certification_request, write_certification_request_info, RequestParams};
 
 /// A key that can be embedded in a certificate and sign one.
@@ -28,8 +31,10 @@ trait Issuer {
     fn sign(&self, tbs: &[u8], out: &mut [u8]) -> usize;
 }
 
+#[cfg(not(ic_approved_only))]
 struct Ed(ec::Ed25519Key);
 
+#[cfg(not(ic_approved_only))]
 impl Issuer for Ed {
     fn spki(&self, out: &mut [u8]) -> usize {
         pkix::PublicKeyInfo::Ed25519(self.0.public_key())
@@ -100,6 +105,10 @@ fn issued_certificates_are_byte_for_byte_openssl_s() {
     for case in &file.cases {
         let (alg, ca, leaf): (_, Box<dyn Issuer>, Box<dyn Issuer>) =
             match case["algorithm"].as_str() {
+                // Not in an approved-only build; the ML-DSA cases still run.
+                #[cfg(ic_approved_only)]
+                "ed25519" => continue,
+                #[cfg(not(ic_approved_only))]
                 "ed25519" => (
                     SignatureAlgorithm::Ed25519,
                     Box::new(Ed(
@@ -185,7 +194,11 @@ fn issued_certificates_are_byte_for_byte_openssl_s() {
         );
         checked += 2;
     }
-    assert_eq!(checked, 6, "a CA and a leaf for each of three algorithms");
+    if cfg!(ic_approved_only) {
+        assert_eq!(checked, 4, "a CA and a leaf for each ML-DSA set");
+    } else {
+        assert_eq!(checked, 6, "a CA and a leaf for each of three algorithms");
+    }
 }
 
 /// A URI alternative name, and a PKCS#10 request, against OpenSSL's.
@@ -195,6 +208,7 @@ fn issued_certificates_are_byte_for_byte_openssl_s() {
 /// Ed25519 key asking for a DNS name and a URI, and issued a leaf from it
 /// under an Ed25519 CA. Ed25519 is deterministic, so the request and both
 /// certificates must be OpenSSL's byte for byte.
+#[cfg(not(ic_approved_only))]
 #[test]
 fn uri_names_and_requests_are_byte_for_byte_openssl_s() {
     let Some(file) = VectorFile::load_or_report("openssl-x509-uri-csr") else {

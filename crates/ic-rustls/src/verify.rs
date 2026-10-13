@@ -125,12 +125,15 @@ impl SignatureVerificationAlgorithm for Ecdsa {
 /// is no pairing to get wrong and no variant to choose. The signature is a
 /// fixed 64 bytes and the public key 32, both raw -- unlike ECDSA there is no
 /// DER wrapper on the way in.
+#[cfg(not(ic_approved_only))]
 pub(crate) static ED25519: Ed25519 = Ed25519;
 
 /// See [`ED25519`].
 #[derive(Debug)]
+#[cfg(not(ic_approved_only))]
 pub(crate) struct Ed25519;
 
+#[cfg(not(ic_approved_only))]
 impl SignatureVerificationAlgorithm for Ed25519 {
     fn verify_signature(
         &self,

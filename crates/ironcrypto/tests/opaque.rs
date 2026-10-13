@@ -8,6 +8,9 @@
 //! the order the protocol makes them, so every message and every key is
 //! compared byte for byte.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::traits::RandomSource;
 use ic_core::ErrorKind;
 use ic_vectors::{hex, hex_field, VectorFile};

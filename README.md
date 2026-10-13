@@ -600,10 +600,20 @@ converting ACVP output.
 ## Honest limits
 
 **This is not a CMVP-validated module.** [FIPS.md](docs/FIPS.md) describes what
-is implemented (approved-mode policy, pre-operational self-tests, 75 algorithm
+is implemented (approved-mode policy, pre-operational self-tests, 85 algorithm
 known-answer tests, a latching error state, service indicators) and what
 validation would still require. `ic capabilities` reports
 `fips-validated: false` and will keep reporting it until a certificate exists.
+
+**Approved mode refuses only what it is asked about** — unless the build
+leaves the rest out. `ic_fips::check` and `guarded` refuse a non-approved
+algorithm in approved mode; a direct call to one is not refused. Build with
+`--cfg ic_approved_only` (in `RUSTFLAGS` and `RUSTDOCFLAGS`) and every
+algorithm approved mode does not permit is left out of the build, so a call to
+one does not compile, the ontology reports it `excluded`, and the module comes
+up in approved mode and cannot leave it. An Ed25519 key, which arrives as data,
+is refused at run time. [FIPS.md](docs/FIPS.md#a-build-with-only-the-approved-algorithms)
+lists what goes. It is still not a validated module.
 
 **Throughput depends on the CPU, and the library tells you which case you are
 in.** On x86-64 with AES-NI and `PCLMULQDQ` the accelerated backend is selected

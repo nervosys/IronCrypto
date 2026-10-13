@@ -7,6 +7,25 @@ all of them.
 
 ### Added
 
+- **A build with only the FIPS-approved algorithms**, `--cfg ic_approved_only`
+  in `RUSTFLAGS` and `RUSTDOCFLAGS`. Approved mode used to refuse a
+  non-approved algorithm only through `ic_fips::check` and `guarded`; a direct
+  call went through. In this build the twenty-one algorithms approved mode
+  does not permit are not compiled, so a call to one does not compile:
+  ChaCha20-Poly1305 and its relatives, AES-GCM-SIV, Shamir sharing, BLAKE2 and
+  BLAKE3, Argon2, scrypt, bcrypt, yescrypt, passphrase sealing,
+  `ic_kdf::password`, X25519, Ed25519, hashing to P-256, the OPRF, OPAQUE and
+  HPKE. Their ontology entries report `excluded`, `recommend` answers every
+  policy as a FIPS one, the CAST table drops to 64 with its own integrity tag,
+  the module comes up in approved mode and refuses to leave it, and
+  `ic_fips::check` gives the reason as `NotApprovedInFipsMode`. An Ed25519 key,
+  which arrives as data, is refused at run time by `ic_sig` and `ic_rustls`,
+  whose provider offers only AES-GCM, P-256 and P-384, ECDSA and RSA. A cfg
+  rather than a Cargo feature: removing API is not additive, and a feature any
+  dependency enabled would strip the algorithms from every crate in the graph.
+  Three `compile_fail` examples in the `ironcrypto` documentation show the
+  absence, and `scripts/approved-only.sh` builds and tests this configuration
+  in the local gate and in CI. It does not make the module validated.
 - **OPAQUE (RFC 9807)**, as `ic_hpke::opaque`: password authentication in
   which the server never sees the password, and a stolen database cannot be
   attacked without also the server's key. OPAQUE-3DH over P-256 with HKDF,

@@ -217,6 +217,7 @@ fn an_openssl_p521_key_is_the_key_it_claims_to_be() {
     ec::p521::EcdsaP521Sha512::verify(spki_point, b"interop", &signature).unwrap();
 }
 
+#[cfg(not(ic_approved_only))]
 #[test]
 fn ed25519_keys_survive_pkcs8_and_spki() {
     let seed = [0x3fu8; 32];
@@ -245,6 +246,7 @@ fn ed25519_keys_survive_pkcs8_and_spki() {
 
 /// X25519 is key agreement, so the round trip is checked by having both sides
 /// arrive at the same shared secret through the encoding.
+#[cfg(not(ic_approved_only))]
 #[test]
 fn x25519_keys_survive_pkcs8_and_agree() {
     let alice_private = [0x11u8; 32];
@@ -574,6 +576,7 @@ fn a_minimal_modulus_is_padded_back_to_full_width() {
 // ---------------------------------------------------------------------------
 
 /// The whole chain: key to DER to PEM text and all the way back, then use it.
+#[cfg(not(ic_approved_only))]
 #[test]
 fn a_key_survives_the_full_pem_round_trip() {
     let seed = [0x77u8; 32];
@@ -658,6 +661,7 @@ fn a_tampered_point_parses_but_does_not_verify() {
 /// Every parse entry point refuses trailing data. Checked here across all of
 /// them at once, because it is the single property most likely to be lost when
 /// one of them is later modified.
+#[cfg(not(ic_approved_only))]
 #[test]
 fn no_parser_accepts_trailing_data() {
     let seed = [0x99u8; 32];

@@ -16,7 +16,9 @@
 //! assert_eq!(r.primary.id, "aes-256-gcm");
 //!
 //! let r = recommend(Intent::EncryptMessage, Policy::DEFAULT).unwrap();
+//! # if !ic_ontology::runtime::has("approved-only") {
 //! assert_eq!(r.primary.id, "chacha20-poly1305");
+//! # }
 //! ```
 
 use crate::query::Query;
@@ -238,7 +240,16 @@ pub enum NoRecommendation {
 /// downgrading when the correct answer exists but this build does not provide
 /// it — the failure mode that would otherwise push an agent into using an
 /// unapproved algorithm to satisfy a FIPS requirement.
+///
+/// In a build with `--cfg ic_approved_only` every policy requires FIPS
+/// approval, because nothing else is in the build to recommend: the answer
+/// is then the one [`Policy::FIPS_APPROVED`] gives, with the approved-mode
+/// reason on each option passed over.
 pub fn recommend(intent: Intent, policy: Policy) -> Result<Recommendation, NoRecommendation> {
+    let policy = Policy {
+        require_fips: policy.require_fips || cfg!(ic_approved_only),
+        ..policy
+    };
     let (class, purpose) = intent.shape();
 
     let base = Query::new().purpose(purpose);
@@ -709,6 +720,7 @@ mod tests {
             .any(|x| x.id == "chacha20-poly1305" && x.reason.contains("approved mode")));
     }
 
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn without_aes_hardware_chacha_wins() {
         let r = recommend(Intent::EncryptMessage, Policy::DEFAULT).unwrap();
@@ -754,6 +766,7 @@ mod tests {
 
     /// Outside a FIPS policy the Curve25519 options stay the default, with the
     /// approved alternatives offered rather than hidden.
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn default_policy_prefers_curve25519_but_offers_the_approved_option() {
         let r = recommend(Intent::SignData, Policy::DEFAULT).unwrap();
@@ -998,6 +1011,7 @@ mod tests {
 
     /// Outside FIPS the memory-hard option wins; under FIPS the approved one
     /// does, and each names the other as the road not taken.
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn password_hashing_tracks_the_policy() {
         let r = recommend(Intent::HashPassword, Policy::DEFAULT).unwrap();
@@ -1012,5 +1026,32 @@ mod tests {
         assert!(r
             .rejected()
             .any(|x| x.id == "argon2id" && x.reason.contains("approved mode")));
+    }
+
+    /// An approved-only build has only approved algorithms to offer, so every
+    /// policy gets the answer a FIPS policy gets.
+    #[cfg(ic_approved_only)]
+    #[test]
+    fn approved_only_builds_recommend_only_approved_algorithms() {
+        for intent in Intent::ALL {
+            let fips = recommend(*intent, Policy::FIPS_APPROVED)
+                .ok()
+                .map(|r| r.primary.id);
+            let default = recommend(*intent, Policy::DEFAULT)
+                .ok()
+                .map(|r| r.primary.id);
+            assert_eq!(fips, default, "{}", intent.id());
+            if let Ok(r) = recommend(*intent, Policy::DEFAULT) {
+                assert!(
+                    r.primary.approved_mode_ok(),
+                    "{}: {}",
+                    intent.id(),
+                    r.primary.id
+                );
+                if let Some(a) = r.alternative {
+                    assert!(a.approved_mode_ok(), "{}: {}", intent.id(), a.id);
+                }
+            }
+        }
     }
 }

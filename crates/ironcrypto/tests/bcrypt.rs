@@ -5,6 +5,9 @@
 //! three prefixes, costs 4 to 10, the empty password, both sides of the
 //! 72-byte limit, non-ASCII, and wrong passwords. Every verdict must match.
 
+// Every algorithm here is one approved mode does not permit.
+#![cfg(not(ic_approved_only))]
+
 use ic_core::ErrorKind;
 use ic_vectors::{hex_field, VectorFile};
 use ironcrypto::kdf::bcrypt;

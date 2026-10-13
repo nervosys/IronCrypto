@@ -16,6 +16,11 @@ publish.workspace = true
 default = ["std"]
 std = ["ic-core/std", "ic-pkix/std", "ic-ec/std", "ic-rsa/std", "ic-mldsa/std", "ic-lms/std", "ic-slhdsa/std"]
 
+# `ic_approved_only` leaves out every algorithm FIPS approved mode does not
+# permit; see docs/FIPS.md.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)"] }
+
 [dependencies]
 ic-core = { workspace = true }
 ic-pkix = { workspace = true }

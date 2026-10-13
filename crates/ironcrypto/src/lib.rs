@@ -65,6 +65,52 @@
 //!   HKDF with both public keys in `info`, or use `ic_hpke`.
 //! * **Wrap secrets in Zeroizing.** Keys, derived keys, shared secrets.
 //!
+//! ## A build with only the approved algorithms
+//!
+//! [`ic_fips::check`] refuses a non-approved algorithm in approved mode, but
+//! only when it is asked: a direct call to one is not refused. A build that
+//! must not contain any can say so at compile time instead. In the
+//! application's `.cargo/config.toml`:
+//!
+//! ```toml
+//! [build]
+//! rustflags = ["--cfg", "ic_approved_only"]
+//! rustdocflags = ["--cfg", "ic_approved_only"]
+//! ```
+//!
+//! Every algorithm FIPS 140-3 approved mode does not permit is then left out
+//! of the build, so code that calls one does not compile; its ontology entry
+//! reports `excluded` and [`recommend`] answers every policy as a FIPS one;
+//! [`ic_fips::initialize`] brings the module up in approved mode, and it cannot
+//! leave. An Ed25519 key, which arrives as data and so cannot be refused at
+//! compile time, is refused by `ic_sig` and `ic_rustls` with
+//! [`ErrorKind::NotApprovedInFipsMode`](ic_core::ErrorKind::NotApprovedInFipsMode).
+//! None of this makes the module validated.
+//!
+//! A cfg rather than a Cargo feature, because a feature that removes API is
+//! not additive: any dependency that turned it on would remove these
+//! algorithms from every crate in the build. See [`ic_core::APPROVED_ONLY`].
+//!
+//! Each of these compiles in the default build and does not compile in that
+//! one, and the documentation tests check both:
+//!
+#![cfg_attr(ic_approved_only, doc = "```compile_fail")]
+#![cfg_attr(not(ic_approved_only), doc = "```")]
+//! use ironcrypto::prelude::*;
+//! let _ = ironcrypto::cipher::ChaCha20Poly1305::new(&[0u8; 32]);
+//! ```
+//!
+#![cfg_attr(ic_approved_only, doc = "```compile_fail")]
+#![cfg_attr(not(ic_approved_only), doc = "```")]
+//! use ironcrypto::prelude::*;
+//! let _ = ironcrypto::ec::Ed25519::public_key(&[7u8; 32], &mut [0u8; 32]);
+//! ```
+//!
+#![cfg_attr(ic_approved_only, doc = "```compile_fail")]
+#![cfg_attr(not(ic_approved_only), doc = "```")]
+//! let _ = ironcrypto::kdf::argon2::Variant::Argon2id;
+//! ```
+//!
 //! ## Honest limits
 //!
 //! * **Not CMVP validated.** The FIPS machinery is real; the certificate does
@@ -124,18 +170,24 @@ pub mod prelude {
     pub use ic_core::{Error, ErrorKind, Result, Zeroize, Zeroizing};
 
     pub use ic_cipher::{Aes128, Aes192, Aes256};
-    pub use ic_cipher::{Aes128Gcm, Aes192Gcm, Aes256Gcm, ChaCha20Poly1305, XChaCha20Poly1305};
+    pub use ic_cipher::{Aes128Gcm, Aes192Gcm, Aes256Gcm};
+    #[cfg(not(ic_approved_only))]
     pub use ic_cipher::{Aes128GcmSiv, Aes256GcmSiv};
     pub use ic_cipher::{Aes128Kw, Aes192Kwp, Aes256Kw, Aes256Kwp};
+    #[cfg(not(ic_approved_only))]
+    pub use ic_cipher::{ChaCha20Poly1305, XChaCha20Poly1305};
     pub use ic_cipher::{Opener, Sealer};
     pub use ic_ec::p256::{EcdhP256, EcdsaP256Sha256};
     pub use ic_ec::p384::{EcdhP384, EcdsaP384Sha384};
     pub use ic_ec::p521::{EcdhP521, EcdsaP521Sha512};
+    #[cfg(not(ic_approved_only))]
     pub use ic_ec::{Ed25519, X25519};
+    #[cfg(not(ic_approved_only))]
     pub use ic_hash::{Blake2b, Blake2s, Blake3};
     pub use ic_hash::{CShake128, CShake256};
     pub use ic_hash::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256};
     pub use ic_hash::{Sha256, Sha384, Sha3_256, Sha3_512, Sha512, Shake128, Shake256};
+    #[cfg(not(ic_approved_only))]
     pub use ic_kdf::argon2::{argon2, Argon2Params, Variant};
     pub use ic_kdf::{pbkdf2, Hkdf};
     pub use ic_mac::{CmacAes256, HmacSha256, HmacSha384, HmacSha512};
@@ -222,6 +274,7 @@ mod tests {
                 Aes256Gcm::NONCE_LEN,
                 Aes256Gcm::TAG_LEN,
             ),
+            #[cfg(not(ic_approved_only))]
             (
                 "chacha20-poly1305",
                 ChaCha20Poly1305::KEY_LEN,
@@ -265,6 +318,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn curve_key_sizes_match_the_ontology() {
         let e = ic_ontology::get("x25519").unwrap();
@@ -300,10 +354,13 @@ mod tests {
             Sha3_256::ID,
             Aes256::ID,
             Aes256Gcm::ID,
-            ChaCha20Poly1305::ID,
             HmacSha256::ID,
             CmacAes256::ID,
+            #[cfg(not(ic_approved_only))]
+            ChaCha20Poly1305::ID,
+            #[cfg(not(ic_approved_only))]
             X25519::ID,
+            #[cfg(not(ic_approved_only))]
             Ed25519::ID,
         ];
         for id in ids {
@@ -314,6 +371,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn a_full_agent_workflow_runs_end_to_end() {
         // Agree a key, derive from it, encrypt with the result, and sign the

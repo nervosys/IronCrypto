@@ -186,6 +186,7 @@ mod tests {
         assert!(get("not-a-real-algorithm").is_none());
     }
 
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn authenticated_encryption_query_finds_the_aeads() {
         let hits: Vec<_> = Query::new()
@@ -213,6 +214,7 @@ mod tests {
         assert!(!hits.contains(&"chacha20-poly1305"));
     }
 
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn availability_filter_excludes_what_is_not_implemented() {
         // The KEM class used to be the example here, because ML-KEM-768 was the

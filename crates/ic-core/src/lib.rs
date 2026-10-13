@@ -47,3 +47,17 @@ pub use zeroize::{Zeroize, Zeroizing};
 
 /// The semantic version of the IronCrypto core contract.
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Whether this build leaves out every algorithm FIPS 140-3 approved mode does
+/// not permit.
+///
+/// Set by building with `--cfg ic_approved_only` in `RUSTFLAGS`, and in
+/// `RUSTDOCFLAGS` for the documentation tests. A cfg rather than a Cargo
+/// feature, for two reasons. Removing API is not additive, and Cargo unifies
+/// features across a dependency graph, so a feature that any dependency turned
+/// on would strip these algorithms from every other crate in the build; a cfg
+/// is set only by whoever builds the final binary, which is who decides where a
+/// module boundary lies. And `--all-features`, which tooling and this
+/// repository's own checks use, would otherwise build only the restricted
+/// configuration.
+pub const APPROVED_ONLY: bool = cfg!(ic_approved_only);

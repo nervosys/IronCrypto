@@ -240,6 +240,11 @@ pub enum ImplStatus {
     /// Specified in the ontology, not yet implemented.
     Planned,
     /// Deliberately excluded; see the entry's `notes`.
+    ///
+    /// Also what an implemented algorithm that FIPS approved mode does not
+    /// permit reports in a build with `--cfg ic_approved_only`, which
+    /// leaves its code out; [`crate::runtime::has`] with `"approved-only"`
+    /// tells the two apart.
     Excluded,
 }
 

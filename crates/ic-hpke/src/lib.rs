@@ -8,6 +8,7 @@
 //! messages under them. Encrypted Client Hello and MLS are built on it.
 //!
 //! ```
+//! # #[cfg(not(ic_approved_only))]
 //! # fn main() -> ic_core::Result<()> {
 //! use ic_hpke::{setup_receiver, setup_sender, Aead, KeyPair};
 //! let mut rng = ic_drbg::Rng::from_os()?;
@@ -22,6 +23,8 @@
 //! assert_eq!(&message, b"hello");
 //! # Ok(())
 //! # }
+//! # #[cfg(ic_approved_only)]
+//! # fn main() {}
 //! ```
 //!
 //! # What is here, and what is not
@@ -49,6 +52,12 @@
 //! other two AEADs, every sequence number it covers, and the exporter.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+// Nothing here is permitted in FIPS approved mode: HPKE, OPAQUE and the X25519
+// KEM are not approved functions, whatever their components are. Under
+// `ic_approved_only` the crate is therefore empty. Empty rather than refusing at
+// run time, so that a call into it fails to compile. After `no_std`, which an
+// empty crate still needs on a target without std.
+#![cfg(not(ic_approved_only))]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]

@@ -6,6 +6,7 @@
 //! key and signs with it, in the encodings [`crate::verify`] accepts.
 //!
 //! ```
+//! # #[cfg(not(ic_approved_only))]
 //! # fn main() -> ic_core::Result<()> {
 //! use ic_core::sig::{SignatureAlgorithm, Signer};
 //! use ic_sig::SoftwareSigner;
@@ -25,6 +26,8 @@
 //! assert_eq!(algorithm, SignatureAlgorithm::Ed25519);
 //! # Ok(())
 //! # }
+//! # #[cfg(ic_approved_only)]
+//! # fn main() {}
 //! ```
 //!
 //! # What it reads
@@ -98,6 +101,7 @@ enum Key {
     P256(Zeroizing<[u8; 32]>),
     P384(Zeroizing<[u8; 48]>),
     P521(Zeroizing<[u8; 66]>),
+    #[cfg(not(ic_approved_only))]
     Ed25519(Zeroizing<[u8; 32]>),
     Rsa(ic_rsa::RsaPrivateKey),
     MlDsa44(Zeroizing<[u8; ic_mldsa::sign44::SECRET_KEY_LEN]>),
@@ -259,6 +263,15 @@ impl SoftwareSigner {
         }
     }
 
+    #[cfg(ic_approved_only)]
+    fn ed25519(_seed: &[u8]) -> Result<Self> {
+        Err(err!(
+            NotApprovedInFipsMode,
+            "Ed25519 is not in this build: it was compiled with ic_approved_only"
+        ))
+    }
+
+    #[cfg(not(ic_approved_only))]
     #[inline(never)]
     fn ed25519(seed: &[u8]) -> Result<Self> {
         ensure!(seed.len() == 32, InvalidLength, "ed25519 seed length");
@@ -427,6 +440,7 @@ impl Signer for SoftwareSigner {
             Key::P256(d) => ecdsa::<ic_ec::p256::EcdsaP256Sha256, 64>(d.get(), message, out),
             Key::P384(d) => ecdsa::<ic_ec::p384::EcdsaP384Sha384, 96>(d.get(), message, out),
             Key::P521(d) => ecdsa::<ic_ec::p521::EcdsaP521Sha512, 132>(d.get(), message, out),
+            #[cfg(not(ic_approved_only))]
             Key::Ed25519(seed) => {
                 ensure!(out.len() >= 64, InvalidLength, "signature buffer too short");
                 <ic_ec::Ed25519 as SignatureScheme>::sign(seed.get(), message, &mut out[..64])?;
@@ -653,6 +667,15 @@ mod tests {
         let n = PrivateKeyInfo::Ed25519(&[9u8; 32])
             .to_der(&mut buf)
             .unwrap();
+        if cfg!(ic_approved_only) {
+            // A key the build cannot use is refused by name, not mistaken for
+            // a malformed one.
+            assert_eq!(
+                kind(SoftwareSigner::from_pkcs8(&buf[..n])),
+                ErrorKind::NotApprovedInFipsMode
+            );
+            return;
+        }
         let signer = SoftwareSigner::from_pkcs8(&buf[..n]).unwrap();
         assert_eq!(signer.algorithms(), [SignatureAlgorithm::Ed25519]);
         exercise(&signer);
@@ -845,10 +868,15 @@ mod tests {
             ErrorKind::MalformedEncoding
         );
         // The key is not printed.
-        let n = PrivateKeyInfo::Ed25519(&[0xabu8; 32])
-            .to_der(&mut buf)
-            .unwrap();
-        let shown = format!("{:?}", SoftwareSigner::from_pkcs8(&buf[..n]).unwrap());
-        assert!(shown.contains("Ed25519") && !shown.contains("171") && !shown.contains("ab, ab"));
+        #[cfg(not(ic_approved_only))]
+        {
+            let n = PrivateKeyInfo::Ed25519(&[0xabu8; 32])
+                .to_der(&mut buf)
+                .unwrap();
+            let shown = format!("{:?}", SoftwareSigner::from_pkcs8(&buf[..n]).unwrap());
+            assert!(
+                shown.contains("Ed25519") && !shown.contains("171") && !shown.contains("ab, ab")
+            );
+        }
     }
 }

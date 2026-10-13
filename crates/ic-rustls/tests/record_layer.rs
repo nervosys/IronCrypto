@@ -75,6 +75,7 @@ fn tls12_aes256() -> &'static dyn Tls12AeadAlgorithm {
 /// suites it can be driven from an external test through the public `AeadKey`
 /// constructor. That is why both of the algorithms exercised below are the
 /// 32-byte ones.
+#[cfg(not(ic_approved_only))]
 fn tls13_chacha() -> &'static dyn Tls13AeadAlgorithm {
     for suite in ic_rustls::suites::ALL {
         if let rustls::SupportedCipherSuite::Tls13(t) = suite {
@@ -88,6 +89,7 @@ fn tls13_chacha() -> &'static dyn Tls13AeadAlgorithm {
 }
 
 /// The TLS 1.2 ChaCha20-Poly1305 algorithm.
+#[cfg(not(ic_approved_only))]
 fn tls12_chacha() -> &'static dyn Tls12AeadAlgorithm {
     for suite in ic_rustls::suites::ALL {
         if let rustls::SupportedCipherSuite::Tls12(t) = suite {
@@ -101,19 +103,24 @@ fn tls12_chacha() -> &'static dyn Tls12AeadAlgorithm {
     panic!("the ChaCha20-Poly1305 TLS 1.2 suite is missing");
 }
 
-/// The two TLS 1.3 algorithms, so every framing test below covers both.
-fn tls13_algorithms() -> [(&'static str, &'static dyn Tls13AeadAlgorithm); 2] {
-    [
+/// The two TLS 1.3 algorithms, so every framing test below covers both; one
+/// under `ic_approved_only`.
+fn tls13_algorithms() -> Vec<(&'static str, &'static dyn Tls13AeadAlgorithm)> {
+    vec![
         ("aes-256-gcm", tls13_aes256()),
+        #[cfg(not(ic_approved_only))]
         ("chacha20-poly1305", tls13_chacha()),
     ]
 }
 
 /// The two TLS 1.2 algorithms. These are *not* framed alike -- ChaCha20 sends
 /// no explicit nonce -- so running the same tests over both is the point.
-fn tls12_algorithms() -> [(&'static str, &'static dyn Tls12AeadAlgorithm); 2] {
-    [
+///
+/// One under `ic_approved_only`.
+fn tls12_algorithms() -> Vec<(&'static str, &'static dyn Tls12AeadAlgorithm)> {
+    vec![
         ("aes-256-gcm", tls12_aes256()),
+        #[cfg(not(ic_approved_only))]
         ("chacha20-poly1305", tls12_chacha()),
     ]
 }
@@ -180,7 +187,8 @@ fn a_tls13_record_survives_the_round_trip() {
         }
     }
 
-    assert!(checked >= 24, "only {checked} records exercised");
+    let floor = if cfg!(ic_approved_only) { 12 } else { 24 };
+    assert!(checked >= floor, "only {checked} records exercised");
 }
 
 #[test]
@@ -340,7 +348,8 @@ fn a_tls12_record_survives_the_round_trip() {
         }
     }
 
-    assert!(checked >= 12, "only {checked} records exercised");
+    let floor = if cfg!(ic_approved_only) { 6 } else { 12 };
+    assert!(checked >= floor, "only {checked} records exercised");
 }
 
 /// The explicit nonce on the wire must be the fixed IV's partner xored with the
@@ -405,6 +414,7 @@ fn the_tls12_explicit_nonce_is_the_key_block_value_xored_with_the_sequence() {
 /// So this checks the length against the plaintext rather than against the
 /// encrypter's own promise, and checks the two suites differ by exactly the
 /// eight bytes that distinguish them.
+#[cfg(not(ic_approved_only))]
 #[test]
 fn a_tls12_chacha_record_carries_no_explicit_nonce() {
     let chacha = tls12_chacha();

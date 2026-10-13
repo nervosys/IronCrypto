@@ -156,6 +156,20 @@ jobs:
           cargo install cargo-audit --locked
           cargo audit
 
+  approved-only:
+    name: approved-only build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          toolchain: stable
+          targets: thumbv7em-none-eabihf
+          components: clippy
+      # --cfg ic_approved_only, which no other job builds. The same script the
+      # local gate runs.
+      - run: scripts/approved-only.sh
+
   msrv:
     name: minimum Rust version
     runs-on: ubuntu-latest

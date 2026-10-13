@@ -20,6 +20,11 @@ std = ["ic-core/std", "ic-hash/std", "ic-mac/std", "ic-kdf/std", "ic-cipher/std"
 # depending on ironcrypto can turn it on, which defeats the point of a facade.
 aarch64-crypto = ["ic-cipher/aarch64-crypto"]
 
+# `ic_approved_only` leaves out every algorithm FIPS approved mode does not
+# permit; see docs/FIPS.md.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)"] }
+
 [dependencies]
 ic-core = { workspace = true }
 ic-hash = { workspace = true }

@@ -120,7 +120,12 @@ pub fn default_kx_groups() -> &'static [&'static dyn SupportedKxGroup] {
     KX_GROUPS
 }
 
-static KX_GROUPS: &[&dyn SupportedKxGroup] = &[&kx::X25519, &kx::SECP256R1, &kx::SECP384R1];
+static KX_GROUPS: &[&dyn SupportedKxGroup] = &[
+    #[cfg(not(ic_approved_only))]
+    &kx::X25519,
+    &kx::SECP256R1,
+    &kx::SECP384R1,
+];
 
 /// Signature verification algorithms, for certificate chains and for the
 /// handshake.
@@ -132,7 +137,9 @@ pub static SUPPORTED_SIG_ALGS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgori
     all: &[
         &verify::ECDSA_P256_SHA256 as &dyn SignatureVerificationAlgorithm,
         &verify::ECDSA_P384_SHA384 as &dyn SignatureVerificationAlgorithm,
-        &verify::ED25519 as &dyn SignatureVerificationAlgorithm,
+        // In parentheses because a cast cannot carry an attribute.
+        #[cfg(not(ic_approved_only))]
+        (&verify::ED25519 as &dyn SignatureVerificationAlgorithm),
         &verify::RSA_PKCS1_SHA256 as &dyn SignatureVerificationAlgorithm,
         &verify::RSA_PKCS1_SHA384 as &dyn SignatureVerificationAlgorithm,
         &verify::RSA_PKCS1_SHA512 as &dyn SignatureVerificationAlgorithm,
@@ -149,6 +156,7 @@ pub static SUPPORTED_SIG_ALGS: WebPkiSupportedAlgorithms = WebPkiSupportedAlgori
             SignatureScheme::ECDSA_NISTP256_SHA256,
             &[&verify::ECDSA_P256_SHA256 as &dyn SignatureVerificationAlgorithm],
         ),
+        #[cfg(not(ic_approved_only))]
         (
             SignatureScheme::ED25519,
             &[&verify::ED25519 as &dyn SignatureVerificationAlgorithm],
@@ -194,6 +202,7 @@ mod tests {
     /// A provider that silently omits a suite does not fail; it negotiates
     /// something else, or nothing, and the reason is several layers away from
     /// whoever has to debug it.
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn the_provider_offers_what_it_says_it_does() {
         let p = provider();
@@ -234,6 +243,62 @@ mod tests {
         assert_eq!(p.signature_verification_algorithms.mapping.len(), 9);
     }
 
+    /// Under `ic_approved_only` the provider offers AES-GCM, the NIST curves and
+    /// ECDSA and RSA, and nothing else: no ChaCha20-Poly1305 suite, no X25519,
+    /// no Ed25519 in either direction.
+    ///
+    /// An Ed25519 key cannot be refused at compile time, since it arrives as
+    /// data, so loading one is refused with a message that says why.
+    #[cfg(ic_approved_only)]
+    #[test]
+    fn an_approved_only_provider_offers_only_approved_algorithms() {
+        use rustls::crypto::KeyProvider;
+
+        let p = provider();
+        let names: alloc::vec::Vec<_> = p
+            .cipher_suites
+            .iter()
+            .map(|s| alloc::format!("{:?}", s.suite()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "TLS13_AES_256_GCM_SHA384",
+                "TLS13_AES_128_GCM_SHA256",
+                "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            ]
+        );
+
+        let groups: alloc::vec::Vec<_> = p.kx_groups.iter().map(|g| g.name()).collect();
+        assert_eq!(
+            groups,
+            [rustls::NamedGroup::secp256r1, rustls::NamedGroup::secp384r1]
+        );
+
+        // Two ECDSA pairings and six RSA ones.
+        assert_eq!(p.signature_verification_algorithms.all.len(), 8);
+        assert_eq!(p.signature_verification_algorithms.mapping.len(), 8);
+        assert!(p
+            .signature_verification_algorithms
+            .mapping
+            .iter()
+            .all(|(scheme, _)| *scheme != rustls::SignatureScheme::ED25519));
+
+        let mut der = [0u8; 128];
+        let n = ic_pkix::PrivateKeyInfo::Ed25519(&[9u8; 32])
+            .to_der(&mut der)
+            .unwrap();
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(der[..n].to_vec().into());
+        let refused = sign::Keys.load_private_key(key).unwrap_err();
+        assert!(
+            alloc::format!("{refused}").contains("ic_approved_only"),
+            "{refused}"
+        );
+    }
+
     /// Nothing in the provider may report FIPS validation.
     ///
     /// rustls surfaces this to applications, some of which gate behaviour on
@@ -259,7 +324,8 @@ mod tests {
             checked += 1;
         }
         // Nine suites, three key exchange groups, nine signature algorithms.
-        assert!(checked >= 21, "only {checked} components examined");
+        let floor = if cfg!(ic_approved_only) { 16 } else { 21 };
+        assert!(checked >= floor, "only {checked} components examined");
     }
 
     /// The suites must name the hash and HMAC this crate provides, or the key

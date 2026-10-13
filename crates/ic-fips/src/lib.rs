@@ -63,6 +63,13 @@ const STATE_ERROR: u8 = 4;
 
 static STATE: AtomicU8 = AtomicU8::new(STATE_UNINITIALIZED);
 
+/// The operational state [`initialize`] leaves the module in.
+const STATE_INITIAL: u8 = if cfg!(ic_approved_only) {
+    STATE_OPERATIONAL_APPROVED
+} else {
+    STATE_OPERATIONAL_UNRESTRICTED
+};
+
 /// The module's operating mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -150,6 +157,11 @@ pub fn mode() -> Option<Mode> {
 /// approved mode. That ordering is deliberate — entering approved mode is a
 /// decision the operator makes explicitly, never a default the caller might not
 /// have noticed.
+///
+/// Built with `--cfg ic_approved_only`, the module comes up in
+/// [`Mode::Approved`] instead, and stays there: that decision was made when the
+/// build was configured, and the algorithms unrestricted mode would add are not
+/// in the build.
 pub fn initialize() -> Result<SelfTestReport> {
     match state() {
         State::Error => {
@@ -173,7 +185,7 @@ pub fn initialize() -> Result<SelfTestReport> {
         ));
     }
 
-    STATE.store(STATE_OPERATIONAL_UNRESTRICTED, Ordering::SeqCst);
+    STATE.store(STATE_INITIAL, Ordering::SeqCst);
     Ok(report)
 }
 
@@ -181,9 +193,18 @@ pub fn initialize() -> Result<SelfTestReport> {
 ///
 /// Requires the module to be operational; returns
 /// [`ErrorKind::ModuleErrorState`] otherwise.
+///
+/// In a build with `--cfg ic_approved_only`, [`Mode::Unrestricted`] is
+/// refused with [`ErrorKind::NotApprovedInFipsMode`]: there is nothing for it to
+/// unlock.
 pub fn set_mode(new_mode: Mode) -> Result<()> {
     match state() {
         State::Operational(_) => {
+            ensure!(
+                !(cfg!(ic_approved_only) && new_mode == Mode::Unrestricted),
+                NotApprovedInFipsMode,
+                "this build was compiled with ic_approved_only and has no unrestricted mode"
+            );
             STATE.store(
                 match new_mode {
                     Mode::Approved => STATE_OPERATIONAL_APPROVED,
@@ -273,6 +294,17 @@ pub fn check(algorithm_id: &str) -> Result<ServiceIndicator> {
     let entry = ic_ontology::get(algorithm_id)
         .ok_or(Error::new(ErrorKind::Unsupported, "unknown algorithm"))?;
 
+    // Said before the availability check, which would also refuse it: the
+    // reason it is missing is that it is not approved, and that is the answer
+    // a caller can act on.
+    if cfg!(ic_approved_only) && !entry.fips.permitted_in_approved_mode() {
+        return Err(Error::new(
+            ErrorKind::NotApprovedInFipsMode,
+            "algorithm is not approved, and this build was compiled with ic_approved_only, which \
+             leaves it out",
+        ));
+    }
+
     ensure!(
         entry.status == ImplStatus::Available,
         Unsupported,
@@ -330,6 +362,7 @@ mod tests {
     /// The module state is process-global, so the state-machine assertions run
     /// as one test rather than racing each other across threads. None of them
     /// enters the error state, which would fail every other test here.
+    #[cfg(not(ic_approved_only))]
     #[test]
     fn module_lifecycle_and_policy() {
         assert_eq!(state(), State::Uninitialized);
@@ -425,6 +458,53 @@ mod tests {
         // The error state latches, and takes every primitive in the process
         // with it, so it is entered in a process of its own:
         // `tests/error_state.rs`.
+    }
+
+    /// The approved-only build's lifecycle: approved from the start, no way
+    /// out, and every algorithm approved mode refuses reported as refused for
+    /// that reason rather than as unknown.
+    #[cfg(ic_approved_only)]
+    #[test]
+    fn approved_only_builds_start_approved_and_stay_there() {
+        assert_eq!(
+            set_mode(Mode::Approved).unwrap_err().kind(),
+            ErrorKind::ModuleErrorState
+        );
+
+        initialize().unwrap();
+        assert_eq!(state(), State::Operational(Mode::Approved));
+        assert_eq!(
+            set_mode(Mode::Unrestricted).unwrap_err().kind(),
+            ErrorKind::NotApprovedInFipsMode
+        );
+        assert_eq!(mode(), Some(Mode::Approved));
+        set_mode(Mode::Approved).unwrap();
+
+        assert_eq!(check("aes-256-gcm").unwrap(), ServiceIndicator::Approved);
+        assert_eq!(
+            check("aes-256").unwrap(),
+            ServiceIndicator::ApprovedAsComponent
+        );
+        assert!(check("ml-kem-768").is_ok());
+        for id in [
+            "chacha20-poly1305",
+            "ed25519",
+            "x25519",
+            "argon2id",
+            "blake3",
+            "md5",
+        ] {
+            assert_eq!(
+                check(id).unwrap_err().kind(),
+                ErrorKind::NotApprovedInFipsMode,
+                "{id}"
+            );
+        }
+        assert_eq!(
+            check("nonsense").unwrap_err().kind(),
+            ErrorKind::Unsupported
+        );
+        assert!(guarded("chacha20-poly1305", || 42).is_err());
     }
 
     #[test]
