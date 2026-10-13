@@ -25,6 +25,7 @@
 use std::time::Instant;
 
 mod ecdh;
+mod graviola;
 mod stack;
 
 use aes::cipher::{BlockEncrypt, KeyInit as AesKeyInit};
@@ -91,6 +92,10 @@ fn verdict(what: &str, ic: f64, other: f64, higher_is_better: bool) {
 fn main() {
     if std::env::args().nth(1).as_deref() == Some("stack") {
         stack::run();
+        return;
+    }
+    if std::env::args().nth(1).as_deref() == Some("graviola") {
+        graviola::run();
         return;
     }
     if std::env::args().nth(1).as_deref() == Some("ecdh") {
