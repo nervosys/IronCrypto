@@ -6,7 +6,10 @@
 //! * [`Ed25519`] — RFC 8032 signatures.
 //!
 //! Both are built on a shared constant-time field implementation
-//! (`field::Fe`) with 51-bit limbs.
+//! (`field::Fe`) with 51-bit limbs, and on x86-64 CPUs with BMI2 and ADX on a
+//! four-limb field (`fe64::Fe64`) whose multiplication is `MULX`/`ADX`
+//! assembly. The second is chosen at run time, once per operation; the first
+//! is the fallback and the reference the second is tested against.
 //!
 //! ```
 //! # #[cfg(not(ic_approved_only))]
@@ -40,7 +43,9 @@
 //! are here too: ECDSA and ECDH over P-256, P-384 and P-521, in [`p256`],
 //! [`p384`] and [`p521`].
 #![cfg_attr(not(feature = "std"), no_std)]
-#![forbid(unsafe_code)]
+// Denied rather than forbidden so that one module can allow it: `fe64`, whose
+// field multiplication is inline assembly. Nothing else here uses `unsafe`.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
@@ -68,6 +73,29 @@ mod field;
     not(any(target_arch = "riscv32", ic_limb32))
 ))]
 mod field32;
+// GF(2^255 - 19) in four 64-bit limbs, for x86-64 CPUs with BMI2 and ADX,
+// selected at run time; see `field_ops::dispatch!`. Not under `ic_limb32`,
+// whose purpose is to run the curve vectors against the ten-limb field, nor
+// under `ic_ec_portable`, which runs everything on the portable field.
+#[cfg(all(
+    not(ic_approved_only),
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable))
+))]
+#[allow(unsafe_code)]
+pub(crate) mod fe64;
+// Four field elements at once on AVX-512 IFMA, and the Edwards operations on
+// them; selected at run time where the CPU has it. Same conditions as `fe64`,
+// which it converts through.
+#[cfg(all(
+    not(ic_approved_only),
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable))
+))]
+#[allow(unsafe_code)]
+pub(crate) mod f51x4;
+#[cfg(not(ic_approved_only))]
+mod field_ops;
 
 #[cfg(feature = "ct-probes")]
 #[doc(hidden)]
@@ -87,6 +115,41 @@ pub use p256::{EcdhP256, EcdsaP256Sha256};
 pub use p384::{EcdhP384, EcdsaP384Sha384};
 #[cfg(not(ic_approved_only))]
 pub use x25519::X25519;
+
+/// The implementation of GF(2^255 - 19) that X25519 and Ed25519 run on here.
+///
+/// A published vector passes whichever implementation runs, so it cannot tell
+/// which one did; this can.
+#[cfg(not(ic_approved_only))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Curve25519Backend {
+    /// Four elements at once on AVX-512 IFMA (x86-64), for X25519 and, under
+    /// `std`, Ed25519's scalar multiplications; the MULX/ADX field for the
+    /// rest.
+    Ifma,
+    /// Four 64-bit limbs on MULX and ADX (x86-64).
+    MulxAdx,
+    /// The portable field: five 51-bit limbs, or ten of 26 and 25 bits on
+    /// 32-bit RISC-V and under `--cfg ic_limb32`.
+    Portable,
+}
+
+/// Which [`Curve25519Backend`] this CPU and build run, chosen at run time on
+/// the CPU's features alone.
+#[cfg(not(ic_approved_only))]
+#[must_use]
+pub fn curve25519_backend() -> Curve25519Backend {
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    {
+        if f51x4::Ifma::get().is_some() {
+            return Curve25519Backend::Ifma;
+        }
+        if fe64::available() {
+            return Curve25519Backend::MulxAdx;
+        }
+    }
+    Curve25519Backend::Portable
+}
 
 /// Digest widths ECDSA's `verify_prehash` accepts.
 pub use nist::ecdsa::PREHASH_LENS;

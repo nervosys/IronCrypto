@@ -48,6 +48,10 @@ step "clippy"
 # time while every local run included it, which is the worst of both: the rule
 # was enforced by habit rather than by the build.
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+# And with default features, which is what a dependent builds. Code used only
+# by a feature-gated caller, such as the benchmark internals, is dead here, and
+# --all-features alone never sees the warning.
+cargo clippy --workspace --all-targets -- -D warnings
 
 step "tests"
 cargo test --workspace --all-features

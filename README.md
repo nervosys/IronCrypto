@@ -446,10 +446,11 @@ measurements remain outstanding.
 
 ### Compiled-code checks
 
-`python scripts/check-ct.py` checks thirty-five fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V: **140 gating probe/target checks**. It rejects
+`python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
+Cortex-M0, Cortex-M4 and RISC-V, and thirteen more on x86-64 alone for its
+Curve25519 assembly: **189 gating probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
-ML-DSA, ML-KEM and P-256 field and scalar operations. On the 32-bit targets the
+ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
 P-256 Montgomery loop stays rolled; its counter branches, and a constant-length
 `memset` on RISC-V, are excused by rules about the surrounding instructions,
 each capped at the count that was read, and Cortex-M0's runtime multiply is
@@ -762,9 +763,20 @@ addition, and inlining the point operations.
 An AVX2 field backend was built far enough to measure -- a four-wide multiply
 is real, 24.35ns against 43.83ns for four scalar ones -- and not kept, because
 77% of a doubling is its multiplications and the other 23% becomes lane
-shuffles rather than disappearing, and it would cost `ic-ec` its
-`forbid(unsafe_code)`. `crates/ic-ec/src/field.rs` records that and the four
-other things tried against this gap that made it worse.
+shuffles rather than disappearing. `crates/ic-ec/src/field.rs` records that
+and the four other things tried against this gap that made it worse.
+
+What closed it, on x86-64, was two backends selected at run time with the
+portable field as fallback and reference: four 64-bit limbs on `MULX` and
+`ADX`, each group operation one assembly block, and where the CPU has
+AVX-512 IFMA, four field elements at once -- an Edwards point is four
+coordinates and its formulas multiply four at a time. `ic-ec` gave up its
+`forbid(unsafe_code)` for them: it is `deny` now, allowed in `fe64` and
+`f51x4` alone, every block with its safety argument. On a Ryzen 9 9900X,
+against Graviola 0.4.1 in the same process, X25519 agreement went from 1.7x
+behind to ahead, Ed25519 signing from 2x behind to ahead, and verification
+from 1.6x behind to ahead; `CHANGELOG.md` has the figures, and
+`ic_ec::curve25519_backend()` says which backend is live.
 
 `Ed25519VerifyKey` holds a decompressed public key, the way `Ed25519Key` holds
 a derived one for signing. Recovering the point is a field exponentiation, and
@@ -781,6 +793,7 @@ twice; `Ed25519::verify` still takes bytes and builds one per call.
 | ChaCha20 | AVX2, eight blocks at a time |
 | Poly1305 | four blocks per group, reducing once instead of four times |
 | RSA exponentiation | AVX-512 IFMA in radix 2^52 for 1024-, 1536- and 2048-bit moduli (every RSA prime here, and an RSA-2048 modulus); `MULX`/`ADCX`/`ADOX` for the other products; a fixed four-bit window everywhere |
+| X25519, Ed25519 | four-limb field on `MULX`/`ADX`; four field elements at once on AVX-512 IFMA |
 
 Each is selected by runtime detection with the portable path as fallback, each
 is differentially tested against that portable path, and each reports which

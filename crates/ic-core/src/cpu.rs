@@ -100,6 +100,38 @@ pub fn has_ghash_clmul() -> bool {
     }
 }
 
+/// Whether the x86-64 wide-multiply instructions are available: `MULX` (BMI2)
+/// and the two independent carry chains of `ADCX`/`ADOX` (ADX).
+///
+/// What `ic_ec`'s four-limb Curve25519 field needs. x86-64 only: the field is
+/// written for sixteen 64-bit registers, and a 32-bit x86 build has neither
+/// those nor a 64x64 multiply to put in them. Every x86-64 CPU since Intel
+/// Broadwell (2014) and AMD Zen (2017) has both.
+#[inline]
+#[must_use]
+pub fn has_bmi2_adx() -> bool {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    {
+        std::arch::is_x86_feature_detected!("bmi2") && std::arch::is_x86_feature_detected!("adx")
+    }
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(feature = "std"),
+        target_feature = "bmi2",
+        target_feature = "adx"
+    ))]
+    {
+        true
+    }
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        any(feature = "std", all(target_feature = "bmi2", target_feature = "adx"))
+    )))]
+    {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,9 +143,11 @@ mod tests {
     fn detection_is_total_and_stable() {
         let a = has_aes();
         let b = has_pclmulqdq();
+        let c = has_bmi2_adx();
         for _ in 0..8 {
             assert_eq!(has_aes(), a);
             assert_eq!(has_pclmulqdq(), b);
+            assert_eq!(has_bmi2_adx(), c);
         }
     }
 

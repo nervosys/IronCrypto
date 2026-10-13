@@ -182,3 +182,90 @@ p256_probes!(
     ct_p256_fn_cmov, ct_p256_fn_eq, ct_p256_fn_is_odd,
     m::{ fn_reduce, fn_add, fn_sub, fn_mul, fn_neg, fn_cmov, fn_eq, fn_is_odd }
 );
+
+// Ed25519's scalar arithmetic modulo L: the nonce and S are secret.
+#[no_mangle]
+pub fn ct_ed25519_reduce_wide(x: &[u8; 64]) -> [u8; 32] {
+    ic_ec::ct_probes::ed25519_reduce_wide(x)
+}
+
+#[no_mangle]
+pub fn ct_ed25519_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
+    ic_ec::ct_probes::ed25519_mul_add(a, b, c)
+}
+
+// The x86-64 Curve25519 backends. x86-64 only, which is the only target they
+// compile for; scripts/check-ct.py requires these there and nowhere else.
+#[cfg(target_arch = "x86_64")]
+mod x86 {
+    use ic_ec::ct_probes::x86 as p;
+
+    #[no_mangle]
+    pub fn ct_fe64_mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        p::fe64_mul(a, b)
+    }
+
+    #[no_mangle]
+    pub fn ct_fe64_square(a: &[u8; 32]) -> [u8; 32] {
+        p::fe64_square(a)
+    }
+
+    #[no_mangle]
+    pub fn ct_fe64_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        p::fe64_add(a, b)
+    }
+
+    #[no_mangle]
+    pub fn ct_fe64_sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        p::fe64_sub(a, b)
+    }
+
+    #[no_mangle]
+    pub fn ct_fe64_mul121666(a: &[u8; 32]) -> [u8; 32] {
+        p::fe64_mul121666(a)
+    }
+
+    #[no_mangle]
+    pub fn ct_fe64_invert(a: &[u8; 32]) -> [u8; 32] {
+        p::fe64_invert(a)
+    }
+
+    #[no_mangle]
+    pub fn ct_x25519_fe64_step(ws: &mut [u64; 76], swap: u64) {
+        p::x25519_step(ws, swap)
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_fe64_madd_ext2(ws: &mut p::Ws2) {
+        p::ed25519_madd_ext2(ws)
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_fe64_dbl_nadd(ws: &mut p::Ws) {
+        p::ed25519_dbl_nadd(ws)
+    }
+
+    #[no_mangle]
+    pub fn ct_x25519_ifma_step(s: &p::ifma::Lanes, x1: &[u64; 4], swap: u64) -> p::ifma::Lanes {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ifma::ladder_step(s, x1, swap) }
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_ifma_select(t: &[p::ifma::Lanes; 8], digit: i8) -> p::ifma::Lanes {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ifma::select(t, digit) }
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_ifma_add(a: &p::ifma::Lanes, n: &p::ifma::Lanes) -> p::ifma::Lanes {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ifma::add(a, n) }
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_ifma_double(a: &p::ifma::Lanes) -> p::ifma::Lanes {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ifma::double(a) }
+    }
+}

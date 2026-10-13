@@ -48,9 +48,9 @@
 //! kilobytes buys. It is still about twice as fast as the bit-at-a-time ladder
 //! it replaced there, and needs no storage that outlives the call.
 
-use ic_core::ct::Choice;
+use std::sync::OnceLock;
 
-use super::{basepoint, signed_digits, AffineNiels, Point};
+use super::{basepoint, signed_digits, AffineNiels, EdField, Ext};
 
 /// Digits per scalar, radix 16 over 256 bits.
 const DIGITS: usize = 64;
@@ -62,18 +62,22 @@ const ENTRIES: usize = 8;
 const TABLES: usize = DIGITS / 2;
 
 /// `1..=8` times some fixed multiple of the basepoint, in affine Niels form.
-#[cfg(feature = "std")]
 ///
 /// Affine because an entry is only ever added to something: storing
 /// `(y+x, y-x, 2d·x·y)` makes that addition three multiplications instead of
 /// nine, and stores three field elements instead of four, which is a quarter
 /// less for the conditional-move scan below to walk.
-struct Window([AffineNiels; ENTRIES]);
+pub(crate) struct Window<F>([AffineNiels<F>; ENTRIES]);
 
-#[cfg(feature = "std")]
-impl Window {
+impl<F: EdField> Window<F> {
+    /// The multiples `1..=8`, for building the four-lane copy.
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    pub(super) fn entries(&self) -> &[AffineNiels<F>; ENTRIES] {
+        &self.0
+    }
+
     /// Build the multiples of `base`.
-    fn new(base: &Point) -> Self {
+    fn new(base: &Ext<F>) -> Self {
         let mut multiples = [*base; ENTRIES];
         for i in 1..ENTRIES {
             multiples[i] = multiples[i - 1].add(base);
@@ -86,15 +90,17 @@ impl Window {
     /// Reads every entry and selects with conditional moves. Indexing would be
     /// a secret-dependent memory access, which is exactly what this workspace
     /// avoids elsewhere at considerably greater cost.
-    fn select(&self, digit: i8) -> AffineNiels {
-        let negative = Choice::from_u8((digit as u8) >> 7);
-        // |digit|, computed without a branch.
-        let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
+    pub(super) fn select(&self, digit: i8) -> AffineNiels<F> {
+        // The sign and |digit|, computed without a branch.
+        let negative = u64::from((digit as u8) >> 7);
+        let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u64;
 
         let mut out = AffineNiels::IDENTITY;
         for (i, entry) in self.0.iter().enumerate() {
-            // `magnitude == i + 1`, as a Choice.
-            let hit = Choice::from_u8(u8::from(magnitude == (i as u8 + 1)));
+            // `magnitude == i + 1` as 0 or 1, by arithmetic rather than a
+            // comparison: the difference is zero exactly then, and subtracting
+            // one from zero is the only way to set the top bit here.
+            let hit = (magnitude ^ (i as u64 + 1)).wrapping_sub(1) >> 63;
             out.cmov(entry, hit);
         }
         out.conditional_negate(negative);
@@ -102,40 +108,88 @@ impl Window {
     }
 }
 
-#[cfg(feature = "std")]
-use std::sync::OnceLock;
+/// A field with its own copy of the tables.
+///
+/// The tables are statics, and a static cannot be generic, so each field
+/// that runs the curve code names its own here. Only the field the CPU
+/// selects is ever filled; the other's `OnceLock`s stay empty and cost their
+/// own size in `.bss` and nothing else.
+pub(crate) trait TableField: EdField {
+    /// `1..=8` times `16^(2j) * B`, for each `j`.
+    fn windows() -> &'static [OnceLock<Window<Self>>; TABLES];
+    /// `1B, 3B, 5B .. 127B`; see [`odd_multiple`].
+    fn odd() -> &'static [OnceLock<AffineNiels<Self>>; 64];
+    /// Whether both tables have been filled.
+    fn built() -> &'static OnceLock<()>;
 
-#[cfg(feature = "std")]
-#[allow(clippy::declare_interior_mutable_const)]
-const NO_WINDOW: OnceLock<Window> = OnceLock::new();
+    /// `scalar * B`, constant time: [`mul_generic`] unless the field has a
+    /// faster form of the same algorithm.
+    fn mul_base(scalar: &[u8; 32]) -> Ext<Self> {
+        mul_generic::<Self>(scalar)
+    }
 
-/// `1..=8` times `16^(2j) * B`, for each `j`.
-#[cfg(feature = "std")]
-static WINDOWS: [OnceLock<Window>; TABLES] = [NO_WINDOW; TABLES];
+    /// `[k]A + [s]B`, variable time:
+    /// [`double_scalar_mul_vartime_generic`][super::double_scalar_mul_vartime_generic]
+    /// unless the field has a faster form of the same algorithm.
+    fn double_mul(a: &Ext<Self>, k: &[u8; 32], s: &[u8; 32]) -> Ext<Self> {
+        super::double_scalar_mul_vartime_generic(a, k, s)
+    }
+}
 
-#[cfg(feature = "std")]
-#[allow(clippy::declare_interior_mutable_const)]
-const NO_POINT: OnceLock<AffineNiels> = OnceLock::new();
+macro_rules! tables {
+    ($f:ty $(, $fast:item)*) => {
+        impl TableField for $f {
+            $($fast)*
+            fn windows() -> &'static [OnceLock<Window<Self>>; TABLES] {
+                #[allow(clippy::declare_interior_mutable_const)]
+                const NO_WINDOW: OnceLock<Window<$f>> = OnceLock::new();
+                static WINDOWS: [OnceLock<Window<$f>>; TABLES] = [NO_WINDOW; TABLES];
+                &WINDOWS
+            }
+            fn odd() -> &'static [OnceLock<AffineNiels<Self>>; 64] {
+                #[allow(clippy::declare_interior_mutable_const)]
+                const NO_POINT: OnceLock<AffineNiels<$f>> = OnceLock::new();
+                static ODD: [OnceLock<AffineNiels<$f>>; 64] = [NO_POINT; 64];
+                &ODD
+            }
+            fn built() -> &'static OnceLock<()> {
+                static BUILT: OnceLock<()> = OnceLock::new();
+                &BUILT
+            }
+        }
+    };
+}
 
-/// `1B, 3B, 5B .. 127B`; see [`odd_multiple`].
-#[cfg(feature = "std")]
-static ODD: [OnceLock<AffineNiels>; 64] = [NO_POINT; 64];
+tables!(crate::field::Fe);
+#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+tables!(
+    crate::fe64::Fe64,
+    // Four lanes at once where the CPU has IFMA; one group operation per
+    // assembly block where it has only BMI2 and ADX.
+    fn mul_base(scalar: &[u8; 32]) -> Ext<Self> {
+        match crate::f51x4::Ifma::get() {
+            Some(t) => super::vector::mul_base(t, scalar),
+            None => super::fast::mul_base(scalar),
+        }
+    },
+    fn double_mul(a: &Ext<Self>, k: &[u8; 32], s: &[u8; 32]) -> Ext<Self> {
+        match crate::f51x4::Ifma::get() {
+            Some(t) => super::vector::double_mul(t, a, k, s),
+            None => super::fast::double_mul(a, k, s),
+        }
+    }
+);
 
-/// Whether both tables have been filled.
-#[cfg(feature = "std")]
-static BUILT: OnceLock<()> = OnceLock::new();
-
-/// Fill both tables, in order, sharing the doublings between entries.
+/// Fill both tables for `F`, in order, sharing the doublings between entries.
 ///
 /// Costs about one and a half scalar multiplications for the signing table and
 /// sixty-four additions for the other, once. A second caller waits for the
 /// first rather than repeating the work.
-#[cfg(feature = "std")]
-pub fn prepare() {
-    BUILT.get_or_init(|| {
+pub fn prepare<F: TableField>() {
+    F::built().get_or_init(|| {
         // Start at B, and step by 16^2 between windows.
-        let mut base = basepoint();
-        for (i, slot) in WINDOWS.iter().enumerate() {
+        let mut base = basepoint::<F>();
+        for (i, slot) in F::windows().iter().enumerate() {
             if i > 0 {
                 // times 16^2 = eight doublings.
                 for _ in 0..8 {
@@ -145,10 +199,10 @@ pub fn prepare() {
             slot.get_or_init(|| Window::new(&base));
         }
 
-        let b = basepoint();
+        let b = basepoint::<F>();
         let twice = b.double();
         let mut multiple = b;
-        for (i, slot) in ODD.iter().enumerate() {
+        for (i, slot) in F::odd().iter().enumerate() {
             if i > 0 {
                 multiple = multiple.add(&twice);
             }
@@ -161,10 +215,9 @@ pub fn prepare() {
 
 /// Window `i`. Filled by [`prepare`]; were it somehow not, it is built here on
 /// its own, more slowly and with the same result, rather than panicking.
-#[cfg(feature = "std")]
-fn window(i: usize) -> &'static Window {
-    WINDOWS[i].get_or_init(|| {
-        let mut base = basepoint();
+pub(super) fn window<F: TableField>(i: usize) -> &'static Window<F> {
+    F::windows()[i].get_or_init(|| {
+        let mut base = basepoint::<F>();
         for _ in 0..8 * i {
             base = base.double();
         }
@@ -173,17 +226,21 @@ fn window(i: usize) -> &'static Window {
 }
 
 /// `scalar * B`, with the scalar in little-endian canonical form.
-#[cfg(feature = "std")]
-pub fn mul(scalar: &[u8; 32]) -> Point {
-    prepare();
+pub fn mul<F: TableField>(scalar: &[u8; 32]) -> Ext<F> {
+    F::mul_base(scalar)
+}
+
+/// [`mul`] in the field's own arithmetic, one method call per operation.
+pub fn mul_generic<F: TableField>(scalar: &[u8; 32]) -> Ext<F> {
+    prepare::<F>();
     let digits = signed_digits(scalar);
 
     // Odd digits first, then four doublings to scale them by 16, then the
     // even ones. Both halves read the same tables; see the module note.
-    let mut acc = Point::IDENTITY;
+    let mut acc = Ext::IDENTITY;
     for i in (1..DIGITS).step_by(2) {
         acc = acc
-            .add_affine_niels(&window(i / 2).select(digits[i]))
+            .add_affine_niels(&window::<F>(i / 2).select(digits[i]))
             .to_extended();
     }
     for _ in 0..4 {
@@ -191,7 +248,7 @@ pub fn mul(scalar: &[u8; 32]) -> Point {
     }
     for i in (0..DIGITS).step_by(2) {
         acc = acc
-            .add_affine_niels(&window(i / 2).select(digits[i]))
+            .add_affine_niels(&window::<F>(i / 2).select(digits[i]))
             .to_extended();
     }
     acc
@@ -207,10 +264,9 @@ pub fn mul(scalar: &[u8; 32]) -> Point {
 ///
 /// Signing must not call this. See
 /// [`double_scalar_mul_vartime`][super::double_scalar_mul_vartime].
-#[cfg(feature = "std")]
-pub(super) fn odd_multiple(i: usize) -> &'static AffineNiels {
-    ODD[i].get_or_init(|| {
-        let b = basepoint();
+pub(super) fn odd_multiple<F: TableField>(i: usize) -> &'static AffineNiels<F> {
+    F::odd()[i].get_or_init(|| {
+        let b = basepoint::<F>();
         let twice = b.double();
         let mut multiple = b;
         for _ in 0..i {
@@ -271,8 +327,8 @@ mod tests {
 
         let mut checked = 0;
         for s in &scalars {
-            let fast = mul(s);
-            let slow = basepoint().mul_scalar(s);
+            let fast = mul::<crate::field::Fe>(s);
+            let slow = basepoint::<crate::field::Fe>().mul_scalar(s);
             assert_eq!(
                 fast.compress(),
                 slow.compress(),

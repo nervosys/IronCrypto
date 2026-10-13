@@ -44,7 +44,8 @@ class InspectionTests(unittest.TestCase):
         for target, instructions in cases.items():
             for instruction in instructions:
                 with self.subTest(target=target, instruction=instruction):
-                    self.assertEqual(len(audit.inspect(assembly(instruction), target)), len(audit.SYMBOLS))
+                    self.assertEqual(len(audit.inspect(assembly(instruction), target)),
+                                     len(audit.symbols_for(target)))
 
     def test_returns_directives_and_comments_are_not_branches(self):
         cases = {
@@ -91,6 +92,63 @@ class CallTests(unittest.TestCase):
         found = audit.inspect(self.with_helper("callq\t__multi3"), self.X86)
         self.assertEqual(len(found), len(audit.SYMBOLS))
 
+
+
+class TargetSymbolTests(unittest.TestCase):
+    """The x86-64-only probes are required there and nowhere else."""
+
+    def test_x86_only_probes_are_required_on_x86(self):
+        asm = assembly().replace(f"{audit.X86_ONLY[0]}:", "unrelated:")
+        with self.assertRaisesRegex(ValueError, "missing probe"):
+            audit.inspect(asm, "x86_64-unknown-linux-gnu")
+
+    def test_and_not_elsewhere(self):
+        asm = "\n".join(f"{name}:\n\tbx lr\n\t.size {name}, .-{name}"
+                        for name in audit.symbols_for("thumbv7em-none-eabihf"))
+        self.assertEqual(audit.inspect(asm, "thumbv7em-none-eabihf"), [])
+        self.assertTrue(set(audit.X86_ONLY) <= set(audit.symbols_for("x86_64-unknown-linux-gnu")))
+        self.assertFalse(set(audit.X86_ONLY) & set(audit.symbols_for("riscv32imac-unknown-none-elf")))
+
+
+class LiteralPoolTests(unittest.TestCase):
+    """A Thumb jump over a constant pool is excused in the Ed25519 probes,
+    and nothing that merely resembles one is."""
+
+    M0 = "thumbv6m-none-eabi"
+
+    def ed25519(self, body, probe=None):
+        probe = probe or audit.ED25519[0]
+        return assembly("bx lr").replace(f"{probe}:\n\tbx lr\n", f"{probe}:\n{body}")
+
+    POOL = ("\tb\t.LBB0_2\n\t.p2align\t2\n.LCPI0_0:\n\t.long\t666643\n"
+            ".LBB0_2:\n\tbx lr\n")
+
+    def test_a_jump_over_a_pool_is_excused_and_counted(self):
+        excused = collections.Counter()
+        self.assertEqual(audit.inspect(self.ed25519(self.POOL), self.M0, excused), [])
+        self.assertEqual(excused["literal-pool jump"], 1)
+
+    def test_a_jump_over_code_is_not(self):
+        body = self.POOL.replace("\t.long\t666643\n", "\tadds r0, r0, r1\n")
+        self.assertTrue(audit.inspect(self.ed25519(body), self.M0))
+
+    def test_a_conditional_jump_over_a_pool_is_not(self):
+        body = self.POOL.replace("\tb\t.LBB0_2", "\tbne\t.LBB0_2")
+        self.assertTrue(audit.inspect(self.ed25519(body), self.M0))
+
+    def test_a_jump_elsewhere_is_not(self):
+        body = self.POOL.replace(".LBB0_2:\n", ".LBB0_3:\n")
+        self.assertTrue(audit.inspect(self.ed25519(body), self.M0))
+
+    def test_only_the_ed25519_probes_get_it(self):
+        body = self.POOL
+        probe = audit.SYMBOLS[0]
+        asm = assembly("bx lr").replace(f"{probe}:\n\tbx lr\n", f"{probe}:\n{body}")
+        self.assertTrue(audit.inspect(asm, self.M0))
+
+    def test_more_than_the_ceiling_fails(self):
+        excused = collections.Counter({"literal-pool jump": 13})
+        self.assertTrue(audit.over_ceiling(self.M0, excused))
 
 
 class ExcuseTests(unittest.TestCase):

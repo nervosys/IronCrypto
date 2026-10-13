@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-two exported probes call the actual implementations. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and thirteen more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -41,6 +41,16 @@ release profile; this is not the workspace binary's overflow-checked profile.
   parity, each from and back to bytes. Hashing to the curve, the OPRF,
   ECDH and ECDSA are built from these. All four targets gate; on the
   32-bit ones a few findings are excused by rule, as described below.
+- Ed25519 scalar arithmetic modulo L: the reduction of a 512-bit value, which
+  makes the secret nonce from a hash and finishes `S`, and `a * b + c`, which
+  is `S`. Straight-line on all four targets; see "Ed25519 scalar reduction"
+  below.
+- On x86-64 only, the Curve25519 backends that exist only there: the
+  MULX/ADX field's multiplication, squaring, addition, subtraction,
+  multiplication by 121666 and divstep inversion, each from and back to
+  bytes; X25519's ladder step on it; signing's group operations on it; and
+  the AVX-512 IFMA four-lane ladder step, table selection, mixed addition and
+  doubling. See "Curve25519 on x86-64" below.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
 Branches and integer division/remainder instructions are rejected. A call or
@@ -205,6 +215,76 @@ targets. Both are additions, rotations and XORs with no table and no
 secret-dependent branch, by construction. Not probed because they are not
 constant time by design: bcrypt, scrypt and yescrypt read memory at
 password-derived indices, as the ontology records.
+
+## Ed25519 scalar reduction, 2026-10-13
+
+Valgrind (docs/CTGRIND.md) found that `scalar::conditional_subtract_l`, in
+source a borrow turned into a mask, compiled under LTO on x86-64 to `js` on
+the sign of the top limb's difference: a jump on whether the secret nonce or
+S was at least L, nine of them per signature. No probe covered it.
+
+`ct_ed25519_reduce_wide` and `ct_ed25519_mul_add` do now. On the unchanged
+source the first run failed x86-64 with those `js` and with the loops LLVM had
+left rolled -- public counts, but a rolled loop is a jump this checker cannot
+tell from a secret one. The fix has two parts:
+
+- **Barriers.** The borrow passes through `black_box` before it becomes a
+  mask, and the mask through another after, as `Choice::mask` does. Removing
+  just those two, with everything else below kept, fails every target: 10
+  findings on x86-64, 14 on each Cortex-M, 10 on RISC-V.
+- **Straight-line code.** The fold rounds, the folding positions, the carry
+  passes and the unpacking are written out with literal indices; `c` enters
+  `mul_add` as the product's initial value instead of through a byte-wise
+  carry loop; and the result is packed into words directly instead of
+  through a zeroed buffer, which on the 32-bit targets was a `memset` call.
+
+What remains is one shape on Cortex-M0: an unconditional `b` over a literal
+pool -- Thumb-1 loads 32-bit constants from memory beside the code, and the
+compiler parks a pool mid-function and jumps over it to the next instruction.
+The rule `literal-pool jump` excuses exactly that: a `b` to a local label
+reached from the jump through nothing but `.LCPI` labels, alignment and data
+directives. It applies to these two probes only, on Cortex-M0, with a ceiling
+of 12, the count read on 2026-10-13 with rustc 1.99.0. `test-check-ct.py`
+holds it to excusing that shape and not a jump over code, a conditional jump
+over a pool, a jump to another label, or the same jump in another probe.
+
+Valgrind on Ed25519 signing reports 9 secret-dependent branches before and 0
+after. It sees the portable field only: Valgrind does not report ADX in
+CPUID, so the x86-64 MULX/ADX field is not selected under it.
+
+## Curve25519 on x86-64, 2026-10-13
+
+X25519 and Ed25519 now run, where the CPU has the instructions, on a field
+of four 64-bit limbs whose multiplication is `MULX`/`ADCX`/`ADOX` assembly
+(`ic-ec/src/fe64.rs`), and where it also has AVX-512 IFMA on four field
+elements at once (`ic-ec/src/f51x4.rs`). Thirteen probes cover them, on
+x86-64 only because that is the only target they compile for;
+`check-ct.py` requires them there (`X86_ONLY`) and nowhere else, and its
+tests check both halves of that.
+
+They are constant time by construction rather than by barrier: the field
+operations and X25519's ladder step are assembly with no branch in them, the
+carry folds are `sbb`/`and` masks inside it, the ladder's selection is
+`CMOV`, the divstep inversion's 590 steps are one `.rept` block of masks and
+`CMOV` in ten calls written out, and the IFMA code is vector instructions
+selected by blends under masks. Where Rust computes a mask from a secret
+bit, it goes through `fe64::mask`, a one-instruction `neg` in an assembly
+block the optimiser cannot see into -- `nomem`, unlike `black_box`, whose
+memory clobber cost the ladder a spill of every live value.
+
+All thirteen pass. Replacing the masked final subtraction in the four-limb
+field's reduction to bytes with an `if` on the same comparison fails every
+probe that reaches it with `js` on x86-64; restored, they pass. The probes
+read compiled code; whether the CPU's `MULX`, `ADCX`, `ADOX`, `CMOV` and
+`VPMADD52` take the same time for all operands is a statement about the
+hardware, not something the gate checked.
+
+Not probed: the full scalar multiplications, whose loops over public counts
+stay rolled; `Window::select` on the MULX/ADX field, which needs the `std`
+tables the probe build does not have (its masks go through the same
+`fe64::mask`); and verification, which is variable time by design on public
+data. Valgrind (docs/CTGRIND.md) cannot see these backends either: it does
+not report ADX or AVX-512 in CPUID, so under it the portable field runs.
 
 The `ic timing` targets `hash-to-curve` (a fixed versus a random password),
 `oprf-evaluate` (two server keys), `blake2s-keyed` and `blake3-keyed` (a
