@@ -14,7 +14,7 @@ Neither library is CMVP validated.
 |---|---|---|---|
 | Speed, x86-64 | AES-GCM, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH | P-384 ECDH; ChaCha20-Poly1305 on long messages (see below) |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
-| Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers and ML-DSA's rounding only |
+| Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's accelerated paths are not yet checked by either tool here |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
 | Test vectors | every suite Graviola runs, plus ACVP for ML-KEM, ML-DSA, SLH-DSA | | |
@@ -95,10 +95,15 @@ instruction, for every input.
 The proofs here ([PROOFS.md](PROOFS.md)) are Kani bounded model checks at the
 level of Rust semantics: the constant-time selection, comparison and swap
 helpers for every input (slices to length six), and ML-DSA's `reduce_q`,
-`power2round`, `decompose` and the hint lemma for every input. The curve and
-RSA arithmetic, including the generated x86-64 assembly, is tested -- against
-the portable code over millions of random and edge values, and against
-published vectors -- and not proved.
+`power2round`, `decompose` and the hint lemma for every input; and, in the
+portable field code, P-256's addition, subtraction and final conditional
+subtraction, and Curve25519's addition, subtraction, carry propagation,
+weak reduction and canonical encoding, each over its documented input
+domain. Multiplication is not proved: Kani did not finish P-256's
+Montgomery step, a 64-bit product by a constant, in 25 minutes. The
+products, the Montgomery reduction as a whole, the x86-64 assembly and the
+RSA arithmetic are tested -- against the portable code over millions of
+random and edge values, and against published vectors -- and not proved.
 
 ## Side-channel evidence
 
