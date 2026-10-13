@@ -380,3 +380,40 @@ mod x86_p256 {
         unsafe { ic_ec::ct_probes::p384_point_add_affine_adx(buf) }
     }
 }
+
+// x86-64: the sixteen-block AVX-512 ChaCha20 keystream and the four-lane AVX2
+// Poly1305. Compiled to be read, never run: they need AVX-512F and AVX2.
+#[cfg(target_arch = "x86_64")]
+mod x86_chacha {
+    use ic_cipher::ct_probes as p;
+
+    /// # Safety
+    /// Requires AVX-512F.
+    #[no_mangle]
+    pub unsafe fn ct_chacha20_zmm_group(
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        data: &mut [u8; 1024],
+    ) {
+        unsafe { p::chacha20_zmm_group(key, nonce, counter, data) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_poly1305_avx2_step(
+        h: &[[u64; 4]; 5],
+        r4: &[u32; 5],
+        blocks: &[u8; 64],
+    ) -> [[u64; 4]; 5] {
+        unsafe { p::poly1305_avx2_step(h, r4, blocks) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_poly1305_avx2_finish(h: &[[u64; 4]; 5], powers: &[[u32; 5]; 4]) -> [u64; 5] {
+        unsafe { p::poly1305_avx2_finish(h, powers) }
+    }
+}

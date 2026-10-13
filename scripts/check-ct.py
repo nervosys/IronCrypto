@@ -67,6 +67,9 @@ X86_ONLY = (
     # unrolled on x86-64. On the 32-bit targets and RISC-V LLVM keeps the entry
     # loop rolled, a loop over a public count, so the probe is x86-64 only.
     "ct_rsa_select_2048",
+    # ChaCha20's sixteen-block AVX-512 keystream group, and Poly1305's
+    # four-lane AVX2 step and final lane folding, under the key's r and s.
+    "ct_chacha20_zmm_group", "ct_poly1305_avx2_step", "ct_poly1305_avx2_finish",
 )
 SYMBOLS += X86_ONLY
 
