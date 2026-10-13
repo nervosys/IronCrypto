@@ -185,4 +185,39 @@ mod x86_p256 {
     pub unsafe fn ct_p256_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 72]) {
         unsafe { ic_ec::ct_probes::point_add_affine_adx(buf) }
     }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_fp_mul_adx(a: &[u64; 6], b: &[u64; 6]) -> ([u64; 6], u64) {
+        unsafe { ic_ec::ct_probes::p384_fp_mul_adx(a, b) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_fn_mul_adx(a: &[u64; 6], b: &[u64; 6]) -> ([u64; 6], u64) {
+        unsafe { ic_ec::ct_probes::p384_fn_mul_adx(a, b) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_point_double_adx(buf: &mut [MaybeUninit<u64>; 90]) {
+        unsafe { ic_ec::ct_probes::p384_point_double_adx(buf) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_point_add_adx(buf: &mut [MaybeUninit<u64>; 132]) {
+        unsafe { ic_ec::ct_probes::p384_point_add_adx(buf) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 114]) {
+        unsafe { ic_ec::ct_probes::p384_point_add_affine_adx(buf) }
+    }
 }

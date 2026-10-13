@@ -1183,7 +1183,11 @@ mod tests {
     /// mixed in.
     #[test]
     fn own_point_formulas_agree_on_arbitrary_coordinates() {
-        type F = <P256 as Curve>::Field;
+        arbitrary_coordinates::<P256>();
+        arbitrary_coordinates::<P384>();
+    }
+
+    fn arbitrary_coordinates<C: Curve>() {
         let mut state = 0x0b1d_u64;
         let mut next = || {
             state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -1192,25 +1196,32 @@ mod tests {
             z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
             z ^ (z >> 31)
         };
-        let edges = [F::ZERO, F::ONE, F::ONE.neg(), F::ONE.double().neg()];
-        let mut field = |i: usize| -> F {
+        type F<C> = <C as Curve>::Field;
+        let edges = [
+            F::<C>::ZERO,
+            F::<C>::ONE,
+            F::<C>::ONE.neg(),
+            F::<C>::ONE.double().neg(),
+        ];
+        let mut field = |i: usize| -> F<C> {
             if i.is_multiple_of(7) {
                 return edges[(i / 7) % edges.len()];
             }
-            let mut bytes = [0u8; 32];
-            for chunk in bytes.chunks_mut(8) {
-                chunk.copy_from_slice(&next().to_be_bytes());
+            let mut bytes = F::<C>::zero_bytes();
+            for chunk in bytes.as_mut().chunks_mut(8) {
+                let word = next().to_be_bytes();
+                chunk.copy_from_slice(&word[..chunk.len()]);
             }
-            F::from_bytes_reduced(&bytes)
+            F::<C>::from_bytes_reduced(&bytes)
         };
-        let same = |a: &Point<P256>, b: &Point<P256>| a.x == b.x && a.y == b.y && a.z == b.z;
+        let same = |a: &Point<C>, b: &Point<C>| a.x == b.x && a.y == b.y && a.z == b.z;
         for i in 0..50_000 {
-            let p = Point::<P256> {
+            let p = Point::<C> {
                 x: field(3 * i),
                 y: field(3 * i + 1),
                 z: field(3 * i + 2),
             };
-            let q = Point::<P256> {
+            let q = Point::<C> {
                 x: field(3 * i + 5),
                 y: field(3 * i + 6),
                 z: field(3 * i + 9),

@@ -40,9 +40,10 @@
 //! are here too: ECDSA and ECDH over P-256, P-384 and P-521, in [`p256`],
 //! [`p384`] and [`p521`].
 #![cfg_attr(not(feature = "std"), no_std)]
-// `deny` rather than `forbid`, so that two modules can be allowed it: the
-// x86-64 assembly for P-256, `nist::p256_x86` and the generated
-// `nist::p256_x86_point`, which are `asm!` and so `unsafe` by construction.
+// `deny` rather than `forbid`, so that the x86-64 assembly for P-256 and
+// P-384 can be allowed it -- `nist::p256_x86`, `nist::p384_x86` and the
+// generated `nist::p256_x86_point`, `nist::p384_x86_point` and
+// `nist::mont_x86` -- which is `asm!` and so `unsafe` by construction.
 // Everywhere else in this crate `unsafe` is a compile error. This crate
 // forbade it outright until that backend, which with the rest of that work
 // took P-256 ECDH from 68 to 26 microseconds on a Zen 5; see the module for

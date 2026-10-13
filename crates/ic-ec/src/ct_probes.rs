@@ -85,3 +85,11 @@ pub use crate::nist::p256_x86_point::{
     add_adx as point_add_adx, add_affine_adx as point_add_affine_adx,
     double_adx as point_double_adx,
 };
+// P-384's, likewise: the two rings' multiplications and the point formulas.
+#[cfg(target_arch = "x86_64")]
+pub use crate::nist::mont_x86::{mul_p384_n as p384_fn_mul_adx, mul_p384_p as p384_fp_mul_adx};
+#[cfg(target_arch = "x86_64")]
+pub use crate::nist::p384_x86_point::{
+    add_adx as p384_point_add_adx, add_affine_adx as p384_point_add_affine_adx,
+    double_adx as p384_point_double_adx,
+};

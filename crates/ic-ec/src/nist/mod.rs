@@ -38,16 +38,19 @@
 //! [`p256_field`] specialises P-256's reduction to its prime; on x86-64 that is
 //! assembly (`p256_x86`), and with BMI2 and ADX the point formulas are each one
 //! block of it (`p256_x86_point`), selected through hooks on [`point::Curve`]
-//! that other curves leave at their default. [`safegcd`] inverts P-256's two
-//! rings on 64-bit targets.
+//! that other curves leave at their default. `safegcd` inverts P-256's two
+//! rings on 64-bit targets. P-384 has the same MULX/ADX multiplications and
+//! point formulas, with field operations generic in the modulus
+//! (`mont_x86`, `p384_x86_point`), selected the same way.
 
 pub mod arith;
 pub mod ecdh;
 pub mod ecdsa;
 pub mod gentable;
 pub mod p256_field;
-// With the module below, the only places in this crate allowed `unsafe`:
-// inline assembly for P-256 on x86-64. See the module, and `lib.rs`, for why.
+// With the modules below, the only places in this crate allowed `unsafe`:
+// inline assembly for P-256 and P-384 on x86-64. See the modules, and
+// `lib.rs`, for why.
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_code)]
 pub(crate) mod p256_x86;
@@ -55,6 +58,16 @@ pub(crate) mod p256_x86;
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_code)]
 pub(crate) mod p256_x86_point;
+// P-384's multiplications in the same assembly; generated, and its dispatch.
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod mont_x86;
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod p384_x86;
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod p384_x86_point;
 pub mod point;
 #[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
 pub(crate) mod safegcd;

@@ -41,12 +41,17 @@ SYMBOLS += P256
 # and squaring have a second instruction sequence, on MULX/ADCX/ADOX, chosen at
 # run time where the CPU has BMI2 and ADX; and the point formulas are whole
 # blocks of that assembly. The probes above, built without `std`, compile to
-# the baseline sequence, so these name the others directly.
+# the baseline sequence, so these name the others directly. P-384's two
+# rings' multiplications and point formulas are in the same assembly, and
+# exist only in that form.
 TARGET_SYMBOLS = {
     "x86_64-unknown-linux-gnu": (
         "ct_p256_fp_mul_adx", "ct_p256_fp_square_adx",
         "ct_p256_point_double_adx", "ct_p256_point_add_adx",
         "ct_p256_point_add_affine_adx",
+        "ct_p384_fp_mul_adx", "ct_p384_fn_mul_adx",
+        "ct_p384_point_double_adx", "ct_p384_point_add_adx",
+        "ct_p384_point_add_affine_adx",
     ),
 }
 
