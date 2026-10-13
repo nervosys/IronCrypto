@@ -3,8 +3,8 @@
 //! # Why
 //!
 //! [`Point::mul_scalar`][super::point::Point::mul_scalar] handles an arbitrary
-//! point: it builds `1..=8` times the point per call and walks the scalar four
-//! bits at a time, which is what ECDH needs. Every digit still costs four
+//! point: it builds `1..=16` times the point per call and walks the scalar five
+//! bits at a time, which is what ECDH needs. Every digit still costs five
 //! doublings, and for an arbitrary point nothing can remove them.
 //!
 //! ECDSA signing does not need it. `R = k*G` multiplies the generator, which is
@@ -37,8 +37,8 @@
 //! Behind `std`, in a `static` per curve: one `OnceLock` per window, filled in
 //! order on first use, or earlier through [`crate::prepare`]. `no_std`
 //! multiplies the generator with [`Point::mul_scalar`], which uses this
-//! module's [`Window`] and [`signed_digits`] against the point it is given, one
-//! window built per call: four bits per addition, without the storage.
+//! module's [`Window`] and [`signed_digits_w`] against the point it is given,
+//! one window built per call: five bits per addition, without the storage.
 //!
 //! The storage is static, not heap. It used to be a `Vec`, and a caller that
 //! forbids allocation after start-up -- a TLS engine running in caller-owned
@@ -52,7 +52,7 @@
 
 use ic_core::ct::Choice;
 
-use super::arith::mask_of;
+use super::arith::masks_for;
 #[cfg(feature = "std")]
 use super::arith::Field;
 #[cfg(feature = "std")]
@@ -60,14 +60,14 @@ use super::point::AffinePoint;
 use super::point::Curve;
 use super::point::Point;
 
-/// Digits for the widest curve here: P-521 has a 66-byte scalar, so 132
-/// nibbles, plus one for the carry out of the top. See `signed_digits`.
-const MAX_DIGITS: usize = 133;
+/// The window width of [`Point::mul_scalar`]: five bits, signed digits in
+/// `[-16, 16]`.
+pub(super) const WIDTH: usize = 5;
 
-/// Entries per window of [`Point::mul_scalar`]: the multiples `1..=8`.
-const ENTRIES: usize = 8;
+/// Entries per window of [`Point::mul_scalar`]: the multiples `1..=16`.
+const ENTRIES: usize = 1 << (WIDTH - 1);
 
-/// `1..=8` times some fixed point, for [`Point::mul_scalar`].
+/// `1..=16` times some fixed point, for [`Point::mul_scalar`].
 pub(super) struct Window<C: Curve>([Point<C>; ENTRIES]);
 
 impl<C: Curve> Window<C> {
@@ -79,15 +79,24 @@ impl<C: Curve> Window<C> {
         Self(multiples(base))
     }
 
-    /// `digit * base` for `digit` in `[-8, 8]`, without indexing by it.
+    /// `digit * base` for `digit` in `[-16, 16]`, without indexing by it.
     pub(super) fn select(&self, digit: i8) -> Point<C> {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
 
-        let mut out = Point::identity();
-        for (i, entry) in self.0.iter().enumerate() {
-            Point::cmov_mask(&mut out, entry, mask_of(magnitude as u32, i as u32 + 1));
-        }
+        // From all zeros, which is a point at infinity (Z = 0) and so the
+        // answer for a zero digit, which matches no entry.
+        let masks = masks_for::<ENTRIES>(magnitude as u32, 1);
+        let mut out = match C::scan_point(&self.0, &masks) {
+            Some([x, y, z]) => Point::from_coordinates(x, y, z),
+            None => {
+                let mut out = Point::zero();
+                for (entry, mask) in self.0.iter().zip(masks) {
+                    Point::or_masked(&mut out, entry, mask);
+                }
+                out
+            }
+        };
         out.conditional_negate(negative);
         out
     }
@@ -161,13 +170,21 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
     fn select(&self, digit: i8) -> (C::Field, C::Field) {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
-        let mut x = self.0[0].x;
-        let mut y = self.0[0].y;
-        for (i, entry) in self.0.iter().enumerate() {
-            let hit = mask_of(magnitude as u32, i as u32 + 1);
-            C::Field::cmov_mask(&mut x, &entry.x, hit);
-            C::Field::cmov_mask(&mut y, &entry.y, hit);
-        }
+        // A zero digit matches no entry and leaves (0, 0), which the caller
+        // discards.
+        let masks = masks_for::<E>(magnitude as u32, 1);
+        let (x, mut y) = match C::scan_affine(&self.0, &masks) {
+            Some(p) => (p.x, p.y),
+            None => {
+                let mut x = C::Field::ZERO;
+                let mut y = C::Field::ZERO;
+                for (entry, mask) in self.0.iter().zip(masks) {
+                    C::Field::or_masked(&mut x, &entry.x, mask);
+                    C::Field::or_masked(&mut y, &entry.y, mask);
+                }
+                (x, y)
+            }
+        };
         let ny = y.neg();
         C::Field::cmov(&mut y, &ny, negative);
         (x, y)
@@ -177,15 +194,18 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
     /// must not equal `digit * base`; see [`mul`].
     fn add_to(&self, acc: &Point<C>, digit: i8, complete: bool) -> Point<C> {
         let (x, y) = self.select(digit);
-        let mut out = if complete {
-            acc.add(&Point::from_affine(&AffinePoint { x, y }))
-        } else {
-            acc.add_affine_unequal(&x, &y)
-        };
         // A zero digit adds the identity, which has no affine form: the
-        // addition above was of an arbitrary entry, and is discarded.
-        Point::cmov(&mut out, acc, equal(digit as u8, 0));
-        out
+        // addition is made anyway, of zeros, and discarded. All ones for a
+        // zero digit: `digit as u8` is below 256, so subtracting one sets the
+        // top bit only from zero.
+        let zero = ((digit as u8 as u64).wrapping_sub(1) >> 63).wrapping_neg();
+        if complete {
+            let mut out = acc.add(&Point::from_affine(&AffinePoint { x, y }));
+            Point::cmov(&mut out, acc, equal(digit as u8, 0));
+            out
+        } else {
+            acc.add_affine_unequal_or_keep(&x, &y, zero)
+        }
     }
 
     /// `acc + digit * base` for a public digit, as in verification.
@@ -304,14 +324,12 @@ pub fn mul_vartime<C: Curve, const E: usize>(
 
 /// Digits of `W` bits in a `len`-byte scalar, plus one for the carry out of
 /// the top.
-#[cfg(feature = "std")]
 pub(crate) const fn digit_count(len: usize, w: usize) -> usize {
     8 * len / w + 1
 }
 
 /// The widest digit expansion [`signed_digits_w`] produces: P-521's 66 bytes
 /// at four bits.
-#[cfg(feature = "std")]
 const MAX_DIGITS_W: usize = 8 * 66 / 4 + 1;
 
 /// The scalar as signed digits of `w` bits, each in `[-2^(w-1), 2^(w-1))`
@@ -321,7 +339,6 @@ const MAX_DIGITS_W: usize = 8 * 66 / 4 + 1;
 /// Branch-free in the scalar: each window's bits are read at a public
 /// position, the carry is `(v + 2^(w-1)) >> w`, and the digit is `v` less the
 /// carry shifted back. The top window absorbs the last carry.
-#[cfg(feature = "std")]
 pub(crate) fn signed_digits_w(bytes: &[u8], w: usize) -> [i8; MAX_DIGITS_W] {
     // Little-endian words, with room above the top for windows that run past
     // it.
@@ -357,41 +374,6 @@ pub(crate) fn signed_digits_w(bytes: &[u8], w: usize) -> [i8; MAX_DIGITS_W] {
         }
     }
     digits
-}
-
-/// The scalar as signed radix-16 digits, each in `[-8, 8]`.
-///
-/// `bytes` is big-endian, as `Field::to_bytes` produces; the digits are
-/// little-endian, least significant first, because that is the order the
-/// accumulation wants.
-///
-/// Every nibble is recoded and the carry out of the top gets a digit of its
-/// own, which is where this differs from the Ed25519 version.
-///
-/// There, scalars are below `2^255`, so the most significant nibble is at most
-/// 7, one carry takes it to 8, and 8 is a legal digit -- the last nibble can
-/// absorb the carry and no extra digit is needed. Here the group orders are
-/// close to `2^(8*SCALAR_BYTES)`, so the top nibble can be 15; a carry would
-/// make it 16, which is outside `[-8, 8]`, and `select` would match no entry
-/// and silently return the identity. Hence the extra digit, which is 0 or 1.
-///
-/// That is exactly how this failed first: the Ed25519 recoding was reused
-/// unchanged and every RFC 6979 vector rejected it.
-pub(super) fn signed_digits(bytes: &[u8]) -> [i8; MAX_DIGITS] {
-    let mut nibbles = [0i8; MAX_DIGITS];
-    let n = bytes.len() * 2;
-    for (i, byte) in bytes.iter().rev().enumerate() {
-        nibbles[i * 2] = (byte & 0x0f) as i8;
-        nibbles[i * 2 + 1] = (byte >> 4) as i8;
-    }
-
-    for i in 0..n {
-        let carry = (nibbles[i] + 8) >> 4;
-        nibbles[i] -= carry << 4;
-        nibbles[i + 1] += carry;
-    }
-    debug_assert!(nibbles[n] == 0 || nibbles[n] == 1);
-    nibbles
 }
 
 /// A curve that knows how to multiply its own generator.

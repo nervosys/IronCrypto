@@ -47,6 +47,7 @@
 //! compiler assigns every one but `rax` and `rdx`, which `mul` dictates.
 
 use core::arch::asm;
+use core::mem::MaybeUninit;
 
 /// `p`'s second word, `2^32 - 1`.
 const P1: u64 = 0x0000_0000_ffff_ffff;
@@ -164,23 +165,179 @@ pub(crate) fn has_adx() -> bool {
     }
 }
 
-/// Copy field elements into a formula's slots.
-#[inline(always)]
-fn load<const N: usize>(buf: &mut [u64; N], values: &[&[u64; 4]]) {
-    for (i, v) in values.iter().enumerate() {
-        buf[4 * i..4 * i + 4].copy_from_slice(&v[..]);
+/// Whether this CPU has AVX2, asked once; as [`has_adx`] for `no_std`.
+#[inline]
+fn has_avx2() -> bool {
+    #[cfg(feature = "std")]
+    {
+        use core::sync::atomic::{AtomicU8, Ordering};
+        static CACHED: AtomicU8 = AtomicU8::new(0);
+        match CACHED.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let have = std::is_x86_feature_detected!("avx2");
+                CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+                have
+            }
+        }
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        cfg!(target_feature = "avx2")
     }
 }
 
-/// A field element from slot `slot`.
-#[inline(always)]
-fn slot<const N: usize>(buf: &[u64; N], slot: usize) -> [u64; 4] {
+/// `OR` over `entries` of `entry & mask`, word by word: a table scan, every
+/// entry read, at most one mask set, as in `gentable`. `W` words per entry.
+///
+/// The portable loop is scalar: LLVM does not vectorise it, and on P-256's
+/// generator table the scans were a third of the cost of `k*G`. Here it is
+/// four 128-bit SSE2 operations per entry, or two 256-bit AVX2 ones where the
+/// CPU has AVX2 -- what Graviola does. Masks and data only: no branch and no
+/// address depends on either.
+#[inline]
+fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
+    let n = entries.len().min(masks.len());
+    let (entries, masks) = (&entries[..n], &masks[..n]);
+    // AVX2 for the generator table's eight-word affine entries only: on the
+    // twelve-word Jacobian window it measured slower than SSE2 (25.7 against
+    // 26.8 microseconds for ECDH, interleaved runs), and faster on the
+    // affine table (5.7 against 6.3 for a public key).
+    if W.is_multiple_of(8) && has_avx2() {
+        // SAFETY: the CPU has AVX2.
+        unsafe { scan_avx2(entries, masks) }
+    } else {
+        // SAFETY: SSE2 is part of the x86-64 baseline; every CPU this
+        // module can run on has it.
+        unsafe { scan_sse2(entries, masks) }
+    }
+}
+
+/// [`scan`] in SSE2, which every x86-64 CPU has and every x86-64 target
+/// enables.
+#[inline]
+#[target_feature(enable = "sse2")]
+fn scan_sse2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
+    use core::arch::x86_64::*;
+    let mut acc = [0u64; W];
+    let mut lanes = [_mm_setzero_si128(); 6];
+    for (entry, &mask) in entries.iter().zip(masks) {
+        let m = _mm_set1_epi64x(mask as i64);
+        for (j, lane) in lanes.iter_mut().enumerate().take(W / 2) {
+            // SAFETY: `entry` is `W` words, so words 2j and 2j + 1 are in it
+            // for every j below W / 2; the load is unaligned.
+            let v = unsafe { _mm_loadu_si128(entry.as_ptr().add(2 * j).cast()) };
+            *lane = _mm_or_si128(*lane, _mm_and_si128(v, m));
+        }
+    }
+    for (j, lane) in lanes.iter().enumerate().take(W / 2) {
+        // SAFETY: as above, into `acc`.
+        unsafe { _mm_storeu_si128(acc.as_mut_ptr().add(2 * j).cast(), *lane) };
+    }
+    acc
+}
+
+/// [`scan`] in AVX2.
+///
+/// # Safety
+///
+/// The CPU must support AVX2, and `W` must be a multiple of four.
+#[target_feature(enable = "avx2")]
+unsafe fn scan_avx2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
+    use core::arch::x86_64::*;
+    let mut acc = [0u64; W];
+    let mut lanes = [_mm256_setzero_si256(); 3];
+    for (entry, &mask) in entries.iter().zip(masks) {
+        let m = _mm256_set1_epi64x(mask as i64);
+        for (j, lane) in lanes.iter_mut().enumerate().take(W / 4) {
+            // SAFETY: `entry` is `W` words and `W` is a multiple of four, so
+            // words 4j to 4j + 3 are in it for every j below W / 4.
+            let v = unsafe { _mm256_loadu_si256(entry.as_ptr().add(4 * j).cast()) };
+            *lane = _mm256_or_si256(*lane, _mm256_and_si256(v, m));
+        }
+    }
+    for (j, lane) in lanes.iter().enumerate().take(W / 4) {
+        // SAFETY: as above, into `acc`.
+        unsafe { _mm256_storeu_si256(acc.as_mut_ptr().add(4 * j).cast(), *lane) };
+    }
+    acc
+}
+
+/// [`scan`] over affine P-256 points, as their eight words.
+#[inline]
+pub(crate) fn scan_affine(
+    entries: &[crate::nist::point::AffinePoint<crate::p256::P256>],
+    masks: &[u64],
+) -> crate::nist::point::AffinePoint<crate::p256::P256> {
+    use crate::nist::point::AffinePoint;
+    use crate::p256::Fp;
+    const _: () = assert!(core::mem::size_of::<AffinePoint<crate::p256::P256>>() == 64);
+    // SAFETY: `AffinePoint` is `repr(C)` over two `Fp`, each a
+    // `repr(transparent)` `[u64; 4]`, so a slice of them is a slice of
+    // `[u64; 8]` of the same length, alignment and lifetime; the assertion
+    // above holds the size to that.
+    let words: &[[u64; 8]] =
+        unsafe { core::slice::from_raw_parts(entries.as_ptr().cast(), entries.len()) };
+    let w = scan(words, masks);
+    AffinePoint {
+        x: Fp([w[0], w[1], w[2], w[3]]),
+        y: Fp([w[4], w[5], w[6], w[7]]),
+    }
+}
+
+/// [`scan`] over Jacobian P-256 points, as their twelve words.
+#[inline]
+pub(crate) fn scan_point(
+    entries: &[crate::nist::point::Point<crate::p256::P256>],
+    masks: &[u64],
+) -> [[u64; 4]; 3] {
+    use crate::nist::point::Point;
+    const _: () = assert!(core::mem::size_of::<Point<crate::p256::P256>>() == 96);
+    // SAFETY: `Point` is `repr(C)` over three `Fp`, each a
+    // `repr(transparent)` `[u64; 4]`; as for `scan_affine`.
+    let words: &[[u64; 12]] =
+        unsafe { core::slice::from_raw_parts(entries.as_ptr().cast(), entries.len()) };
+    let w = scan(words, masks);
     [
-        buf[4 * slot],
-        buf[4 * slot + 1],
-        buf[4 * slot + 2],
-        buf[4 * slot + 3],
+        [w[0], w[1], w[2], w[3]],
+        [w[4], w[5], w[6], w[7]],
+        [w[8], w[9], w[10], w[11]],
     ]
+}
+
+/// A formula's slots with `values` in the first ones and the rest
+/// uninitialised: zeroing them would cost a store per word on every point
+/// operation, and the formula writes every slot it reads but these.
+#[inline(always)]
+fn slots<const N: usize>(values: &[&[u64; 4]]) -> [MaybeUninit<u64>; N] {
+    let mut buf = [const { MaybeUninit::uninit() }; N];
+    for (i, v) in values.iter().enumerate() {
+        for (j, w) in v.iter().enumerate() {
+            buf[4 * i + j].write(*w);
+        }
+    }
+    buf
+}
+
+/// Field elements from the slots `first..first + K`.
+///
+/// # Safety
+///
+/// The formula must have written those slots.
+#[inline(always)]
+unsafe fn read<const N: usize, const K: usize>(
+    buf: &[MaybeUninit<u64>; N],
+    first: usize,
+) -> [[u64; 4]; K] {
+    let mut out = [[0u64; 4]; K];
+    for (k, value) in out.iter_mut().enumerate() {
+        for (j, w) in value.iter_mut().enumerate() {
+            // SAFETY: the caller guarantees the slot was written.
+            *w = unsafe { buf[4 * (first + k) + j].assume_init() };
+        }
+    }
+    out
 }
 
 /// Jacobian doubling as one block of assembly, where the CPU has BMI2 and
@@ -190,11 +347,13 @@ pub(crate) fn point_double(x: &[u64; 4], y: &[u64; 4], z: &[u64; 4]) -> Option<[
     if !has_adx() {
         return None;
     }
-    let mut buf = [0u64; 56];
-    load(&mut buf, &[x, y, z]);
-    // SAFETY: the CPU has BMI2 and ADX.
-    unsafe { super::p256_x86_point::double_adx(&mut buf) };
-    Some([slot(&buf, 3), slot(&buf, 4), slot(&buf, 5)])
+    let mut buf = slots::<56>(&[x, y, z]);
+    // SAFETY: the CPU has BMI2 and ADX; the formula writes X3, Y3, Z3, slots
+    // 3 to 5.
+    unsafe {
+        super::p256_x86_point::double_adx(&mut buf);
+        Some(read(&buf, 3))
+    }
 }
 
 /// The Jacobian addition formula as one block of assembly, with `h` and `r`;
@@ -208,15 +367,14 @@ pub(crate) fn point_add(
     if !has_adx() {
         return None;
     }
-    let mut buf = [0u64; 84];
-    load(&mut buf, &[p[0], p[1], p[2], q[0], q[1], q[2]]);
-    // SAFETY: the CPU has BMI2 and ADX.
-    unsafe { super::p256_x86_point::add_adx(&mut buf) };
-    Some((
-        [slot(&buf, 6), slot(&buf, 7), slot(&buf, 8)],
-        slot(&buf, 9),
-        slot(&buf, 10),
-    ))
+    let mut buf = slots::<84>(&[p[0], p[1], p[2], q[0], q[1], q[2]]);
+    // SAFETY: the CPU has BMI2 and ADX; the formula writes X3, Y3, Z3, H, R,
+    // slots 6 to 10.
+    unsafe {
+        super::p256_x86_point::add_adx(&mut buf);
+        let [h, r] = read(&buf, 9);
+        Some((read(&buf, 6), h, r))
+    }
 }
 
 /// The mixed addition formula as one block of assembly, with `h` and `r`;
@@ -230,15 +388,14 @@ pub(crate) fn point_add_affine(
     if !has_adx() {
         return None;
     }
-    let mut buf = [0u64; 72];
-    load(&mut buf, &[p[0], p[1], p[2], q[0], q[1]]);
-    // SAFETY: the CPU has BMI2 and ADX.
-    unsafe { super::p256_x86_point::add_affine_adx(&mut buf) };
-    Some((
-        [slot(&buf, 5), slot(&buf, 6), slot(&buf, 7)],
-        slot(&buf, 8),
-        slot(&buf, 9),
-    ))
+    let mut buf = slots::<72>(&[p[0], p[1], p[2], q[0], q[1]]);
+    // SAFETY: the CPU has BMI2 and ADX; the formula writes X3, Y3, Z3, H, R,
+    // slots 5 to 9.
+    unsafe {
+        super::p256_x86_point::add_affine_adx(&mut buf);
+        let [h, r] = read(&buf, 8);
+        Some((read(&buf, 5), h, r))
+    }
 }
 
 /// `a * b * 2^-256 mod p`, on `mulx`/`adcx`/`adox` where the CPU has them.

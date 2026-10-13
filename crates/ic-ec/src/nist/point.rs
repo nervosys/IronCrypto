@@ -89,6 +89,21 @@ pub trait Curve: Sized {
         None
     }
 
+    /// A faster table scan, where the curve has one: the `OR` over `entries`
+    /// of each entry masked by its mask, which `gentable` uses to read one
+    /// entry of a window without indexing by the digit. `None` to use the
+    /// portable loop. P-256 on x86-64 has one, in SSE2 or AVX2.
+    #[inline(always)]
+    fn scan_affine(_entries: &[AffinePoint<Self>], _masks: &[u64]) -> Option<AffinePoint<Self>> {
+        None
+    }
+
+    /// The same over Jacobian points, as coordinates.
+    #[inline(always)]
+    fn scan_point(_entries: &[Point<Self>], _masks: &[u64]) -> Option<[Self::Field; 3]> {
+        None
+    }
+
     /// The same for the mixed addition formula, with `q` affine.
     #[inline(always)]
     #[allow(clippy::type_complexity)]
@@ -101,6 +116,7 @@ pub trait Curve: Sized {
 }
 
 /// A point in Jacobian coordinates.
+#[repr(C)]
 pub struct Point<C: Curve> {
     x: C::Field,
     y: C::Field,
@@ -116,6 +132,7 @@ impl<C: Curve> Clone for Point<C> {
 impl<C: Curve> Copy for Point<C> {}
 
 /// A point in affine coordinates, as produced by decoding or normalization.
+#[repr(C)]
 pub struct AffinePoint<C: Curve> {
     /// The x-coordinate.
     pub x: C::Field,
@@ -263,10 +280,23 @@ impl<C: Curve> Point<C> {
     /// addition in case they are; see [`Point::mul_scalar`] for the argument
     /// that makes its loop such a caller.
     pub(crate) fn add_unequal(&self, other: &Self) -> Self {
-        let (mut result, _, _) = self.add_formula(other);
-        Self::cmov(&mut result, self, other.is_identity());
-        Self::cmov(&mut result, other, self.is_identity());
-        result
+        let (sum, _, _) = self.add_formula(other);
+        // Both identity tests behind one barrier.
+        let [other_inf, self_inf] =
+            core::hint::black_box([other.z.zero_mask(), self.z.zero_mask()]);
+        let result = Self::select_masked(other_inf, self, &sum);
+        Self::select_masked(self_inf, other, &result)
+    }
+
+    /// `a` where `mask` is all ones, `b` where it is zero; the mask must
+    /// already be behind a barrier.
+    #[inline]
+    fn select_masked(mask: u64, a: &Self, b: &Self) -> Self {
+        Point {
+            x: C::Field::select_mask(mask, &a.x, &b.x),
+            y: C::Field::select_mask(mask, &a.y, &b.y),
+            z: C::Field::select_mask(mask, &a.z, &b.z),
+        }
     }
 
     /// `self + other`, complete, branching on the cases: for public points
@@ -296,16 +326,31 @@ impl<C: Curve> Point<C> {
     /// Constant time, and correct when `self` is the identity or `-(x2, y2)`,
     /// but not when it is `(x2, y2)` itself; the same contract as
     /// [`Point::add_unequal`].
-    #[cfg(feature = "std")]
+    #[cfg(test)]
     pub(crate) fn add_affine_unequal(&self, x2: &C::Field, y2: &C::Field) -> Self {
-        let (mut result, _, _) = self.add_affine_formula(x2, y2);
+        self.add_affine_unequal_or_keep(x2, y2, 0)
+    }
+
+    /// [`Point::add_affine_unequal`], or `self` unchanged where `keep` is
+    /// all ones: the generator table's zero digit, whose identity has no
+    /// affine form. `keep` need not be behind a barrier yet; it is put behind
+    /// one together with the identity test, one barrier for both.
+    #[cfg(feature = "std")]
+    pub(crate) fn add_affine_unequal_or_keep(
+        &self,
+        x2: &C::Field,
+        y2: &C::Field,
+        keep: u64,
+    ) -> Self {
+        let (sum, _, _) = self.add_affine_formula(x2, y2);
         let lifted = Point {
             x: *x2,
             y: *y2,
             z: C::Field::ONE,
         };
-        Self::cmov(&mut result, &lifted, self.is_identity());
-        result
+        let [self_inf, keep] = core::hint::black_box([self.z.zero_mask(), keep]);
+        let result = Self::select_masked(self_inf, &lifted, &sum);
+        Self::select_masked(keep, self, &result)
     }
 
     /// [`Point::add_affine_unequal`], complete, branching on the cases: for
@@ -416,13 +461,28 @@ impl<C: Curve> Point<C> {
         C::Field::cmov(&mut a.z, &b.z, choice);
     }
 
-    /// Conditional move under a mask already behind a barrier; see
-    /// [`Field::cmov_mask`].
+    /// The point with these Jacobian coordinates, for a table scan.
     #[inline]
-    pub(crate) fn cmov_mask(a: &mut Self, b: &Self, mask: u64) {
-        C::Field::cmov_mask(&mut a.x, &b.x, mask);
-        C::Field::cmov_mask(&mut a.y, &b.y, mask);
-        C::Field::cmov_mask(&mut a.z, &b.z, mask);
+    pub(crate) fn from_coordinates(x: C::Field, y: C::Field, z: C::Field) -> Self {
+        Point { x, y, z }
+    }
+
+    /// All coordinates zero: a point at infinity, since `Z = 0`, and the
+    /// starting value of a table scan by [`Self::or_masked`].
+    pub(crate) fn zero() -> Self {
+        Point {
+            x: C::Field::ZERO,
+            y: C::Field::ZERO,
+            z: C::Field::ZERO,
+        }
+    }
+
+    /// `a |= b & mask`, coordinate by coordinate; see [`Field::or_masked`].
+    #[inline]
+    pub(crate) fn or_masked(a: &mut Self, b: &Self, mask: u64) {
+        C::Field::or_masked(&mut a.x, &b.x, mask);
+        C::Field::or_masked(&mut a.y, &b.y, mask);
+        C::Field::or_masked(&mut a.z, &b.z, mask);
     }
 
     /// Point negation.
@@ -436,18 +496,18 @@ impl<C: Curve> Point<C> {
 
     /// Scalar multiplication, constant-time in the scalar.
     ///
-    /// Four bits at a time. The scalar becomes signed radix-16 digits in
-    /// `[-8, 8]`, `1..=8` times this point are computed once per call, and each
-    /// digit selects one of them by reading all eight with conditional moves,
-    /// then negates it or not the same way. Every scalar of a curve has the
-    /// same digit count, and every digit costs four doublings, one selection
-    /// and one addition, so the trace does not depend on the scalar.
+    /// Five bits at a time. The scalar becomes signed digits in `[-16, 16]`,
+    /// `1..=16` times this point are computed once per call, and each digit
+    /// selects one of them by reading all sixteen with conditional moves, then
+    /// negates it or not the same way. Every scalar of a curve has the same
+    /// digit count, and every digit costs five doublings, one selection and
+    /// one addition, so the trace does not depend on the scalar.
     ///
-    /// That is an addition per four bits where the double-and-add-always
-    /// ladder it replaced had one per bit. ECDH is one of these, so this is
-    /// most of its cost; under `no_std` it is also what multiplies the
-    /// generator, since there is no stored table there. The window is eight
-    /// points on the stack, freed on return.
+    /// ECDH is one of these, so this is most of its cost; under `no_std` it is
+    /// also what multiplies the generator, since there is no stored table
+    /// there. The window is sixteen points on the stack, freed on return.
+    /// Four-bit windows cost thirteen more additions on P-256 and eight
+    /// fewer entries to build; five measured faster.
     ///
     /// # Which additions can be incomplete
     ///
@@ -455,36 +515,35 @@ impl<C: Curve> Point<C> {
     /// doubling [`Self::add`] computes in case its inputs are equal, because
     /// they cannot be. `self` is a point of prime order `n` (every point of
     /// a NIST curve is: the cofactor is 1), or the identity. Before digit `i`
-    /// is added, the accumulator is `16 * S * P`, where `S` is the integer
-    /// the digits above `i` spell, and the entry is `d * P` with `|d| <= 8`.
-    /// They are equal only if `16 * S - d = 0 mod n`. The scalar is below
-    /// `n`, so for `i >= 1`, `|16 * S - d| <= k / 16 + 24 < n`, which makes
-    /// that `16 * S = d` exactly, and with `|d| <= 8` that is `S = d = 0`: an
-    /// identity on both sides, which `add_unequal` handles. At `i = 0` the
+    /// is added, the accumulator is `32 * S * P`, where `S` is the integer
+    /// the digits above `i` spell, and the entry is `d * P` with `|d| <= 16`.
+    /// They are equal only if `32 * S - d = 0 mod n`. The scalar is below
+    /// `n`, so for `i >= 1`, `|32 * S - d| <= k / 32 + 48 < n`, which makes
+    /// that `32 * S = d` exactly, and with `|d| <= 16` that is `S = d = 0`:
+    /// an identity on both sides, which `add_unequal` handles. At `i = 0` the
     /// bound fails -- `k = n - 2` makes the accumulator `-P` and the last
-    /// digit `-1` -- so the last addition is the complete one. `selected`
+    /// digit `-1` -- so the last addition is the complete one. Selected
     /// identities, and `P + (-P)`, are handled by `add_unequal` as well.
     ///
-    /// The scalars at that edge, `n - 2 .. n - 16` and `2 .. 16`, are in the
+    /// The scalars at that edge, `n - 1 .. n - 40` and `1 .. 40`, are in the
     /// tests, as is a comparison with the ladder over random scalars.
     pub fn mul_scalar(&self, scalar: &C::Scalar) -> Self {
-        use super::gentable::{signed_digits, Window};
+        use super::gentable::{digit_count, signed_digits_w, Window, WIDTH};
 
         let bytes = scalar.to_bytes();
         let bytes = bytes.as_ref();
-        let digits = signed_digits(bytes);
-        // Every nibble, plus the carry digit above them.
-        let n = bytes.len() * 2 + 1;
+        let digits = signed_digits_w(bytes, WIDTH);
+        let n = digit_count(bytes.len(), WIDTH);
         let window = Window::new(self);
 
         let mut acc = window.select(digits[n - 1]);
         for i in (1..n - 1).rev() {
-            for _ in 0..4 {
+            for _ in 0..WIDTH {
                 acc = acc.double();
             }
             acc = acc.add_unequal(&window.select(digits[i]));
         }
-        for _ in 0..4 {
+        for _ in 0..WIDTH {
             acc = acc.double();
         }
         acc.add(&window.select(digits[0]))
@@ -1092,6 +1151,56 @@ mod tests {
             }
         }
         checked
+    }
+
+    /// The same comparison on arbitrary coordinates rather than curve points:
+    /// the formulas are polynomials, so they agree on any input, and random
+    /// field elements reach the reductions' edges -- a top word of every
+    /// value in the small multiples, a sum just above `p` -- far more often
+    /// than multiples of a point do. Coordinates near zero and near `p` are
+    /// mixed in.
+    #[test]
+    fn own_point_formulas_agree_on_arbitrary_coordinates() {
+        type F = <P256 as Curve>::Field;
+        let mut state = 0x0b1d_u64;
+        let mut next = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        let edges = [F::ZERO, F::ONE, F::ONE.neg(), F::ONE.double().neg()];
+        let mut field = |i: usize| -> F {
+            if i.is_multiple_of(7) {
+                return edges[(i / 7) % edges.len()];
+            }
+            let mut bytes = [0u8; 32];
+            for chunk in bytes.chunks_mut(8) {
+                chunk.copy_from_slice(&next().to_be_bytes());
+            }
+            F::from_bytes_reduced(&bytes)
+        };
+        let same = |a: &Point<P256>, b: &Point<P256>| a.x == b.x && a.y == b.y && a.z == b.z;
+        for i in 0..50_000 {
+            let p = Point::<P256> {
+                x: field(3 * i),
+                y: field(3 * i + 1),
+                z: field(3 * i + 2),
+            };
+            let q = Point::<P256> {
+                x: field(3 * i + 5),
+                y: field(3 * i + 6),
+                z: field(3 * i + 9),
+            };
+            assert!(same(&p.double(), &p.double_formula()), "double");
+            let (s1, h1, r1) = p.add_formula(&q);
+            let (s2, h2, r2) = p.add_formula_generic(&q);
+            assert!(same(&s1, &s2) && h1 == h2 && r1 == r2, "add");
+            let (s1, h1, r1) = p.add_affine_formula(&q.x, &q.y);
+            let (s2, h2, r2) = p.add_affine_formula_generic(&q.x, &q.y);
+            assert!(same(&s1, &s2) && h1 == h2 && r1 == r2, "add_affine");
+        }
     }
 
     #[test]

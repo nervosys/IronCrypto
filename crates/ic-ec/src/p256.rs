@@ -166,6 +166,19 @@ impl Curve for P256 {
 
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
+    fn scan_affine(entries: &[AffinePoint], masks: &[u64]) -> Option<AffinePoint> {
+        Some(crate::nist::p256_x86::scan_affine(entries, masks))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn scan_point(entries: &[Point], masks: &[u64]) -> Option<[Fp; 3]> {
+        let [x, y, z] = crate::nist::p256_x86::scan_point(entries, masks);
+        Some([Fp(x), Fp(y), Fp(z)])
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
     fn add_fast(p: [&Fp; 3], q: [&Fp; 3]) -> Option<([Fp; 3], Fp, Fp)> {
         crate::nist::p256_x86::point_add([&p[0].0, &p[1].0, &p[2].0], [&q[0].0, &q[1].0, &q[2].0])
             .map(|([x, y, z], h, r)| ([Fp(x), Fp(y), Fp(z)], Fp(h), Fp(r)))

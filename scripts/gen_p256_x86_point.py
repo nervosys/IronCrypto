@@ -237,7 +237,76 @@ def sub(dst, a, b):
     return out
 
 
-OPS = {"mul": mul, "sqr": sqr, "add": add, "sub": sub}
+def mulk(dst, a, k):
+    """`k * a mod p` for k in 3, 4, 8: the product in five words, then the
+    top word `q` (at most 7) folded back as `q * (2^256 - p)`, which is
+    `q*2^224 - q*2^192 - q*2^96 + q`, then one conditional subtraction.
+
+    The fold leaves `t - q*p`, which is non-negative (q <= t / 2^256 < t / p)
+    and below 2^256 + 7*2^224 < 2p, so one subtraction makes it canonical.
+    """
+    k = int(k)
+    out = [f"mov {{t{i}}}, {addr(a, i)}" for i in range(4)]
+    if k in (4, 8):
+        s = {4: 2, 8: 3}[k]
+        out += [
+            "mov {t4}, {t3}",
+            f"shr {{t4}}, {64 - s}",
+            f"shld {{t3}}, {{t2}}, {s}",
+            f"shld {{t2}}, {{t1}}, {s}",
+            f"shld {{t1}}, {{t0}}, {s}",
+            f"shl {{t0}}, {s}",
+        ]
+    elif k == 3:
+        out += [
+            "mov {t4}, {t3}",
+            "shr {t4}, 63",
+            "shld {t3}, {t2}, 1",
+            "shld {t2}, {t1}, 1",
+            "shld {t1}, {t0}, 1",
+            "shl {t0}, 1",
+            f"add {{t0}}, {addr(a, 0)}",
+            f"adc {{t1}}, {addr(a, 1)}",
+            f"adc {{t2}}, {addr(a, 2)}",
+            f"adc {{t3}}, {addr(a, 3)}",
+            "adc {t4}, 0",
+        ]
+    else:
+        raise ValueError(k)
+    out += [
+        # q*2^32 for the words at 2^96 and 2^224.
+        "mov rax, {t4}",
+        "shl rax, 32",
+        # + q + q*2^224
+        "xor {c:e}, {c:e}",
+        "add {t0}, {t4}",
+        "adc {t1}, 0",
+        "adc {t2}, 0",
+        "adc {t3}, rax",
+        "adc {c}, 0",
+        # - q*2^96 - q*2^192
+        "sub {t1}, rax",
+        "sbb {t2}, 0",
+        "sbb {t3}, {t4}",
+        "sbb {c}, 0",
+    ]
+    # One conditional subtraction, as in `add`.
+    out += [f"mov {{t{i + 4}}}, {{t{i}}}" for i in range(4)]
+    out += [
+        f"mov eax, {P1}",
+        f"mov rdx, {P3}",
+        "sub {t4}, -1",
+        "sbb {t5}, rax",
+        "sbb {t6}, 0",
+        "sbb {t7}, rdx",
+        "sbb {c}, 0",
+    ]
+    out += [f"cmovc {{t{i + 4}}}, {{t{i}}}" for i in range(4)]
+    out += store(dst, [f"{{t{i + 4}}}" for i in range(4)])
+    return out
+
+
+OPS = {"mul": mul, "sqr": sqr, "add": add, "sub": sub, "mulk": mulk}
 
 
 def emit(name, doc, slots, program):
@@ -252,16 +321,18 @@ def emit(name, doc, slots, program):
     out.append("///")
     out.append("/// The CPU must support BMI2 and ADX; see [`super::p256_x86::has_adx`].")
     out.append("#[inline(never)]")
-    out.append(f"pub(crate) unsafe fn {name}(buf: &mut [u64; {4 * len(slots)}]) {{")
+    out.append(f"pub(crate) unsafe fn {name}(buf: &mut [MaybeUninit<u64>; {4 * len(slots)}]) {{")
     out.append("    // SAFETY: the caller guarantees the instructions exist. The block reads")
     out.append("    // and writes only the buffer behind `{s}`, a live, exclusive reference")
     out.append(f"    // of {32 * len(slots)} bytes, at offsets below that; it writes only the")
-    out.append("    // registers it declares, and does not touch the stack.")
+    out.append("    // registers it declares, and does not touch the stack. It reads no slot")
+    out.append("    // before writing it but the inputs, which the caller has written.")
     out.append("    unsafe {")
     out.append("        asm!(")
     for op, *args in program:
         out.append(f"            // {args[0]} = {op}({', '.join(args[1:])})")
-        for l in OPS[op](*[idx[x] for x in args]):
+        operands = [idx[x] if x in idx else int(x) for x in args]
+        for l in OPS[op](*operands):
             out.append(f'            "{l}",')
     out.append("            s = in(reg) buf.as_mut_ptr(),")
     for i in range(8):
@@ -295,6 +366,7 @@ HEADER = '''//! P-256 point formulas, each one `asm!` block over `mulx`/`adcx`/`
 //! by data: the reductions end in `cmovc`, the subtractions in a borrow mask.
 
 use core::arch::asm;
+use core::mem::MaybeUninit;
 '''
 
 
@@ -328,11 +400,9 @@ DOUBLE = [
     ("sub", "t", "X", "delta"),
     ("add", "u", "X", "delta"),
     ("mul", "t", "t", "u"),
-    ("add", "alpha", "t", "t"),
-    ("add", "alpha", "alpha", "t"),
-    ("add", "beta", "beta", "beta"),
-    ("add", "beta", "beta", "beta"),
-    ("add", "beta8", "beta", "beta"),
+    ("mulk", "alpha", "t", "3"),
+    ("mulk", "beta8", "beta", "8"),
+    ("mulk", "beta", "beta", "4"),
     ("sqr", "w", "alpha"),
     ("sub", "X3", "w", "beta8"),
     ("add", "w", "Y", "Z"),
@@ -340,9 +410,7 @@ DOUBLE = [
     ("sub", "w", "w", "gamma"),
     ("sub", "Z3", "w", "delta"),
     ("sqr", "gamma", "gamma"),
-    ("add", "gamma", "gamma", "gamma"),
-    ("add", "gamma", "gamma", "gamma"),
-    ("add", "gamma", "gamma", "gamma"),
+    ("mulk", "gamma", "gamma", "8"),
     ("sub", "beta", "beta", "X3"),
     ("mul", "beta", "alpha", "beta"),
     ("sub", "Y3", "beta", "gamma"),
@@ -391,8 +459,7 @@ MADD = [
     ("mul", "s2", "t", "z1z1"),
     ("sub", "H", "u2", "X1"),
     ("sqr", "hh", "H"),
-    ("add", "i", "hh", "hh"),
-    ("add", "i", "i", "i"),
+    ("mulk", "i", "hh", "4"),
     ("mul", "j", "H", "i"),
     ("sub", "R", "s2", "Y1"),
     ("add", "R", "R", "R"),

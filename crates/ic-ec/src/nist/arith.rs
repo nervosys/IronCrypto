@@ -311,15 +311,22 @@ pub(crate) fn select_ct<const N: usize>(mask: u64, a: [u64; N], b: [u64; N]) -> 
     select(core::hint::black_box(mask), a, b)
 }
 
-/// All ones when `a == b`, zero otherwise, behind the barrier: the mask for
-/// one entry of a table scan, for [`Field::cmov_mask`].
+/// The masks for a scan of `E` entries, for [`Field::or_masked`]: entry
+/// `i`'s mask is all ones when `i + offset == index` and zero otherwise, all
+/// of them behind one barrier. One barrier for the whole scan rather than one
+/// per entry, and the scan itself is then plain masking the compiler can
+/// vectorise.
 ///
 /// The xor is zero exactly when the two are equal, and only zero minus one
 /// sets the top bit of a value below 2^32; nothing is compared.
 #[inline]
-pub(crate) fn mask_of(a: u32, b: u32) -> u64 {
-    let bit = ((a ^ b) as u64).wrapping_sub(1) >> 63;
-    core::hint::black_box(bit.wrapping_neg())
+pub(crate) fn masks_for<const E: usize>(index: u32, offset: u32) -> [u64; E] {
+    let mut masks = [0u64; E];
+    for (i, m) in masks.iter_mut().enumerate() {
+        let bit = (((i as u32 + offset) ^ index) as u64).wrapping_sub(1) >> 63;
+        *m = bit.wrapping_neg();
+    }
+    core::hint::black_box(masks)
 }
 
 /// Double `x` modulo `m`, in constant time.
@@ -445,11 +452,21 @@ pub trait Field: Copy + Clone + core::fmt::Debug + PartialEq + Eq + Sized {
     fn ct_eq(&self, other: &Self) -> Choice;
     /// Constant-time conditional move.
     fn cmov(a: &mut Self, b: &Self, choice: Choice);
-    /// Conditional move under a mask that is all ones or zero and that the
-    /// caller has already put behind a barrier ([`mask_of`]): for a table
-    /// scan, where one mask per entry covers every coordinate and a barrier
-    /// per coordinate would be most of the scan's cost.
-    fn cmov_mask(a: &mut Self, b: &Self, mask: u64);
+    /// `a |= b & mask`, word by word, for a mask that is all ones or zero and
+    /// that the caller has already put behind a barrier ([`masks_for`]).
+    ///
+    /// A table scan: start from zero, and with exactly one mask set the
+    /// accumulator ends as that entry. One mask per entry covers every
+    /// coordinate, where a barrier per coordinate would be most of the
+    /// scan's cost, and an AND and an OR per word is half a selection's work.
+    fn or_masked(a: &mut Self, b: &Self, mask: u64);
+    /// All ones when zero, zero otherwise, **without** a barrier: for a
+    /// caller that gathers several masks and puts them behind one
+    /// (`core::hint::black_box` on the array) before using any.
+    fn zero_mask(&self) -> u64;
+    /// `a` where `mask` is all ones, `b` where it is zero, without a
+    /// barrier: the mask must already be behind one.
+    fn select_mask(mask: u64, a: &Self, b: &Self) -> Self;
     /// Whether the canonical integer is odd — the SEC1 compression sign bit.
     fn is_odd(&self) -> Choice;
 }
@@ -495,6 +512,7 @@ macro_rules! mont_field {
         /// Values are held in Montgomery form (`a * R mod m`). Arithmetic is
         /// branch-free and carries no data-dependent memory access.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(transparent)]
         pub struct $name(pub [u64; $limbs]);
 
         impl $name {
@@ -640,13 +658,10 @@ macro_rules! mont_field {
                 }
                 // The window's power, by a scan with conditional moves.
                 let select = |nibble: u64| {
-                    let mut out = table[0];
-                    for (j, entry) in table.iter().enumerate() {
-                        <Self as $crate::nist::arith::Field>::cmov_mask(
-                            &mut out,
-                            entry,
-                            $crate::nist::arith::mask_of(j as u32, nibble as u32),
-                        );
+                    let mut out = <Self as $crate::nist::arith::Field>::ZERO;
+                    let masks = $crate::nist::arith::masks_for::<16>(nibble as u32, 0);
+                    for (entry, mask) in table.iter().zip(masks) {
+                        <Self as $crate::nist::arith::Field>::or_masked(&mut out, entry, mask);
                     }
                     out
                 };
@@ -767,8 +782,25 @@ macro_rules! mont_field {
             }
 
             #[inline]
-            fn cmov_mask(a: &mut Self, b: &Self, mask: u64) {
-                a.0 = $crate::nist::arith::select(mask, b.0, a.0);
+            fn zero_mask(&self) -> u64 {
+                let mut acc = 0u64;
+                for limb in self.0.iter() {
+                    acc |= *limb;
+                }
+                // 1 if any bit is set, so 0 - 1 for zero and 1 - 1 otherwise.
+                ((acc | acc.wrapping_neg()) >> 63).wrapping_sub(1)
+            }
+
+            #[inline]
+            fn select_mask(mask: u64, a: &Self, b: &Self) -> Self {
+                Self($crate::nist::arith::select(mask, a.0, b.0))
+            }
+
+            #[inline]
+            fn or_masked(a: &mut Self, b: &Self, mask: u64) {
+                for (x, y) in a.0.iter_mut().zip(b.0.iter()) {
+                    *x |= y & mask;
+                }
             }
 
             #[inline]
