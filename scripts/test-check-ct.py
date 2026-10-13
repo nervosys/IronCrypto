@@ -57,6 +57,48 @@ class InspectionTests(unittest.TestCase):
                     self.assertFalse(audit.forbidden(instruction, target))
 
 
+class CallTests(unittest.TestCase):
+    """Calls into bodies in the same file are followed, not trusted."""
+
+    X86 = "x86_64-unknown-linux-gnu"
+
+    def with_helper(self, helper_instruction, call="callq\thelper"):
+        helper = (f"\t.type helper,@function\nhelper:\n\t{helper_instruction}\n"
+                  "\t.size helper, .-helper")
+        return assembly(call) + "\n" + helper
+
+    def test_a_clean_helper_passes(self):
+        self.assertEqual(audit.inspect(self.with_helper("retq"), self.X86), [])
+
+    def test_a_branch_in_a_helper_is_reported_against_the_probe(self):
+        found = audit.inspect(self.with_helper("jne .L1"), self.X86)
+        self.assertEqual(len(found), len(audit.SYMBOLS))
+        self.assertTrue(all(" -> helper: jne .L1" in f for f in found), found)
+
+    def test_tail_calls_and_other_targets_are_followed(self):
+        self.assertTrue(audit.inspect(self.with_helper("jne .L1", "jmp\thelper"), self.X86))
+        self.assertTrue(audit.inspect(
+            self.with_helper("bne .L1", "bl\thelper"), "thumbv7em-none-eabihf"))
+        self.assertTrue(audit.inspect(
+            self.with_helper("bnez a0, .L1", "call\thelper"), "riscv32imac-unknown-none-elf"))
+
+    def test_a_helper_that_calls_itself_ends(self):
+        asm = self.with_helper("callq\thelper")
+        self.assertEqual(audit.inspect(asm, self.X86), [])
+
+    def test_a_call_to_an_undefined_symbol_stays_forbidden(self):
+        found = audit.inspect(self.with_helper("callq\t__multi3"), self.X86)
+        self.assertEqual(len(found), len(audit.SYMBOLS))
+
+    def test_p256_probes_gate_on_x86_64_and_report_elsewhere(self):
+        probe = audit.P256[0]
+        finding = f"{probe} -> helper: bne .L1"
+        self.assertTrue(audit.gated(finding, self.X86))
+        for target in audit.TARGETS[1:]:
+            self.assertFalse(audit.gated(finding, target), target)
+        self.assertTrue(audit.gated("ct_reduce_q: bne .L1", "thumbv6m-none-eabi"))
+
+
 class BuildTests(unittest.TestCase):
     def test_stale_artifacts_cannot_hide_a_current_branch(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(audit, "ROOT", Path(directory)):

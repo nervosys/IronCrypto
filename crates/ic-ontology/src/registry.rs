@@ -1832,6 +1832,7 @@ pub static REGISTRY: &[Entry] = &[
         params: &[P_KEY_32, P_NONCE_24, P_TAG_16],
         constraints: &[UNIQUE_NONCE],
         edges: &[
+            Edge { relation: Relation::BuiltOn, target: "hchacha20" },
             Edge { relation: Relation::BuiltOn, target: "chacha20-poly1305" },
             Edge { relation: Relation::BuiltOn, target: "poly1305" },
         ],
@@ -1993,12 +1994,14 @@ pub static REGISTRY: &[Entry] = &[
         constraints: &[Constraint {
             id: "scrypt-data-dependent-access",
             requirement: "Prefer Argon2id where another process on the same machine can \
-                          observe this one's cache.",
+                          observe this one's cache, and say so when choosing scrypt anyway.",
             consequence: "ROMix reads memory at password-dependent addresses, so a co-resident \
-                          attacker learns something about the access pattern.",
-            severity: Severity::Advisory,
+                          attacker learns something about the access pattern. bcrypt and \
+                          yescrypt carry the same exposure at the same severity.",
+            severity: Severity::Serious,
         }],
         edges: &[
+            Edge { relation: Relation::BuiltOn, target: "salsa20-8-core" },
             Edge { relation: Relation::BuiltOn, target: "pbkdf2-hmac-sha2-256" },
             Edge { relation: Relation::SupersededBy, target: "argon2id" },
         ],
@@ -2011,6 +2014,83 @@ pub static REGISTRY: &[Entry] = &[
                 the form the RustCrypto scrypt crate writes, with which they were checked both \
                 ways. Checked against all four of RFC 7914's vectors, the 1 GiB one in a release \
                 build, and eight of OpenSSL's over shapes the RFC does not vary.",
+    },
+    Entry {
+        id: "blowfish",
+        name: "Blowfish",
+        aliases: &[],
+        summary: "A 64-bit block cipher, present only as bcrypt's key schedule. Not offered \
+                  as a cipher.",
+        class: Class::BlockCipher,
+        family: "Blowfish",
+        purposes: &[Purpose::Confidentiality],
+        strength: Strength { classical: 64, quantum: 32 },
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Excluded,
+        standards: &["Schneier 1994"],
+        params: &NO_PARAMS,
+        constraints: &[],
+        edges: &[Edge { relation: Relation::SupersededBy, target: "aes-256" }],
+        performance: Performance::Moderate,
+        rust_path: "",
+        example: "",
+        notes: "Implemented inside ic_kdf::bcrypt, with no public interface, so that stored \
+                bcrypt hashes can be verified. As a cipher it is excluded: its 64-bit block \
+                makes collisions likely after about 32 GiB under one key (Sweet32), and its \
+                key-dependent S-boxes are read at indices derived from the key. Neither \
+                matters to bcrypt, which encrypts one fixed text, but both rule it out for \
+                data. Use an AEAD.",
+    },
+    Entry {
+        id: "salsa20-8-core",
+        name: "Salsa20/8 core",
+        aliases: &["salsa20/8"],
+        summary: "The eight-round Salsa20 core, present only inside scrypt and yescrypt.",
+        class: Class::Hash,
+        family: "Salsa20",
+        purposes: &[Purpose::KeyDerivation],
+        strength: Strength { classical: 0, quantum: 0 },
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Excluded,
+        standards: &["RFC 7914"],
+        params: &NO_PARAMS,
+        constraints: &[],
+        edges: &[],
+        performance: Performance::Fast,
+        rust_path: "",
+        example: "",
+        notes: "RFC 7914 section 3 defines it as a function from 64 octets to 64 octets, the \
+                mixing step of scrypt's BlockMix; yescrypt uses it too, with two rounds as \
+                well as eight. It has no key and is not collision resistant, so on its own it \
+                is no hash and no cipher, which is why its strength is given as zero: what \
+                security it contributes, it contributes inside scrypt. Not offered alone. The \
+                Salsa20 stream cipher is not implemented; ChaCha20 is its successor here.",
+    },
+    Entry {
+        id: "hchacha20",
+        name: "HChaCha20",
+        aliases: &[],
+        summary: "Derives a ChaCha20 subkey from a key and 128 bits of nonce; present only \
+                  inside XChaCha20-Poly1305.",
+        class: Class::Kdf,
+        family: "ChaCha",
+        purposes: &[Purpose::KeyDerivation],
+        strength: Strength::symmetric(256),
+        fips: FipsStatus::NotApproved,
+        status: ImplStatus::Excluded,
+        standards: &["draft-irtf-cfrg-xchacha-03"],
+        params: &NO_PARAMS,
+        constraints: &[],
+        edges: &[],
+        performance: Performance::Fast,
+        rust_path: "",
+        example: "",
+        notes: "The ChaCha20 block function without the final addition, keeping eight of its \
+                sixteen words: a PRF under the key, which is what extends the nonce to 192 \
+                bits. Implemented inside ic_cipher's XChaCha20-Poly1305 and checked against \
+                the draft's HChaCha20 vector there. Not offered alone: it is a building block \
+                for that construction, and a key derivation from material that is already a \
+                key belongs to HKDF.",
     },
     Entry {
         id: "bcrypt",
@@ -2027,7 +2107,10 @@ pub static REGISTRY: &[Entry] = &[
         standards: &["Provos-Mazieres 1999", "Schneier 1994"],
         params: &NO_PARAMS,
         constraints: &[VERIFY_ONLY_MIGRATE, PASSWORD_INDEXED_TABLES],
-        edges: &[Edge { relation: Relation::SupersededBy, target: "argon2id" }],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "blowfish" },
+            Edge { relation: Relation::SupersededBy, target: "argon2id" },
+        ],
         performance: Performance::DeliberatelySlow,
         rust_path: "ic_kdf::bcrypt",
         example: "ic_kdf::bcrypt::verify_password(password, stored)?;",
@@ -2054,6 +2137,7 @@ pub static REGISTRY: &[Entry] = &[
         params: &NO_PARAMS,
         constraints: &[VERIFY_ONLY_MIGRATE, PASSWORD_INDEXED_TABLES],
         edges: &[
+            Edge { relation: Relation::BuiltOn, target: "salsa20-8-core" },
             Edge { relation: Relation::BuiltOn, target: "scrypt" },
             Edge { relation: Relation::BuiltOn, target: "pbkdf2-hmac-sha2-256" },
             Edge { relation: Relation::SupersededBy, target: "argon2id" },

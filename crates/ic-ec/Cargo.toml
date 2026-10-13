@@ -19,6 +19,9 @@ std = ["ic-core/std", "ic-hash/std", "ic-mac/std"]
 # outside the workspace, so it cannot reach private items; this is how it gets
 # them without their being public API for everyone else. Not covered by semver.
 bench-internals = ["std"]
+# P-256 field and scalar operations for `scripts/ct-audit`, which inspects their
+# compiled code. Also not API and not covered by semver.
+ct-probes = []
 
 # `ic_limb32` selects the 32-bit-limb Curve25519 field on any target; see
 # `src/field32.rs`.

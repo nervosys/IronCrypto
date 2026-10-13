@@ -56,6 +56,9 @@ mod field;
 #[cfg(all(test, not(any(target_arch = "riscv32", ic_limb32))))]
 mod field32;
 
+#[cfg(feature = "ct-probes")]
+#[doc(hidden)]
+pub mod ct_probes;
 mod nist;
 pub mod p256;
 pub mod p384;

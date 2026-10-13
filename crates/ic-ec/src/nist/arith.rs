@@ -345,9 +345,18 @@ pub(crate) const fn compute_r2<const N: usize>(m: [u64; N]) -> [u64; N] {
 /// the macro.
 #[inline]
 pub(crate) fn from_be_bytes<const N: usize>(bytes: &[u8]) -> [u64; N] {
+    // Whole words from the right, the top one zero-padded (P-521's 66 bytes
+    // leave two). Every length here is the curve's, so the compiled form is
+    // straight-line: a byte loop compiled to a loop, which the compiled-code
+    // gate (`scripts/check-ct.py`) rejects even with a public count.
     let mut limbs = [0u64; N];
-    for (i, byte) in bytes.iter().rev().enumerate() {
-        limbs[i / 8] |= (*byte as u64) << (8 * (i % 8));
+    let mut chunks = bytes.rchunks(8);
+    for limb in limbs.iter_mut() {
+        if let Some(chunk) = chunks.next() {
+            let mut word = [0u8; 8];
+            word[8 - chunk.len()..].copy_from_slice(chunk);
+            *limb = u64::from_be_bytes(word);
+        }
     }
     limbs
 }
@@ -355,11 +364,13 @@ pub(crate) fn from_be_bytes<const N: usize>(bytes: &[u8]) -> [u64; N] {
 /// Encode little-endian limbs as big-endian bytes, zero-padded on the left.
 #[inline]
 pub(crate) fn to_be_bytes<const N: usize>(limbs: &[u64; N], out: &mut [u8]) {
-    let n = out.len();
-    for (i, slot) in out.iter_mut().rev().enumerate() {
-        *slot = (limbs[i / 8] >> (8 * (i % 8))) as u8;
+    // Whole words, as `from_be_bytes` reads them: indexing a byte as
+    // `limb >> (8 * (i % 8))` shifts a u64 by a variable amount, which 32-bit
+    // targets compile to a branch on whether it reaches 32.
+    for (limb, chunk) in limbs.iter().zip(out.rchunks_mut(8)) {
+        let word = limb.to_be_bytes();
+        chunk.copy_from_slice(&word[8 - chunk.len()..]);
     }
-    let _ = n;
 }
 
 /// `-m^-1 mod 2^64`, by Newton iteration.

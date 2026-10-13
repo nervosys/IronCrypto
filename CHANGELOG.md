@@ -119,6 +119,26 @@ all of them.
 
 ### Changed
 
+- **The constant-time gate covers P-256's field and scalar arithmetic.**
+  Sixteen compiled-code probes check the operations hashing to the curve
+  and the OPRF apply to password- and key-derived values; the checker now
+  follows calls into bodies it can read instead of rejecting them. They
+  gate on x86-64, where they have no branch or call. On 32-bit targets
+  they are reported, not gated: what remains there is the Montgomery
+  loop's counter, a fixed-size `memset` and M0's runtime multiply, each
+  read and recorded in `docs/CONSTANT_TIME.md`. Byte-to-limb conversion
+  now works in whole words, which removed the last branch on x86-64 and
+  a variable-shift branch on 32-bit RISC-V. `ic timing` gained
+  `hash-to-curve`, `oprf-evaluate`, `blake2s-keyed` and `blake3-keyed`.
+- **Ontology entries for Blowfish, the Salsa20/8 core and HChaCha20**,
+  each `excluded` as a primitive of its own: they are implemented only
+  inside bcrypt, scrypt and yescrypt, and XChaCha20-Poly1305, which now
+  name them as what they are built on.
+- **scrypt's password-dependent memory access is a serious constraint**,
+  as bcrypt's and yescrypt's are, not an advisory one: an agent choosing
+  scrypt must say so.
+- **bcrypt wipes its key schedule's running block** after use, as it
+  already wiped the schedule itself.
 - **`ic lint` no longer reports scrypt's single PBKDF2 pass.** The
   iteration check skipped nothing, so ic-kdf's crate-private
   `pbkdf2::derive`, which scrypt and yescrypt run once by definition, was

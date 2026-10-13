@@ -105,7 +105,9 @@ impl Blowfish {
         for i in 0..18 {
             self.p[i] ^= stream_word(key, &mut j);
         }
-        let (mut l, mut r) = (0u32, 0u32);
+        // The running block, in an array so that it can be wiped: it is
+        // derived from the key.
+        let mut lr = [0u32; 2];
         let mut k = 0;
         let mut next = |l: &mut u32, r: &mut u32| {
             if !salt.is_empty() {
@@ -113,20 +115,24 @@ impl Blowfish {
                 *r ^= stream_word(salt, &mut k);
             }
         };
-        for i in (0..18).step_by(2) {
-            next(&mut l, &mut r);
-            self.encrypt(&mut l, &mut r);
-            self.p[i] = l;
-            self.p[i + 1] = r;
-        }
-        for b in 0..4 {
-            for i in (0..256).step_by(2) {
-                next(&mut l, &mut r);
-                self.encrypt(&mut l, &mut r);
-                self.s[b][i] = l;
-                self.s[b][i + 1] = r;
+        {
+            let [l, r] = &mut lr;
+            for i in (0..18).step_by(2) {
+                next(l, r);
+                self.encrypt(l, r);
+                self.p[i] = *l;
+                self.p[i + 1] = *r;
+            }
+            for b in 0..4 {
+                for i in (0..256).step_by(2) {
+                    next(l, r);
+                    self.encrypt(l, r);
+                    self.s[b][i] = *l;
+                    self.s[b][i + 1] = *r;
+                }
             }
         }
+        lr.zeroize();
     }
 }
 

@@ -93,3 +93,54 @@ pub fn ct_hex_encode(input: &[u8; 1], output: &mut [u8; 2]) {
 pub fn ct_base64_encode(input: &[u8; 3], output: &mut [u8; 4]) {
     let _ = ic_core::codec::base64_encode(input, output);
 }
+
+// P-256: the field and scalar operations that hashing to the curve, the OPRF,
+// ECDH and ECDSA are composed of.
+macro_rules! p256_probes {
+    ($reduce:ident, $add:ident, $sub:ident, $mul:ident, $neg:ident, $cmov:ident, $eq:ident, $odd:ident,
+     $m:ident :: { $r:ident, $a:ident, $s:ident, $mu:ident, $n:ident, $c:ident, $e:ident, $o:ident }) => {
+        #[no_mangle]
+        pub fn $reduce(a: &[u8; 32]) -> [u8; 32] {
+            ic_ec::ct_probes::$r(a)
+        }
+        #[no_mangle]
+        pub fn $add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+            ic_ec::ct_probes::$a(a, b)
+        }
+        #[no_mangle]
+        pub fn $sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+            ic_ec::ct_probes::$s(a, b)
+        }
+        #[no_mangle]
+        pub fn $mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+            ic_ec::ct_probes::$mu(a, b)
+        }
+        #[no_mangle]
+        pub fn $neg(a: &[u8; 32]) -> [u8; 32] {
+            ic_ec::ct_probes::$n(a)
+        }
+        #[no_mangle]
+        pub fn $cmov(flag: u8, a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+            ic_ec::ct_probes::$c(flag, a, b)
+        }
+        #[no_mangle]
+        pub fn $eq(a: &[u8; 32], b: &[u8; 32]) -> u8 {
+            ic_ec::ct_probes::$e(a, b)
+        }
+        #[no_mangle]
+        pub fn $odd(a: &[u8; 32]) -> u8 {
+            ic_ec::ct_probes::$o(a)
+        }
+    };
+}
+
+p256_probes!(
+    ct_p256_fp_reduce, ct_p256_fp_add, ct_p256_fp_sub, ct_p256_fp_mul, ct_p256_fp_neg,
+    ct_p256_fp_cmov, ct_p256_fp_eq, ct_p256_fp_is_odd,
+    m::{ fp_reduce, fp_add, fp_sub, fp_mul, fp_neg, fp_cmov, fp_eq, fp_is_odd }
+);
+p256_probes!(
+    ct_p256_fn_reduce, ct_p256_fn_add, ct_p256_fn_sub, ct_p256_fn_mul, ct_p256_fn_neg,
+    ct_p256_fn_cmov, ct_p256_fn_eq, ct_p256_fn_is_odd,
+    m::{ fn_reduce, fn_add, fn_sub, fn_mul, fn_neg, fn_cmov, fn_eq, fn_is_odd }
+);

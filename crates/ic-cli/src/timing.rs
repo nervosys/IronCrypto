@@ -97,6 +97,15 @@ pub enum Target {
     MlDsaRounding,
     /// ML-KEM compression at every scheme width, likewise.
     MlKemCompress,
+    /// Hashing to P-256 (RFC 9380), whose input is usually a password.
+    HashToCurve,
+    /// The OPRF's keyed evaluation (RFC 9497), POPRF mode: a scalar
+    /// inversion and a multiplication, both by the server's secret key.
+    OprfEvaluate,
+    /// BLAKE2s in keyed mode.
+    Blake2sKeyed,
+    /// BLAKE3 in keyed mode.
+    Blake3Keyed,
 }
 
 impl Target {
@@ -116,6 +125,10 @@ impl Target {
         Target::RsaSign,
         Target::MlDsaRounding,
         Target::MlKemCompress,
+        Target::HashToCurve,
+        Target::OprfEvaluate,
+        Target::Blake2sKeyed,
+        Target::Blake3Keyed,
     ];
 
     /// Stable identifier, as the command line accepts it.
@@ -132,6 +145,10 @@ impl Target {
             Self::RsaSign => "rsa-sign",
             Self::MlDsaRounding => "mldsa-rounding",
             Self::MlKemCompress => "mlkem-compress",
+            Self::HashToCurve => "hash-to-curve",
+            Self::OprfEvaluate => "oprf-evaluate",
+            Self::Blake2sKeyed => "blake2s-keyed",
+            Self::Blake3Keyed => "blake3-keyed",
         }
     }
 
@@ -146,7 +163,11 @@ impl Target {
             Self::MlKemDecapsulate => {
                 "a ciphertext that decapsulates, versus one that is implicitly rejected"
             }
-            Self::AesEncrypt => "a fixed key, versus a random key",
+            Self::AesEncrypt | Self::Blake2sKeyed | Self::Blake3Keyed => {
+                "a fixed key, versus a random key"
+            }
+            Self::HashToCurve => "a fixed 16-byte password, versus a random one",
+            Self::OprfEvaluate => "one server key, versus a different one",
             Self::EcdsaSign | Self::RsaSign => "one private key, versus a different one",
             Self::MlDsaRounding | Self::MlKemCompress => {
                 "256 zero coefficients, versus 256 random coefficients in the scheme's residue range"
@@ -430,6 +451,49 @@ fn time_once(target: Target, class: u8, rng: &mut Rng, sink: &mut u64) -> f64 {
             *sink = sink
                 .wrapping_add(out.is_ok() as u64)
                 .wrapping_add(sig[0] as u64);
+            elapsed
+        }
+        Target::HashToCurve => {
+            let mut password = [0x61u8; 16];
+            if class == 1 {
+                rng.fill(&mut password);
+            }
+            let start = Instant::now();
+            let out = ic_ec::hash_to_curve::hash_to_curve(&password, b"timing");
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink.wrapping_add(out.map(|p| p[1] as u64).unwrap_or(0));
+            elapsed
+        }
+        Target::OprfEvaluate => {
+            // Two fixed keys, as for ECDSA: derived outside the timed region.
+            use ic_ec::oprf::{Mode, ServerKey};
+            let seed = if class == 0 {
+                [0x07u8; 32]
+            } else {
+                [0x5bu8; 32]
+            };
+            let key = ServerKey::derive(Mode::Poprf, &seed, b"timing").unwrap();
+            let start = Instant::now();
+            let out = key.evaluate(b"input", b"info");
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink.wrapping_add(out.map(|o| o[0] as u64).unwrap_or(0));
+            elapsed
+        }
+        Target::Blake2sKeyed | Target::Blake3Keyed => {
+            let mut key = [0x07u8; 32];
+            if class == 1 {
+                rng.fill(&mut key);
+            }
+            let message = [0x42u8; 64];
+            let mut out = [0u8; 32];
+            let start = Instant::now();
+            if target == Target::Blake2sKeyed {
+                let _ = ic_hash::Blake2s::keyed_hash(&key, &message, &mut out);
+            } else {
+                out = ic_hash::Blake3::keyed_hash(&key, &message);
+            }
+            let elapsed = start.elapsed().as_nanos() as f64;
+            *sink = sink.wrapping_add(out[0] as u64);
             elapsed
         }
         Target::AesEncrypt => {

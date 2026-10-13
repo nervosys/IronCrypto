@@ -27,14 +27,40 @@ SYMBOLS = (
     "ct_base64_encode",
     "ct_select_u8", "ct_eq_4", "ct_zero_4", "ct_lt_be_4", "ct_cmov_4", "ct_cswap_4",
 )
+# P-256 field and scalar operations: what hashing to the curve, the OPRF,
+# ECDH and ECDSA are built from.
+P256 = tuple(
+    f"ct_p256_{field}_{op}"
+    for field in ("fp", "fn")
+    for op in ("reduce", "add", "sub", "mul", "neg", "cmov", "eq", "is_odd")
+)
+SYMBOLS += P256
+# Probes that gate only on some targets. On the rest they are built and their
+# findings printed, not failed: on 32-bit targets P-256's limb loops stay
+# rolled, and a text check cannot tell a loop counter from a secret. The
+# review that classified those findings is in docs/CONSTANT_TIME.md.
+GATED_ONLY_ON = {name: ("x86_64-unknown-linux-gnu",) for name in P256}
+
+
+def gated(finding, target):
+    probe = finding.split(":", 1)[0].split(" -> ", 1)[0]
+    return target in GATED_ONLY_ON.get(probe, TARGETS)
 
 
 def bodies(assembly):
-    """Read ELF function boundaries; missing/aliased bodies fail closed."""
+    """Read ELF function boundaries; missing/aliased bodies fail closed.
+
+    Probes, and every symbol the file declares a function with `.type`, so
+    that a call from a probe can be followed into a body in the same file.
+    """
+    functions = set(SYMBOLS) | set(re.findall(
+        r"^\s*\.type\s+([^\s,]+)\s*,\s*[@%]function", assembly, re.MULTILINE))
     result = {}
     current = None
     for line in assembly.splitlines():
-        label = re.fullmatch(r"(ct_\w+):", line.strip())
+        label = re.fullmatch(r"([^\s:]+):", line.strip())
+        if label and label[1] not in functions:
+            label = None
         if label:
             name = label[1]
             if name in result:
@@ -85,19 +111,59 @@ def forbidden(line, target):
     raise ValueError(f"unsupported target {target}")
 
 
+def called(line, target, defined):
+    """The function a call or tail call names, if its body is in this file.
+
+    A call into a body the checker can read is followed rather than
+    rejected, and the callee is held to the same rules. A call to anything
+    else -- a runtime-library routine, a register -- stays forbidden: its
+    instructions are not here to inspect.
+    """
+    line = re.split(r"\s+(?:@|//|# )", line, maxsplit=1)[0].strip()
+    fields = line.split(None, 1)
+    if len(fields) != 2:
+        return None
+    mnemonic = fields[0].lower()
+    if target.startswith("riscv32") and mnemonic.startswith("c."):
+        mnemonic = mnemonic[2:]
+    op = mnemonic.split(".")[0]
+    operand = fields[1].strip().removesuffix("@PLT")
+    calls = {
+        "x86_64": {"call", "callq", "jmp", "jmpq"},
+        "thumb": {"bl", "b"},
+        "riscv32": {"call", "tail"},
+    }
+    family = next(prefix for prefix in calls if target.startswith(prefix))
+    if op in calls[family] and operand in defined:
+        return operand
+    return None
+
+
+def instructions_of(lines):
+    return [line for line in lines if line.strip()
+            and not line.strip().startswith((".", "#", "@", "//"))
+            and not line.strip().endswith(":")]
+
+
 def inspect(assembly, target):
     failures = []
-    for name, lines in bodies(assembly).items():
-        if name not in SYMBOLS:
-            continue
-        instructions = [line for line in lines if line.strip()
-                        and not line.strip().startswith((".", "#", "@", "//"))
-                        and not line.strip().endswith(":")]
-        if not instructions:
+    functions = bodies(assembly)
+
+    def walk(probe, name, seen):
+        for line in instructions_of(functions[name]):
+            callee = called(line, target, functions)
+            if callee is not None:
+                if callee not in seen:
+                    seen.add(callee)
+                    walk(probe, callee, seen)
+            elif forbidden(line, target):
+                where = probe if name == probe else f"{probe} -> {name}"
+                failures.append(f"{where}: {line.strip()}")
+
+    for name in SYMBOLS:
+        if not instructions_of(functions[name]):
             failures.append(f"{name}: empty body")
-        for line in instructions:
-            if forbidden(line, target):
-                failures.append(f"{name}: {line.strip()}")
+        walk(name, name, {name})
     return failures
 
 
@@ -127,8 +193,12 @@ def main():
     failures = []
     for target in args.target or TARGETS:
         found = inspect(build_probe(target), target)
-        failures.extend(f"{target}: {finding}" for finding in found)
-        print(f"{target}: {len(SYMBOLS)} probes, {len(found)} forbidden instructions", flush=True)
+        gating = [finding for finding in found if gated(finding, target)]
+        reported = [finding for finding in found if not gated(finding, target)]
+        failures.extend(f"{target}: {finding}" for finding in gating)
+        print(f"{target}: {len(SYMBOLS)} probes, {len(gating)} forbidden instructions"
+              + (f"; {len(reported)} more in probes not gated on this target"
+                 if reported else ""), flush=True)
     if failures:
         print("\n".join(failures), file=sys.stderr)
         return 1
