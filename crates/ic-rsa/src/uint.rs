@@ -673,6 +673,28 @@ impl Modulus {
         Some(m)
     }
 
+    /// Calls `f` with the address and length of the parts of this modulus that
+    /// are derived from its value: the value itself and the Montgomery
+    /// constants. The active width is left out, since it is public by design
+    /// and a function of the key size.
+    ///
+    /// For the Valgrind harness in `ctgrind/`; see
+    /// [`crate::key::RsaPrivateKey::for_each_secret_region`].
+    pub(crate) fn for_each_secret_region(&self, mut f: impl FnMut(*const u8, usize)) {
+        f(
+            &self.n as *const Uint as *const u8,
+            core::mem::size_of::<Uint>(),
+        );
+        f(
+            &self.n0inv as *const u64 as *const u8,
+            core::mem::size_of::<u64>(),
+        );
+        f(
+            &self.r2 as *const Uint as *const u8,
+            core::mem::size_of::<Uint>(),
+        );
+    }
+
     /// The modulus itself.
     pub fn value(&self) -> &Uint {
         &self.n

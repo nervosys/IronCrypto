@@ -71,6 +71,12 @@ mod vg {
         );
     }
 
+    /// Mark the `len` bytes at `addr` as secret, for a region reached through
+    /// a library's accessor rather than through a reference the harness holds.
+    pub fn secret_region(addr: *const u8, len: usize) {
+        request(MAKE_MEM_UNDEFINED, addr as usize, len);
+    }
+
     /// Mark `bytes` as public again, once the program has released them.
     pub fn public<T: ?Sized>(value: &T) {
         request(
@@ -295,10 +301,14 @@ fn ic_cases() -> Vec<Case> {
         ("ic-rsa-2048-sign", || {
             let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x41u8; 48], b"ctgrind").unwrap();
             let key = ic_rsa::generate(2048, &mut rng).unwrap();
-            // The whole private key: its public modulus and exponent too, which
-            // the checks on it may branch on. Reports there are read and
-            // classified rather than avoided by marking less.
-            secret(&key);
+            // Only the private state is marked: d, the primes p and q with
+            // their Montgomery constants, and the CRT values dP, dQ, qInv,
+            // which are derived from the primes. The public modulus n and
+            // exponent e stay defined, and so does the active width of each
+            // prime, which the code documents as public (a function of the
+            // key size). Marking the whole key, as this case once did, made
+            // loops bounded by the public modulus width report as secret.
+            key.for_each_secret_region(vg::secret_region);
             let mut sig = vec![0u8; 256];
             let r = ironcrypto::rsa::Pkcs1Sha256::sign(&key, b"message", &mut sig);
             public(&r);

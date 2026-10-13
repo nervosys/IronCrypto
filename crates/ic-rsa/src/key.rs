@@ -448,6 +448,28 @@ impl RsaPrivateKey {
         self.d.to_be_bytes(out);
         Ok(())
     }
+
+    /// Calls `f` with the address and length of each region that holds secret
+    /// state: `d`, and when present the CRT parameters derived from the primes
+    /// (the two primes with their Montgomery constants, and `dP`, `dQ`, `qInv`).
+    /// The public modulus, the exponent and the key's shape are not reported.
+    ///
+    /// For the Valgrind harness in `ctgrind/`, which marks these regions
+    /// undefined to see what depends on them. It is not part of the API.
+    #[doc(hidden)]
+    pub fn for_each_secret_region(&self, mut f: impl FnMut(*const u8, usize)) {
+        fn region<T>(value: &T, f: &mut impl FnMut(*const u8, usize)) {
+            f(value as *const T as *const u8, core::mem::size_of::<T>());
+        }
+        region(&self.d, &mut f);
+        if let Some(crt) = self.crt.as_ref() {
+            crt.p.for_each_secret_region(&mut f);
+            crt.q.for_each_secret_region(&mut f);
+            region(&crt.dp, &mut f);
+            region(&crt.dq, &mut f);
+            region(&crt.qinv, &mut f);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

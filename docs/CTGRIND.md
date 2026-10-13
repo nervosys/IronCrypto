@@ -56,7 +56,7 @@ Curve25519, P-256 and P-384 work merged), Graviola 0.4.1, both x86-64, rustc
 | ML-KEM-768 key generation | 7 + 6 address | -- | all in `rej_uniform`, sampling the matrix from rho: derived from the secret seed, so marked, but published in the encapsulation key |
 | ML-KEM-768 encapsulate, decapsulate | 0, 0 | 45 + 27 address (decapsulate) | Graviola's are the same matrix sampling, reached because its decapsulation key could only be marked through the seed it is made from |
 | ML-DSA-65 sign | 11 + 1 address | -- | the rejection loop and the packing of the hint, which FIPS 204 treats as public; sampling the matrix from its public seed; sampling the challenge, which is published in the signature |
-| RSA-2048 sign | 315 + 15 address | -- | not yet classifiable: the harness can only mark the whole key, public modulus included, and almost all are loops bounded by the modulus length |
+| RSA-2048 sign | 1 + 0 address | -- | to be classified: the one branch is the check in `crt_private` that the CRT result `m` satisfies `m^e = c` (`crates/ic-rsa/src/key.rs:432`), whose operand `m` is computed from the private CRT values; the case marks `d`, the primes with their Montgomery constants, and dP, dQ, qInv, and leaves n, e and the modulus width defined. Before the change, marking the whole key gave 315 + 15 |
 
 ### Findings
 
