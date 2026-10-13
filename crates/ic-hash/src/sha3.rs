@@ -1392,13 +1392,17 @@ mod tests {
     /// Say which four-way path this build takes.
     #[test]
     fn the_active_four_way_keccak_path_is_reported() {
-        println!(
-            "keccak x4 backend: {}",
-            if KeccakX4::is_parallel() {
-                "AVX2"
-            } else {
-                "portable"
-            }
-        );
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        let backend = if avx512vl() {
+            "AVX-512VL"
+        } else if crate::sha2::avx2() {
+            "AVX2"
+        } else {
+            "portable"
+        };
+        #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
+        let backend = "portable";
+        assert_eq!(KeccakX4::is_parallel(), backend != "portable");
+        println!("keccak x4 backend: {backend}");
     }
 }

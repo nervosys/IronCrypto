@@ -393,6 +393,301 @@ pub(crate) unsafe fn basemul_add(acc: &mut [i16; N], a: &[i16; N], b: &[i16; N])
     }
 }
 
+/// `Compress_d` of every coefficient, by the scalar `compress`'s arithmetic,
+/// eight coefficients to a register.
+///
+/// The scalar function is `t = (x << d) + q/2`, an estimate
+/// `e = ((t >> 8) * 40318) >> 19` of `t / q` that is exact or one short, and a
+/// correction adding one when `t - e q` reached `q`, taken from the sign bit
+/// of `(q - 1) - (t - e q)`. Those are the operations here, in 32-bit lanes:
+/// no division, and no branch for the correction. `x` is expected in
+/// `[0, q)`, as it is for the scalar function; the tests compare the two at
+/// every such `x` for every width ML-KEM uses.
+///
+/// The scalar function hides its correction behind `black_box` so that no
+/// compiler turns it into a branch on Cortex-M0. That is not a risk here:
+/// these are vector instructions, and there is no vector branch.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn compress(c: &[i16; N], d: u32, out: &mut [i16; N]) {
+    let count = _mm_cvtsi32_si128(d as i32);
+    let mask = _mm256_set1_epi32(((1u32 << d) - 1) as i32);
+    for v in 0..16 {
+        let x = load(c, v);
+        let lo = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(x));
+        let hi = _mm256_cvtepi16_epi32(_mm256_extracti128_si256::<1>(x));
+        // `packus` works within 128-bit halves, leaving the 64-bit words in
+        // the order lo[0..4], hi[0..4], lo[4..8], hi[4..8]; restore it.
+        let packed = _mm256_packus_epi32(compress8(lo, count, mask), compress8(hi, count, mask));
+        store(out, v, _mm256_permute4x64_epi64::<0xd8>(packed));
+    }
+}
+
+/// [`compress`] for eight coefficients in 32-bit lanes.
+#[inline]
+#[target_feature(enable = "avx2")]
+unsafe fn compress8(x: __m256i, count: __m128i, mask: __m256i) -> __m256i {
+    let q = _mm256_set1_epi32(Q as i32);
+    let t = _mm256_add_epi32(_mm256_sll_epi32(x, count), _mm256_set1_epi32(Q as i32 / 2));
+    let e = _mm256_srli_epi32::<19>(_mm256_mullo_epi32(
+        _mm256_srli_epi32::<8>(t),
+        _mm256_set1_epi32(40318),
+    ));
+    let r = _mm256_sub_epi32(t, _mm256_mullo_epi32(e, q));
+    let below = _mm256_sub_epi32(_mm256_set1_epi32(Q as i32 - 1), r);
+    let e = _mm256_add_epi32(e, _mm256_srli_epi32::<31>(below));
+    _mm256_and_si256(e, mask)
+}
+
+/// For each eight-bit mask, the `pshufb` pattern that moves the sixteen-bit
+/// lanes whose bits are set to the front, in order.
+const fn compaction_table() -> [[u8; 16]; 256] {
+    let mut t = [[0xffu8; 16]; 256];
+    let mut m = 0;
+    while m < 256 {
+        let mut at = 0;
+        let mut lane = 0;
+        while lane < 8 {
+            if (m >> lane) & 1 == 1 {
+                t[m][at] = 2 * lane as u8;
+                t[m][at + 1] = 2 * lane as u8 + 1;
+                at += 2;
+            }
+            lane += 1;
+        }
+        m += 1;
+    }
+    t
+}
+
+static COMPACTION: [[u8; 16]; 256] = compaction_table();
+
+/// Byte pattern that spreads 24 bytes, held as bytes 0..16 in the low half
+/// and 8..24 in the high, into sixteen sixteen-bit words each holding one
+/// twelve-bit candidate: candidate `2k` in bytes `3k, 3k+1` and `2k + 1` in
+/// `3k + 1, 3k + 2`.
+const SPREAD: [i8; 32] = [
+    0, 1, 1, 2, 3, 4, 4, 5, 6, 7, 7, 8, 9, 10, 10, 11, //
+    4, 5, 5, 6, 7, 8, 8, 9, 10, 11, 11, 12, 13, 14, 14, 15,
+];
+
+/// The rejection step of `SampleNTT`, sixteen candidates at a time:
+/// `crate::sample::rej_uniform`'s result, from the same bytes.
+///
+/// Candidates below `q` are moved to the front of each half-register by a
+/// shuffle looked up from the comparison's mask, and stored at the end of
+/// what has been accepted so far. The lookup is indexed by which candidates
+/// were accepted, and that depends only on the public seed `rho`; this
+/// function never sees a secret. Whatever is left over -- the last few
+/// coefficients, or a tail of the buffer shorter than 24 bytes -- goes
+/// through the scalar function.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn rej_uniform(out: &mut [i16; N], mut filled: usize, buf: &[u8]) -> usize {
+    let spread = _mm256_loadu_si256(SPREAD.as_ptr().cast());
+    let twelve = _mm256_set1_epi16(0x0fff);
+    let q = _mm256_set1_epi16(Q);
+    let mut pos = 0;
+    // Two stores of up to eight lanes each must fit below `N`.
+    while filled + 16 <= N && pos + 24 <= buf.len() {
+        // SAFETY: `pos + 24 <= buf.len()`, so both sixteen-byte loads, at
+        // `pos` and `pos + 8`, are in bounds; they are unaligned.
+        let (lo, hi) = unsafe {
+            (
+                _mm_loadu_si128(buf.as_ptr().add(pos).cast()),
+                _mm_loadu_si128(buf.as_ptr().add(pos + 8).cast()),
+            )
+        };
+        let f = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi);
+        let f = _mm256_shuffle_epi8(f, spread);
+        // Even words take their low twelve bits; odd words the twelve above
+        // the low four.
+        let f = _mm256_blend_epi16::<0xaa>(f, _mm256_srli_epi16::<4>(f));
+        let f = _mm256_and_si256(f, twelve);
+        let good = _mm256_cmpgt_epi16(q, f);
+        let bits = _mm256_movemask_epi8(_mm256_packs_epi16(good, good)) as u32;
+        for (half, m) in [
+            (_mm256_castsi256_si128(f), bits & 0xff),
+            (_mm256_extracti128_si256::<1>(f), (bits >> 16) & 0xff),
+        ] {
+            let pattern = _mm_loadu_si128(COMPACTION[m as usize].as_ptr().cast());
+            // SAFETY: `filled + 8 <= N` here, since `filled` started this
+            // iteration at most `N - 16` and the first half added at most 8;
+            // the store writes eight lanes from `filled`, unaligned.
+            unsafe {
+                _mm_storeu_si128(
+                    out.as_mut_ptr().add(filled).cast(),
+                    _mm_shuffle_epi8(half, pattern),
+                )
+            };
+            filled += m.count_ones() as usize;
+        }
+        pos += 24;
+    }
+    crate::sample::rej_uniform_scalar(out, filled, &buf[pos..])
+}
+
+/// Sixteen twelve-bit fields from 24 bytes, at `pos`.
+///
+/// # Safety
+///
+/// The CPU must support AVX2, and `pos + 24 <= bytes.len()`.
+#[inline]
+#[target_feature(enable = "avx2")]
+unsafe fn twelve_bit_fields(bytes: &[u8], pos: usize) -> __m256i {
+    debug_assert!(pos + 24 <= bytes.len());
+    // SAFETY: the caller keeps `pos + 24` within `bytes`, so both
+    // sixteen-byte loads, at `pos` and `pos + 8`, are in bounds.
+    let (lo, hi) = unsafe {
+        (
+            _mm_loadu_si128(bytes.as_ptr().add(pos).cast()),
+            _mm_loadu_si128(bytes.as_ptr().add(pos + 8).cast()),
+        )
+    };
+    let f = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi);
+    let f = _mm256_shuffle_epi8(f, _mm256_loadu_si256(SPREAD.as_ptr().cast()));
+    // Even words take their low twelve bits; odd words the twelve above the
+    // low four.
+    let f = _mm256_blend_epi16::<0xaa>(f, _mm256_srli_epi16::<4>(f));
+    _mm256_and_si256(f, _mm256_set1_epi16(0x0fff))
+}
+
+/// `ByteDecode_12`, with the reduction modulo `q`: `byte_decode(.., 12, ..)`
+/// coefficient for coefficient, the reduction being the scalar
+/// `reduce_12`'s subtraction and sign mask.
+///
+/// Constant time: a decapsulation key's secret vector comes through here.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn decode12(bytes: &[u8; 384], out: &mut [i16; N]) {
+    let q = _mm256_set1_epi16(Q);
+    for v in 0..16 {
+        let f = twelve_bit_fields(bytes, 24 * v);
+        let r = _mm256_sub_epi16(f, q);
+        let r = _mm256_add_epi16(r, _mm256_and_si256(_mm256_srai_epi16::<15>(r), q));
+        store(out, v, r);
+    }
+}
+
+/// Whether every twelve-bit field of `bytes` is below `q`, for the
+/// encapsulation key's modulus check. `bytes.len()` must be a multiple of 24;
+/// otherwise this answers `false`.
+///
+/// The key is public, so the single branch at the end, on the answer, reveals
+/// nothing; the loop itself does not stop early.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn all_below_q_12(bytes: &[u8]) -> bool {
+    if !bytes.len().is_multiple_of(24) {
+        return false;
+    }
+    let limit = _mm256_set1_epi16(Q - 1);
+    let mut over = _mm256_setzero_si256();
+    for pos in (0..bytes.len()).step_by(24) {
+        let f = twelve_bit_fields(bytes, pos);
+        over = _mm256_or_si256(over, _mm256_cmpgt_epi16(f, limit));
+    }
+    _mm256_testz_si256(over, over) == 1
+}
+
+/// `SamplePolyCBD_2` of 128 bytes: `sample_poly_cbd(2, ..)` coefficient for
+/// coefficient.
+///
+/// Each byte holds two coefficients: the low nibble's two bit-counts give
+/// coefficient `2j`, the high nibble's give `2j + 1`. The counts are formed
+/// for every byte at once by adding the word to itself shifted, as the
+/// scalar `cbd2` does for a 32-bit word, the differences taken per byte, and
+/// the bytes interleaved and widened to sixteen bits in order.
+///
+/// Constant time: these are secret bits, and nothing here branches or
+/// indexes memory on them.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn cbd2(bytes: &[u8; 128], out: &mut [i16; N]) {
+    let m55 = _mm_set1_epi8(0x55);
+    let m03 = _mm_set1_epi8(0x03);
+    for chunk in 0..8 {
+        // SAFETY: `16 * chunk + 16 <= 128`; the load is unaligned.
+        let w = unsafe { _mm_loadu_si128(bytes.as_ptr().add(16 * chunk).cast()) };
+        // Two-bit fields holding the sums of adjacent bit pairs.
+        let d = _mm_add_epi8(
+            _mm_and_si128(w, m55),
+            _mm_and_si128(_mm_srli_epi16::<1>(w), m55),
+        );
+        // The four fields of each byte. Shifting sixteen-bit words moves the
+        // next byte's low bits into this byte's top, which the mask drops.
+        let f0 = _mm_and_si128(d, m03);
+        let f1 = _mm_and_si128(_mm_srli_epi16::<2>(d), m03);
+        let f2 = _mm_and_si128(_mm_srli_epi16::<4>(d), m03);
+        let f3 = _mm_and_si128(_mm_srli_epi16::<6>(d), m03);
+        let lo = _mm_sub_epi8(f0, f1);
+        let hi = _mm_sub_epi8(f2, f3);
+        let first = _mm256_cvtepi8_epi16(_mm_unpacklo_epi8(lo, hi));
+        let second = _mm256_cvtepi8_epi16(_mm_unpackhi_epi8(lo, hi));
+        store(out, 2 * chunk, first);
+        store(out, 2 * chunk + 1, second);
+    }
+}
+
+/// `Poly::normalize`: Barrett-reduce, then add `q` where the result is
+/// negative, the sign taken by an arithmetic shift rather than a comparison.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn normalize(c: &mut [i16; N]) {
+    let q = _mm256_set1_epi16(Q);
+    for v in 0..16 {
+        let x = barrett(load(c, v));
+        let fix = _mm256_and_si256(_mm256_srai_epi16::<15>(x), q);
+        store(c, v, _mm256_add_epi16(x, fix));
+    }
+}
+
+/// `Poly::to_mont`: Montgomery multiplication by `2^32 mod q`.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn to_mont(c: &mut [i16; N]) {
+    // 1353 = 2^32 mod q, as the scalar `to_mont` uses.
+    const R2: i16 = 1353;
+    let z = _mm256_set1_epi16(R2);
+    let zq = _mm256_set1_epi16(qinv_of(R2));
+    for v in 0..16 {
+        store(c, v, fqmul_const(load(c, v), z, zq));
+    }
+}
+
+/// `Poly::add_assign`: `a += b`, coefficient by coefficient.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn add_assign(a: &mut [i16; N], b: &[i16; N]) {
+    for v in 0..16 {
+        store(a, v, _mm256_add_epi16(load(a, v), load(b, v)));
+    }
+}
+
 /// `Poly::reduce`: Barrett-reduce every coefficient.
 ///
 /// # Safety

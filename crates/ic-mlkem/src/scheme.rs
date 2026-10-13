@@ -718,6 +718,142 @@ macro_rules! ml_kem {
                 assert_eq!(checked, 12, "the comparison did not run");
             }
 
+            /// Where encapsulation and decapsulation spend their time, stage by
+            /// stage, on the scheduled path. A diagnostic, not a test: run it
+            /// with `--release -- --ignored --nocapture`.
+            #[cfg(feature = "std")]
+            #[test]
+            #[ignore = "diagnostic, not a test"]
+            fn where_the_time_goes() {
+                use std::time::Instant;
+                fn time(label: &str, mut f: impl FnMut()) {
+                    let mut best = f64::INFINITY;
+                    for _ in 0..7 {
+                        let t = Instant::now();
+                        for _ in 0..2000 {
+                            f();
+                        }
+                        best = best.min(t.elapsed().as_secs_f64() / 2000.0 * 1e6);
+                    }
+                    println!("  {label:<44} {best:>7.2} us");
+                }
+                let mut ek = [0u8; ENCAPS_KEY_LEN];
+                let mut dk = [0u8; DECAPS_KEY_LEN];
+                $name::keygen_deterministic(&bytes(1), &bytes(2), &mut ek, &mut dk);
+                let mut ct = [0u8; CIPHERTEXT_LEN];
+                let mut ss = [0u8; SHARED_SECRET_LEN];
+                let m: [u8; 32] = bytes(3);
+                let mut rho = [0u8; 32];
+                rho.copy_from_slice(&ek[384 * K..]);
+                println!("{}", $display);
+                time("encapsulate_lanes", || {
+                    $name::encapsulate_lanes(&m, &ek, &mut ct, &mut ss)
+                });
+                time("  H(ek) and A^T, scheduled", || {
+                    let mut h = [[0u8; 32]];
+                    let task = $crate::lanes::Task::Hash {
+                        parts: [&ek[..], &[]],
+                        domain: 0x06,
+                        slot: 0,
+                    };
+                    std::hint::black_box(super::fast::transposed_matrix_and_hashes(
+                        &rho,
+                        &[task],
+                        &mut h,
+                    ));
+                });
+                time("  A^T alone, scheduled", || {
+                    std::hint::black_box(super::fast::transposed_matrix_and_hashes(
+                        &rho,
+                        &[],
+                        &mut [],
+                    ));
+                });
+                time("  H(ek) alone, scalar", || {
+                    std::hint::black_box($crate::scheme::h(&ek));
+                });
+                time("  G", || {
+                    std::hint::black_box($crate::scheme::g(&[&m, &m]));
+                });
+                time("  noise, scheduled", || {
+                    std::hint::black_box(super::fast::encryption_noise(&m));
+                });
+                let at = super::fast::transposed_matrix_and_hashes(&rho, &[], &mut []);
+                time("  K-PKE arithmetic and encoding", || {
+                    let mut noise = super::fast::encryption_noise(&m);
+                    super::fast::pke_encrypt(&ek, &m, &at, &mut noise, &mut ct);
+                });
+                time("validate_encapsulation_key", || {
+                    $name::validate_encapsulation_key(&ek).unwrap()
+                });
+                time("decapsulate_lanes", || {
+                    $name::decapsulate_lanes(&dk, &ct, &mut ss).unwrap()
+                });
+                time("  K-PKE decryption", || {
+                    std::hint::black_box(super::pke_decrypt(&dk[..384 * K], &ct));
+                });
+                println!("per polynomial");
+                let mut p = at[1];
+                let q = at[2];
+                time("  ntt", || {
+                    let mut x = std::hint::black_box(p);
+                    x.ntt();
+                    std::hint::black_box(x);
+                });
+                time("  inv_ntt", || {
+                    let mut x = std::hint::black_box(p);
+                    x.inv_ntt();
+                    std::hint::black_box(x);
+                });
+                time("  basemul_add", || {
+                    let mut x = std::hint::black_box(p);
+                    x.basemul_add(&q, &q);
+                    std::hint::black_box(x);
+                });
+                time("  reduce", || {
+                    let mut x = std::hint::black_box(p);
+                    x.reduce();
+                    std::hint::black_box(x);
+                });
+                time("  normalize", || {
+                    let mut x = std::hint::black_box(p);
+                    x.normalize();
+                    std::hint::black_box(x);
+                });
+                time("  to_mont", || {
+                    let mut x = std::hint::black_box(p);
+                    x.to_mont();
+                    std::hint::black_box(x);
+                });
+                time("  add_assign", || {
+                    let mut x = std::hint::black_box(p);
+                    x.add_assign(&q);
+                    std::hint::black_box(x);
+                });
+                p.normalize();
+                let mut b12 = [0u8; 384];
+                time("  encode_poly (normalize, ByteEncode12)", || {
+                    encode_poly(std::hint::black_box(&p), &mut b12);
+                });
+                time("  ByteDecode12", || {
+                    byte_decode(std::hint::black_box(&b12), 12, &mut p);
+                });
+                let mut b10 = [0u8; 320];
+                time("  compress_encode 10", || {
+                    compress_encode(std::hint::black_box(&p), 10, &mut b10);
+                });
+                time("  decode_decompress 10", || {
+                    decode_decompress(std::hint::black_box(&b10), 10, &mut p);
+                });
+                time("  decode_decompress 1", || {
+                    decode_decompress(std::hint::black_box(&m), 1, &mut p);
+                });
+                let prf = [0x5au8; 192];
+                time("  SamplePolyCBD eta 2", || {
+                    $crate::sample::sample_poly_cbd(2, std::hint::black_box(&prf[..128]), &mut p);
+                });
+            }
+
             /// On a CPU with the vector permutation, the public functions take
             /// the scheduled form; say which, so a vector run is not silently
             /// testing the other.
@@ -823,7 +959,12 @@ macro_rules! ml_kem {
                 ek: &[u8; ENCAPS_KEY_LEN],
                 dk: &[u8; DECAPS_KEY_LEN],
             ) -> Result<()> {
-                let m = $crate::scheme::h(ek);
+                // `H(ek)`, as key generation stored it in `dk`. Recomputing it
+                // here was a fourth hash of the same 1 KiB key per generation;
+                // the decapsulation below checks the stored copy against `ek`
+                // in any case.
+                let mut m = [0u8; 32];
+                m.copy_from_slice(&dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32]);
                 let mut ct = [0u8; CIPHERTEXT_LEN];
                 let mut sent = [0u8; SHARED_SECRET_LEN];
                 Self::encapsulate_deterministic(&m, ek, &mut ct, &mut sent);
@@ -1132,19 +1273,12 @@ macro_rules! ml_kem {
             /// rejects keys whose coefficients are at or above `q`. Without this a
             /// malformed key is silently reinterpreted.
             pub fn validate_encapsulation_key(ek: &[u8; ENCAPS_KEY_LEN]) -> Result<()> {
-                // An element at a time. The key is public, so stopping at the
-                // first non-canonical element would reveal nothing, but every
-                // element is checked anyway so the work does not depend on it.
-                let mut canonical = true;
-                for chunk in ek[..384 * K].chunks(384) {
-                    let mut t = Poly::ZERO;
-                    byte_decode(chunk, 12, &mut t);
-                    let mut round = [0u8; 384];
-                    encode_poly(&t, &mut round);
-                    canonical &= round[..] == chunk[..];
-                }
+                // The round trip reproduces its input exactly when no twelve-bit
+                // field reaches q, which is what this tests, every field of
+                // every element; `the_modulus_check_is_the_round_trip` holds the
+                // two forms to each other.
                 ensure!(
-                    canonical,
+                    $crate::encode::all_below_q_12(&ek[..384 * K]),
                     MalformedEncoding,
                     "encapsulation key is not canonically encoded"
                 );

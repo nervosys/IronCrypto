@@ -152,6 +152,7 @@ fn encode_bits(p: &Poly, d: u32, out: &mut [u8]) {
 ///
 /// The reduction is [`reduce_12`], a subtraction and a mask. It was `% q`, on
 /// what is, for a decapsulation key, the secret vector.
+#[allow(unsafe_code)]
 pub fn byte_decode(data: &[u8], d: u32, out: &mut Poly) {
     debug_assert_eq!(data.len(), 32 * d as usize);
     match d {
@@ -161,13 +162,65 @@ pub fn byte_decode(data: &[u8], d: u32, out: &mut Poly) {
         10 => decode_groups::<10>(data, out),
         11 => decode_groups::<11>(data, out),
         12 => {
-            decode_groups::<12>(data, out);
-            for c in out.c.iter_mut() {
-                *c = reduce_12(*c as u16);
+            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            if let (true, Ok(bytes)) = (crate::poly::avx2(), <&[u8; 384]>::try_from(data)) {
+                // SAFETY: `avx2()` is the feature test `avx2::decode12` requires.
+                unsafe { crate::avx2::decode12(bytes, &mut out.c) };
+                return;
             }
+            decode_twelve(data, out);
         }
         _ => decode_bits(data, d, out),
     }
+}
+
+/// `ByteDecode_12` and its reduction, eight coefficients at a time.
+fn decode_twelve(data: &[u8], out: &mut Poly) {
+    decode_groups::<12>(data, out);
+    for c in out.c.iter_mut() {
+        *c = reduce_12(*c as u16);
+    }
+}
+
+/// Whether every twelve-bit field of an encoded vector is below `q`.
+///
+/// This is FIPS 203's modulus check, `ByteEncode_12(ByteDecode_12(x)) == x`,
+/// in the form that does not need the round trip: a field below `q` decodes
+/// to itself and re-encodes to the same bits, and a field at or above `q`
+/// decodes to itself less `q` and re-encodes to different bits. So the round
+/// trip reproduces its input exactly when no field reaches `q`.
+/// `the_modulus_check_is_the_round_trip` holds the two forms to each other
+/// over every field value. `data.len()` must be a multiple of 384; anything
+/// else is not an encoded vector and answers `false`.
+#[allow(unsafe_code)]
+pub(crate) fn all_below_q_12(data: &[u8]) -> bool {
+    if !data.len().is_multiple_of(384) {
+        return false;
+    }
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if crate::poly::avx2() {
+        // SAFETY: `avx2()` is the feature test `avx2::all_below_q_12` requires.
+        return unsafe { crate::avx2::all_below_q_12(data) };
+    }
+    all_below_q_12_scalar(data)
+}
+
+/// [`all_below_q_12`], eight fields at a time.
+fn all_below_q_12_scalar(data: &[u8]) -> bool {
+    if !data.len().is_multiple_of(384) {
+        return false;
+    }
+    // Every field is checked whatever the answer; the key is public, but
+    // there is no reason for the work to depend on it.
+    let mut below = true;
+    for bytes in data.chunks_exact(12) {
+        let mut buf = [0u8; 16];
+        buf[..12].copy_from_slice(bytes);
+        for v in unpack8::<12>(&buf) {
+            below &= v < Q as u16;
+        }
+    }
+    below
 }
 
 fn decode_groups<const D: usize>(data: &[u8], out: &mut Poly) {
@@ -210,12 +263,28 @@ pub fn reduce_12(x: u16) -> i16 {
 }
 
 /// Compress every coefficient and pack the result.
+///
+/// With AVX2 the compression runs eight coefficients to a register by the
+/// same arithmetic as [`compress`]; see `crate::avx2::compress`.
+#[allow(unsafe_code)]
 pub fn compress_encode(p: &Poly, d: u32, out: &mut [u8]) {
     let mut compressed = Poly::ZERO;
-    for (dst, src) in compressed.c.iter_mut().zip(p.c.iter()) {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if crate::poly::avx2() && (1..=12).contains(&d) {
+        // SAFETY: `avx2()` is the feature test `avx2::compress` requires.
+        unsafe { crate::avx2::compress(&p.c, d, &mut compressed.c) };
+        byte_encode(&compressed, d, out);
+        return;
+    }
+    compress_poly(p, d, &mut compressed);
+    byte_encode(&compressed, d, out);
+}
+
+/// [`compress`] of every coefficient.
+fn compress_poly(p: &Poly, d: u32, out: &mut Poly) {
+    for (dst, src) in out.c.iter_mut().zip(p.c.iter()) {
         *dst = compress(*src, d) as i16;
     }
-    byte_encode(&compressed, d, out);
 }
 
 /// Unpack and decompress.
@@ -342,6 +411,131 @@ mod tests {
         for c in back.c.iter() {
             assert_eq!(*c, 4095 % Q, "4095 must reduce to {}", 4095 % Q);
             assert!(*c < Q, "a decoded coefficient must be below q");
+        }
+    }
+
+    /// The AVX2 compression against the scalar one at every `x` in `[0, q)`,
+    /// for every width, through `compress_encode` -- which is what selects it.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx2_compression_matches_the_scalar_one_everywhere() {
+        if !crate::poly::avx2() {
+            println!("no AVX2 on this CPU; the vector compression was not exercised");
+            return;
+        }
+        let mut checked = 0;
+        for d in 1..=12u32 {
+            for base in (0..Q).step_by(N) {
+                let mut p = Poly::ZERO;
+                for (i, c) in p.c.iter_mut().enumerate() {
+                    *c = (base + i as i16).min(Q - 1);
+                }
+                let mut want = Poly::ZERO;
+                compress_poly(&p, d, &mut want);
+                let mut got = Poly::ZERO;
+                // SAFETY: guarded by the `avx2()` check above.
+                #[allow(unsafe_code)]
+                unsafe {
+                    crate::avx2::compress(&p.c, d, &mut got.c)
+                };
+                assert_eq!(got, want, "compress at d={d} from {base}");
+
+                let mut packed = vec![0u8; encoded_len(d)];
+                compress_encode(&p, d, &mut packed);
+                let mut expected = vec![0u8; encoded_len(d)];
+                byte_encode(&want, d, &mut expected);
+                assert_eq!(packed, expected, "compress_encode at d={d} from {base}");
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 12 * 14, "the comparison did not run");
+    }
+
+    /// The modulus check against its definition, the FIPS 203 round trip:
+    /// every field value from 0 to 4095, alone in an otherwise valid vector
+    /// at a position that moves, and random vectors either side of the
+    /// boundary -- through the scalar form and the one this CPU selects.
+    #[test]
+    fn the_modulus_check_is_the_round_trip() {
+        fn round_trip(data: &[u8]) -> bool {
+            data.chunks_exact(384).all(|chunk| {
+                let mut p = Poly::ZERO;
+                byte_decode(chunk, 12, &mut p);
+                let mut again = [0u8; 384];
+                byte_encode(&p, 12, &mut again);
+                again[..] == chunk[..]
+            })
+        }
+        let mut rng = Rng(0x600d_5eed);
+        let mut base = vec![0u8; 3 * 384];
+        let mut fields = Poly::ZERO;
+        for chunk in base.chunks_exact_mut(384) {
+            for c in fields.c.iter_mut() {
+                *c = (rng.next() % Q as u64) as i16;
+            }
+            byte_encode(&fields, 12, chunk);
+        }
+        assert!(round_trip(&base) && all_below_q_12(&base) && all_below_q_12_scalar(&base));
+
+        let mut checked = 0;
+        for value in 0..4096u16 {
+            let mut data = base.clone();
+            let at = (value as usize * 37) % (3 * N);
+            let (chunk, index) = (at / N, at % N);
+            let mut p = Poly::ZERO;
+            for (i, c) in p.c.iter_mut().enumerate() {
+                *c = if i == index { value as i16 } else { 0 };
+            }
+            // Write the one field into the vector, leaving the rest valid.
+            let mut one = [0u8; 384];
+            byte_encode(&p, 12, &mut one);
+            let byte = index * 12 / 8;
+            let shift = (index * 12) % 8;
+            let mask_lo = (0x0fffu32 << shift) as u16;
+            let span = &mut data[chunk * 384 + byte..chunk * 384 + byte + 2];
+            let old = u16::from_le_bytes([span[0], span[1]]);
+            let new = (old & !mask_lo) | (u16::from_le_bytes([one[byte], one[byte + 1]]) & mask_lo);
+            span.copy_from_slice(&new.to_le_bytes());
+
+            let want = round_trip(&data);
+            assert_eq!(
+                want,
+                value < Q as u16,
+                "the round trip itself, value {value}"
+            );
+            assert_eq!(all_below_q_12_scalar(&data), want, "scalar, value {value}");
+            assert_eq!(all_below_q_12(&data), want, "selected, value {value}");
+            checked += 1;
+        }
+        assert_eq!(checked, 4096);
+        assert!(!all_below_q_12(&base[..383]), "a partial vector is refused");
+    }
+
+    /// The AVX2 twelve-bit decode against the scalar one, over every field
+    /// value at every position.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_avx2_twelve_bit_decode_matches_the_scalar_one() {
+        if !crate::poly::avx2() {
+            println!("no AVX2 on this CPU; the vector decode was not exercised");
+            return;
+        }
+        for base in (0u16..4096).step_by(N) {
+            let mut p = Poly::ZERO;
+            for (i, c) in p.c.iter_mut().enumerate() {
+                *c = ((base as usize + i * 17) % 4096) as i16;
+            }
+            let mut packed = [0u8; 384];
+            byte_encode(&p, 12, &mut packed);
+            let mut want = Poly::ZERO;
+            decode_twelve(&packed, &mut want);
+            let mut got = Poly::ZERO;
+            // SAFETY: guarded by the `avx2()` check above.
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::decode12(&packed, &mut got.c)
+            };
+            assert_eq!(got, want, "from {base}");
         }
     }
 

@@ -225,7 +225,43 @@ impl Poly {
 
     /// Coefficient-wise addition, in place: [`Poly::add`] without a second
     /// 512-byte polynomial for the result.
+    #[allow(unsafe_code)]
     pub(crate) fn add_assign(&mut self, other: &Poly) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::add_assign` requires.
+            unsafe { crate::avx2::add_assign(&mut self.c, &other.c) };
+            return;
+        }
+        self.add_assign_portable(other);
+    }
+
+    /// Bring every coefficient into `[0, q)`.
+    #[allow(unsafe_code)]
+    pub fn normalize(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::normalize` requires.
+            unsafe { crate::avx2::normalize(&mut self.c) };
+            return;
+        }
+        self.normalize_portable();
+    }
+
+    /// Convert every coefficient into Montgomery form.
+    #[allow(unsafe_code)]
+    pub fn to_mont(&mut self) {
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if avx2() {
+            // SAFETY: `avx2()` is the feature test `avx2::to_mont` requires.
+            unsafe { crate::avx2::to_mont(&mut self.c) };
+            return;
+        }
+        self.montgomery_form_portable();
+    }
+
+    /// [`Poly::add_assign`], one coefficient at a time.
+    pub(crate) fn add_assign_portable(&mut self, other: &Poly) {
         for i in 0..N {
             self.c[i] += other.c[i];
         }
@@ -266,7 +302,7 @@ impl Poly {
     }
 
     /// Bring every coefficient into `[0, q)`.
-    pub fn normalize(&mut self) {
+    pub(crate) fn normalize_portable(&mut self) {
         for c in self.c.iter_mut() {
             let v = barrett_reduce(*c);
             *c = v + ((v >> 15) & Q);
@@ -364,7 +400,7 @@ impl Poly {
     }
 
     /// Convert every coefficient into Montgomery form.
-    pub fn to_mont(&mut self) {
+    pub(crate) fn montgomery_form_portable(&mut self) {
         // 1353 = 2^32 mod q, so multiplying by it and reducing gives a * 2^16.
         const R2: i16 = 1353;
         for c in self.c.iter_mut() {
@@ -521,7 +557,8 @@ mod tests {
         }
         assert_eq!(checked, inputs.len(), "the comparison did not run");
 
-        // Barrett reduction over every sixteen-bit value.
+        // Barrett reduction, normalisation and conversion to Montgomery form
+        // over every sixteen-bit value.
         for chunk in 0..256 {
             let mut p = Poly::ZERO;
             for (i, c) in p.c.iter_mut().enumerate() {
@@ -529,11 +566,43 @@ mod tests {
             }
             let mut want = p;
             want.reduce_portable();
+            let mut got = p;
             #[allow(unsafe_code)]
             unsafe {
-                crate::avx2::reduce(&mut p.c)
+                crate::avx2::reduce(&mut got.c)
             };
-            assert_eq!(p, want, "reduce, chunk {chunk}");
+            assert_eq!(got, want, "reduce, chunk {chunk}");
+
+            let mut want = p;
+            want.normalize_portable();
+            let mut got = p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::normalize(&mut got.c)
+            };
+            assert_eq!(got, want, "normalize, chunk {chunk}");
+
+            let mut want = p;
+            want.montgomery_form_portable();
+            let mut got = p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::to_mont(&mut got.c)
+            };
+            assert_eq!(got, want, "to_mont, chunk {chunk}");
+        }
+
+        // Addition, on sums that stay inside sixteen bits as the scheme's do.
+        for (n, p) in inputs.iter().enumerate() {
+            let other = &inputs[(n * 5 + 1) % inputs.len()];
+            let mut want = *p;
+            want.add_assign_portable(other);
+            let mut got = *p;
+            #[allow(unsafe_code)]
+            unsafe {
+                crate::avx2::add_assign(&mut got.c, &other.c)
+            };
+            assert_eq!(got, want, "add_assign, input {n}");
         }
     }
 
