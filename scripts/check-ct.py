@@ -53,13 +53,16 @@ X86_ONLY = (
     # run time where the CPU has BMI2 and ADX, and the point formulas that are
     # whole blocks of that assembly; the P-256 probes above, built without
     # `std`, compile to the baseline sequence, so these name the others.
-    # P-384's two rings' multiplications and point formulas exist only here.
+    # P-384's field multiplication and squaring specialised to its prime, its
+    # scalar ring's multiplication, its point formulas, and its field
+    # inversion by divsteps exist only here. So do the divsteps inversions
+    # of P-256's two rings: 64-bit only, and x86-64 is the 64-bit target.
     "ct_p256_fp_mul_adx", "ct_p256_fp_square_adx",
     "ct_p256_point_double_adx", "ct_p256_point_add_adx",
-    "ct_p256_point_add_affine_adx",
-    "ct_p384_fp_mul_adx", "ct_p384_fn_mul_adx",
+    "ct_p256_point_add_affine_adx", "ct_p256_fp_invert", "ct_p256_fn_invert",
+    "ct_p384_fp_mul_adx", "ct_p384_fp_sqr_adx", "ct_p384_fn_mul_adx",
     "ct_p384_point_double_adx", "ct_p384_point_add_adx",
-    "ct_p384_point_add_affine_adx",
+    "ct_p384_point_add_affine_adx", "ct_p384_fp_invert",
 )
 SYMBOLS += X86_ONLY
 

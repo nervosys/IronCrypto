@@ -94,6 +94,10 @@ fn main() {
         stack::run();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("graviola-p384") {
+        graviola::p384();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("graviola") {
         graviola::run();
         return;

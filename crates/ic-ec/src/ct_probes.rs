@@ -174,11 +174,40 @@ pub use crate::nist::p256_x86_point::{
     add_adx as point_add_adx, add_affine_adx as point_add_affine_adx,
     double_adx as point_double_adx,
 };
-// P-384's, likewise: the two rings' multiplications and the point formulas.
+// P-384's, likewise: the scalar ring's multiplication, the field's
+// multiplication and squaring specialised to the prime, and the point
+// formulas.
 #[cfg(target_arch = "x86_64")]
-pub use crate::nist::mont_x86::{mul_p384_n as p384_fn_mul_adx, mul_p384_p as p384_fp_mul_adx};
+pub use crate::nist::mont_x86::mul_p384_n as p384_fn_mul_adx;
 #[cfg(target_arch = "x86_64")]
 pub use crate::nist::p384_x86_point::{
     add_adx as p384_point_add_adx, add_affine_adx as p384_point_add_affine_adx,
-    double_adx as p384_point_double_adx,
+    double_adx as p384_point_double_adx, fmul_adx as p384_fp_mul_adx, fsqr_adx as p384_fp_sqr_adx,
 };
+
+/// P-384's field inversion by divsteps, on the integer below p as the field
+/// gives it: what ECDH's shared secret and every public key pass through, on
+/// a secret-derived `Z`. Words in and out rather than bytes, so the probe is
+/// the inversion and not the generic Montgomery conversions around it, whose
+/// word loop the compiler keeps rolled.
+#[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
+#[inline(always)]
+pub fn p384_fp_invert(a: &[u64; 6]) -> [u64; 6] {
+    crate::nist::safegcd::invert_384::<crate::p384::FpModulus>(a)
+}
+
+/// P-256's two inversions by divsteps, the same way: the field's, on ECDH's
+/// and every public key's `Z`, and the scalar ring's, on ECDSA's secret
+/// nonce.
+#[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
+#[inline(always)]
+pub fn p256_fp_invert(a: &[u64; 4]) -> [u64; 4] {
+    crate::nist::safegcd::invert::<crate::p256::FpModulus>(a)
+}
+
+/// See [`p256_fp_invert`].
+#[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
+#[inline(always)]
+pub fn p256_fn_invert(a: &[u64; 4]) -> [u64; 4] {
+    crate::nist::safegcd::invert::<crate::p256::FnModulus>(a)
+}

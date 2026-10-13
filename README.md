@@ -447,8 +447,9 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V, and twenty-three more on x86-64 alone for its
-Curve25519, P-256 and P-384 assembly: **199 gating probe/target checks**. It rejects
+Cortex-M0, Cortex-M4 and RISC-V, and twenty-seven more on x86-64 alone for its
+Curve25519, P-256 and P-384 assembly and its divsteps inversions: **203 gating
+probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
 P-256 Montgomery loop stays rolled; its counter branches, and a constant-length

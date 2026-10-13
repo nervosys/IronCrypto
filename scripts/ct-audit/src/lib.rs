@@ -314,8 +314,34 @@ mod x86_p256 {
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub unsafe fn ct_p384_fp_mul_adx(a: &[u64; 6], b: &[u64; 6]) -> ([u64; 6], u64) {
-        unsafe { ic_ec::ct_probes::p384_fp_mul_adx(a, b) }
+    pub unsafe fn ct_p384_fp_mul_adx(buf: &mut [MaybeUninit<u64>; 24]) {
+        unsafe { ic_ec::ct_probes::p384_fp_mul_adx(buf) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_fp_sqr_adx(buf: &mut [MaybeUninit<u64>; 18]) {
+        unsafe { ic_ec::ct_probes::p384_fp_sqr_adx(buf) }
+    }
+
+    /// P-384's field inversion by divsteps: ECDH's shared secret and every
+    /// public key pass through it, on a secret-derived Z.
+    #[no_mangle]
+    pub fn ct_p384_fp_invert(a: &[u64; 6]) -> [u64; 6] {
+        ic_ec::ct_probes::p384_fp_invert(a)
+    }
+
+    /// P-256's field inversion by divsteps.
+    #[no_mangle]
+    pub fn ct_p256_fp_invert(a: &[u64; 4]) -> [u64; 4] {
+        ic_ec::ct_probes::p256_fp_invert(a)
+    }
+
+    /// P-256's scalar inversion by divsteps: ECDSA's secret nonce.
+    #[no_mangle]
+    pub fn ct_p256_fn_invert(a: &[u64; 4]) -> [u64; 4] {
+        ic_ec::ct_probes::p256_fn_invert(a)
     }
 
     /// # Safety

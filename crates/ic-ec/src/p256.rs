@@ -74,10 +74,27 @@ mont_field!(
 /// stays as the tests' reference.
 #[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
 fn invert_field(a: [u64; 4]) -> [u64; 4] {
-    const INFO: crate::nist::safegcd::ModInfo =
-        crate::nist::safegcd::ModInfo::new(crate::nist::p256_field::P);
     const R3: [u64; 4] = Fp::mont_mul_const(Fp::R2, Fp::R2);
-    crate::nist::p256_field::active::mul(crate::nist::safegcd::invert(&a, &INFO), R3)
+    crate::nist::p256_field::active::mul(crate::nist::safegcd::invert::<FpModulus>(&a), R3)
+}
+
+/// The prime, for the divsteps.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+pub(crate) struct FpModulus;
+
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+impl crate::nist::safegcd::Modulus<5> for FpModulus {
+    const INFO: crate::nist::safegcd::ModInfo<5> =
+        crate::nist::safegcd::ModInfo::new(crate::nist::p256_field::P);
+}
+
+/// The order, for the divsteps.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+pub(crate) struct FnModulus;
+
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+impl crate::nist::safegcd::Modulus<5> for FnModulus {
+    const INFO: crate::nist::safegcd::ModInfo<5> = crate::nist::safegcd::ModInfo::new(N);
 }
 
 /// `a^-1` in the scalar ring, Montgomery form in and out, by divsteps.
@@ -87,9 +104,8 @@ fn invert_field(a: [u64; 4]) -> [u64; 4] {
 /// makes that `a^-1 * R`.
 #[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
 fn invert_scalar(a: [u64; 4]) -> [u64; 4] {
-    const INFO: crate::nist::safegcd::ModInfo = crate::nist::safegcd::ModInfo::new(N);
     const R3: [u64; 4] = Fn::mont_mul_const(Fn::R2, Fn::R2);
-    Fn::mont_mul_raw(crate::nist::safegcd::invert(&a, &INFO), R3)
+    Fn::mont_mul_raw(crate::nist::safegcd::invert::<FnModulus>(&a), R3)
 }
 
 /// The P-256 curve.

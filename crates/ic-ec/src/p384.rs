@@ -36,8 +36,11 @@ const N: [u64; 6] = [
     0xffff_ffff_ffff_ffff,
 ];
 
-// On x86-64 both rings multiply in assembly on MULX/ADX where the CPU has it
-// (`nist::mont_x86`), and by the generic word loop otherwise.
+// On x86-64 both rings multiply in assembly on MULX/ADX where the CPU has it,
+// and by the generic word loop otherwise: the field in assembly specialised
+// to p (`nist::p384_x86_point`), with squaring of its own; the scalar ring
+// generic in the modulus (`nist::mont_x86`). The field inverts by divsteps
+// on 64-bit targets, by an addition chain on 32-bit ones.
 #[cfg(target_arch = "x86_64")]
 mont_field!(
     Fp,
@@ -46,8 +49,8 @@ mont_field!(
     P,
     "The P-384 coordinate field, GF(p) with p = 2^384 - 2^128 - 2^96 + 2^32 - 1.",
     mul = fp_mul,
-    square = |a| fp_mul(a, a),
-    invert = Self::invert_raw,
+    square = fp_sqr,
+    invert = fp_invert,
     add = Self::add_raw,
     sub = Self::sub_raw
 );
@@ -58,8 +61,73 @@ mont_field!(
     6,
     48,
     P,
-    "The P-384 coordinate field, GF(p) with p = 2^384 - 2^128 - 2^96 + 2^32 - 1."
+    "The P-384 coordinate field, GF(p) with p = 2^384 - 2^128 - 2^96 + 2^32 - 1.",
+    mul = Self::mont_mul_raw,
+    square = Self::mont_square_raw,
+    invert = fp_invert,
+    add = Self::add_raw,
+    sub = Self::sub_raw
 );
+
+/// `a^-1` in the coordinate field, Montgomery form in and out: by divsteps
+/// on 64-bit targets (`nist::safegcd`), by [`fp_invert_chain`] elsewhere.
+///
+/// The divsteps invert the integer they are given, so a Montgomery `a * R`
+/// comes back as `a^-1 * R^-1`; one Montgomery multiplication by `R^3`
+/// makes that `a^-1 * R`.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+fn fp_invert(a: [u64; 6]) -> [u64; 6] {
+    const R3: [u64; 6] = Fp::mont_mul_const(Fp::R2, Fp::R2);
+    Fp(crate::nist::safegcd::invert_384::<FpModulus>(&a))
+        .mul(&Fp(R3))
+        .0
+}
+
+/// The prime, for the divsteps.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+pub(crate) struct FpModulus;
+
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+impl crate::nist::safegcd::Modulus<7> for FpModulus {
+    const INFO: crate::nist::safegcd::ModInfo<7> = crate::nist::safegcd::ModInfo::new(P);
+}
+
+#[cfg(not(all(target_pointer_width = "64", not(ic_limb32))))]
+fn fp_invert(a: [u64; 6]) -> [u64; 6] {
+    fp_invert_chain(a)
+}
+
+/// `a^(p-2)`, the inverse by Fermat, by an addition chain: 385 squarings
+/// and 14 multiplications, where [`Fp::pow`]'s four-bit window takes 380
+/// squarings, 109 multiplications and 96 table scans. What 32-bit targets
+/// use, where the divsteps' 128-bit products would be library calls; on
+/// 64-bit targets the tests' reference for the divsteps.
+///
+/// `p - 2` is, from the top, 255 ones, a zero, 32 ones, 64 zeros, 30 ones,
+/// a zero and a one. `x_k` below is `a^(2^k - 1)`, a run of `k` ones.
+/// Nothing depends on `a` but the values: the chain is a constant sequence
+/// of squarings and multiplications. The tests hold it to `Fp::pow`.
+#[cfg(any(test, not(all(target_pointer_width = "64", not(ic_limb32)))))]
+fn fp_invert_chain(a: [u64; 6]) -> [u64; 6] {
+    let x1 = Fp(a);
+    let x2 = x1.square().mul(&x1);
+    let x3 = x2.square().mul(&x1);
+    let x6 = x3.square_n(3).mul(&x3);
+    let x12 = x6.square_n(6).mul(&x6);
+    let x15 = x12.square_n(3).mul(&x3);
+    let x30 = x15.square_n(15).mul(&x15);
+    let x32 = x30.square_n(2).mul(&x2);
+    let x60 = x30.square_n(30).mul(&x30);
+    let x120 = x60.square_n(60).mul(&x60);
+    let x240 = x120.square_n(120).mul(&x120);
+    let x255 = x240.square_n(15).mul(&x15);
+    // 255 ones, then a zero, then 32 ones.
+    let t = x255.square_n(33).mul(&x32);
+    // 64 zeros, then 30 ones.
+    let t = t.square_n(94).mul(&x30);
+    // A zero and a one.
+    t.square_n(2).mul(&x1).0
+}
 
 #[cfg(target_arch = "x86_64")]
 mont_field!(
@@ -98,8 +166,18 @@ fn canonical(t: [u64; 6], top: u64, m: [u64; 6]) -> [u64; 6] {
 #[inline(always)]
 fn fp_mul(a: [u64; 6], b: [u64; 6]) -> [u64; 6] {
     match crate::nist::p384_x86::mul_p(&a, &b) {
-        Some((t, top)) => canonical(t, top, P),
+        Some(r) => r,
         None => Fp::mont_mul_raw(a, b),
+    }
+}
+
+/// `a^2 * 2^-384 mod p`.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn fp_sqr(a: [u64; 6]) -> [u64; 6] {
+    match crate::nist::p384_x86::sqr_p(&a) {
+        Some(r) => r,
+        None => Fp::mont_mul_raw(a, a),
     }
 }
 
@@ -187,6 +265,22 @@ impl Curve for P384 {
     fn double_fast(x: &Fp, y: &Fp, z: &Fp) -> Option<[Fp; 3]> {
         crate::nist::p384_x86::point_double([&x.0, &y.0, &z.0])
             .map(|[x, y, z]| [Fp(x), Fp(y), Fp(z)])
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn scan_affine(
+        entries: &[crate::nist::point::AffinePoint<P384>],
+        masks: &[u64],
+    ) -> Option<crate::nist::point::AffinePoint<P384>> {
+        Some(crate::nist::p384_x86::scan_affine(entries, masks))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn scan_point(entries: &[crate::nist::point::Point<P384>], masks: &[u64]) -> Option<[Fp; 3]> {
+        let [x, y, z] = crate::nist::p384_x86::scan_point(entries, masks);
+        Some([Fp(x), Fp(y), Fp(z)])
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -396,6 +490,45 @@ mod tests {
         assert_eq!(fp(9).square(), fp(81));
         assert_eq!(fp(5).triple(), fp(15));
         assert_eq!(Fp::ONE.from_mont(), [1, 0, 0, 0, 0, 0]);
+    }
+
+    /// The field's inversion -- divsteps on 64-bit targets -- and its
+    /// addition chain, each against `a^(p-2)` by the generic windowed
+    /// exponentiation, which shares nothing with either but the
+    /// multiplication: on zero, one, `-1`, `-2`, powers of two across the
+    /// width, and two thousand pseudo-random elements; and against `a * a^-1
+    /// = 1` on all but zero.
+    #[test]
+    fn the_inversion_agrees_with_exponentiation() {
+        let mut exp = P;
+        exp[0] -= 2;
+        let mut values = std::vec![Fp::ZERO, Fp::ONE, Fp::ONE.neg(), Fp::ONE.double().neg()];
+        for k in [1usize, 31, 32, 63, 64, 95, 96, 127, 128, 200, 255, 256, 383] {
+            let mut x = [0u64; 6];
+            x[k / 64] = 1 << (k % 64);
+            values.push(Fp::to_mont(x));
+            values.push(Fp::to_mont(x).neg());
+        }
+        let mut state = 0x384u64;
+        for _ in 0..2000 {
+            let mut bytes = [0u8; 48];
+            for chunk in bytes.chunks_mut(8) {
+                state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                chunk.copy_from_slice(&(z ^ (z >> 31)).to_be_bytes());
+            }
+            values.push(Fp::from_bytes_reduced(&bytes));
+        }
+        for v in values {
+            let inv = v.invert();
+            assert_eq!(inv, v.pow(&exp), "{v:x?}");
+            assert_eq!(Fp(fp_invert_chain(v.0)), inv, "{v:x?}");
+            if v != Fp::ZERO {
+                assert_eq!(v.mul(&inv), Fp::ONE, "{v:x?}");
+            }
+        }
     }
 
     #[test]

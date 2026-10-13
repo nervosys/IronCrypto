@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH | P-384 ECDH; ChaCha20-Poly1305 on long messages (see below) |
+| Speed, x86-64 | AES-GCM, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, P-384 ECDH | ChaCha20-Poly1305 on long messages (see below) |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers and ML-DSA's rounding only |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA signing not yet classified here |
@@ -51,9 +51,9 @@ and a ratio inside that as parity.
 | P-256 ECDH | 24.8 | 25.7-26.3 | 37.9 / 32.7 |
 | ECDSA P-256 sign | 7.5 | 7.8-8.0 | 11.0 / 11.9 |
 | ECDSA P-256 verify | 26.8 | 30.0-30.6 | 44.5 / 44.9 |
-| P-384 ECDH | 135 | 80 | not in the bench mode |
-| ECDSA P-384 sign | 50 | 86-88 | not in the bench mode |
-| ECDSA P-384 verify | 145 | 154-171 | not in the bench mode |
+| P-384 ECDH | 117-141, loaded | 103-138, loaded | 0.94-1.25 in the same runs: parity |
+| ECDSA P-384 sign | 46-58, loaded | 125-155, loaded | 0.30-0.42 in the same runs |
+| ECDSA P-384 verify | 160-203, loaded | 228-300, loaded | 0.58-0.79 in the same runs |
 | ML-KEM-768 keygen, like for like | 6.4 | 7.5 | 8.5 / 11.0 |
 | ML-KEM-768 encapsulate, key prepared | 2.6 | 4.6 | 3.1 / 4.6 |
 | ML-KEM-768 decapsulate, key prepared | 4.4 | 5.9 | 5.5 / 9.2 |
@@ -62,10 +62,18 @@ and a ratio inside that as parity.
 
 Where it is not ahead:
 
-- **P-384 ECDH** is 1.7 times slower. The field arithmetic here is generic in
-  the modulus; Graviola's, from s2n-bignum, is specialised to the prime.
-  Signing and verification are ahead because they lean on the generator
-  table and the scalar arithmetic, where the work here went.
+- **P-384 ECDH** is level, not ahead. It was 1.7 times slower while the
+  field arithmetic here was generic in the modulus; specialised to the
+  prime, with a squaring of its own and divsteps inversion, it came out at
+  0.94 to 1.25 times Graviola's time across five rounds run in the same
+  binaries (P-384 rows are `cargo run --release -- graviola-p384` alone).
+  Those rounds ran on a machine another workload held near full load, so
+  the absolute figures above are high for both libraries; the ratios are
+  what to read. The rows are not quite like for like: Graviola's
+  `PublicKey` builds its sixteen-point table when it is parsed, outside the
+  timed loop, where `EcdhP384::agree` takes SEC1 bytes and decodes,
+  validates and builds its window inside every call, about 3.5 us of its
+  time.
 - **ChaCha20-Poly1305** was ahead in an earlier run and is behind on 1 KiB
   and 4 MiB messages in the latest, by 1.25 and 1.46 times; on 64-byte
   messages it is ahead by 1.57. Until a quiet A/B separates load from code,

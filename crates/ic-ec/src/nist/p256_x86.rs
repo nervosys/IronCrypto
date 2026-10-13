@@ -207,7 +207,7 @@ fn has_avx2() -> bool {
 /// CPU has AVX2 -- what Graviola does. Masks and data only: no branch and no
 /// address depends on either.
 #[inline]
-fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
+pub(crate) fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
     let n = entries.len().min(masks.len());
     let (entries, masks) = (&entries[..n], &masks[..n]);
     // AVX2 for the generator table's eight-word affine entries only: on the
@@ -230,8 +230,10 @@ fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
 #[target_feature(enable = "sse2")]
 fn scan_sse2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
     use core::arch::x86_64::*;
+    // Up to eighteen words, P-384's Jacobian point, in whole lanes.
+    const { assert!(W.is_multiple_of(2) && W <= 18) };
     let mut acc = [0u64; W];
-    let mut lanes = [_mm_setzero_si128(); 6];
+    let mut lanes = [_mm_setzero_si128(); 9];
     for (entry, &mask) in entries.iter().zip(masks) {
         let m = _mm_set1_epi64x(mask as i64);
         for (j, lane) in lanes.iter_mut().enumerate().take(W / 2) {

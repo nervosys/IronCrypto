@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and twenty-three more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and twenty-seven more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -58,10 +58,17 @@ release profile; this is not the workspace binary's overflow-checked profile.
   `ct_p256_point_add_adx`, `ct_p256_point_add_affine_adx`). The common
   P-256 probes are built without `std`, so there is no run-time detection
   and they compile to the baseline `mul`/`adc` assembly; these name the
-  other sequences directly. Likewise P-384's: both rings' multiplications
+  other sequences directly. Likewise P-384's: the field's multiplication
+  and squaring specialised to its prime, the scalar ring's multiplication,
   and the same three point formulas (`ct_p384_fp_mul_adx`,
-  `ct_p384_fn_mul_adx`, `ct_p384_point_double_adx`,
+  `ct_p384_fp_sqr_adx`, `ct_p384_fn_mul_adx`, `ct_p384_point_double_adx`,
   `ct_p384_point_add_adx`, `ct_p384_point_add_affine_adx`).
+- On x86-64 only, the divsteps inversions, on the integer as the field or
+  ring gives it to them: P-384's field (`ct_p384_fp_invert`) and P-256's
+  field and scalar ring (`ct_p256_fp_invert`, `ct_p256_fn_invert`, the
+  last the ECDSA nonce's). They exist on 64-bit targets only, and x86-64 is
+  the 64-bit target the gate reads. See "P-384 specialised to its prime"
+  below.
   `X86_ONLY` in the checker requires all of these on that target and no other.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
@@ -338,7 +345,9 @@ rejects every branch and these loops' counts are public constants.
   Bernstein-Yang divsteps (`nist/safegcd.rs`, libsecp256k1's `modinv64`
   transcribed): 590 divsteps for every input, each branch-free, its two
   decisions as masks behind `black_box`, as libsecp256k1 puts them behind
-  `volatile`. Elsewhere, and for P-384 and P-521, inversion and square roots
+  `volatile`. (Since then P-384's field inverts by divsteps too, and these
+  inversions are probed; see "P-384 specialised to its prime" below.)
+  Elsewhere, and for P-384 and P-521, inversion and square roots
   are a fixed four-bit-window exponentiation whose table is read by masked
   scan: no branch on the exponent at all, where square-and-multiply branched
   on each of its bits, which Valgrind reported in the nonce inversion (see
@@ -358,3 +367,40 @@ the last, and in the generator table every addition below the top of the
 order. The arguments are in `Point::mul_scalar` and `gentable::mul`; the
 tests run the scalars at both edges of the range, `1..40` and `n-40..n-1`,
 where the last, complete addition is the one that matters.
+
+## P-384 specialised to its prime, 2026-10-13
+
+P-384's field operations on x86-64 with BMI2 and ADX are now specialised to
+p = 2^384 - 2^128 - 2^96 + 2^32 - 1 (`scripts/gen_p384_x86_point.py`):
+Montgomery reduction by two `mulx` per word by constants, a squaring of its
+own, final corrections by masked addition in registers, and three fused
+`c*a - d*b` operations in the doubling. Each is branch-free by construction:
+every correction is a mask from a carry or borrow, never a `cmov` choice of
+address and never a jump. `ct_p384_fp_mul_adx` now names the specialised
+multiplication, and `ct_p384_fp_sqr_adx` the squaring; the point formula
+probes read the regenerated blocks.
+
+P-384's field now inverts by divsteps on 64-bit targets
+(`nist/safegcd.rs`): Bernstein and Yang's own divstep, 62 to a batch,
+eighteen batches, for the 1111 their Theorem 11.2 requires at 384 bits.
+32-bit targets keep an addition chain of squarings and multiplications, a
+fixed sequence. The steps are written out and the batches are calls rather
+than loops, so the compiled inversion has no branch for the gate to excuse;
+P-256's inversion was restructured the same way, and is now probed too.
+
+The first run of `ct_p384_fp_invert` failed, and the finding was real, in
+the new code: in the final normalisation, generic over the limb count, LLVM
+compiled `x += m & mask` -- `m` the constant modulus, `mask` the sign of the
+secret result -- into a `js`/`jns` around the addition. The masks now pass
+through `black_box`, as the divsteps' own decisions already did; with the
+barriers removed again, all three inversion probes fail on exactly those
+branches. P-256's inversion as shipped before this change was compiled into
+a scratch probe to see whether it had the same branch: it did not (its two
+loop branches were the only ones), so this is not a fix to a released leak.
+Making each modulus a type (`safegcd::Modulus`) gives each its own copy of
+the inversion with its limbs as constants, so no limb test survives as a
+branch either.
+
+Probe count: twenty-seven on x86-64 alone, where there were twenty-three.
+All seventy-one pass on x86-64, and the forty-four on each 32-bit target
+are unchanged.

@@ -39,9 +39,17 @@
 //! assembly (`p256_x86`), and with BMI2 and ADX the point formulas are each one
 //! block of it (`p256_x86_point`), selected through hooks on [`point::Curve`]
 //! that other curves leave at their default. `safegcd` inverts P-256's two
-//! rings on 64-bit targets. P-384 has the same MULX/ADX multiplications and
-//! point formulas, with field operations generic in the modulus
-//! (`mont_x86`, `p384_x86_point`), selected the same way.
+//! rings and P-384's field on 64-bit targets.
+//!
+//! # P-384 on x86-64
+//!
+//! With BMI2 and ADX, P-384's field operations are specialised to its prime
+//! too: Montgomery reduction takes two `mulx` per word where a generic
+//! modulus takes six, squaring computes each cross product once, and the
+//! doubling folds its small multiples into three fused operations. They and
+//! the point formulas are generated into `p384_x86_point` and dispatched from
+//! `p384_x86`; the scalar ring's multiplication stays generic in the modulus
+//! (`mont_x86`).
 
 pub mod arith;
 pub mod ecdh;
