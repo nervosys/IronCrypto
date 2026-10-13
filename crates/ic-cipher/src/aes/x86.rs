@@ -82,6 +82,14 @@ impl Keys {
         Keys { enc, dec, rounds }
     }
 
+    /// The encryption round keys and the round count, for the fused AES-GCM
+    /// kernels in `gcm_x86`, which run their own rounds interleaved with GHASH.
+    #[cfg(target_arch = "x86_64")]
+    #[inline]
+    pub(crate) fn enc_round_keys(&self) -> (&[__m128i; 15], usize) {
+        (&self.enc, self.rounds)
+    }
+
     /// Encrypt one block in registers.
     ///
     /// # Safety

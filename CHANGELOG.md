@@ -245,6 +245,32 @@ every caller of a hash function uses.
   project, which found ic-hash's SHA-512 faster than RustCrypto's and this
   PBKDF2 slower than theirs.
 
+### Performance
+
+- **AES-GCM on x86-64 runs as one fused pass.** `H` and its powers are
+  computed once per key instead of once per call, and counter mode and GHASH
+  are stitched: the previous group's ciphertext is multiplied in between the
+  AES rounds of the next, with one reduction per group. Three kernels, chosen
+  at run time: AES-NI with `PCLMULQDQ`, eight blocks at a time; `VAES` and
+  `VPCLMULQDQ` on 256-bit registers, sixteen; and the same on 512-bit
+  registers, thirty-two, where the CPU has AVX-512. Sealing with AES-256-GCM
+  on a Ryzen 9 9900X (Zen 5), before and after, best of runs taken minutes
+  apart, with Graviola 0.4.1 measured alongside:
+
+  | message | before    | after      | Graviola   |
+  |---------|-----------|------------|------------|
+  | 4 MiB   | 5.4 GB/s  | 25.4 GB/s  | 17.4 GB/s  |
+  | 1 KiB   | 3.3 GB/s  | 13.0 GB/s  | 10.0 GB/s  |
+  | 64 B    | 0.58 GB/s | 1.15 GB/s  | 0.82 GB/s  |
+
+  AES-128-GCM: 6.1 to 28.7 GB/s at 4 MiB, 3.7 to 17.0 at 1 KiB, 0.65 to
+  1.57 at 64 bytes. The 512-bit loops are inline assembly, because their
+  intrinsics need Rust 1.89 and the MSRV is 1.87. Every kernel is held to an
+  independent byte-at-a-time GCM over the portable AES and GHASH at every
+  length to 600 bytes and beyond, and the portable path, `no_std` builds and
+  the failure behaviour of opening -- nothing released on a bad tag -- are
+  unchanged.
+
 ## 0.2.24
 
 ### Added

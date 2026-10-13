@@ -40,7 +40,7 @@ fn byte_swap() -> __m128i {
 /// linear over GF(2), so reducing a sum is the sum of the reductions.
 #[inline]
 #[target_feature(enable = "pclmulqdq,ssse3")]
-fn product(a: __m128i, b: __m128i) -> (__m128i, __m128i, __m128i) {
+pub(crate) fn product(a: __m128i, b: __m128i) -> (__m128i, __m128i, __m128i) {
     (
         _mm_clmulepi64_si128(a, b, 0x00),
         _mm_xor_si128(
@@ -55,7 +55,7 @@ fn product(a: __m128i, b: __m128i) -> (__m128i, __m128i, __m128i) {
 /// and reduce modulo `x^128 + x^7 + x^2 + x + 1`.
 #[inline]
 #[target_feature(enable = "pclmulqdq,ssse3")]
-fn reduce(lo: __m128i, mid: __m128i, hi: __m128i) -> __m128i {
+pub(crate) fn reduce(lo: __m128i, mid: __m128i, hi: __m128i) -> __m128i {
     let mut lo = _mm_xor_si128(lo, _mm_slli_si128(mid, 8));
     let mut hi = _mm_xor_si128(hi, _mm_srli_si128(mid, 8));
 

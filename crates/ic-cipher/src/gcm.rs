@@ -300,14 +300,9 @@ fn derive_j0(nonce: &[u8], h: &[u8; BLOCK_LEN]) -> [u8; BLOCK_LEN] {
     }
 }
 
-/// Shared GCM machinery over any 128-bit block cipher.
-fn gcm_core<C: Ctr32>(
-    cipher: &C,
-    nonce: &[u8],
-    aad: &[u8],
-    in_out: &mut [u8],
-    encrypting: bool,
-) -> Result<[u8; BLOCK_LEN]> {
+/// The argument checks every GCM invocation makes first, whichever path then
+/// runs it, so the fused path fails exactly where this one does.
+fn check_invocation(nonce: &[u8], in_out: &[u8]) -> Result<()> {
     ensure!(
         !nonce.is_empty(),
         InvalidParameter,
@@ -318,6 +313,18 @@ fn gcm_core<C: Ctr32>(
         CounterExhausted,
         "gcm plaintext exceeds 2^39-256 bits"
     );
+    Ok(())
+}
+
+/// Shared GCM machinery over any 128-bit block cipher.
+fn gcm_core<C: Ctr32>(
+    cipher: &C,
+    nonce: &[u8],
+    aad: &[u8],
+    in_out: &mut [u8],
+    encrypting: bool,
+) -> Result<[u8; BLOCK_LEN]> {
+    check_invocation(nonce, in_out)?;
 
     // H = E_K(0^128)
     let mut h = [0u8; BLOCK_LEN];
@@ -358,10 +365,81 @@ fn gcm_core<C: Ctr32>(
     Ok(tag)
 }
 
+/// The fused x86-64 kernel's per-key state, when this CPU can run it.
+///
+/// Built once in `new`: `H`, its powers, and which kernel. `None` where the
+/// AES backend is not AES-NI or GHASH has no carry-less multiply, and then
+/// every call takes [`gcm_core`] exactly as before.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+type Fast = Option<crate::gcm_x86::HashKey>;
+
+/// [`Fast`] for a freshly expanded cipher, using `kernel`.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn fast_for(keys: Option<&crate::aes::x86::Keys>, kernel: crate::gcm_x86::Kernel) -> Fast {
+    let keys = keys?;
+    if !ghash_accelerated() {
+        return None;
+    }
+    // SAFETY: `keys` exists only on the AES-NI backend, which is only chosen
+    // after detecting `aes`, and `ghash_accelerated()` has just confirmed
+    // `pclmulqdq` and `ssse3`. `HashKey::new` checks the wide kernel's
+    // features itself.
+    Some(unsafe { crate::gcm_x86::HashKey::new(keys, kernel) })
+}
+
 macro_rules! aes_gcm {
     ($name:ident, $inner:ty, $id:literal, $disp:literal, $keylen:literal) => {
         #[doc = concat!("SP 800-38D ", $disp, ".")]
-        pub struct $name($inner);
+        pub struct $name {
+            cipher: $inner,
+            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            fast: Fast,
+        }
+
+        impl $name {
+            /// The expected tag for `in_out`, sealing or opening it in place,
+            /// by the fused kernel where there is one and [`gcm_core`]
+            /// otherwise.
+            fn run(
+                &self,
+                nonce: &[u8],
+                aad: &[u8],
+                in_out: &mut [u8],
+                encrypting: bool,
+            ) -> Result<[u8; BLOCK_LEN]> {
+                #[cfg(all(target_arch = "x86_64", feature = "std"))]
+                if let (Some(hk), Some(keys)) = (&self.fast, self.cipher.aesni_keys()) {
+                    check_invocation(nonce, in_out)?;
+                    let j0 = derive_j0(nonce, hk.h());
+                    // SAFETY: `hk` was built by `HashKey::new` after the
+                    // feature checks in `fast_for`, and `keys` is the AES-NI
+                    // schedule it was built from.
+                    return Ok(unsafe {
+                        crate::gcm_x86::seal_or_open(keys, hk, &j0, aad, in_out, encrypting)
+                    });
+                }
+                gcm_core(&self.cipher, nonce, aad, in_out, encrypting)
+            }
+
+            /// Which fused kernel this key runs, if any.
+            #[cfg(all(test, target_arch = "x86_64", feature = "std"))]
+            fn kernel(&self) -> Option<crate::gcm_x86::Kernel> {
+                self.fast.as_ref().map(|hk| hk.kernel())
+            }
+
+            /// A key forced onto `kernel`, or onto [`gcm_core`] with `None`,
+            /// so each path can be compared with the others on one CPU.
+            #[cfg(all(test, target_arch = "x86_64", feature = "std"))]
+            fn with_kernel(key: &[u8], kernel: Option<crate::gcm_x86::Kernel>) -> Result<Self> {
+                ic_core::module::operational()?;
+                let cipher = <$inner as BlockCipher>::new(key)?;
+                let fast = match kernel {
+                    Some(k) => fast_for(cipher.aesni_keys(), k),
+                    None => None,
+                };
+                Ok(Self { cipher, fast })
+            }
+        }
 
         impl Algorithm for $name {
             const ID: &'static str = $id;
@@ -375,7 +453,14 @@ macro_rules! aes_gcm {
 
             fn new(key: &[u8]) -> Result<Self> {
                 ic_core::module::operational()?;
-                Ok(Self(<$inner as BlockCipher>::new(key)?))
+                let cipher = <$inner as BlockCipher>::new(key)?;
+                #[cfg(all(target_arch = "x86_64", feature = "std"))]
+                let fast = fast_for(cipher.aesni_keys(), crate::gcm_x86::best_kernel());
+                Ok(Self {
+                    cipher,
+                    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+                    fast,
+                })
             }
 
             fn seal_detached(
@@ -387,7 +472,7 @@ macro_rules! aes_gcm {
             ) -> Result<()> {
                 ic_core::module::operational()?;
                 ensure!(tag.len() == 16, InvalidLength, "gcm tag buffer");
-                let t = gcm_core(&self.0, nonce, aad, in_out, true)?;
+                let t = self.run(nonce, aad, in_out, true)?;
                 tag.copy_from_slice(&t);
                 Ok(())
             }
@@ -401,7 +486,7 @@ macro_rules! aes_gcm {
             ) -> Result<()> {
                 ic_core::module::operational()?;
                 ensure!(tag.len() == 16, InvalidLength, "gcm tag");
-                let expected = gcm_core(&self.0, nonce, aad, in_out, false)?;
+                let expected = self.run(nonce, aad, in_out, false)?;
                 if ic_core::ct::verify(&expected, tag) {
                     Ok(())
                 } else {
@@ -642,6 +727,11 @@ mod tests {
         }
         assert_eq!(hex(&buf), ct, "ciphertext");
         assert_eq!(hex(&got_tag), tag, "tag");
+
+        // And through every path this CPU has, each forced in turn, opening
+        // as well as sealing.
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        super::fused_tests::check_every_path(&k, &n, &a, &unhex(pt).unwrap(), ct, tag);
     }
 
     #[test]
@@ -764,5 +854,415 @@ mod tests {
         Aes128Gcm::self_test().unwrap();
         Aes192Gcm::self_test().unwrap();
         Aes256Gcm::self_test().unwrap();
+    }
+}
+
+/// The fused x86-64 kernels against an independent GCM.
+///
+/// The reference below is SP 800-38D §7 written out a block at a time: the
+/// portable AES (validated by the FIPS 197 vectors) and the portable GHASH
+/// multiply (validated by the GCM specification vectors), no batching, no
+/// precomputed powers, no SIMD. Every kernel this CPU can run -- and
+/// [`gcm_core`], the path every other CPU takes -- must agree with it on
+/// every message length from 0 to 600 bytes, AAD lengths across 0..=100 and
+/// beyond, every key size, nonces of several lengths, and counters that wrap
+/// inside a group.
+///
+/// The specification vectors alone would not do. The longest is four blocks,
+/// so they never reach a 128- or 256-byte group, never leave a ragged tail
+/// after one, and never put AAD and data in the same reduction.
+#[cfg(all(test, target_arch = "x86_64", feature = "std"))]
+mod fused_tests {
+    use super::*;
+    use crate::gcm_x86::{self, best_kernel, Kernel, Wide, Wide512};
+    use std::boxed::Box;
+    use std::vec::Vec;
+
+    type Block = [u8; BLOCK_LEN];
+
+    /// A small xorshift, so the sweep covers varied keys, nonces and data
+    /// without an RNG dependency.
+    struct Xs(u64);
+
+    impl Xs {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn bytes(&mut self, n: usize) -> Vec<u8> {
+            (0..n).map(|_| (self.next() >> 24) as u8).collect()
+        }
+    }
+
+    /// Every path this CPU can run: `None` is [`gcm_core`].
+    fn paths() -> Vec<Option<Kernel>> {
+        let mut v = std::vec![None];
+        if crate::aes::aesni_available() && ghash_accelerated() {
+            v.push(Some(Kernel::Clmul8));
+            if Wide::detect().is_some() {
+                v.push(Some(Kernel::Vaes256));
+            }
+            if Wide512::detect().is_some() {
+                v.push(Some(Kernel::Vaes512));
+            }
+        }
+        v
+    }
+
+    /// The portable block cipher for `key`.
+    fn portable(key: &[u8]) -> Box<dyn Fn(&mut Block)> {
+        match key.len() {
+            16 => {
+                let c = crate::aes::Aes128::new_portable(key).unwrap();
+                Box::new(move |b| c.encrypt_block(b).unwrap())
+            }
+            24 => {
+                let c = crate::aes::Aes192::new_portable(key).unwrap();
+                Box::new(move |b| c.encrypt_block(b).unwrap())
+            }
+            _ => {
+                let c = crate::aes::Aes256::new_portable(key).unwrap();
+                Box::new(move |b| c.encrypt_block(b).unwrap())
+            }
+        }
+    }
+
+    /// One serial GHASH step per 16-byte block, the last zero-padded.
+    fn ghash_serial(h: &Block, y: &mut Block, bytes: &[u8]) {
+        for chunk in bytes.chunks(BLOCK_LEN) {
+            for (a, b) in y.iter_mut().zip(chunk) {
+                *a ^= b;
+            }
+            portable_ghash_mul(y, h);
+        }
+    }
+
+    fn inc32(c: &mut Block) {
+        let n = u32::from_be_bytes([c[12], c[13], c[14], c[15]]).wrapping_add(1);
+        c[12..].copy_from_slice(&n.to_be_bytes());
+    }
+
+    /// SP 800-38D §7.1 (and §7.2 when opening) from a given `J0`: the output
+    /// and the tag.
+    fn reference_j0(
+        key: &[u8],
+        j0: Block,
+        aad: &[u8],
+        data: &[u8],
+        sealing: bool,
+    ) -> (Vec<u8>, Block) {
+        let e = portable(key);
+        let mut h = [0u8; BLOCK_LEN];
+        e(&mut h);
+        let mut out = data.to_vec();
+        let mut ctr = j0;
+        for chunk in out.chunks_mut(BLOCK_LEN) {
+            inc32(&mut ctr);
+            let mut ks = ctr;
+            e(&mut ks);
+            for (d, k) in chunk.iter_mut().zip(ks.iter()) {
+                *d ^= k;
+            }
+        }
+        let ciphertext = if sealing { &out[..] } else { data };
+        let mut y = [0u8; BLOCK_LEN];
+        ghash_serial(&h, &mut y, aad);
+        ghash_serial(&h, &mut y, ciphertext);
+        let mut len = [0u8; BLOCK_LEN];
+        len[..8].copy_from_slice(&((aad.len() as u64) * 8).to_be_bytes());
+        len[8..].copy_from_slice(&((data.len() as u64) * 8).to_be_bytes());
+        ghash_serial(&h, &mut y, &len);
+        let mut mask = j0;
+        e(&mut mask);
+        for (t, m) in y.iter_mut().zip(mask.iter()) {
+            *t ^= m;
+        }
+        (out, y)
+    }
+
+    /// `J0` from a nonce of any length, serially.
+    fn reference_j0_of(key: &[u8], nonce: &[u8]) -> Block {
+        if nonce.len() == 12 {
+            let mut j0 = [0u8; BLOCK_LEN];
+            j0[..12].copy_from_slice(nonce);
+            j0[15] = 1;
+            return j0;
+        }
+        let e = portable(key);
+        let mut h = [0u8; BLOCK_LEN];
+        e(&mut h);
+        let mut y = [0u8; BLOCK_LEN];
+        ghash_serial(&h, &mut y, nonce);
+        let mut len = [0u8; BLOCK_LEN];
+        len[8..].copy_from_slice(&((nonce.len() as u64) * 8).to_be_bytes());
+        ghash_serial(&h, &mut y, &len);
+        y
+    }
+
+    /// Seal through one path; open the result through it; open it again with
+    /// a flipped tag bit.
+    fn through(
+        key: &[u8],
+        path: Option<Kernel>,
+        nonce: &[u8],
+        aad: &[u8],
+        pt: &[u8],
+    ) -> (Vec<u8>, Block, Vec<u8>, bool) {
+        macro_rules! go {
+            ($ty:ty) => {{
+                let c = <$ty>::with_kernel(key, path).unwrap();
+                // The forced path is the one that runs, or this compares the
+                // default path with itself.
+                assert_eq!(c.kernel(), path, "{} did not take {path:?}", <$ty>::ID);
+                let mut ct = pt.to_vec();
+                let mut tag = [0u8; BLOCK_LEN];
+                c.seal_detached(nonce, aad, &mut ct, &mut tag).unwrap();
+                let mut opened = ct.clone();
+                c.open_detached(nonce, aad, &mut opened, &tag).unwrap();
+                let mut bad_tag = tag;
+                bad_tag[(pt.len() + aad.len()) % BLOCK_LEN] ^= 0x01;
+                let mut tampered = ct.clone();
+                let refused = c
+                    .open_detached(nonce, aad, &mut tampered, &bad_tag)
+                    .is_err()
+                    && tampered.iter().all(|&b| b == 0);
+                (ct, tag, opened, refused)
+            }};
+        }
+        match key.len() {
+            16 => go!(Aes128Gcm),
+            24 => go!(Aes192Gcm),
+            _ => go!(Aes256Gcm),
+        }
+    }
+
+    /// Every path against the reference on one input.
+    fn agree(key: &[u8], nonce: &[u8], aad: &[u8], pt: &[u8]) -> usize {
+        let j0 = reference_j0_of(key, nonce);
+        let (want_ct, want_tag) = reference_j0(key, j0, aad, pt, true);
+        let mut n = 0;
+        for path in paths() {
+            let (ct, tag, opened, refused) = through(key, path, nonce, aad, pt);
+            let what = std::format!(
+                "{path:?}, key {} bytes, nonce {} bytes, aad {} bytes, {} bytes",
+                key.len(),
+                nonce.len(),
+                aad.len(),
+                pt.len()
+            );
+            assert_eq!(ct, want_ct, "ciphertext: {what}");
+            assert_eq!(tag, want_tag, "tag: {what}");
+            assert_eq!(opened, pt, "opened: {what}");
+            assert!(
+                refused,
+                "a flipped tag bit was accepted, or left plaintext: {what}"
+            );
+            n += 1;
+        }
+        n
+    }
+
+    /// The CPU's best kernel is the one `new` installs.
+    #[test]
+    fn new_selects_the_best_kernel_this_cpu_has() {
+        let c = Aes256Gcm::new(&[1u8; 32]).unwrap();
+        if crate::aes::aesni_available() && ghash_accelerated() {
+            assert_eq!(c.kernel(), Some(best_kernel()));
+            let expect = if Wide512::detect().is_some() {
+                Kernel::Vaes512
+            } else if Wide::detect().is_some() {
+                Kernel::Vaes256
+            } else {
+                Kernel::Clmul8
+            };
+            assert_eq!(best_kernel(), expect);
+            std::eprintln!("AES-GCM kernel on this CPU: {:?}", best_kernel());
+        } else {
+            assert_eq!(c.kernel(), None);
+        }
+        // And forcing a narrower kernel takes it.
+        if c.kernel().is_some() {
+            let n = Aes128Gcm::with_kernel(&[1u8; 16], Some(Kernel::Clmul8)).unwrap();
+            assert_eq!(n.kernel(), Some(Kernel::Clmul8));
+        }
+    }
+
+    #[test]
+    fn every_path_matches_the_reference_at_every_length_to_600() {
+        let mut rng = Xs(0x9e37_79b9_7f4a_7c15);
+        let mut checked = 0;
+        for key_len in [16usize, 24, 32] {
+            for len in 0..=600usize {
+                let key = rng.bytes(key_len);
+                let nonce = rng.bytes(12);
+                // Every AAD length from 0 to 100 occurs at many message
+                // lengths.
+                let aad = rng.bytes((len * 37 + key_len) % 101);
+                let pt = rng.bytes(len);
+                checked += agree(&key, &nonce, &aad, &pt);
+            }
+        }
+        assert!(checked >= 3 * 601 * 2, "only {checked} comparisons ran");
+    }
+
+    #[test]
+    fn every_path_matches_the_reference_for_every_aad_length_to_100() {
+        let mut rng = Xs(0x2545_f491_4f6c_dd1d);
+        for key_len in [16usize, 32] {
+            for len in [
+                0usize, 1, 15, 16, 17, 127, 128, 129, 255, 256, 257, 383, 513,
+            ] {
+                for aad_len in 0..=100usize {
+                    let key = rng.bytes(key_len);
+                    let nonce = rng.bytes(12);
+                    let aad = rng.bytes(aad_len);
+                    let pt = rng.bytes(len);
+                    agree(&key, &nonce, &aad, &pt);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_path_matches_the_reference_on_large_inputs() {
+        let mut rng = Xs(0xd1b5_4a32_d192_ed03);
+        for (aad_len, len) in [
+            (1000usize, 0usize),
+            (4099, 1),
+            (16, 4096),
+            (13, 4096 + 255),
+            (300, 65536 + 17),
+            (0, 3 * 256 + 128 + 15),
+        ] {
+            for key_len in [16usize, 24, 32] {
+                let key = rng.bytes(key_len);
+                let nonce = rng.bytes(12);
+                let aad = rng.bytes(aad_len);
+                let pt = rng.bytes(len);
+                agree(&key, &nonce, &aad, &pt);
+            }
+        }
+    }
+
+    /// Past what the reference can do quickly in a debug build: every path
+    /// against [`gcm_core`].
+    #[test]
+    fn every_path_matches_gcm_core_on_a_megabyte() {
+        let mut rng = Xs(0x6a09_e667_f3bc_c909);
+        for (key_len, len) in [(16usize, (1 << 20) + 13), (32, (1 << 20) + 256 + 7)] {
+            let key = rng.bytes(key_len);
+            let nonce = rng.bytes(12);
+            let aad = rng.bytes(77);
+            let pt = rng.bytes(len);
+            let (want_ct, want_tag, _, _) = through(&key, None, &nonce, &aad, &pt);
+            for path in paths().into_iter().skip(1) {
+                let (ct, tag, opened, refused) = through(&key, path, &nonce, &aad, &pt);
+                assert!(ct == want_ct, "{path:?}: ciphertext differs at {len} bytes");
+                assert_eq!(tag, want_tag, "{path:?}: tag at {len} bytes");
+                assert!(opened == pt, "{path:?}: open at {len} bytes");
+                assert!(refused, "{path:?}: tampered tag at {len} bytes");
+            }
+        }
+    }
+
+    /// Nonces other than 96 bits take `J0` from GHASH, so the counter starts
+    /// anywhere.
+    #[test]
+    fn every_path_matches_the_reference_with_other_nonce_lengths() {
+        let mut rng = Xs(0xbb67_ae85_84ca_a73b);
+        for nonce_len in [1usize, 8, 11, 13, 16, 60, 128] {
+            for len in [0usize, 5, 64, 200, 256, 300, 600] {
+                let key = rng.bytes(32);
+                let nonce = rng.bytes(nonce_len);
+                let aad = rng.bytes(len % 37);
+                let pt = rng.bytes(len);
+                agree(&key, &nonce, &aad, &pt);
+            }
+        }
+    }
+
+    /// The counter wraps within its last 32 bits, and must do so inside a
+    /// group of 8 or 16 and in the tail, without carrying into the nonce.
+    #[test]
+    fn every_kernel_wraps_the_counter_as_inc32_does() {
+        let mut rng = Xs(0x3c6e_f372_fe94_f82b);
+        let mut checked = 0;
+        for kernel in paths().into_iter().flatten() {
+            for key_len in [16usize, 32] {
+                let key = rng.bytes(key_len);
+                macro_rules! keys {
+                    ($ty:ty) => {{
+                        <$ty as BlockCipher>::new(&key).unwrap()
+                    }};
+                }
+                for back in [1u32, 2, 3, 7, 8, 9, 15, 16, 17, 31] {
+                    for len in [
+                        16usize,
+                        100,
+                        128,
+                        255,
+                        256,
+                        257,
+                        512,
+                        600,
+                        1072,
+                        2048 + 256 + 128 + 33,
+                    ] {
+                        let mut j0 = [0xa5u8; BLOCK_LEN];
+                        j0[12..].copy_from_slice(&0u32.wrapping_sub(back).to_be_bytes());
+                        let aad = rng.bytes(len % 23);
+                        let pt = rng.bytes(len);
+                        let (want_ct, want_tag) = reference_j0(&key, j0, &aad, &pt, true);
+                        let mut got = pt.clone();
+                        let tag = if key_len == 16 {
+                            let c = keys!(crate::aes::Aes128);
+                            let keys = c.aesni_keys().unwrap();
+                            // SAFETY: `paths()` lists only kernels whose
+                            // features were detected, AES-NI included.
+                            let hk = unsafe { gcm_x86::HashKey::new(keys, kernel) };
+                            assert_eq!(hk.kernel(), kernel);
+                            unsafe { gcm_x86::seal_or_open(keys, &hk, &j0, &aad, &mut got, true) }
+                        } else {
+                            let c = keys!(crate::aes::Aes256);
+                            let keys = c.aesni_keys().unwrap();
+                            // SAFETY: as above.
+                            let hk = unsafe { gcm_x86::HashKey::new(keys, kernel) };
+                            assert_eq!(hk.kernel(), kernel);
+                            unsafe { gcm_x86::seal_or_open(keys, &hk, &j0, &aad, &mut got, true) }
+                        };
+                        let what = std::format!(
+                            "{kernel:?}, key {key_len}, wrap {back} back, {len} bytes"
+                        );
+                        assert_eq!(got, want_ct, "ciphertext: {what}");
+                        assert_eq!(tag, want_tag, "tag: {what}");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        if crate::aes::aesni_available() && ghash_accelerated() {
+            assert!(checked >= 2 * 10 * 10, "only {checked} wrap cases ran");
+        }
+    }
+
+    /// The specification vectors through every path, sealing and opening.
+    pub(super) fn check_every_path(
+        key: &[u8],
+        nonce: &[u8],
+        aad: &[u8],
+        pt: &[u8],
+        ct: &str,
+        tag: &str,
+    ) {
+        use ic_core::codec::hex;
+        for path in paths() {
+            let (got_ct, got_tag, opened, refused) = through(key, path, nonce, aad, pt);
+            assert_eq!(hex(&got_ct), ct, "{path:?} ciphertext");
+            assert_eq!(hex(&got_tag), tag, "{path:?} tag");
+            assert_eq!(opened, pt, "{path:?} open");
+            assert!(refused, "{path:?} accepted a bad tag");
+        }
     }
 }

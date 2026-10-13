@@ -71,6 +71,12 @@ mod clmul;
 pub mod gcm;
 #[cfg(not(ic_approved_only))]
 pub mod gcm_siv;
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+// AES-GCM as one fused pass: AES-NI or VAES rounds interleaved with the
+// carry-less multiply, behind runtime detection. The wide instructions are
+// inline assembly because their intrinsics postdate the MSRV.
+#[allow(unsafe_code)]
+mod gcm_x86;
 pub mod gf;
 pub mod keywrap;
 pub mod modes;
