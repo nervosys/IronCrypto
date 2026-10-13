@@ -4,8 +4,10 @@
 //! Read [`VERIFICATION`] before using any of this.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-// `deny` rather than `forbid`: one module, the AVX2 arithmetic, is allowed
-// unsafe, for the intrinsics, and every other line here is a compile error.
+// `deny` rather than `forbid`: the AVX2 module is allowed unsafe, for the
+// intrinsics, and so is each runtime-detected call into it, one
+// `#[allow(unsafe_code)]` function at a time. Unsafe anywhere else is a
+// compile error.
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]

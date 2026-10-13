@@ -258,8 +258,12 @@ fn decode_bits(data: &[u8], d: u32, out: &mut Poly) {
 #[doc(hidden)]
 #[inline]
 pub fn reduce_12(x: u16) -> i16 {
-    let r = (x & 0x0fff) as i16 - Q;
-    r + ((r >> 15) & Q)
+    // Without the barriers, LTO turns the sign mask back into a comparison
+    // and a branch on Cortex-M0 -- found by `scripts/check-ct.py` the day this
+    // function was written, as `compress` was before it. The first hides the
+    // difference's range, the second the mask's, as there.
+    let r = black_box((x & 0x0fff) as i16 - Q);
+    r + (black_box(r >> 15) & Q)
 }
 
 /// Compress every coefficient and pack the result.

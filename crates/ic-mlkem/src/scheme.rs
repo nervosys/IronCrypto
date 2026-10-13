@@ -255,16 +255,12 @@ macro_rules! ml_kem {
 
         /// Whether the lane-scheduled form below runs: only where the four-way
         /// Keccak is a vector permutation, since elsewhere it is four scalar
-        /// ones and holding the matrix would buy nothing.
+        /// ones and holding the matrix would buy nothing. A `no_std` build has
+        /// no way to detect the instructions, and compiles only the streaming
+        /// form.
+        #[cfg(feature = "std")]
         fn parallel() -> bool {
-            #[cfg(feature = "std")]
-            {
-                ic_hash::KeccakX4::is_parallel()
-            }
-            #[cfg(not(feature = "std"))]
-            {
-                false
-            }
+            ic_hash::KeccakX4::is_parallel()
         }
 
         /// K-PKE and the KEM's hashing with every Keccak call run through
@@ -363,17 +359,19 @@ macro_rules! ml_kem {
                 }
             }
 
+            // These write into storage the caller holds, rather than
+            // returning arrays of polynomials: a returned array was built and
+            // then copied, and the copy was kilobytes of stack.
+
             /// `y` (nonces 0..k, `eta1`), `e1` (k..2k, `eta2`) and `e2` (2k).
-            pub(super) fn encryption_noise(r: &[u8; 32]) -> [Poly; 2 * K + 1] {
+            pub(super) fn encryption_noise(r: &[u8; 32], noise: &mut [Poly; 2 * K + 1]) {
                 let tasks: [Task<'_>; 2 * K + 1] = core::array::from_fn(|n| Task::Noise {
                     seed: r,
                     nonce: n as u8,
                     eta: if n < K { ETA1 } else { ETA2 },
                     slot: n,
                 });
-                let mut noise = [Poly::ZERO; 2 * K + 1];
-                run(&tasks, &mut noise, &mut []);
-                noise
+                run(&tasks, noise, &mut []);
             }
 
             /// `A^T` and up to two 32-byte hashes, in one schedule. The hashes
@@ -382,7 +380,8 @@ macro_rules! ml_kem {
                 rho: &[u8; 32],
                 hash_tasks: &[Task<'_>],
                 hashes: &mut [[u8; 32]],
-            ) -> [Poly; KK] {
+                at: &mut [Poly; KK],
+            ) {
                 let mut tasks = [Task::Hash {
                     parts: [&[], &[]],
                     domain: 0,
@@ -393,18 +392,48 @@ macro_rules! ml_kem {
                 for f in 0..KK {
                     tasks[n + f] = uniform(rho, f / K, f % K, true, f);
                 }
-                let mut at = [Poly::ZERO; KK];
-                run(&tasks[..n + KK], &mut at, hashes);
-                at
+                run(&tasks[..n + KK], at, hashes);
             }
 
-            /// K-PKE encryption, given `A^T` and the noise already drawn:
-            /// `pke_encrypt`'s arithmetic, in its order. Clears `noise`.
+            /// `A^T` in slots `0..k*k` and the encryption noise for coins `r`
+            /// in the `2k + 1` after, with up to two 32-byte hashes, in one
+            /// schedule.
+            pub(super) fn matrix_noise_and_hashes(
+                rho: &[u8; 32],
+                r: &[u8; 32],
+                hash_tasks: &[Task<'_>],
+                hashes: &mut [[u8; 32]],
+                polys: &mut [Poly; KK + 2 * K + 1],
+            ) {
+                let mut tasks = [Task::Hash {
+                    parts: [&[], &[]],
+                    domain: 0,
+                    slot: usize::MAX,
+                }; 2 + KK + 2 * K + 1];
+                let n = hash_tasks.len().min(2);
+                tasks[..n].copy_from_slice(&hash_tasks[..n]);
+                for f in 0..KK {
+                    tasks[n + f] = uniform(rho, f / K, f % K, true, f);
+                }
+                for e in 0..2 * K + 1 {
+                    tasks[n + KK + e] = Task::Noise {
+                        seed: r,
+                        nonce: e as u8,
+                        eta: if e < K { ETA1 } else { ETA2 },
+                        slot: KK + e,
+                    };
+                }
+                run(&tasks[..n + KK + 2 * K + 1], polys, hashes);
+            }
+
+            /// K-PKE encryption, given `A^T` (`k * k` entries) and the
+            /// `2k + 1` noise polynomials already drawn: `pke_encrypt`'s
+            /// arithmetic, in its order. Clears `noise`.
             pub(super) fn pke_encrypt(
                 ek: &[u8],
                 m: &[u8; 32],
-                at: &[Poly; KK],
-                noise: &mut [Poly; 2 * K + 1],
+                at: &[Poly],
+                noise: &mut [Poly],
                 out: &mut [u8],
             ) {
                 let du_len = encoded_len(DU);
@@ -749,6 +778,8 @@ macro_rules! ml_kem {
                 time("encapsulate_lanes", || {
                     $name::encapsulate_lanes(&m, &ek, &mut ct, &mut ss)
                 });
+                let mut at = [Poly::ZERO; super::fast::KK];
+                let mut noise = [Poly::ZERO; 2 * K + 1];
                 time("  H(ek) and A^T, scheduled", || {
                     let mut h = [[0u8; 32]];
                     let task = $crate::lanes::Task::Hash {
@@ -756,18 +787,12 @@ macro_rules! ml_kem {
                         domain: 0x06,
                         slot: 0,
                     };
-                    std::hint::black_box(super::fast::transposed_matrix_and_hashes(
-                        &rho,
-                        &[task],
-                        &mut h,
-                    ));
+                    super::fast::transposed_matrix_and_hashes(&rho, &[task], &mut h, &mut at);
+                    std::hint::black_box(&at);
                 });
                 time("  A^T alone, scheduled", || {
-                    std::hint::black_box(super::fast::transposed_matrix_and_hashes(
-                        &rho,
-                        &[],
-                        &mut [],
-                    ));
+                    super::fast::transposed_matrix_and_hashes(&rho, &[], &mut [], &mut at);
+                    std::hint::black_box(&at);
                 });
                 time("  H(ek) alone, scalar", || {
                     std::hint::black_box($crate::scheme::h(&ek));
@@ -776,11 +801,12 @@ macro_rules! ml_kem {
                     std::hint::black_box($crate::scheme::g(&[&m, &m]));
                 });
                 time("  noise, scheduled", || {
-                    std::hint::black_box(super::fast::encryption_noise(&m));
+                    super::fast::encryption_noise(&m, &mut noise);
+                    std::hint::black_box(&noise);
                 });
-                let at = super::fast::transposed_matrix_and_hashes(&rho, &[], &mut []);
+                super::fast::transposed_matrix_and_hashes(&rho, &[], &mut [], &mut at);
                 time("  K-PKE arithmetic and encoding", || {
-                    let mut noise = super::fast::encryption_noise(&m);
+                    super::fast::encryption_noise(&m, &mut noise);
                     super::fast::pke_encrypt(&ek, &m, &at, &mut noise, &mut ct);
                 });
                 time("validate_encapsulation_key", || {
@@ -1084,9 +1110,11 @@ macro_rules! ml_kem {
                     domain: 0x06,
                     slot: 0,
                 };
-                let at = fast::transposed_matrix_and_hashes(&rho, &[hash], &mut hashes);
+                let mut at = [Poly::ZERO; fast::KK];
+                fast::transposed_matrix_and_hashes(&rho, &[hash], &mut hashes, &mut at);
                 let (mut k, mut r) = $crate::scheme::g(&[m, &hashes[0]]);
-                let mut noise = fast::encryption_noise(&r);
+                let mut noise = [Poly::ZERO; 2 * K + 1];
+                fast::encryption_noise(&r, &mut noise);
                 fast::pke_encrypt(ek, m, &at, &mut noise, ct);
                 shared.copy_from_slice(&k);
                 k.zeroize();
@@ -1198,6 +1226,15 @@ macro_rules! ml_kem {
                 let mut rho = [0u8; 32];
                 rho.copy_from_slice(&ek[384 * K..]);
 
+                // Decryption, and the re-encryption's coins, need no Keccak
+                // that depends on the checks, so they come first and the
+                // re-encryption noise joins `H(ek)`, `J(z || c)` and `A^T` in
+                // one schedule. Nothing computed here is returned, or
+                // influences what is returned, unless the hash check passes;
+                // on failure all of it is wiped.
+                let mut m = pke_decrypt(dk_pke, ct);
+                let (mut k, mut r) = $crate::scheme::g(&[&m, hash]);
+
                 use $crate::lanes::Task;
                 let tasks = [
                     Task::Hash {
@@ -1212,19 +1249,23 @@ macro_rules! ml_kem {
                     },
                 ];
                 let mut hashes = [[0u8; 32]; 2];
-                let at = fast::transposed_matrix_and_hashes(&rho, &tasks, &mut hashes);
+                let mut polys = [Poly::ZERO; fast::KK + 2 * K + 1];
+                fast::matrix_noise_and_hashes(&rho, &r, &tasks, &mut hashes, &mut polys);
                 let [computed, mut reject] = hashes;
-                // The hash check, before anything touches the secret key.
+                let (at, noise) = polys.split_at_mut(fast::KK);
                 if let Err(e) = Self::check_embedded_hash(dk, &computed) {
+                    for p in noise.iter_mut() {
+                        p.zeroize();
+                    }
+                    m.zeroize();
+                    k.zeroize();
+                    r.zeroize();
                     reject.zeroize();
                     return Err(e);
                 }
 
-                let mut m = pke_decrypt(dk_pke, ct);
-                let (mut k, mut r) = $crate::scheme::g(&[&m, hash]);
-                let mut noise = fast::encryption_noise(&r);
                 let mut recomputed = [0u8; CIPHERTEXT_LEN];
-                fast::pke_encrypt(ek, &m, &at, &mut noise, &mut recomputed);
+                fast::pke_encrypt(ek, &m, at, noise, &mut recomputed);
 
                 Self::select_shared_secret(ct, &recomputed, &k, &reject, shared);
                 // As in `decapsulate`: all key material, `noise` cleared by

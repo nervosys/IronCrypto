@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Nineteen exported probes call the actual implementations. Their public sizes
+Twenty-six exported probes call the actual implementations. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -29,6 +29,10 @@ release profile; this is not the workspace binary's overflow-checked profile.
 - ML-DSA reduction modulo q, power2round, and decompose for both gamma2 values.
 - ML-KEM compression at all five widths used by its parameter sets: 1, 4, 5,
   10 and 11 bits.
+- ML-KEM's other scalar helpers that see secrets: centered binomial
+  sampling a word at a time for eta 2 and 3, the twelve-bit field
+  reduction modulo q, packing and unpacking eight twelve-bit fields, and
+  Barrett and Montgomery reduction.
 - Core 8-, 32- and 64-bit selection; four-byte equality, zero checking,
   big-endian ordering, conditional copy and swap; one-byte hex encoding and
   three-byte Base64 encoding.
@@ -98,6 +102,22 @@ these tested paths; the output barrier remains.
 
 Removing the input barrier deliberately reproduced all three forbidden
 branches. Restoring it passed all nineteen probes on all four targets.
+
+## ML-KEM decode regression
+
+On 2026-10-13 seven probes were added for the ML-KEM helpers the AVX2 work
+rewrote or newly relied on. The first run failed on Cortex-M0: the twelve-bit
+reduction `reduce_12`, which a decapsulation key's secret vector passes
+through, compiled its sign mask into a comparison and `blo`. It replaced a
+`% q` that had no probe at all. The same input and output barriers as
+`compress` fixed it, and all twenty-six probes then passed on all four
+targets.
+
+The AVX2 forms of these routines (`ic-mlkem/src/avx2.rs`) are outside this
+gate: they exist only in `std` x86-64 builds behind runtime detection, and
+their loops branch on loop counters. They are vector instructions with no
+data-dependent branch or index; each is compared exactly against the scalar
+form on every input the tests reach.
 The functional test checks masks, byte selection and four-byte copy/swap for
 all 256 flag inputs, including noncanonical nonzero values. This adds
 compiler regression coverage, not hardware timing evidence or a guarantee
