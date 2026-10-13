@@ -92,10 +92,11 @@ impl Fe {
         // in a point doubling, so it is on the hot path of every scalar
         // multiplication on this curve.
         //
-        // The bound: `sub` forms `self + 2p - other` with limbs below 2^52, so
-        // each input limb is below 2^53 and each carry below 4. Nineteen times
-        // the top carry is under 80, which is why the scaled carry cannot
-        // overflow here even without a second pass.
+        // The bound: `sub` forms `self + 2p - other`, whose limbs reach
+        // 2^53 + 2^52 (the limbs of `2p` are near 2^52, and `self` has limbs
+        // below 2^53). So each carry is below 6 and nineteen times the top
+        // carry is under 120, which cannot overflow even without a second pass.
+        // `proofs.rs` checks the bound on the limbs this produces.
         let r = self.0;
         let c = [r[0] >> 51, r[1] >> 51, r[2] >> 51, r[3] >> 51, r[4] >> 51];
         Fe([
@@ -381,6 +382,10 @@ impl Fe {
         Choice::from_u8(self.to_bytes()[0] & 1)
     }
 }
+
+// Bounded proofs for Kani; see the module.
+#[cfg(kani)]
+mod proofs;
 
 /// One 64x64 multiplication, widened.
 ///

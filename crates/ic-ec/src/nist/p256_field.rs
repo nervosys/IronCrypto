@@ -84,23 +84,46 @@ const fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
 /// canonical.
 #[inline(always)]
 fn reduce(t: [u64; 8]) -> [u64; 4] {
-    let [mut w0, mut w1, mut w2, mut w3, t4, t5, t6, t7] = t;
-    // Four steps, each dividing the low window by 2^64 after adding u*p;
-    // see the module documentation for the algebra.
-    let mut i = 0;
-    while i < 4 {
-        let u = w0;
-        let (n0, c) = adc(w1, u << 32, 0);
-        let (n1, c) = adc(w2, u >> 32, c);
-        let (n2, n3) = mac(w3, u, P[3], c);
-        (w0, w1, w2, w3) = (n0, n1, n2, n3);
-        i += 1;
+    let [w0, w1, w2, w3, t4, t5, t6, t7] = t;
+    let w = montgomery_low([w0, w1, w2, w3]);
+    finish([t4, t5, t6, t7], w)
+}
+
+/// One Montgomery step: `(w + w0 * p) / 2^64`, as four words. The low word of
+/// `w + w0 * p` is zero, because `p = -1 mod 2^64`, so the quotient digit is
+/// the low word itself and the division is exact. The result is below `2^256`
+/// for every `w`, so no word is lost.
+#[inline(always)]
+fn mont_step(w: [u64; 4]) -> [u64; 4] {
+    let u = w[0];
+    let (n0, c) = adc(w[1], u << 32, 0);
+    let (n1, c) = adc(w[2], u >> 32, c);
+    let (n2, n3) = mac(w[3], u, P[3], c);
+    [n0, n1, n2, n3]
+}
+
+/// The low half of the Montgomery reduction: `w = (lo + U * p) / 2^256` for
+/// the four-word `lo`, where `U` is the four quotient digits the four steps
+/// take. Applying [`mont_step`] four times is that division, one word at a
+/// time, and `w` is at most `p` for every `lo`.
+#[inline(always)]
+fn montgomery_low(lo: [u64; 4]) -> [u64; 4] {
+    let mut w = lo;
+    for _ in 0..4 {
+        w = mont_step(w);
     }
-    // hi + w < 2p.
-    let (s0, c) = adc(t4, w0, 0);
-    let (s1, c) = adc(t5, w1, c);
-    let (s2, c) = adc(t6, w2, c);
-    let (s3, top) = adc(t7, w3, c);
+    w
+}
+
+/// The high half added to the low half, and made canonical: `hi + w`, with
+/// `hi` below `p` and `w` at most `p`, is below `2p`, so one conditional
+/// subtraction of `p` leaves it in `[0, p)`.
+#[inline(always)]
+fn finish(hi: [u64; 4], w: [u64; 4]) -> [u64; 4] {
+    let (s0, c) = adc(hi[0], w[0], 0);
+    let (s1, c) = adc(hi[1], w[1], c);
+    let (s2, c) = adc(hi[2], w[2], c);
+    let (s3, top) = adc(hi[3], w[3], c);
     let (d0, b) = sbb(s0, P[0], 0);
     let (d1, b) = sbb(s1, P[1], b);
     let (d2, b) = sbb(s2, P[2], b);
@@ -206,6 +229,10 @@ pub(crate) fn sub(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
     let (r3, _) = adc(d3, P[3] & mask, c);
     [r0, r1, r2, r3]
 }
+
+// Bounded proofs for Kani; see the module.
+#[cfg(kani)]
+mod proofs;
 
 /// `a^-1 = a^(p-2)`, with `0^-1 = 0`, by a fixed addition chain: 255
 /// squarings and 12 multiplications, where square-and-multiply over the bits
