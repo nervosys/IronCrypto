@@ -51,7 +51,7 @@ written with, Graviola 0.4.1, both x86-64, rustc 1.99.0, LTO.
 | P-256 ECDH | 3 | 3 | both: the private scalar's range check, and the result's identity check; IronCrypto also the zero check |
 | P-256 ECDSA sign | 8 | 6 | range and zero checks on key and nonce candidates, and r = 0, s = 0, as RFC 6979 and FIPS 186-5 allow; **and one in the nonce inversion, below** |
 | P-384 ECDSA sign | 7 | -- | as P-256 |
-| Ed25519 sign | **9** | 0 | **a real finding, below** |
+| Ed25519 sign | 0 (9 before the fix) | 0 | the finding below, fixed |
 | ML-KEM-768 key generation | 27 | -- | sampling the matrix from its seed, which is public: it is in the encapsulation key |
 | ML-KEM-768 encapsulate, decapsulate | 0, 0 | 45 + 27 address (decapsulate) | Graviola's are the same matrix sampling, reached because its decapsulation key could only be marked through the seed it is made from |
 | ML-DSA-65 sign | 11 + 1 address | -- | the rejection loop and the packing of the hint, which FIPS 204 treats as public; sampling the matrix from its public seed; sampling the challenge, which is published in the signature |
@@ -72,3 +72,11 @@ written with, Graviola 0.4.1, both x86-64, rustc 1.99.0, LTO.
 
 Both are being fixed in the P-256 and Curve25519 work streams, and this table
 is to be rerun when they land.
+
+- **Ed25519, fixed 2026-10-13.** The borrow and the mask now pass through
+  `black_box`, and the reduction is straight-line; rerun, Ed25519 signing
+  reports 0. `scripts/check-ct.py` now probes the reduction on all four
+  targets, and fails on them with the barriers removed; see
+  docs/CONSTANT_TIME.md. Valgrind runs the portable Curve25519 field only,
+  since it hides ADX from CPUID and the MULX/ADX field is chosen by CPUID;
+  that field is held by the compiled-code probes instead.

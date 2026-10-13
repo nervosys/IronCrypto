@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Thirty-five exported probes call the actual implementations. Their public sizes
+Thirty-seven exported probes call the actual implementations. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -37,6 +37,10 @@ release profile; this is not the workspace binary's overflow-checked profile.
   parity, each from and back to bytes. Hashing to the curve, the OPRF,
   ECDH and ECDSA are built from these. All four targets gate; on the
   32-bit ones a few findings are excused by rule, as described below.
+- Ed25519 scalar arithmetic modulo L: the reduction of a 512-bit value, which
+  makes the secret nonce from a hash and finishes `S`, and `a * b + c`, which
+  is `S`. Straight-line on all four targets; see "Ed25519 scalar reduction"
+  below.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
 Branches and integer division/remainder instructions are rejected. A call or
@@ -185,6 +189,42 @@ targets. Both are additions, rotations and XORs with no table and no
 secret-dependent branch, by construction. Not probed because they are not
 constant time by design: bcrypt, scrypt and yescrypt read memory at
 password-derived indices, as the ontology records.
+
+## Ed25519 scalar reduction, 2026-10-13
+
+Valgrind (docs/CTGRIND.md) found that `scalar::conditional_subtract_l`, in
+source a borrow turned into a mask, compiled under LTO on x86-64 to `js` on
+the sign of the top limb's difference: a jump on whether the secret nonce or
+S was at least L, nine of them per signature. No probe covered it.
+
+`ct_ed25519_reduce_wide` and `ct_ed25519_mul_add` do now. On the unchanged
+source the first run failed x86-64 with those `js` and with the loops LLVM had
+left rolled -- public counts, but a rolled loop is a jump this checker cannot
+tell from a secret one. The fix has two parts:
+
+- **Barriers.** The borrow passes through `black_box` before it becomes a
+  mask, and the mask through another after, as `Choice::mask` does. Removing
+  just those two, with everything else below kept, fails every target: 10
+  findings on x86-64, 14 on each Cortex-M, 10 on RISC-V.
+- **Straight-line code.** The fold rounds, the folding positions, the carry
+  passes and the unpacking are written out with literal indices; `c` enters
+  `mul_add` as the product's initial value instead of through a byte-wise
+  carry loop; and the result is packed into words directly instead of
+  through a zeroed buffer, which on the 32-bit targets was a `memset` call.
+
+What remains is one shape on Cortex-M0: an unconditional `b` over a literal
+pool -- Thumb-1 loads 32-bit constants from memory beside the code, and the
+compiler parks a pool mid-function and jumps over it to the next instruction.
+The rule `literal-pool jump` excuses exactly that: a `b` to a local label
+reached from the jump through nothing but `.LCPI` labels, alignment and data
+directives. It applies to these two probes only, on Cortex-M0, with a ceiling
+of 12, the count read on 2026-10-13 with rustc 1.99.0. `test-check-ct.py`
+holds it to excusing that shape and not a jump over code, a conditional jump
+over a pool, a jump to another label, or the same jump in another probe.
+
+Valgrind on Ed25519 signing reports 9 secret-dependent branches before and 0
+after. It sees the portable field only: Valgrind does not report ADX in
+CPUID, so the x86-64 MULX/ADX field is not selected under it.
 
 The `ic timing` targets `hash-to-curve` (a fixed versus a random password),
 `oprf-evaluate` (two server keys), `blake2s-keyed` and `blake3-keyed` (a

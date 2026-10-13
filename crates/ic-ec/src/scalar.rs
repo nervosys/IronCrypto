@@ -39,7 +39,17 @@ fn conditional_subtract_l(r: &mut [u32; 9]) {
         borrow = (d >> 63) & 1;
     }
     // `borrow == 0` means r >= L, so the difference is the value we want.
-    let mask = ((borrow as u32) ^ 1).wrapping_neg();
+    //
+    // Both barriers are load-bearing. Without them LLVM, under LTO, saw that
+    // the mask is one of two values, recognised the masked merge below as a
+    // select, and compiled it as a jump on the sign of the top limb's
+    // difference: a branch on whether the secret nonce or S was at least L.
+    // Valgrind found it (docs/CTGRIND.md); `ct_ed25519_reduce_wide` in
+    // scripts/check-ct.py now holds the compiled code to having none. The
+    // input barrier hides that the borrow is 0 or 1, and the output barrier
+    // that the mask is 0 or all ones, as `ic_core::ct::Choice::mask` does.
+    let keep = core::hint::black_box(borrow as u32) ^ 1;
+    let mask = core::hint::black_box(keep.wrapping_neg());
     for i in 0..9 {
         r[i] ^= mask & (r[i] ^ diff[i]);
     }
@@ -69,6 +79,42 @@ fn carry(limbs: &mut [i64; LIMBS], i: usize) {
     limbs[i + 1] += c;
 }
 
+/// [`carry`] at limbs `0..n`, in order.
+///
+/// `n` is a constant at every call, and the calls are written out below it
+/// rather than looped: as a loop, LLVM kept it rolled on the 32-bit targets,
+/// and a rolled loop is a conditional jump the compiled-code gate cannot tell
+/// from a secret one.
+#[inline(always)]
+fn carry_through(limbs: &mut [i64; LIMBS], n: usize) {
+    macro_rules! carries {
+        ($($k:literal)*) => {$(
+            if $k < n {
+                carry(limbs, $k);
+            }
+        )*};
+    }
+    carries!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23);
+}
+
+/// One round of `reduce_wide`'s folding: carry every limb, then push each
+/// limb at or above `2^252` down twelve places, times the digits of `-c`.
+#[inline(always)]
+fn fold_round(limbs: &mut [i64; LIMBS]) {
+    carry_through(limbs, LIMBS - 1);
+    // Positions 24 down to 12, written out: as a loop LLVM kept it rolled.
+    macro_rules! fold_down {
+        ($($i:literal)*) => {$({
+            let t = limbs[$i];
+            limbs[$i] = 0;
+            for (j, d) in NEG_C_DIGITS.iter().enumerate() {
+                limbs[$i - 12 + j] += d * t;
+            }
+        })*};
+    }
+    fold_down!(24 23 22 21 20 19 18 17 16 15 14 13 12);
+}
+
 /// Reduce a 512-bit little-endian integer modulo `L`.
 ///
 /// This used to be long division, one bit at a time: 512 rounds of shifting a
@@ -93,17 +139,26 @@ pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
     // shift produces it. Doing this a bit at a time -- 525 iterations with a
     // bounds test each -- cost more than the folding it feeds.
     //
-    // The scratch buffer is eight bytes longer than the input so the read for
-    // the top limb stays in bounds rather than needing a special case.
-    let mut padded = [0u8; 72];
-    padded[..64].copy_from_slice(input);
-    let mut limbs = [0i64; LIMBS];
-    for (i, slot) in limbs.iter_mut().enumerate() {
+    // The array is built limb by limb, each index a literal, rather than
+    // filled by a loop from a padded copy of the input: on the 32-bit targets
+    // the loop stayed rolled and the copy and the zeroing became `memcpy` and
+    // `memset` calls, none of which the compiled-code gate can read. Reads
+    // past byte 63 are of zero, which is what the padding used to supply.
+    #[inline(always)]
+    fn limb(input: &[u8; 64], i: usize) -> i64 {
         let bit = i * 21;
-        let mut b = [0u8; 8];
-        b.copy_from_slice(&padded[bit / 8..bit / 8 + 8]);
-        *slot = ((u64::from_le_bytes(b) >> (bit % 8)) & ((1 << 21) - 1)) as i64;
+        let mut v = 0u64;
+        for k in 0..8 {
+            let byte = input.get(bit / 8 + k).copied().unwrap_or(0);
+            v |= (byte as u64) << (8 * k);
+        }
+        ((v >> (bit % 8)) & ((1 << 21) - 1)) as i64
     }
+    macro_rules! unpack {
+        ($($i:literal)*) => { [$(limb(input, $i)),*] };
+    }
+    let mut limbs: [i64; LIMBS] =
+        unpack!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24);
 
     // Fold everything at or above 2^252 down, in rounds of carry-then-fold.
     //
@@ -119,18 +174,15 @@ pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
     // four are run because the count is fixed rather than tested, this being
     // constant-time code. `folding_agrees_with_long_division` covers the
     // largest input there is, which is where too few rounds would show.
-    for _round in 0..4 {
-        for k in 0..LIMBS - 1 {
-            carry(&mut limbs, k);
-        }
-        for i in (12..LIMBS).rev() {
-            let t = limbs[i];
-            limbs[i] = 0;
-            for (j, d) in NEG_C_DIGITS.iter().enumerate() {
-                limbs[i - 12 + j] += d * t;
-            }
-        }
-    }
+    //
+    // The four rounds are written out rather than looped. The loop count is
+    // public, but LLVM kept the nest rolled, and a compiled loop is a
+    // conditional jump that `scripts/check-ct.py` cannot tell from a secret
+    // one; written out, `ct_ed25519_reduce_wide` has no jump at all.
+    fold_round(&mut limbs);
+    fold_round(&mut limbs);
+    fold_round(&mut limbs);
+    fold_round(&mut limbs);
     // Folding subtracts `c` times the high part, so the residue is congruent
     // to the input but may be negative -- it lies in roughly `(-L, L)`. Two
     // copies of `L` are added to put it safely above zero; the conditional
@@ -145,9 +197,7 @@ pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
             limbs[j] -= d;
         }
     }
-    for k in 0..13 {
-        carry(&mut limbs, k);
-    }
+    carry_through(&mut limbs, 13);
 
     // Now non-negative. Settle into 21-bit limbs.
     let mut u = [0u64; 14];
@@ -160,30 +210,29 @@ pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
     }
     debug_assert!(borrow >= 0, "reduction left a negative value");
 
-    // Pack the 21-bit limbs into the 32-byte little-endian encoding, eight
-    // bytes at a time for the same reason.
-    let mut wide = [0u8; 40];
-    for (i, &v) in u.iter().enumerate().take(13) {
-        let bit = i * 21;
-        let mut b = [0u8; 8];
-        b.copy_from_slice(&wide[bit / 8..bit / 8 + 8]);
-        let merged = u64::from_le_bytes(b) | (v << (bit % 8));
-        wide[bit / 8..bit / 8 + 8].copy_from_slice(&merged.to_le_bytes());
+    // Pack the 21-bit limbs into eight 32-bit words, each from the at most
+    // three limbs it overlaps, with every index a literal. This used to merge
+    // them into a zeroed byte buffer, which on the 32-bit targets compiled to
+    // a `memset` call the compiled-code gate cannot read. Bits from 256 up are
+    // dropped, as the buffer's truncation to 32 bytes dropped them: at most a
+    // couple of multiples of L remain, well below 2^256.
+    #[inline(always)]
+    fn word(u: &[u64; 14], w: usize) -> u32 {
+        let bit = 32 * w;
+        let (i, s) = (bit / 21, bit % 21);
+        ((u[i] >> s) | (u[i + 1] << (21 - s)) | (u[i + 2] << (42 - s))) as u32
     }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&wide[..32]);
+    macro_rules! pack {
+        ($($w:literal)*) => { [$(word(&u, $w)),*, 0] };
+    }
+    let mut r: [u32; 9] = pack!(0 1 2 3 4 5 6 7);
 
     // At most a couple of multiples of L remain.
-    let mut r = [0u32; 9];
-    for i in 0..8 {
-        let mut b = [0u8; 4];
-        b.copy_from_slice(&out[i * 4..i * 4 + 4]);
-        r[i] = u32::from_le_bytes(b);
-    }
     conditional_subtract_l(&mut r);
     conditional_subtract_l(&mut r);
     conditional_subtract_l(&mut r);
     conditional_subtract_l(&mut r);
+    let mut out = [0u8; 32];
     for i in 0..8 {
         out[i * 4..i * 4 + 4].copy_from_slice(&r[i].to_le_bytes());
     }
@@ -203,32 +252,44 @@ pub fn mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
     let al = to_limbs(a);
     let bl = to_limbs(b);
 
-    // Schoolbook 8x8 -> 16 limbs.
+    // Schoolbook 8x8 -> 16 limbs of 32 bits, starting from `c` rather than
+    // adding it afterwards. Every limb stays below 2^32 between steps, so
+    // each step is at most (2^32 - 1) + (2^32 - 1)^2 + (2^32 - 1) = 2^64 - 1
+    // and fits a u64; `c` in the bottom eight limbs is under that bound
+    // already.
+    //
+    // The rows are written out, and `c` enters here, for the reason the
+    // folding rounds in `reduce_wide` are written out: the row loop and a
+    // byte-wise carry loop that used to add `c` stayed rolled, and a rolled
+    // loop is a jump the compiled-code gate cannot tell from a secret one.
+    let cl = to_limbs(c);
     let mut prod = [0u64; 16];
     for i in 0..8 {
+        prod[i] = cl[i] as u64;
+    }
+    #[inline(always)]
+    fn row(prod: &mut [u64; 16], i: usize, ai: u32, bl: &[u32; 8]) {
         let mut carry = 0u64;
         for j in 0..8 {
-            let t = prod[i + j] + (al[i] as u64) * (bl[j] as u64) + carry;
+            let t = prod[i + j] + (ai as u64) * (bl[j] as u64) + carry;
             prod[i + j] = t & 0xFFFF_FFFF;
             carry = t >> 32;
         }
-        prod[i + 8] += carry;
+        prod[i + 8] = carry;
     }
+    row(&mut prod, 0, al[0], &bl);
+    row(&mut prod, 1, al[1], &bl);
+    row(&mut prod, 2, al[2], &bl);
+    row(&mut prod, 3, al[3], &bl);
+    row(&mut prod, 4, al[4], &bl);
+    row(&mut prod, 5, al[5], &bl);
+    row(&mut prod, 6, al[6], &bl);
+    row(&mut prod, 7, al[7], &bl);
 
     let mut wide = [0u8; 64];
     for i in 0..16 {
         wide[i * 4..i * 4 + 4].copy_from_slice(&(prod[i] as u32).to_le_bytes());
     }
-
-    // Add `c`, propagating the carry across the full 512-bit width.
-    let mut carry = 0u16;
-    for i in 0..64 {
-        let ci = if i < 32 { c[i] as u16 } else { 0 };
-        let t = wide[i] as u16 + ci + carry;
-        wide[i] = t as u8;
-        carry = t >> 8;
-    }
-
     reduce_wide(&wide)
 }
 

@@ -184,6 +184,19 @@ every caller of a hash function uses.
   for BLAKE2b -- and the BLAKE3 team's vectors: 35 input lengths to
   100 KiB in all three modes, to 131 bytes of output.
 
+### Security
+
+- **Ed25519 signing no longer branches on whether a secret scalar is at
+  least L.** `scalar::conditional_subtract_l` was branch-free in source, and
+  under LTO rustc 1.99 compiled its masked merge to a `js` on the borrow:
+  nine jumps per signature on the nonce and on S, found by the Valgrind
+  harness. The borrow and the mask now pass through barriers, and the
+  reduction and `mul_add` are written straight-line; Valgrind reports 0.
+  Two compiled-code probes, `ct_ed25519_reduce_wide` and
+  `ct_ed25519_mul_add`, hold this on all four gated targets, and fail on all
+  four with the barriers removed. One new, narrow rule excuses Cortex-M0's
+  jumps over literal pools in those two probes, with a ceiling.
+
 ### Changed
 
 - **The constant-time gate covers P-256's field and scalar arithmetic.**

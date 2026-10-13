@@ -144,3 +144,14 @@ p256_probes!(
     ct_p256_fn_cmov, ct_p256_fn_eq, ct_p256_fn_is_odd,
     m::{ fn_reduce, fn_add, fn_sub, fn_mul, fn_neg, fn_cmov, fn_eq, fn_is_odd }
 );
+
+// Ed25519's scalar arithmetic modulo L: the nonce and S are secret.
+#[no_mangle]
+pub fn ct_ed25519_reduce_wide(x: &[u8; 64]) -> [u8; 32] {
+    ic_ec::ct_probes::ed25519_reduce_wide(x)
+}
+
+#[no_mangle]
+pub fn ct_ed25519_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
+    ic_ec::ct_probes::ed25519_mul_add(a, b, c)
+}

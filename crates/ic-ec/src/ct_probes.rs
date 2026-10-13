@@ -1,5 +1,6 @@
-//! P-256 field and scalar operations, for `scripts/ct-audit` to inspect after
-//! LTO. Not API, not covered by semver; behind the `ct-probes` feature.
+//! P-256 field and scalar operations, and Ed25519's scalar arithmetic modulo
+//! L, for `scripts/ct-audit` to inspect after LTO. Not API, not covered by
+//! semver; behind the `ct-probes` feature.
 //!
 //! Each takes and returns big-endian bytes, so the probe's inputs stay
 //! runtime values and every operation passes through the same conversions
@@ -73,3 +74,18 @@ macro_rules! probes {
 
 probes!(Fp, fp_reduce, fp_add, fp_sub, fp_mul, fp_neg, fp_cmov, fp_eq, fp_is_odd);
 probes!(Scalar, fn_reduce, fn_add, fn_sub, fn_mul, fn_neg, fn_cmov, fn_eq, fn_is_odd);
+
+/// Ed25519's scalar reduction, `x mod L` for a 512-bit `x`: what turns a hash
+/// into the secret nonce `r`, and finishes `S`.
+#[cfg(not(ic_approved_only))]
+#[inline(always)]
+pub fn ed25519_reduce_wide(x: &[u8; 64]) -> [u8; 32] {
+    crate::scalar::reduce_wide(x)
+}
+
+/// `(a * b + c) mod L`, which is `S = k * s + r` in Ed25519 signing.
+#[cfg(not(ic_approved_only))]
+#[inline(always)]
+pub fn ed25519_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
+    crate::scalar::mul_add(a, b, c)
+}

@@ -36,6 +36,9 @@ P256 = tuple(
     for op in ("reduce", "add", "sub", "mul", "neg", "cmov", "eq", "is_odd")
 )
 SYMBOLS += P256
+# Ed25519 scalar arithmetic modulo L, on the secret nonce and S.
+ED25519 = ("ct_ed25519_reduce_wide", "ct_ed25519_mul_add")
+SYMBOLS += ED25519
 
 # Runtime-library routines a probe may call on a target, because their bodies
 # are disassembled from that target's compiler_builtins and held to the same
@@ -56,7 +59,8 @@ VERIFIED_EXTERNAL = {
 # Counted per probe, following calls: one loop in a shared `from_mont` is
 # counted once for each probe that reaches it. Read on 2026-10-12, rustc 1.99.0.
 EXCUSE_CEILINGS = {
-    "thumbv6m-none-eabi": {"counter loop": 32, "unconditional jump": 40},
+    "thumbv6m-none-eabi": {"counter loop": 32, "unconditional jump": 40,
+                           "literal-pool jump": 12},
     "thumbv7em-none-eabihf": {"counter loop": 32},
     "riscv32imac-unknown-none-elf": {"stack-bound loop": 16, "constant memset": 16},
 }
@@ -190,6 +194,40 @@ def _previous(ins, i, count, skip=None):
     return found
 
 
+_POOL_DATA = re.compile(r"\.(?:p2align|align|long|short|byte|word|zero)\b")
+
+
+def pool_jumps(lines):
+    """Indices, into `instructions_of(lines)`, of Thumb unconditional jumps
+    over a literal pool: `b L` where everything between it and `L:` is
+    constant-pool data -- `.LCPI` labels, alignment and data directives.
+
+    Thumb-1 can only load a 32-bit constant from memory near the code, so
+    the compiler parks constants mid-function and jumps over them to the
+    very next instruction. Such a jump has one target and no condition, and
+    whether it is taken depends on nothing.
+    """
+    found = set()
+    index = -1
+    for r, line in enumerate(lines):
+        text = line.strip()
+        if not text or text.startswith((".", "#", "@", "//")) or text.endswith(":"):
+            continue
+        index += 1
+        op, operands = _split(line)
+        if op not in {"b", "b.n"} or len(operands) != 1 or not _LOCAL_LABEL.fullmatch(operands[0]):
+            continue
+        for following in lines[r + 1:]:
+            t = following.strip()
+            if t == operands[0] + ":":
+                found.add(index)
+                break
+            if not t or _POOL_DATA.match(t) or re.fullmatch(r"\.LCPI[\w.$]+:", t):
+                continue
+            break
+    return found
+
+
 def excuse(target, ins, i):
     """The rule that excuses the finding at `ins[i]`, or None.
 
@@ -296,6 +334,7 @@ def inspect(assembly, target, excused=None):
 
     def walk(probe, name, lines, seen):
         ins = instructions_of(lines)
+        pools = pool_jumps(lines) if target.startswith("thumb") else set()
         for i, line in enumerate(ins):
             callee = called(line, target, functions)
             if callee is not None:
@@ -314,6 +353,10 @@ def inspect(assembly, target, excused=None):
             if not forbidden(line, target):
                 continue
             rule = excuse(target, ins, i) if excusable and probe in P256 else None
+            # The Ed25519 scalar probes are straight-line by construction;
+            # the one shape excused in them is a jump over a literal pool.
+            if probe in ED25519 and i in pools:
+                rule = "literal-pool jump"
             # A rule excuses only on a target it was reviewed for.
             if rule is not None and rule in EXCUSE_CEILINGS[target]:
                 excused[rule] += 1

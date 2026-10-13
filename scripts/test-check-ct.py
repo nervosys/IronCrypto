@@ -93,6 +93,47 @@ class CallTests(unittest.TestCase):
 
 
 
+class LiteralPoolTests(unittest.TestCase):
+    """A Thumb jump over a constant pool is excused in the Ed25519 probes,
+    and nothing that merely resembles one is."""
+
+    M0 = "thumbv6m-none-eabi"
+
+    def ed25519(self, body, probe=None):
+        probe = probe or audit.ED25519[0]
+        return assembly("bx lr").replace(f"{probe}:\n\tbx lr\n", f"{probe}:\n{body}")
+
+    POOL = ("\tb\t.LBB0_2\n\t.p2align\t2\n.LCPI0_0:\n\t.long\t666643\n"
+            ".LBB0_2:\n\tbx lr\n")
+
+    def test_a_jump_over_a_pool_is_excused_and_counted(self):
+        excused = collections.Counter()
+        self.assertEqual(audit.inspect(self.ed25519(self.POOL), self.M0, excused), [])
+        self.assertEqual(excused["literal-pool jump"], 1)
+
+    def test_a_jump_over_code_is_not(self):
+        body = self.POOL.replace("\t.long\t666643\n", "\tadds r0, r0, r1\n")
+        self.assertTrue(audit.inspect(self.ed25519(body), self.M0))
+
+    def test_a_conditional_jump_over_a_pool_is_not(self):
+        body = self.POOL.replace("\tb\t.LBB0_2", "\tbne\t.LBB0_2")
+        self.assertTrue(audit.inspect(self.ed25519(body), self.M0))
+
+    def test_a_jump_elsewhere_is_not(self):
+        body = self.POOL.replace(".LBB0_2:\n", ".LBB0_3:\n")
+        self.assertTrue(audit.inspect(self.ed25519(body), self.M0))
+
+    def test_only_the_ed25519_probes_get_it(self):
+        body = self.POOL
+        probe = audit.SYMBOLS[0]
+        asm = assembly("bx lr").replace(f"{probe}:\n\tbx lr\n", f"{probe}:\n{body}")
+        self.assertTrue(audit.inspect(asm, self.M0))
+
+    def test_more_than_the_ceiling_fails(self):
+        excused = collections.Counter({"literal-pool jump": 13})
+        self.assertTrue(audit.over_ceiling(self.M0, excused))
+
+
 class ExcuseTests(unittest.TestCase):
     """The 32-bit P-256 findings are excused by rule, and only those."""
 
