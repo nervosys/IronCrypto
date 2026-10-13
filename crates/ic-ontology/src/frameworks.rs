@@ -249,7 +249,7 @@ pub static CONTROLS: &[Control] = &[
         compliance: Compliance::Partial {
             file: "crates/ic-cli/src/timing.rs",
             symbol: "the_positive_control_detects_its_own_leak",
-            gap: "A dudect-style leakage detector ships as `ic timing`, so the claim is measurable rather than only argued. It is a tool and not a gating test, because timing measurement needs a quiet machine and a test that fails when a laptop indexes its disk teaches people to ignore failures. It carries a positive control, since a detector that has never detected anything proves nothing. Eleven targets now, including batched ML-DSA rounding, ML-KEM compression and both signing paths, which are the severe case: a distinguisher on verification tells an attacker whether a signature was valid, which they usually learn anyway, while one on signing leaks the private key. On a developer machine the constant-time comparison, P-256 scalar multiplication, X25519, AES, ML-KEM decapsulation, ECDSA signing and RSA signing all show no evidence of leakage against a control registering above 1000; AEAD open differs, for the documented reason that its failure path zeroizes the buffer, which is a branch on already-public output. What is still missing is measurement on quiet reference hardware rather than a loaded developer machine. The RSA and ECDSA targets also run at a lower iteration ceiling because each operation costs milliseconds, so they have less statistical power than the cheap targets, and a null result on a noisy machine remains weak evidence of absence rather than a proof."
+            gap: "A dudect-style leakage detector ships as `ic timing`, so the claim is measurable rather than only argued. It is a tool and not a gating test, because timing measurement needs a quiet machine and a test that fails when a laptop indexes its disk teaches people to ignore failures. It carries a positive control, since a detector that has never detected anything proves nothing. Fifteen targets now, including batched ML-DSA rounding, ML-KEM compression, both signing paths, hashing a password to P-256, the OPRF's keyed evaluation and keyed BLAKE2s and BLAKE3, which are the severe case: a distinguisher on verification tells an attacker whether a signature was valid, which they usually learn anyway, while one on signing leaks the private key. On a developer machine the constant-time comparison, P-256 scalar multiplication, X25519, AES, ML-KEM decapsulation, ECDSA signing and RSA signing all show no evidence of leakage against a control registering above 1000; AEAD open differs, for the documented reason that its failure path zeroizes the buffer, which is a branch on already-public output. Separately, `scripts/check-ct.py` rejects branches, division and unreadable calls in compiled probes of the ML-KEM, ML-DSA and core helpers on four targets, and of P-256's field and scalar arithmetic on x86-64; on 32-bit targets the P-256 findings are a loop counter, a fixed memset and Cortex-M0's runtime multiply, read and recorded in docs/CONSTANT_TIME.md rather than gated. bcrypt, scrypt and yescrypt are excluded from all of this because they read memory at password-derived indices by design, which the ontology states as a serious constraint on each. What is still missing is measurement on quiet reference hardware rather than a loaded developer machine. The RSA and ECDSA targets also run at a lower iteration ceiling because each operation costs milliseconds, so they have less statistical power than the cheap targets, and a null result on a noisy machine remains weak evidence of absence rather than a proof."
         },
         algorithms: &[],
         standards: &[],
@@ -267,6 +267,19 @@ pub static CONTROLS: &[Control] = &[
         },
         algorithms: &["aes-256-gcm", "aes-256-gcm-siv", "hpke-x25519-sha256"],
         standards: &["SP 800-38D", "RFC 8452"],
+    },
+    Control {
+        id: "CWE-916",
+        framework: Framework::Cwe,
+        title: "Use of Password Hash With Insufficient Computational Effort",
+        description: "Stored password hashes are cheap enough to compute that guessing them offline is practical.",
+        bearing: "PBKDF2 refuses fewer than SP 800-132's 1000 iterations and check_iterations calls anything under 600000 weak; Argon2 and scrypt refuse parameters outside their specifications. Stored hashes are moved upward over time: needs_rehash says when an Argon2 or scrypt hash falls short of the current parameters, and ic_kdf::password verifies a hash in any supported format -- Argon2, scrypt, bcrypt, yescrypt -- and returns its Argon2id replacement, so legacy hashes leave the database one login at a time. bcrypt and yescrypt are verify-only for that reason. A stored hash that names an absurd cost is refused before any work, so the defence cannot be turned into a denial of service.",
+        compliance: Compliance::Met {
+            file: "crates/ic-kdf/src/password.rs",
+            symbol: "verify_and_upgrade",
+        },
+        algorithms: &["argon2id", "scrypt", "bcrypt", "yescrypt", "pbkdf2-hmac-sha2-256"],
+        standards: &["RFC 9106", "RFC 7914", "SP 800-132"],
     },
     Control {
         id: "CWE-759",
@@ -379,13 +392,13 @@ pub static CONTROLS: &[Control] = &[
         framework: Framework::Attack,
         title: "Brute Force",
         description: "An adversary guesses credentials or keys by exhaustive search.",
-        bearing: "For keys, the floors under T1600.001. For passwords, a memory-hard KDF is available and recommended over PBKDF2, because PBKDF2 has no memory cost and so concedes an unbounded hardware advantage to the attacker.",
+        bearing: "For keys, the floors under T1600.001. For passwords, a memory-hard KDF is available and recommended over PBKDF2, because PBKDF2 has no memory cost and so concedes an unbounded hardware advantage to the attacker; scrypt where Argon2 is not available. OPAQUE goes further: a stolen password database cannot be attacked offline without also the server's OPRF key, and the server never sees the password, so guessing has to go through the server, where it can be rate limited.",
         compliance: Compliance::Met {
             file: "crates/ic-kdf/src/argon2.rs",
             symbol: "memory_kib",
         },
-        algorithms: &["argon2id", "pbkdf2-hmac-sha2-256"],
-        standards: &["RFC 9106", "SP 800-132"],
+        algorithms: &["argon2id", "scrypt", "opaque-3dh-p256", "pbkdf2-hmac-sha2-256"],
+        standards: &["RFC 9106", "RFC 7914", "RFC 9807", "SP 800-132"],
     },
     Control {
         id: "T1565",

@@ -139,6 +139,13 @@ all of them.
   scrypt must say so.
 - **bcrypt wipes its key schedule's running block** after use, as it
   already wiped the schedule itself.
+- **The frameworks knowledgebase follows the new work.** CWE-916,
+  password hashes with too little computational effort, is a new control,
+  met by `needs_rehash` and `ic_kdf::password`. ATT&CK T1110, brute force,
+  now names scrypt and OPAQUE, whose stolen database cannot be attacked
+  offline without the server's key. CWE-208's evidence describes the new
+  timing targets and the P-256 compiled-code probes, and why bcrypt, scrypt
+  and yescrypt stand outside both.
 - **`ic lint` no longer reports scrypt's single PBKDF2 pass.** The
   iteration check skipped nothing, so ic-kdf's crate-private
   `pbkdf2::derive`, which scrypt and yescrypt run once by definition, was
