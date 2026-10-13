@@ -205,7 +205,7 @@ macro_rules! ml_dsa {
         const SK_S1_AT: usize = 128;
         const SK_S2_AT: usize = SK_S1_AT + L * S_LEN;
         const SK_T0_AT: usize = SK_S2_AT + K * S_LEN;
-        const _: () = assert!(SK_T0_AT + K * T0_LEN == SECRET_KEY_LEN);
+        const _: () = { assert!(SK_T0_AT + K * T0_LEN == SECRET_KEY_LEN) };
 
         // # Why `A` is never held
         //

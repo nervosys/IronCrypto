@@ -169,6 +169,10 @@ pub fn is_zero(x: &[u8]) -> Choice {
     Choice::from_u8(acc).not()
 }
 
+// Bounded proofs for Kani; see the module.
+#[cfg(kani)]
+mod proofs;
+
 #[cfg(test)]
 mod tests {
     use super::*;

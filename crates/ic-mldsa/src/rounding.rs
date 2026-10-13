@@ -272,6 +272,10 @@ pub fn use_hint_poly(hints: &[bool; N], r: &Poly, gamma2: i32) -> Poly {
     out
 }
 
+// Bounded proofs for Kani; see the module.
+#[cfg(kani)]
+mod proofs;
+
 #[cfg(test)]
 mod tests {
     use super::*;
