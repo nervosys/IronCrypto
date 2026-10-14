@@ -58,9 +58,16 @@ pub(crate) const P: [u64; 4] = [
 
 /// `a + b * c + carry`, as (low, high). Cannot overflow: at most
 /// `(2^64 - 1) + (2^64 - 1)^2 + (2^64 - 1) = 2^128 - 1`.
+///
+/// The product is `wrapping_mul` because a product of two 64-bit values cannot
+/// overflow 128 bits, so it never wraps and compiles to the same instruction.
+/// Written with `*`, the model checker tests that product for overflow with a
+/// 256-bit multiplier, and its SMT path encodes the checked product wrongly;
+/// see `proofs`.
 #[inline(always)]
-const fn mac(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
-    let t = (a as u128) + (b as u128) * (c as u128) + (carry as u128);
+#[cfg_attr(kani, kani::ensures(|r: &(u64, u64)| proofs::mac_post(a, b, c, carry, *r)))]
+fn mac(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
+    let t = (a as u128) + (b as u128).wrapping_mul(c as u128) + (carry as u128);
     (t as u64, (t >> 64) as u64)
 }
 
@@ -83,6 +90,8 @@ const fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
 /// Montgomery-reduce `t` (eight words, below `p^2`): `t / 2^256 mod p`,
 /// canonical.
 #[inline(always)]
+#[cfg_attr(kani, kani::requires(proofs::reduce_pre(t)))]
+#[cfg_attr(kani, kani::ensures(|out: &[u64; 4]| proofs::reduce_post(t, *out)))]
 fn reduce(t: [u64; 8]) -> [u64; 4] {
     let [w0, w1, w2, w3, t4, t5, t6, t7] = t;
     let w = montgomery_low([w0, w1, w2, w3]);
@@ -94,6 +103,7 @@ fn reduce(t: [u64; 8]) -> [u64; 4] {
 /// the low word itself and the division is exact. The result is below `2^256`
 /// for every `w`, so no word is lost.
 #[inline(always)]
+#[cfg_attr(kani, kani::ensures(|out: &[u64; 4]| proofs::mont_step_post(w, *out)))]
 fn mont_step(w: [u64; 4]) -> [u64; 4] {
     let u = w[0];
     let (n0, c) = adc(w[1], u << 32, 0);
@@ -107,6 +117,7 @@ fn mont_step(w: [u64; 4]) -> [u64; 4] {
 /// take. Applying [`mont_step`] four times is that division, one word at a
 /// time, and `w` is at most `p` for every `lo`.
 #[inline(always)]
+#[cfg_attr(kani, kani::ensures(|w: &[u64; 4]| proofs::montgomery_low_post(lo, *w)))]
 fn montgomery_low(lo: [u64; 4]) -> [u64; 4] {
     let mut w = lo;
     for _ in 0..4 {
@@ -119,6 +130,8 @@ fn montgomery_low(lo: [u64; 4]) -> [u64; 4] {
 /// `hi` below `p` and `w` at most `p`, is below `2p`, so one conditional
 /// subtraction of `p` leaves it in `[0, p)`.
 #[inline(always)]
+#[cfg_attr(kani, kani::requires(proofs::finish_pre(hi, w)))]
+#[cfg_attr(kani, kani::ensures(|out: &[u64; 4]| proofs::finish_post(hi, w, *out)))]
 fn finish(hi: [u64; 4], w: [u64; 4]) -> [u64; 4] {
     let (s0, c) = adc(hi[0], w[0], 0);
     let (s1, c) = adc(hi[1], w[1], c);

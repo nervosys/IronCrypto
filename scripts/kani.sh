@@ -14,4 +14,7 @@ cd "$root"
 if [ $# -eq 0 ]; then
     set -- -p ic-core -p ic-ec -p ic-mldsa
 fi
-cargo kani "$@"
+# Function contracts (`proof_for_contract`, `stub_verified`) and the stubbing
+# they use are unstable in Kani 0.68, so both flags are passed for every crate.
+# Some ic-ec proofs name Bitwuzla as their solver; it must be on PATH.
+cargo kani -Z function-contracts -Z stubbing "$@"
