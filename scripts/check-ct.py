@@ -76,6 +76,13 @@ X86_ONLY = (
     # ChaCha20's sixteen-block AVX-512 keystream group, and Poly1305's
     # four-lane AVX2 step and final lane folding, under the key's r and s.
     "ct_chacha20_zmm_group", "ct_poly1305_avx2_step", "ct_poly1305_avx2_finish",
+    # Short messages: ChaCha20's two-block AVX2 kernel, two blocks side by
+    # side in each register and its rounds written out, once and as two
+    # pairs; the AEAD's tag in radix 2^64 over thirteen bytes of associated
+    # data and sixty-four of ciphertext; and HMAC-SHA256's SHA-NI key-pad
+    # compressions and its last inner and outer compressions.
+    "ct_chacha20_avx2_pair", "ct_chacha20_avx2_two_pairs", "ct_poly1305_short",
+    "ct_hmac_sha256_pads", "ct_hmac_sha256_tail",
     # RSA's Montgomery products at 2048 bits: the MULX/ADCX/ADOX product, the
     # AVX-512 IFMA almost-Montgomery product, and the portable CIOS product.
     # Each loops over the public width, and their loop branches are excused by

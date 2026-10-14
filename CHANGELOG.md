@@ -134,6 +134,96 @@ all of them.
 
 ### Performance
 
+- **Short messages on x86-64: ChaCha20-Poly1305, SHA-256 and HMAC-SHA256
+  ahead of Graviola, where they were level.** Each was measured first for
+  what it pays per message, with an rdtsc harness taking the minimum of many
+  batches (TSC ticks; master's build and this one alternated):
+  - *ChaCha20-Poly1305, 64 bytes*: 1048-1079 ticks, of which two calls of
+    the portable block function (the Poly1305 key's block and the message's,
+    about 260 each with their set-up), Poly1305 key set-up computing `r^2` to
+    `r^4` that a short message never uses (85), five blocks of the 26-bit
+    Poly1305 and its finish (about 190), and the rest in the module gate
+    (6 per check, three checks), key copies, wipes and plumbing. Now
+    458-644: a two-block AVX2 kernel (`chacha::avx2::pair`, two blocks side
+    by side in each register, the diagonal rounds by `vpshufd`, rounds
+    written out) computes block 0, the Poly1305 key, and block 1 in one call
+    (357-373 ticks; four blocks, two pairs overlapped, 412-424, for messages
+    to 192 bytes); and the tag is computed in radix 2^64 on `MUL`
+    (`chacha::poly64`, 89-95 ticks for the five blocks and the finish) for
+    associated data and ciphertext together to 256 bytes. Opening checks the
+    tag over the ciphertext before the keystream touches it. The keystream
+    tail under eight blocks in the bulk path now takes the same kernel, so
+    a 256-byte message went from 1855-1909 to 1266-1484 ticks; a lone last
+    block stays on the block function, which has the lower latency for one.
+    One kernel pair is slower than one scalar block (357 against 260), so
+    the bulk path's Poly1305 key stays on the block function.
+  - *SHA-256, 64 bytes*: 249-257 ticks; the two SHA-NI compressions are
+    most of it, and the overhead was two calls each shuffling the state into
+    and out of the instructions' layout, the block buffer and its copy, and
+    the wipes. `digest` now pads into a buffer of its own and compresses the
+    message's blocks and the padding in one call: 188-193.
+  - *HMAC-SHA256, 200 bytes* (both libraries rekeying per call, like for
+    like; `Hmac::new` is the keyed object that holds the two pad states, and
+    HKDF already keeps one): 907-935 ticks. The public `Mac::mac` and
+    `Digest::digest` were the traits' defaults, `new`, `update`, `finalize`,
+    so a caller through them never reached the one-pass HMAC path the crate
+    has had (`ic_core::traits` now forwards both to the implementation's
+    one-shot, behind the same refusal). And on SHA-NI, HMAC-SHA256 is now
+    three calls of the compression code: the two key-pad blocks together,
+    two independent chains with the outer pad made from the inner in
+    registers; then the message's blocks, its padding, and the outer block,
+    which is the inner digest and goes from registers into the outer
+    compression without being stored and swapped to bytes and back
+    (`ic_hash::sha2::x86::hmac_tail`). 677-696 ticks; at 32 bytes 618-640 to
+    428-439. A keyed `Hmac` cloned and finished, as HKDF's expansion does
+    per block, finishes the same way: 391-403 to 325-338 ticks at 32 bytes.
+
+  `cargo run --release -- graviola` and `graviola-chacha` (bench), master's
+  binary and this one alternated in each configuration, five and six
+  rounds, on a machine other work loaded to 7-100 percent; IronCrypto's
+  rate over Graviola's in the same run, the range across rounds:
+
+  | row | default, before | default, after | `ic_no_avx512`, before | after |
+  |---|---|---|---|---|
+  | ChaCha20-Poly1305 seal, 64 B | 1.48-1.51 | 2.59-2.64 | 1.34-1.51 | 2.57-2.65 |
+  | HMAC-SHA256, 200 B | 0.92-0.93 | 1.21-1.25 | 0.92-0.94 | 1.17-1.24 |
+  | SHA-256, 64 B | 0.92-1.03 | 1.35-1.37 | 1.01-1.04 | 1.36-1.37 |
+  | ChaCha20-Poly1305 seal, 1 KiB | 2.11-2.14 | 2.05-2.09 | 1.40-1.42 | 1.40-1.41 |
+  | ChaCha20-Poly1305 seal, 4 MiB | 2.80-2.84 | 2.68-2.75 | 1.32-1.66 | 1.46 |
+  | SHA-256 and HMAC-SHA256, 4 MiB | 0.99-1.00 | 0.99-1.01 | 0.99-1.01 | 0.99-1.01 |
+
+  The long ChaCha20-Poly1305 rows of the default build read two to four
+  percent lower in this binary, where their code did not change; in the
+  same binaries P-256 ECDH, which nothing here touches, read 1.19-1.21
+  before and 1.44-1.50 after, so placement moves rows by more than that.
+  The rdtsc harness, which runs the same code in a binary of its own, puts
+  1 KiB at 1802-1875 ticks before and 1816-1886 after and 16 KiB level.
+  An earlier form of this change did cost the bulk path: with the AEAD's
+  tag computed by a function taking the Poly1305 key through memory, the
+  `ic_no_avx512` 1 KiB row fell from 1.40 to 1.19-1.20 in every round; the
+  bulk path computes its tag inline again, and the short path is out of
+  line.
+
+  Tests: the AEAD against the one-block keystream and 26-bit Poly1305 at
+  every length to 600 bytes with associated data of every length to 48,
+  unaligned, sealed, opened, and refused with a forged tag and the buffer
+  wiped; the radix-2^64 tag at every length to 192 with every message bit
+  set under the largest clamped `r`, and with `h` placed at `p - 2` to `p +
+  4` under `r = 1`, where the tag is known by the rule -- random inputs
+  reach `h >= p` with probability about 2^-128, so this is the only test
+  that sees the final subtraction (making it never subtract fails that test
+  and no other); SHA-224 and SHA-256 one-shot against the portable
+  streaming hash at every length to 600; HMAC-SHA256's one pass and its
+  finish against HMAC built by hand on the portable compression at every
+  message length to 600 and key length to 64. Mutations each failed tests
+  and were restored: the Poly1305 key from block 1, a padding boundary of
+  55, the refused output not wiped, the fold by four, the outer block's
+  length 512 bits, the outer pad constant, the tail's counter step, the
+  second pair's counter. A deleted wipe of the one-shot digest's padded
+  tail passes every test: no test reads the stack. Five new constant-time
+  probes (docs/CONSTANT_TIME.md, "Short messages on x86-64"): 119 on
+  x86-64, 302 gating probe/target checks.
+
 - **Ed25519 signing on x86-64 without AVX-512 IFMA: ahead of Graviola.**
   Two changes. (1) The basepoint multiplication on the MULX/ADX field takes
   signed radix-32 digits against 26 windows of sixteen affine Niels points
@@ -405,7 +495,7 @@ all of them.
   key load and the decryption one through its `AESIMC` key derivation; the
   `PMULL` GHASH multiply and eight-block absorb; SHA-256 and SHA-512
   compression. aarch64 runs the forty-four shared probes too: 51 there,
-  294 gating probe/target checks when this landed (297 now; docs/CONSTANT_TIME.md). Every control transfer but `ret` fails on
+  294 gating probe/target checks when this landed (302 now; docs/CONSTANT_TIME.md). Every control transfer but `ret` fails on
   AArch64 unless excused; one rule, the x86-64 counter-loop rule's shape,
   excuses a `cbz`/`cbnz` or a `b.<cond>` fed by `subs`/`adds`/`cmp`/`cmn`
   with an immediate (or `cmp` against a register the loop never writes) on a

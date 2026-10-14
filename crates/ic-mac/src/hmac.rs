@@ -34,6 +34,24 @@ pub trait HmacDigest: Digest {
     const HMAC_ID: &'static str;
     /// Display name of the HMAC built on this digest.
     const HMAC_NAME: &'static str;
+
+    /// A faster whole-tag path for this digest, where it has one: `None`
+    /// sends [`Mac::mac`] down the generic path, which gives the same tag.
+    /// Not API.
+    #[doc(hidden)]
+    fn one_shot(key: &[u8], data: &[u8]) -> Option<Self::Output> {
+        let _ = (key, data);
+        None
+    }
+
+    /// A faster finish from the two keyed states, `inner` having absorbed
+    /// the message, where this digest has one: `None` sends
+    /// [`Mac::finalize`] down the generic path. Not API.
+    #[doc(hidden)]
+    fn finish(inner: &Self, outer: &Self) -> Option<Self::Output> {
+        let _ = (inner, outer);
+        None
+    }
 }
 
 impl<D: HmacDigest> Algorithm for Hmac<D> {
@@ -207,6 +225,10 @@ impl<D: HmacDigest> Mac for Hmac<D> {
     }
 
     fn finalize(self) -> Self::Tag {
+        // `self` is dropped on return either way, which wipes both states.
+        if let Some(tag) = D::finish(&self.inner, &self.outer) {
+            return tag;
+        }
         if large_state::<D>() {
             tag_out_of_line(self)
         } else {
@@ -216,6 +238,9 @@ impl<D: HmacDigest> Mac for Hmac<D> {
 
     fn mac(key: &[u8], data: &[u8]) -> Result<Self::Tag> {
         ic_core::module::operational()?;
+        if let Some(tag) = D::one_shot(key, data) {
+            return Ok(tag);
+        }
         ensure!(
             D::BLOCK_LEN <= MAX_BLOCK_LEN,
             InvalidParameter,
@@ -233,6 +258,7 @@ macro_rules! hmac_alias {
     (
         $name:ident, $digest:ty, $id:literal, $disp:literal, $taglen:literal,
         $kat_key:expr, $kat_msg:expr, $kat_tag:literal
+        $(, one_shot = $fast:path, finish = $finish:path)?
     ) => {
         #[doc = concat!($disp, ".")]
         pub type $name = Hmac<$digest>;
@@ -240,6 +266,15 @@ macro_rules! hmac_alias {
         impl HmacDigest for $digest {
             const HMAC_ID: &'static str = $id;
             const HMAC_NAME: &'static str = $disp;
+            $(
+                fn one_shot(key: &[u8], data: &[u8]) -> Option<Self::Output> {
+                    $fast(key, data)
+                }
+
+                fn finish(inner: &Self, outer: &Self) -> Option<Self::Output> {
+                    $finish(inner, outer)
+                }
+            )?
         }
 
         impl SelfTest for Hmac<$digest> {
@@ -277,7 +312,9 @@ hmac_alias!(
     32,
     KAT_KEY,
     b"Hi There",
-    "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+    "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+    one_shot = ic_hash::hmac_sha256_one_shot,
+    finish = ic_hash::hmac_sha256_finish
 );
 hmac_alias!(
     HmacSha384,

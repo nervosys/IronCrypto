@@ -14,8 +14,11 @@ use ic_core::{ensure, Result, Zeroize};
 
 // SHA-NI, where the CPU has it. Only under `std`, because the detection does:
 // a `no_std` build has no way to ask, and guessing wrong is an illegal
-// instruction rather than a wrong answer.
-#[cfg(all(target_arch = "x86_64", feature = "std"))]
+// instruction rather than a wrong answer. Also compiled, without `std` and
+// without the detection, for `ct-probes`, so `scripts/ct-audit` can read the
+// HMAC compositions.
+#[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod x86;
 
 // SHA-512's schedule, four words at a time. Same reasoning as `x86`: only
@@ -34,22 +37,55 @@ mod avx2_512;
 ))]
 mod aarch64;
 
-/// The ARMv8 SHA-256 and SHA-512 kernels, for `scripts/ct-audit` to inspect
-/// after LTO. Not API, not covered by semver; behind the `ct-probes` feature.
-/// Never executed by the audit: compiled to be read.
+/// The ARMv8 SHA-256 and SHA-512 kernels, and on x86-64 HMAC-SHA256's SHA-NI
+/// compositions, for `scripts/ct-audit` to inspect after LTO. Not API, not
+/// covered by semver; behind the `ct-probes` feature. Never executed by the
+/// audit: compiled to be read.
 #[cfg(all(
-    target_arch = "aarch64",
-    feature = "aarch64-crypto",
-    feature = "ct-probes"
+    feature = "ct-probes",
+    any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", feature = "aarch64-crypto")
+    )
 ))]
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod ct_probes {
+    /// HMAC-SHA256's two key-pad compressions, the outer pad made from the
+    /// inner in registers.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have SHA-NI and SSE4.1.
+    #[cfg(target_arch = "x86_64")]
+    pub unsafe fn hmac_sha256_pads(inner: &mut [u32; 8], outer: &mut [u32; 8], ipad: &[u8; 64]) {
+        // SAFETY: as the caller guarantees.
+        unsafe { super::x86::compress_pads(inner, outer, ipad) }
+    }
+
+    /// HMAC-SHA256's end over one whole block of message and one padding
+    /// block, then the outer block from the inner digest in registers.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have SHA-NI and SSE4.1.
+    #[cfg(target_arch = "x86_64")]
+    pub unsafe fn hmac_sha256_tail(
+        inner: &[u32; 8],
+        block: &[u8; 64],
+        tail: &[u8; 64],
+        outer: &mut [u32; 8],
+    ) {
+        // SAFETY: as the caller guarantees; both are one whole block.
+        unsafe { super::x86::hmac_tail(inner, block, tail, outer) }
+    }
+
     /// SHA-256 compression over a fixed four blocks.
     ///
     /// # Safety
     ///
     /// The CPU must have the SHA-256 instructions.
+    #[cfg(target_arch = "aarch64")]
     #[target_feature(enable = "neon,sha2")]
     pub unsafe fn sha256_armv8_compress(state: &mut [u32; 8], blocks: &[u8; 256]) {
         // SAFETY: as the caller guarantees.
@@ -61,6 +97,7 @@ pub mod ct_probes {
     /// # Safety
     ///
     /// The CPU must have the SHA-512 instructions.
+    #[cfg(target_arch = "aarch64")]
     #[target_feature(enable = "neon,sha3")]
     pub unsafe fn sha512_armv8_compress(state: &mut [u64; 8], blocks: &[u8; 256]) {
         // SAFETY: as the caller guarantees.
@@ -407,6 +444,127 @@ impl Core256 {
     }
 }
 
+/// The padded final block or two of a SHA-256 message: `rest`, the bytes
+/// after its last whole block, then `0x80`, zeros and the length in bits of
+/// the whole message, `total` bytes, into the front of `out`. Returns how
+/// many bytes that is, 64 or 128.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[inline(always)]
+fn pad256(rest: &[u8], total: u64, out: &mut [u8; 128]) -> usize {
+    debug_assert!(rest.len() < 64);
+    out[..rest.len()].copy_from_slice(rest);
+    out[rest.len()] = 0x80;
+    let end = if rest.len() < 56 { 64 } else { 128 };
+    out[end - 8..end].copy_from_slice(&total.wrapping_mul(8).to_be_bytes());
+    end
+}
+
+/// SHA-224 or SHA-256 of `data` from the starting value in `h`, on SHA-NI:
+/// the message's whole blocks straight from `data` and its padded tail from a
+/// buffer, in one call that keeps the state in registers across them.
+///
+/// For a short message that is most of the work saved over `new`, `update`
+/// and `finalize`: one load and store of the state in the instructions'
+/// layout rather than two, and no block buffer to fill, copy and wipe. The
+/// tail buffer, which holds the end of the message, is wiped.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn one_shot_sha_ni(h: &mut [u32; 8], data: &[u8]) {
+    let whole = data.len() - data.len() % 64;
+    let mut tail = [0u8; 128];
+    let end = pad256(&data[whole..], data.len() as u64, &mut tail);
+    // SAFETY: the callers checked `sha_ni()`; both lengths are whole blocks.
+    unsafe { x86::compress_parts(h, &data[..whole], &tail[..end]) };
+    tail[..end].zeroize();
+}
+
+/// SHA-256's starting value, FIPS 180-4 section 5.3.3.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+const IV256: [u32; 8] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
+
+/// HMAC-SHA256 (FIPS 198-1) of `data` under `key`, in one pass on SHA-NI, or
+/// `None` where this CPU has no SHA-NI or the key is longer than a block --
+/// the caller then takes the generic path, which gives the same tag. Not API:
+/// `ic_mac::HmacSha256::mac` calls it.
+///
+/// Three calls into the SHA-NI code where the generic path makes six: the two
+/// key-pad blocks together, as two independent chains the CPU overlaps; and
+/// the message's blocks, its padding, and the outer block -- which is the
+/// inner digest, so it goes from registers into the outer compression without
+/// being stored or swapped to bytes and back.
+///
+/// The padded key, both chaining values and the message's padded tail are
+/// wiped before it returns.
+#[doc(hidden)]
+pub fn hmac_sha256_one_shot(key: &[u8], data: &[u8]) -> Option<[u8; 32]> {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if key.len() <= 64 && sha_ni() {
+        let mut ipad = [0x36u8; 64];
+        for (p, k) in ipad.iter_mut().zip(key) {
+            *p ^= k;
+        }
+        let mut inner = IV256;
+        let mut outer = IV256;
+        // SAFETY: `sha_ni()` is the feature test these require.
+        unsafe { x86::compress_pads(&mut inner, &mut outer, &ipad) };
+        ipad.zeroize();
+
+        let whole = data.len() - data.len() % 64;
+        let mut tail = [0u8; 128];
+        // The inner hash's message is the 64-byte pad, then `data`.
+        let end = pad256(&data[whole..], 64 + data.len() as u64, &mut tail);
+        // SAFETY: as above; both lengths are whole blocks.
+        unsafe { x86::hmac_tail(&inner, &data[..whole], &tail[..end], &mut outer) };
+        tail[..end].zeroize();
+        inner.zeroize();
+
+        let mut tag = [0u8; 32];
+        for (t, w) in tag.chunks_exact_mut(4).zip(outer) {
+            t.copy_from_slice(&w.to_be_bytes());
+        }
+        outer.zeroize();
+        return Some(tag);
+    }
+    let _ = (key, data);
+    None
+}
+
+/// HMAC-SHA256's tag from its two keyed states, `inner` having absorbed the
+/// message, on SHA-NI; or `None` where the CPU has no SHA-NI or `outer` is
+/// not a state that has absorbed exactly one block, the outer pad -- the
+/// caller then finishes the generic way, which gives the same tag. Not API:
+/// `ic_mac::HmacSha256`'s `finalize` calls it, as HKDF's expansion does once
+/// per block of output.
+///
+/// The inner hash's padding and the outer block are one call, the outer block
+/// built from the inner digest in registers ([`hmac_sha256_one_shot`] has the
+/// same end). The states themselves are the caller's, and wiped when it drops
+/// them; the padded tail and the outer chaining value copied here are wiped
+/// before this returns.
+#[doc(hidden)]
+pub fn hmac_sha256_finish(inner: &Sha256, outer: &Sha256) -> Option<[u8; 32]> {
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if outer.0.buffered == 0 && outer.0.len == 64 && sha_ni() {
+        let core = &inner.0;
+        let mut tail = [0u8; 128];
+        let end = pad256(&core.buf[..core.buffered], core.len, &mut tail);
+        let mut h = outer.0.h;
+        // SAFETY: `sha_ni()` is the feature test this requires; there are no
+        // whole blocks, and the tail is one or two.
+        unsafe { x86::hmac_tail(&core.h, &[], &tail[..end], &mut h) };
+        tail[..end].zeroize();
+        let mut tag = [0u8; 32];
+        for (t, w) in tag.chunks_exact_mut(4).zip(h) {
+            t.copy_from_slice(&w.to_be_bytes());
+        }
+        h.zeroize();
+        return Some(tag);
+    }
+    let _ = (inner, outer);
+    None
+}
+
 /// The shared 64-bit SHA-2 compression core (SHA-384 / SHA-512 / SHA-512-t).
 #[derive(Clone)]
 struct Core512 {
@@ -660,6 +818,23 @@ macro_rules! sha2_32 {
                 let mut out = [0u8; $out];
                 out.copy_from_slice(&full[..$out]);
                 out
+            }
+
+            fn digest(data: &[u8]) -> Self::Output {
+                #[cfg(all(target_arch = "x86_64", feature = "std"))]
+                if sha_ni() {
+                    let mut h = $iv;
+                    one_shot_sha_ni(&mut h, data);
+                    let mut out = [0u8; $out];
+                    for (o, w) in out.chunks_mut(4).zip(h) {
+                        o.copy_from_slice(&w.to_be_bytes()[..o.len()]);
+                    }
+                    h.zeroize();
+                    return out;
+                }
+                let mut h = Self::default();
+                h.update(data);
+                h.finalize()
             }
         }
 
@@ -970,6 +1145,135 @@ mod tests {
             h.update(b);
             assert_eq!(h.finalize(), want512, "sha-512, {len} bytes in two pieces");
         }
+    }
+
+    /// The one-shot `digest`, which on SHA-NI pads into a buffer of its own
+    /// and compresses in one call, against `new`, `update` and `finalize` on
+    /// the portable round function, for SHA-224 and SHA-256, at every length
+    /// to 600 bytes from an unaligned start.
+    #[test]
+    fn the_one_shot_digest_matches_the_portable_streaming_one() {
+        fn portable<const N: usize>(iv: [u32; 8], msg: &[u8]) -> [u8; N] {
+            let mut padded = msg.to_vec();
+            padded.push(0x80);
+            while padded.len() % 64 != 56 {
+                padded.push(0);
+            }
+            padded.extend_from_slice(&((msg.len() as u64) * 8).to_be_bytes());
+            let mut core = Core256::new(iv);
+            for block in padded.chunks_exact(64) {
+                core.compress(block);
+            }
+            let mut out = [0u8; N];
+            for (o, w) in out.chunks_mut(4).zip(core.h) {
+                o.copy_from_slice(&w.to_be_bytes()[..o.len()]);
+            }
+            out
+        }
+        let source = pattern(603, 9);
+        for len in 0..=600usize {
+            let msg = &source[3..3 + len];
+            assert_eq!(
+                Sha256::digest(msg),
+                portable::<32>(Sha256::default().0.h, msg),
+                "sha-256, {len} bytes"
+            );
+            assert_eq!(
+                Sha224::digest(msg),
+                portable::<28>(Sha224::default().0.h, msg),
+                "sha-224, {len} bytes"
+            );
+        }
+    }
+
+    /// HMAC-SHA256's one-pass SHA-NI path against HMAC built by hand from the
+    /// portable round function, FIPS 198-1 section 4, at every message length
+    /// to 600 bytes and every key length to the block's 64, from unaligned
+    /// starts; and `None`, for the generic path, for a longer key. The RFC
+    /// 4231 vectors reach it through `ic_mac` and pin it to published values;
+    /// this pins it everywhere between them, the length of the padding block
+    /// above all, and the outer block that never exists in memory.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_one_pass_hmac_matches_hmac_by_hand() {
+        if !sha_ni() {
+            println!("no SHA-NI on this CPU; the one-pass HMAC was not exercised");
+            return;
+        }
+        fn hash(msg: &[u8]) -> [u8; 32] {
+            let mut padded = msg.to_vec();
+            padded.push(0x80);
+            while padded.len() % 64 != 56 {
+                padded.push(0);
+            }
+            padded.extend_from_slice(&((msg.len() as u64) * 8).to_be_bytes());
+            let mut core = Core256::new(IV256);
+            for block in padded.chunks_exact(64) {
+                core.compress(block);
+            }
+            let mut out = [0u8; 32];
+            for (o, w) in out.chunks_mut(4).zip(core.h) {
+                o.copy_from_slice(&w.to_be_bytes());
+            }
+            out
+        }
+        fn by_hand(key: &[u8], msg: &[u8]) -> [u8; 32] {
+            let mut k = key.to_vec();
+            k.resize(64, 0);
+            let mut inner: std::vec::Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
+            inner.extend_from_slice(msg);
+            let mut outer: std::vec::Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
+            outer.extend_from_slice(&hash(&inner));
+            hash(&outer)
+        }
+        let source = pattern(700, 3);
+        let mut checked = 0;
+        for key_len in 0..=64usize {
+            let key = &source[1..1 + key_len];
+            let lengths: std::vec::Vec<usize> = if key_len % 8 == 0 || key_len > 60 {
+                (0..=600).collect()
+            } else {
+                (0..=600).step_by(7).chain(50..=70).collect()
+            };
+            for len in lengths {
+                let msg = &source[5..5 + len];
+                let want = by_hand(key, msg);
+                assert_eq!(
+                    hmac_sha256_one_shot(key, msg),
+                    Some(want),
+                    "one pass, key {key_len}, message {len}"
+                );
+
+                // The finish from keyed states, the message absorbed in two
+                // pieces so the inner state's buffer is reached both ways.
+                let mut k = key.to_vec();
+                k.resize(64, 0);
+                let ipad: std::vec::Vec<u8> = k.iter().map(|b| b ^ 0x36).collect();
+                let opad: std::vec::Vec<u8> = k.iter().map(|b| b ^ 0x5c).collect();
+                let mut inner = Sha256::default();
+                inner.update(&ipad);
+                let (a, b) = msg.split_at(len / 3);
+                inner.update(a);
+                inner.update(b);
+                let mut outer = Sha256::default();
+                outer.update(&opad);
+                assert_eq!(
+                    hmac_sha256_finish(&inner, &outer),
+                    Some(want),
+                    "finish, key {key_len}, message {len}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 10_000, "the comparison did not run");
+        assert_eq!(hmac_sha256_one_shot(&source[..65], b"m"), None);
+        // An outer state that is not one block of pad is refused.
+        let mut outer = Sha256::default();
+        outer.update(&source[..65]);
+        assert_eq!(hmac_sha256_finish(&Sha256::default(), &outer), None);
+        let mut outer = Sha256::default();
+        outer.update(&source[..128]);
+        assert_eq!(hmac_sha256_finish(&Sha256::default(), &outer), None);
     }
 
     /// The ARMv8 SHA-256 backend against the portable compression.

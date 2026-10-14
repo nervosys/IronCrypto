@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305 (at 1 KiB and 4 MiB, not at 64 bytes), X25519 (with AVX-512), Ed25519 (with AVX-512; without it, signing narrowly, 1.07-1.10), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512 at 2048 and 3072 bits; level at 4096-bit signing), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH, P-256 signing and P-256 verify are level (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305 (at every size, also without AVX-512), SHA-256 and HMAC-SHA256 on short inputs (64 and 200 bytes), X25519 (with AVX-512), Ed25519 (with AVX-512; without it, signing narrowly, 1.07-1.10), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512 at 2048 and 3072 bits; level at 4096-bit signing), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256 and HMAC-SHA256 on long inputs, SHA3-256, ML-KEM key generation | without AVX-512, P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH, P-256 signing and P-256 verify are level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's portable field multiplication and squaring, end to end except for two argued steps, and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -41,11 +41,11 @@ and a ratio inside that as parity.
 | AES-256-GCM seal, 64 B | 1.15 GB/s | 0.82 GB/s | 813 / 679 MiB/s |
 | ChaCha20-Poly1305 seal, 4 MiB | 2426-3523 MiB/s, loaded | 955-1132 MiB/s, loaded | 2.54-3.68 in the same runs |
 | ChaCha20-Poly1305 seal, 1 KiB | 1724-2229 MiB/s, loaded | 662-1055 MiB/s, loaded | 2.07-2.65 in the same runs |
-| ChaCha20-Poly1305 seal, 64 B | 147-166 MiB/s, loaded | 113-137 MiB/s, loaded | 1.07-1.47 in the same runs |
+| ChaCha20-Poly1305 seal, 64 B | 147-166 MiB/s, loaded | 113-137 MiB/s, loaded | 2.59-2.64 in the same runs (short-message paths, below) |
 | SHA-256, 4 MiB | -- | -- | 2187 / 2275 MiB/s |
 | SHA-512, 4 MiB | -- | -- | 669 / 507 MiB/s |
 | SHA3-256, 4 MiB | 690 MiB/s | 690-735 MiB/s | 594 / 445 MiB/s |
-| HMAC-SHA256, 200 B | 230 ns | parity | 1.18x slower |
+| HMAC-SHA256, 200 B | 230 ns | parity | 1.21-1.25 in the same runs (short-message paths, below) |
 | X25519 | 11.7-12.2 | 13.2-13.6 | 13.7 / 21.6 |
 | Ed25519 sign | 4.6-4.8 | 5.3-6.0 | 5.2 / 6.7 |
 | Ed25519 verify | 17.3-17.6 | 22.4-24.1 | 23.6 / 31.0 |
@@ -81,13 +81,13 @@ here), with the range across rounds:
 | AES-256-GCM, 64 B | 1.43-1.46 | | Ed25519 verify | 1.12-1.33 |
 | ChaCha20-Poly1305, 4 MiB | 2.64-5.20 | | P-256 ECDH | 0.95-0.99 |
 | ChaCha20-Poly1305, 1 KiB | 2.02-2.17 | | ECDSA P-256 sign | 1.00-1.07 |
-| ChaCha20-Poly1305, 64 B | 1.19-1.57 | | ECDSA P-256 verify | 1.09-1.13 |
+| ChaCha20-Poly1305, 64 B | 1.19-1.57 (2.59-2.64 since, below) | | ECDSA P-256 verify | 1.09-1.13 |
 | SHA-256, 4 MiB | 0.98-1.01 | | P-384 ECDH | 0.83-0.98 |
 | SHA-512, 4 MiB | 1.27-2.05 | | ECDSA P-384 sign | 2.33-2.79 |
 | SHA3-256, 4 MiB | 0.95-0.97 | | ECDSA P-384 verify | 1.41-1.56 |
 | HMAC-SHA256, 4 MiB | 0.92-0.99 | | ML-KEM-768 keygen, like for like | 0.98-1.39 |
-| HMAC-SHA256, 200 B | 0.93 | | ML-KEM-768 encapsulate, from bytes, both | 1.82-2.08 |
-| SHA-256, 64 B | 1.01-1.03 | | ML-KEM-768 encapsulate, parsed once, both | 1.71-2.27 |
+| HMAC-SHA256, 200 B | 0.93 (1.21-1.25 since, below) | | ML-KEM-768 encapsulate, from bytes, both | 1.82-2.08 |
+| SHA-256, 64 B | 1.01-1.03 (1.35-1.37 since, below) | | ML-KEM-768 encapsulate, parsed once, both | 1.71-2.27 |
 | RSA-2048 sign / verify | 1.16-1.30 | | ML-KEM-768 decapsulate, parsed once, both | 1.31-1.38 |
 
 The ML-KEM rows in this table were re-measured for this change, not in the
@@ -173,15 +173,6 @@ Where it is not ahead:
   while the field arithmetic here was generic in the modulus. All of these
   rounds ran with the machine loaded by other work; read the ratios, not
   the absolute figures.
-- **ChaCha20-Poly1305 on 64-byte messages** is level, not ahead: 1.07 to
-  1.47 times Graviola's rate across five rounds on a loaded machine, a
-  range that includes parity. One block of keystream and four of Poly1305
-  are too short for the vector kernels, so this is the portable code. On 1
-  KiB and 4 MiB messages it is ahead, by 2.1 to 3.7 times, since ChaCha20
-  runs sixteen blocks at a time on AVX-512 and Poly1305 four lanes on AVX2
-  (CHANGELOG.md has the A/B). Before that it was 0.8 to 1.5 times
-  Graviola's rate under the same load: parity, which an earlier single run
-  had read as behind.
 - **ECDSA P-256 signing without AVX-512 IFMA** is level: 1.02 to 1.07
   of Graviola's rate under `ic_no_avx512`, against 1.20 to 1.22 with IFMA.
 - **aarch64** has ARMv8 backends here for AES, SHA-256 and SHA-512 (the
@@ -443,6 +434,44 @@ The P-256 and P-384 rows of the AVX2 table predate their IFMA path, so the
 default column there is the MULX/ADX path too; the IFMA change's own
 figures, with and without `ic_no_avx512`, are above.
 
+### Short messages, 2026-10-14
+
+ChaCha20-Poly1305 at 64 bytes, HMAC-SHA256 at 200 and SHA-256 at 64 were
+level with Graviola: 1.07-1.47, 0.93 and 1.01-1.03 above. Each was
+measured first for what it pays per message (CHANGELOG.md, Unreleased, has
+the breakdown): at 64 bytes ChaCha20-Poly1305 ran the portable block
+function twice -- the Poly1305 key's block and the message's -- and the
+26-bit Poly1305; SHA-256 and HMAC paid for the state's shuffle into and out
+of SHA-NI's layout once per call rather than once per message, and for
+buffers copied and wiped; and the public `Mac::mac` and `Digest::digest`
+never reached the one-pass paths the implementations have. Now a two-block
+AVX2 kernel gives the AEAD its Poly1305 key and keystream in one call, the
+tag is computed in radix 2^64 for short inputs, SHA-256 pads into its own
+buffer and compresses in one call, and HMAC-SHA256 on SHA-NI is three
+calls, the outer block built from the inner digest in registers.
+
+`graviola` and `graviola-chacha`, master's binary and this change's
+alternated, five and six rounds, the machine loaded by other work;
+IronCrypto's rate over Graviola's within a run, the range across rounds. The
+HMAC rows rekey per call on both sides, like for like:
+
+| operation | default, before | default, after | `ic_no_avx512`, before | after |
+|---|---|---|---|---|
+| ChaCha20-Poly1305 seal, 64 B | 1.48-1.51 | 2.59-2.64 | 1.34-1.51 | 2.57-2.65 |
+| HMAC-SHA256, 200 B | 0.92-0.93 | 1.21-1.25 | 0.92-0.94 | 1.17-1.24 |
+| SHA-256, 64 B | 0.92-1.03 | 1.35-1.37 | 1.01-1.04 | 1.36-1.37 |
+| ChaCha20-Poly1305 seal, 1 KiB | 2.11-2.14 | 2.05-2.09 | 1.40-1.42 | 1.40-1.41 |
+| ChaCha20-Poly1305 seal, 4 MiB | 2.80-2.84 | 2.68-2.75 | 1.32-1.66 | 1.46 |
+| SHA-256, HMAC-SHA256, 4 MiB | 0.99-1.00 | 0.99-1.01 | 0.99-1.01 | 0.99-1.01 |
+
+The long ChaCha20-Poly1305 rows of the default build read a few percent
+lower after, though their code is unchanged; P-256 ECDH, which this change
+does not touch, read 1.19-1.21 before and 1.44-1.50 after in the same
+binaries. An rdtsc harness that runs the code in a binary of its own puts
+1 KiB and 16 KiB level. Read those rows as unchanged, and the short rows as
+ahead. SHA-256 and HMAC-SHA256 on long inputs stay level: both libraries
+run the same SHA-NI instructions over the same blocks.
+
 ## Proved arithmetic
 
 Graviola is ahead here, and this library does not close the gap.
@@ -504,7 +533,7 @@ expected, not a weakness.
 
 Beyond Valgrind, which only sees the build and CPU it runs on:
 
-- `scripts/check-ct.py` disassembles the compiled code of 114 probes on
+- `scripts/check-ct.py` disassembles the compiled code of 119 probes on
   x86-64, 51 on aarch64 (the ARMv8 AES, `PMULL` GHASH, SHA-256 and SHA-512
   backends among them) and 44 on Cortex-M0, Cortex-M4 and 32-bit RISC-V, and fails the
   build on any branch or secret-indexed load in them. It has caught

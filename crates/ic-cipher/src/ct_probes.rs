@@ -200,7 +200,7 @@ mod gcm {
 
 #[cfg(target_arch = "x86_64")]
 mod x86 {
-    use crate::chacha::{poly_avx2, zmm};
+    use crate::chacha::{avx2, poly64, poly_avx2, zmm};
     use core::arch::x86_64::*;
     use core::mem::ManuallyDrop;
 
@@ -261,6 +261,47 @@ mod x86 {
         let last = poly_avx2::Mul::lanes([&powers[0], &powers[1], &powers[2], &powers[3]]);
         // SAFETY: AVX2, as the caller guarantees.
         unsafe { poly_avx2::finish(&limbs(h), &last) }
+    }
+
+    /// Two ChaCha20 blocks on AVX2, side by side in each register: the short
+    /// messages' kernel, which gives an AEAD its Poly1305 key and its first
+    /// block of keystream.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    pub unsafe fn chacha20_avx2_pair(
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        out: &mut [u8; 128],
+    ) {
+        // SAFETY: as the caller guarantees.
+        unsafe { avx2::pair(key, nonce, counter, out) }
+    }
+
+    /// Four ChaCha20 blocks on AVX2, as two such pairs.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    pub unsafe fn chacha20_avx2_two_pairs(
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        out: &mut [u8; 256],
+    ) {
+        // SAFETY: as the caller guarantees.
+        unsafe { avx2::two_pairs(key, nonce, counter, out) }
+    }
+
+    /// The AEAD's tag in radix 2^64, under the one-time key `key`, over
+    /// thirteen bytes of associated data and sixty-four of ciphertext -- a
+    /// TLS 1.2 record's header and a short record -- so that both the padded
+    /// partial block and the whole blocks are in the code read. No feature
+    /// needed: `MUL`, `ADC` and masks.
+    pub fn poly1305_short(key: &[u8; 32], aad: &[u8; 13], ct: &[u8; 64]) -> [u8; 16] {
+        poly64::aead_tag(key, aad, ct)
     }
 }
 

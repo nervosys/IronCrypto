@@ -91,6 +91,13 @@ impl<T: internal::Digest> Digest for T {
         crate::module::operational()?;
         Ok(<T as internal::Digest>::finalize(self))
     }
+
+    /// The implementation's own one-shot path, which may be faster than
+    /// `new`, `update` and `finalize`, behind the same refusal.
+    fn digest(data: &[u8]) -> Result<Self::Output> {
+        crate::module::operational()?;
+        Ok(<T as internal::Digest>::digest(data))
+    }
 }
 
 impl<T: internal::Xof> Xof for T {
@@ -262,6 +269,17 @@ impl<T: internal::Mac> Mac for T {
     fn finalize(self) -> Result<Self::Tag> {
         crate::module::operational()?;
         Ok(<T as internal::Mac>::finalize(self))
+    }
+
+    /// The implementation's own one-shot path, behind the same refusal.
+    ///
+    /// Through 0.3.0 this was the trait's default -- `new`, `update` and
+    /// `finalize` -- so a caller through this trait never reached the
+    /// one-shot paths the implementations provide, HMAC's among them, which
+    /// the library's own callers, through the internal trait, did reach.
+    fn mac(key: &[u8], data: &[u8]) -> Result<Self::Tag> {
+        crate::module::operational()?;
+        <T as internal::Mac>::mac(key, data)
     }
 }
 
