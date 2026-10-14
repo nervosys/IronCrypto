@@ -19,8 +19,140 @@ all of them.
   and two tests assert that the 512-bit kernels stay off. The bench header
   prints the X25519 and RSA-2048 backends. `docs/GRAVIOLA.md` ("Without
   AVX-512") has the measured effect on the Graviola comparison.
+- **ARMv8 backends for SHA-256, SHA-512 and GHASH**, beside the existing
+  ARMv8 AES one and behind the same off-by-default `aarch64-crypto` feature
+  (now on `ic-hash` too; `ironcrypto`'s forwards to both). SHA-256 uses
+  `SHA256H`/`SHA256H2`/`SHA256SU0`/`SHA256SU1`, SHA-512
+  `SHA512H`/`SHA512H2`/`SHA512SU0`/`SHA512SU1`, and GHASH `PMULL`/`PMULL2`
+  over bit-reversed operands, eight blocks per reduction as on x86-64. All
+  are intrinsics stable at the 1.87 MSRV, selected by runtime detection
+  (`sha2`, `sha3`, `pmull`), with the portable code as fallback and
+  reference. Each kernel's structure is a macro shared with a software model
+  of its instructions -- transcribed from the Arm ARM pseudocode for SHA-2,
+  from the definition of carry-less multiplication for `PMULL` -- so the
+  composition is checked against the portable code on every host, as
+  `aes::armv8_model` already did for AES.
+- **The ARM backends have been executed**, under QEMU user-mode emulation:
+  `scripts/test-aarch64.sh` runs them on `qemu-aarch64 -cpu max` from an
+  x86-64 Linux host, including the AES backend, which until now had only been
+  compiled. Each SHA kernel equals the portable compression for block counts
+  0 to 10, 257 and 1024 from varied states, and through `Sha256`/`Sha512` at
+  every message length 0 to 600 bytes and at 64 KiB and 1 MiB, whole and in
+  two pieces. AES-GCM on the ARM path equals an SP 800-38D reference built
+  from the portable AES and GHASH at every length 0 to 600 for all three key
+  sizes, every AAD length 0 to 100, 64 KiB, and nonces of 1 to 129 bytes; the
+  SP 800-38D and Wycheproof AES-GCM vectors and the whole facade suite pass.
+  Seven mutations -- a wrong round constant in each SHA structure, a wrong
+  byte or bit shuffle in each real kernel, GHASH powers in the wrong order, a
+  wrong reduction constant -- each failed the tests under QEMU, and the
+  model tests also caught the three in shared structure. Nothing has run on
+  ARM hardware, and nothing has been measured: emulated timings are not
+  performance.
+- **Prepared ECDH peer keys for P-256, P-384 and P-521**:
+  `ic_ec::p256::PreparedPublicKey`, `p384::PreparedPublicKey` and
+  `p521::PreparedPublicKey`. `new` takes the peer's SEC1 encoding,
+  compressed or uncompressed, and runs the checks `agree` runs -- length and
+  tag, each coordinate below `p`, the curve equation -- then builds sixteen
+  affine multiples of the point at each of four spacings across the scalar,
+  `Q`, `2^(5m) Q`, `2^(10m) Q`, `2^(15m) Q`, with one inversion per window.
+  `agree(private_key, out)` then does only the scalar multiplication, which
+  shares its five doublings per position between the four windows: about a
+  quarter of the doublings of an unprepared agreement and its mixed
+  additions, over the same signed five-bit digits. Each holds 64 affine
+  points and nothing secret: about 4, 6 and 9 KiB, not allocated, `no_std`.
+  The private key is checked and the secret written exactly as `agree` does.
+  Both refuse with `ModuleErrorState` once the module has failed, a key
+  prepared before the failure included (`tests/error_state.rs`).
+
+  The additions at the last position are complete, and the rest are
+  incomplete by an argument in `nist::gentable::Comb::mul`: an entry and
+  the accumulator differ as integers whenever the digit is not zero, and
+  their magnitudes are below `n` before the last position. That position
+  needs the complete formula, and a test proves it: it searches, on every
+  curve, for scalars where the accumulator meets the entry at the last
+  position, confirmed by the recoding, and fails if that addition is made
+  incomplete. Tests compare the prepared agreement with `agree` byte for
+  byte on random keys, compressed and uncompressed, and on edge private
+  keys (`1..=40`, `n - 40..=n - 1`, every window boundary); the comb with
+  the double-and-add ladder; and Wycheproof's ECDH cases on all three
+  curves run through it too, refused where `agree` refuses and the same
+  secret where it agrees. Skipping the curve-equation check in `new`,
+  spacing the windows one doubling short, writing each entry's `y` with the
+  wrong power of `Z`, or making the last position incomplete each fails
+  them.
+
+  A probe, `ct_p384_comb_select`, holds the secret digit's read of a
+  prepared window to the compiled-code gate on x86-64: 35 probes on x86-64
+  alone, 79 there, 211 gating probe/target checks. Its one loop, over the
+  sixteen entries, is excused by the counter-loop rule with a ceiling of
+  one; a branch on the digit fails it, and so does a second pass. The
+  multiplication as a whole is not probed (docs/CONSTANT_TIME.md,
+  "Prepared ECDH public keys").
+
+### Performance
+
+- **ECDH with a prepared peer key takes about 40 percent of the time** of
+  an agreement from key bytes, on P-256, P-384 and P-521 alike. Measured
+  in-process, the two interleaved over twenty rounds on a loaded machine,
+  best of each (x86-64, Zen 5): P-256 34.9 to 13.9 us, P-384 121.8 to 48.6
+  us, P-521 731 to 309 us; preparing a key cost 33, 107 and 751 us, about
+  one agreement. Against Graviola 0.4.1 in the same runs, P-384 ECDH with
+  the key prepared on both sides runs at 1.74 to 2.78 times Graviola's rate
+  across nine rounds, and P-256 at 2.20 to 2.64 across three; from key
+  bytes, each library parsing per call, P-384 is level, 0.89 to 1.39.
+  Graviola's parsed key is sixteen Jacobian points built in about 4 us;
+  this one is sixty-four affine points built in about one agreement, so the
+  prepared row is a trade of memory and set-up for speed, not like for like
+  (docs/GRAVIOLA.md). New bench rows give both comparisons: each library
+  parsing per call, and each with its key prepared.
+
+  Unprepared operations are unchanged: an A/B of the build before and
+  after, alternated over ten rounds, put P-256, P-384 and P-521 ECDH,
+  signing and verification each at parity (medians 0.98 to 1.08). An
+  affine window with mixed additions inside the unprepared multiplication
+  was tried: level on P-256 and P-384 (best of 30 interleaved rounds, 32.4
+  against 32.2 us and 111.6 against 110.7 us), slower on P-521 (658 against
+  622 us), where the window's inversion costs more than the cheaper
+  additions save. It was not kept.
 
 ### Changed
+
+- **The ontology reports `hardware-accelerated` on AArch64** when the
+  `aarch64-crypto` feature is on and the CPU has `aes` and `pmull`, because
+  AES-GCM then runs on both halves in hardware; `recommend` follows it.
+  Without the feature an ARM build is portable and reported as such, as
+  before. `ic-core` gains `cpu::has_armv8_aes` and `cpu::has_ghash_pmull`,
+  and an `aarch64-crypto` feature that `ic-cipher`'s turns on, so the
+  ontology and the cipher dispatch on the same predicates.
+- **AArch64 is not a target of the compiled-code gate.** The ARM kernels are
+  argued constant time from the instructions and the source, with one
+  reading of their compiled code recorded in docs/CONSTANT_TIME.md; that is
+  not a gate.
+- **RSA's whole AVX-512 IFMA exponentiation is in the compiled-code gate**,
+  at 1024 bits (`ct_rsa_ifma_pow_1024`, each of RSA-2048's CRT
+  exponentiations) and 2048 bits (`ct_rsa_ifma_pow_2048`), with no rule
+  added or widened: every branch in it is a loop's own counter, and the
+  ceilings, 9 and 12 counter loops and one `memset` each, were read branch
+  by branch. Valgrind cannot run AVX-512, so this is the only tool that
+  reads it. `ic_rsa::uint::ifma` is now one copy of the exponentiation per
+  width, chosen once by the modulus's width, with fixed-size arrays; the
+  window loop runs the kernel inlined and everything else calls one
+  out-of-line copy per width; `R'^2` is two products instead of 32 to 64
+  modular doublings; the top window is handled like the others, from a
+  masked copy of the exponent; nothing is copied between arrays. The rest
+  keeps the compiler from spilling the loop counters around a kernel that
+  holds twelve registers: `MASK` comes from memory, the kernel writes the
+  shifted words of `a` itself, the table read's masks are made in SSE2
+  registers (docs/CONSTANT_TIME.md, "The IFMA exponentiation"). Results
+  are unchanged; the tests compare every width with the portable path, now
+  also for 0- and 2-bit and zero exponents, in-place products and the
+  radix conversions. A branch on an exponent digit fails both probes, as
+  does one loop more than a ceiling. 36 probes on x86-64 alone, 80 there,
+  212 gating probe/target checks. Cost: `ic-rsa`'s `.text` grows by 18 KB
+  (79 to 98 KB, x86-64, LTO off). RSA-2048 against Graviola in the same
+  process, old and new builds alternated five times under load: signing
+  went from a median 0.71 to 0.83 of Graviola's time per run to 0.61 to
+  0.70, verification from 0.68 to 0.81 to 0.47 to 0.60.
 
 - **RSA key generation draws each Miller-Rabin base at random**, as FIPS
   186-5 B.3.1 specifies, from the generator's own RNG. The bases were the
@@ -50,8 +182,8 @@ all of them.
   probe/target checks. A branch on a limb inserted into the IFMA product,
   in Rust or in its assembly, into CIOS, or into the MULX/ADX kernel's
   assembly, fails the gate; so does one loop more than a ceiling. Not
-  covered: the IFMA exponentiation as a whole, which dispatches on the
-  width for every product (docs/CONSTANT_TIME.md, "Loops on x86-64").
+  covered then: the IFMA exponentiation as a whole, which dispatched on
+  the width for every product; see the entry above.
 - **ic-rsa:** `Ctx::amm` reads the width once, before the IFMA kernel,
   instead of after it, where the kernel's pointer into the context made
   every read a reload. The same value; the probe needs it to fold. Under

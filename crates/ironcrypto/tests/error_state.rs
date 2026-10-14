@@ -167,6 +167,19 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     let dh384 = ecdh!(ec::p384::EcdhP384);
     let dh521 = ecdh!(ec::p521::EcdhP521);
     let x = ecdh!(ec::X25519);
+    // And each NIST curve's peer key prepared, while the module works.
+    macro_rules! prepared {
+        ($curve:ident, $made:expr) => {{
+            let (private, public) = &$made;
+            let prepared = ec::$curve::PreparedPublicKey::new(public).unwrap();
+            let mut shared = vec![0u8; public.len() / 2];
+            prepared.agree(private, &mut shared).unwrap();
+            prepared
+        }};
+    }
+    let prepared256 = prepared!(p256, dh256);
+    let prepared384 = prepared!(p384, dh384);
+    let prepared521 = prepared!(p521, dh521);
 
     // RSA: one key, a signature under each of the six algorithms.
     let rsa_key = rsa::generate(2048, &mut rng).unwrap();
@@ -841,6 +854,24 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     agreement!("ecdh-p384", ec::p384::EcdhP384, dh384);
     agreement!("ecdh-p521", ec::p521::EcdhP521, dh521);
     agreement!("x25519", ec::X25519, x);
+    // The prepared peer keys: none can be built, and one built before the
+    // failure agrees to nothing after it.
+    macro_rules! prepared_refuses {
+        ($id:literal, $curve:ident, $made:expr, $prepared:expr) => {{
+            let (private, public) = &$made;
+            seen.refused(
+                $id,
+                "PreparedPublicKey::new",
+                ec::$curve::PreparedPublicKey::new(public),
+            );
+            let mut shared = vec![0u8; public.len() / 2];
+            seen.refused($id, "prepared agree", $prepared.agree(private, &mut shared));
+            assert!(shared.iter().all(|b| *b == 0), "{}: no secret", $id);
+        }};
+    }
+    prepared_refuses!("ecdh-p256", p256, dh256, prepared256);
+    prepared_refuses!("ecdh-p384", p384, dh384, prepared384);
+    prepared_refuses!("ecdh-p521", p521, dh521, prepared521);
 
     let mut rsa_out = [0u8; 256];
     seen.refused(

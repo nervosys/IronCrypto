@@ -81,6 +81,15 @@ X86_ONLY = (
     # The MULX/ADCX/ADOX square at 2048 bits, and the straight-line product
     # and square at 1024 bits that RSA-2048 signing runs on.
     "ct_rsa_adx_mont_sqr_2048", "ct_rsa_adx_mont_mul_1024", "ct_rsa_adx_mont_sqr_1024",
+    # RSA's whole exponentiation on AVX-512 IFMA, compiled once per width:
+    # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
+    # bits, its modulus. Its loops are excused the same way.
+    "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_2048",
+    # The secret digit's read of a prepared P-384 key's window, in ECDH. Its
+    # loop over the sixteen entries is excused by the x86-64 rules below, up
+    # to X86_EXCUSE_CEILINGS. The additions after it are the point formulas
+    # above; the multiplication as a whole is not a probe (CONSTANT_TIME.md).
+    "ct_p384_comb_select",
 )
 SYMBOLS += X86_ONLY
 
@@ -144,6 +153,23 @@ X86_EXCUSE_CEILINGS = {
     # loop's back edge, and the zeroing of the 34-word accumulator.
     "ct_rsa_cios_2048": {"counter loop": 4, "unconditional jump": 2,
                          "constant memset": 1},
+    # The whole IFMA exponentiation, following its calls. At 1024 bits: the
+    # kernel's row loop (`dec`/`jne` on the 20 rows) three times, inlined
+    # for the squaring and the multiplication in the window loop and once in
+    # the out-of-line product everything else calls; the four squarings; the
+    # table read's word loop (20 words); the window loop (`test`/`jne` on a
+    # counter from `exp_bits`); the masking of the exponent (64 words, two a
+    # time); the conversion out of radix 2^52 (16 words); the wipe of the
+    # work area; and the `memset` that zeroes it on the stack.
+    "ct_rsa_ifma_pow_1024": {"counter loop": 9, "constant memset": 1},
+    # At 2048 bits the same nine (40 rows, 40 words, 32 words), and three that
+    # the 1024-bit copy unrolls: the modulus's and the out-of-line conversion
+    # into radix 2^52 (39 limbs each), and the masked subtraction at the end
+    # (32 words).
+    "ct_rsa_ifma_pow_2048": {"counter loop": 12, "constant memset": 1},
+    # A prepared P-384 key's window read: the loop over its sixteen entries,
+    # `incq`/`cmpq $16`/`jne` on the entry counter.
+    "ct_p384_comb_select": {"counter loop": 1},
 }
 
 # Loads and stores, which do not set the flags a conditional branch reads, and

@@ -15,12 +15,8 @@
 
 /// Whether x86 AES-NI is available.
 ///
-/// x86 only, deliberately. The ARMv8 cryptographic extension is detected in
-/// `ic_cipher::aes::armv8_aes_available`, because selecting it also depends on
-/// a cargo feature that this crate has no business knowing about. Reporting it
-/// here would additionally make the ontology call an ARM build
-/// `hardware-accelerated`, which would be an overclaim: that label means the
-/// cipher and the carry-less multiply, and there is no `PMULL` GHASH backend.
+/// x86 only, deliberately: `ic_cipher::aes::aesni_available` is this, and it
+/// selects the x86 backend. The ARMv8 extension is [`has_armv8_aes`].
 #[inline]
 #[must_use]
 pub fn has_aes() -> bool {
@@ -100,6 +96,46 @@ pub fn has_ghash_clmul() -> bool {
     }
 }
 
+/// Whether the ARMv8 AES backend is compiled in and this CPU can run it.
+///
+/// Two conditions. The CPU must have `FEAT_AES`, and the build must have the
+/// `aarch64-crypto` feature, which `ic-cipher`'s feature of the same name turns
+/// on here. The feature exists because the ARM backends have not yet run on
+/// ARM hardware, only under emulation; without it an ARM build keeps the
+/// portable code, and this says so. `ic_cipher::aes::armv8_aes_available` is
+/// this function, so the ontology and the cipher cannot disagree.
+#[inline]
+#[must_use]
+pub fn has_armv8_aes() -> bool {
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    {
+        std::arch::is_aarch64_feature_detected!("aes")
+    }
+    #[cfg(not(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")))]
+    {
+        false
+    }
+}
+
+/// Whether GHASH will run on `PMULL` in this build.
+///
+/// The ARM counterpart of [`has_ghash_clmul`], under the same two conditions
+/// as [`has_armv8_aes`]. `ic_cipher::gcm` dispatches on it, and the ontology
+/// reports from it.
+#[inline]
+#[must_use]
+pub fn has_ghash_pmull() -> bool {
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    {
+        std::arch::is_aarch64_feature_detected!("neon")
+            && std::arch::is_aarch64_feature_detected!("pmull")
+    }
+    #[cfg(not(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")))]
+    {
+        false
+    }
+}
+
 /// Whether the x86-64 wide-multiply instructions are available: `MULX` (BMI2)
 /// and the two independent carry chains of `ADCX`/`ADOX` (ADX).
 ///
@@ -144,11 +180,23 @@ mod tests {
         let a = has_aes();
         let b = has_pclmulqdq();
         let c = has_bmi2_adx();
+        let d = has_armv8_aes();
+        let e = has_ghash_pmull();
         for _ in 0..8 {
             assert_eq!(has_aes(), a);
             assert_eq!(has_pclmulqdq(), b);
             assert_eq!(has_bmi2_adx(), c);
+            assert_eq!(has_armv8_aes(), d);
+            assert_eq!(has_ghash_pmull(), e);
         }
+    }
+
+    /// Off aarch64, or without the feature, the ARM predicates must say no.
+    #[test]
+    #[cfg(not(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")))]
+    fn the_arm_backends_are_absent_without_the_feature() {
+        assert!(!has_armv8_aes());
+        assert!(!has_ghash_pmull());
     }
 
     /// On a non-x86 target both must report false rather than guessing.

@@ -394,6 +394,13 @@ impl SelfTest for EcdhP256 {
 pub type Point = crate::nist::point::Point<P256>;
 /// A P-256 point in affine coordinates.
 pub type AffinePoint = crate::nist::point::AffinePoint<P256>;
+/// A peer's P-256 public key for [`EcdhP256`], decoded, validated and
+/// expanded once: `new` takes its SEC1 encoding and refuses what
+/// [`EcdhP256`]'s `agree` would refuse; `agree` takes a private key and
+/// writes the 32-byte shared secret, doing only the scalar multiplication
+/// in about 40 percent of the time of an unprepared agreement. About 4 KiB, not
+/// allocated.
+pub type PreparedPublicKey = crate::nist::ecdh::PreparedPublicKey<P256>;
 
 #[cfg(test)]
 mod tests {

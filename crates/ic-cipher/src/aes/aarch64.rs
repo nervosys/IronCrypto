@@ -1,18 +1,20 @@
 //! The ARMv8 cryptographic extension backend for AES.
 //!
-//! # This has never been executed by its author
+//! # Executed under emulation, not yet on hardware
 //!
-//! It was written and cross-compiled on an x86-64 machine. Every other backend
-//! in this library was run before it was committed; this one was not, and that
-//! is why it is behind the off-by-default `aarch64-crypto` feature rather than
-//! selected automatically the way AES-NI is.
+//! It was written and cross-compiled on an x86-64 machine, and committed
+//! before it had ever run; that is why it is behind the off-by-default
+//! `aarch64-crypto` feature rather than selected automatically the way AES-NI
+//! is. It has since run under QEMU user-mode emulation (`-cpu max`,
+//! `scripts/test-aarch64.sh`), where the tests below and the AES-GCM suites
+//! pass. That establishes what the instructions compute as QEMU models them,
+//! not behaviour on a real core, and nothing about speed.
 //!
-//! CI runs the workspace with `--all-features` on `macos-latest`, which is
-//! arm64, so the differential tests below do execute on real hardware there.
-//! When that has passed, the feature can become the default on aarch64. Until
-//! then an ARM build keeps using the portable backend, which is slower and
-//! known to be right — the correct way round for a library nobody has a reason
-//! to trust yet.
+//! CI's arm64 job on `macos-latest` runs the same tests on hardware. When that
+//! has passed, the feature can become the default on aarch64. Until then an
+//! ARM build keeps using the portable backend, which is slower and known to be
+//! right — the correct way round for a library nobody has a reason to trust
+//! yet.
 //!
 //! # How this differs from the x86 backend
 //!
@@ -40,18 +42,17 @@
 //! by running the structure against the portable backend on a machine with no
 //! ARM hardware at all.
 //!
-//! # Scope: AES only
+//! # Scope: the block cipher
 //!
-//! This accelerates the block cipher and nothing else. There is no `PMULL`
-//! GHASH backend, so AES-GCM on ARM still computes its authentication tag with
-//! the portable code, where GHASH costs far more per block than AES does.
+//! This accelerates AES. GHASH has its own `PMULL` backend in `crate::pmull`,
+//! behind the same feature; AES-GCM on ARM runs the two one after the other,
+//! not as a fused kernel like x86-64's.
 //!
-//! That is why `ic_ontology::runtime::backend()` keeps reporting
-//! `portable-constant-time` on ARM even with this feature on, and why
-//! `recommend` keeps choosing ChaCha20-Poly1305 there. Both are correct: the
-//! ontology's `hardware-accelerated` means the cipher *and* the multiply, and
-//! claiming it on the strength of half would make an agent pick AES-GCM for a
-//! workload where it is the slower answer.
+//! The ontology's `hardware-accelerated` means the cipher *and* the multiply,
+//! so `ic_ontology::runtime::backend()` reports it on ARM only when both this
+//! and the `PMULL` backend are live -- the feature on and the CPU having
+//! `aes` and `pmull`. Claiming it on the strength of half would make an agent
+//! pick AES-GCM for a workload where it is the slower answer.
 //!
 //! # Verification
 //!
@@ -207,7 +208,7 @@ pub unsafe fn decrypt_block(keys: &Keys, block: &mut [u8]) -> Result<()> {
 #[target_feature(enable = "aes")]
 pub unsafe fn encrypt_blocks(keys: &Keys, data: &mut [u8]) -> Result<()> {
     ensure!(
-        data.len() % BLOCK_LEN == 0,
+        data.len().is_multiple_of(BLOCK_LEN),
         InvalidLength,
         "aes block sequence"
     );

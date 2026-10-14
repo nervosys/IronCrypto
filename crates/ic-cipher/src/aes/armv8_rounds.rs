@@ -27,9 +27,12 @@
 //! - The final round therefore needs a bare `AESE` followed by an explicit XOR
 //!   of the last round key, which x86 gets for free from `AESENCLAST`.
 //!
-//! Decryption mirrors it, with the round keys in plain reverse order and
-//! `AESIMC` applied to the **state** rather than pre-applied to the keys as the
-//! x86 equivalent inverse cipher does. Doing both would invert twice.
+//! Decryption mirrors it, with `AESIMC` applied to the state *and* the round
+//! keys in the equivalent inverse cipher schedule x86 uses: reversed, with
+//! InvMixColumns pre-applied to every key but the first and last. This comment
+//! used to say plain reversal, on the reasoning that doing both would invert
+//! twice; that reasoning is wrong, the model caught it, and the backend has
+//! since passed under QEMU with the pre-applied schedule.
 
 /// Encryption rounds: `AESMC(AESE(state, rk[r]))`, then a bare `AESE`, then a
 /// final XOR.
@@ -49,8 +52,8 @@ macro_rules! armv8_encrypt_rounds {
 
 /// Decryption rounds, the mirror of the above.
 ///
-/// `$dk` must be the round keys in plain reverse order: `dk[i] = rk[rounds-i]`,
-/// with no `AESIMC` pre-applied.
+/// `$dk` must be the equivalent inverse cipher schedule: `dk[0] = rk[rounds]`,
+/// `dk[i] = AESIMC(rk[rounds-i])` for `0 < i < rounds`, `dk[rounds] = rk[0]`.
 macro_rules! armv8_decrypt_rounds {
     ($b:expr, $dk:expr, $rounds:expr, $aesd:path, $aesimc:path, $xor:path) => {{
         let mut b = $b;

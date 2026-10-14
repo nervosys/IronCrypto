@@ -130,11 +130,14 @@
 //!   ML-KEM-768 and ML-DSA-65, with a constraint to deploy them in a hybrid.
 //!   SLH-DSA is not implemented; the ontology lists it as `planned` so that a
 //!   request for it resolves to an absence rather than to nothing.
-//! * **ARM gets hardware AES but not hardware GHASH.** x86-64 gets AES-NI and
-//!   PCLMULQDQ, selected at run time. On AArch64 the ARMv8 AES instructions are
-//!   used behind the `aarch64-crypto` feature, but there is no `PMULL` path, so
-//!   AES-GCM there is limited by a portable GHASH and [`recommend`] prefers
-//!   ChaCha20-Poly1305. Everywhere else runs the portable constant-time code.
+//! * **ARM acceleration is behind a feature and unmeasured.** x86-64 gets
+//!   AES-NI and PCLMULQDQ, selected at run time. On AArch64 the ARMv8 AES,
+//!   `PMULL`, SHA-256 and SHA-512 instructions are used behind the
+//!   off-by-default `aarch64-crypto` feature; they have been run under QEMU
+//!   emulation, not on ARM hardware, and their speed has not been measured.
+//!   Without the feature an ARM build is portable throughout, and [`recommend`]
+//!   prefers ChaCha20-Poly1305 there. Everywhere else runs the portable
+//!   constant-time code.
 //!
 //! Each of those is queryable at runtime through
 //! [`ic_ontology::runtime::capabilities`], so an agent can discover them

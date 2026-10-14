@@ -95,21 +95,16 @@ pub fn aesni_available() -> bool {
 ///
 /// Two conditions, and the second is deliberate. The CPU must support the
 /// extension, and the `aarch64-crypto` feature must be on. The feature exists
-/// because the backend was written on an x86 machine and has never been run by
-/// its author; until CI on an arm64 runner has executed the differential tests,
-/// an ARM build keeps the portable backend, which is slower and known to be
-/// right.
+/// because the backend was written on an x86 machine and has run only under
+/// QEMU emulation; until the differential tests have run on arm64 hardware, an
+/// ARM build keeps the portable backend, which is slower and known to be right.
+///
+/// Detection lives in `ic-core` ([`ic_core::cpu::has_armv8_aes`]) so the
+/// ontology reports the same answer this selects on.
 #[inline]
 #[must_use]
 pub fn armv8_aes_available() -> bool {
-    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
-    {
-        std::arch::is_aarch64_feature_detected!("aes")
-    }
-    #[cfg(not(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")))]
-    {
-        false
-    }
+    ic_core::cpu::has_armv8_aes()
 }
 
 /// The backend this build will use for AES.

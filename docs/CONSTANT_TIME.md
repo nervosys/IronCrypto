@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and thirty-four more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and thirty-seven more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -82,6 +82,16 @@ release profile; this is not the workspace binary's overflow-checked profile.
   `ct_rsa_adx_mont_sqr_1024`). The loops over the width are excused by the
   x86-64 counter-loop rule, per probe, up to a ceiling. See "Loops on
   x86-64" and "RSA on MULX/ADX in eight-word blocks" below.
+- On x86-64 only, RSA's whole exponentiation on AVX-512 IFMA, from the
+  modulus, base and secret exponent to the reduced result, at 1024 bits
+  (`ct_rsa_ifma_pow_1024`, each of RSA-2048's two CRT exponentiations) and
+  2048 bits (`ct_rsa_ifma_pow_2048`, its modulus): under the same rule, with
+  no branch but a loop's own counter. See "The IFMA exponentiation" below.
+
+- On x86-64 only, the window read of a prepared P-384 public key in ECDH
+  (`ct_p384_comb_select`): a secret digit's masked read of sixteen affine
+  entries and the conditional negation. See "Prepared ECDH public keys"
+  below.
   `X86_ONLY` in the checker requires all of these on that target and no other.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
@@ -551,6 +561,7 @@ loop has to arrive as a change that someone then reads.
 | `ct_rsa_adx_mont_mul_2048` | 4 | 2 | 1 |
 | `ct_rsa_ifma_amm_2048` | 1 | 0 | 0 |
 | `ct_rsa_cios_2048` | 4 | 2 | 1 |
+| `ct_p384_comb_select` | 1 | 0 | 0 |
 
 Each excused finding, read in `target/ct-audit/probes/x86_64-unknown-linux-gnu.s`:
 
@@ -562,10 +573,13 @@ Each excused finding, read in `target/ct-audit/probes/x86_64-unknown-linux-gnu.s
   `finish`, `addq $2, %rcx; cmpq $32, %rcx; jne` over the words of the
   masked subtraction; and `memset` of 528 bytes at `8(%rsp)`, the zeroed
   66-word accumulator.
-- `ct_rsa_ifma_amm_2048` (`ic-rsa/src/uint/ifma.rs`, `Ctx::amm` at 2048
-  bits, `amm5`): `decq %r9; jne` ending the row loop, r9 set to 40, the
-  number of 52-bit words. Everything else in the product, the carry of the
-  columns into limbs included, is straight-line.
+- `ct_rsa_ifma_amm_2048` (`ic-rsa/src/uint/ifma.rs`, `Ctx<40>::mul_inline`,
+  the `amm5` kernel inlined as the exponentiation's window loop has it):
+  `decq %r9; jne` ending the row loop, r9 set to 40, the number of 52-bit
+  words, by `movl $40` before the kernel. Everything else in the product,
+  the carry of the columns into limbs included, is straight-line. Re-read
+  after "The IFMA exponentiation" below changed the code: the same one
+  branch.
 - `ct_rsa_cios_2048` (`ic-rsa/src/uint.rs`, `cios` at 32 words): the outer
   loop's exit, `incq %rbp; cmpq $32, %rbp; je`; the multiply pass,
   `addq $2, %rsi; cmpq $33, %rsi; jne`; the reduction pass's exit,
@@ -575,9 +589,10 @@ Each excused finding, read in `target/ct-audit/probes/x86_64-unknown-linux-gnu.s
   `16(%rsp)`, the 34-word accumulator.
 
 None of the three has a bounds check, an indirect call or a branch on a
-value. The IFMA probe sets the context's geometry to 2048 bits before the
-product (`Ctx::set_width_for_probe`), so the kernel is selected at compile
-time; `Ctx::amm` now reads the width once, before the kernel, which is
+value. When these were read, the IFMA probe set the context's geometry to
+2048 bits before the product (`Ctx::set_width_for_probe`), so the kernel
+was selected at compile time; the context is now built for one width, a
+const parameter, and the probe takes a `Ctx<40>`. Then, `Ctx::amm` now reads the width once, before the kernel, which is
 handed a pointer into the context and so forced every later read of the
 field to be a reload, and with it a bounds check on `out[words..]` that
 could not be folded. That change is a refactor: the same value, read
@@ -609,24 +624,13 @@ restored:
   reviewed`. (A second pass over the fixed 34-word accumulator did not:
   LLVM unrolled it, so it added no loop.)
 
-Restored, all 78 pass.
+Restored, all 78 pass. These ran against `Ctx::amm` as it then was; the
+next section's mutations ran against the code that replaced it.
 
 ### Not covered
 
-- **The IFMA exponentiation as a whole.** A probe running `pow_windowed`
-  on the IFMA context at 1024 bits, RSA-2048 signing's two exponentiations,
-  was built and read, and is not in the gate. Every product in it re-reads
-  the context's register count and width from memory after the previous
-  kernel call, and dispatches on them: `cmpq $3, %rax; je` to `amm3`,
-  `cmpq $4, %rax; jne` to `amm5`; bounds checks on the width,
-  `cmpq $84, %rsi; ja` and `cmpq $64, %r12; ja` to `slice_index_fail`;
-  and `memset`/`memcpy` of computed lengths and through a register. Each is
-  on the modulus's width, which is public, but none is a loop counter, and
-  the rule does not excuse them. Covering it means hoisting the kernel
-  choice out of `amm` (one copy of the exponentiation per width), which
-  changes code size, and was not done here. Its pieces are covered: the
-  product (`ct_rsa_ifma_amm_2048`) and the table read
-  (`ct_rsa_select_2048`).
+- **The IFMA exponentiation as a whole** was not covered when this was
+  written; "The IFMA exponentiation" below covers it.
 - **The MULX/ADX product's entry checks** (`x86::mont_mul`: the CPU
   feature, the slice lengths) are not in the probe, which calls the kernel
   at a fixed width. They are on public lengths, and Valgrind runs that path
@@ -642,6 +646,259 @@ Restored, all 78 pass.
 Probe count: thirty-four on x86-64 alone, where there were thirty-one. All
 seventy-eight pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 78 + 3 x 44 = 210 gating probe/target checks.
+
+## The ARMv8 backends, 2026-10-13: not gated
+
+AES (`ic-cipher::aes::aarch64`), GHASH on `PMULL` (`ic-cipher::pmull`),
+SHA-256 and SHA-512 (`ic-hash::sha2::aarch64`) have AArch64 backends behind
+the off-by-default `aarch64-crypto` feature. None of them is a probe in this
+gate, and `aarch64` is not one of its targets.
+
+Adding it is more than a target name. The checker has branch, call and
+loop rules per target family, and the loop rule exists for x86-64 only;
+AArch64 would need its own (`b.cond`, `cbz`/`cbnz`, `tbz`/`tbnz`, `bl`,
+`br`/`blr`) and a reviewed loop rule, because every one of these kernels
+loops over blocks; and the kernels would need probes in `scripts/ct-audit`,
+which they are `pub(super)` and `#[target_feature]` to avoid. That was not
+done here.
+
+What argues they are constant time instead:
+
+- **The instructions.** `AESE`/`AESD`/`AESMC`/`AESIMC`, `PMULL`/`PMULL2`,
+  `SHA256H`/`SHA256H2`/`SHA256SU0`/`SHA256SU1`, `SHA512H`/`SHA512H2`/
+  `SHA512SU0`/`SHA512SU1`, `RBIT`, `REV32`/`REV64` and `EXT` are vector
+  operations with no data-dependent behaviour in the architecture; Arm lists
+  the crypto instructions among those covered by FEAT_DIT (data-independent
+  timing). This library does not set `PSTATE.DIT`.
+- **The source.** No table is indexed and no branch is taken on key, state,
+  message or field element. Every branch is on the block count or the round
+  number, and every vector index is a literal or a function of the round.
+- **One reading of the compiled code**, not a gate: `cargo rustc --release
+  --target aarch64-unknown-linux-gnu --features aarch64-crypto -- --emit asm`
+  for `ic-hash` and `ic-cipher` with rustc 1.99.0. `compress256` is 143
+  instructions with sixteen `sha256h`, its only conditional branches the
+  block loop (`b.eq`, `b.ne`); `compress512` is 236 with the block loop
+  and a round-group loop (`b.ne` twice, `b.eq` once); `pmull::mul` is
+  thirty instructions with no branch at all; `pmull::absorb8` branches only
+  on its group count. No calls in any of them.
+
+That reading is a snapshot of one compiler on one day, which is exactly what
+this gate exists to replace. Until AArch64 is a gated target, a compiler
+change that introduced a secret-dependent branch here would not be caught.
+
+## The IFMA exponentiation, 2026-10-13
+
+RSA's exponentiation on AVX-512 IFMA (`ic-rsa/src/uint/ifma.rs`) is in the
+gate as a whole: `ct_rsa_ifma_pow_1024` and `ct_rsa_ifma_pow_2048` call
+`ifma::pow_fixed` with the modulus, base, secret exponent and exponent
+length as arguments, and read everything from the conversion into radix
+2^52 to the reduced result. No rule was added or widened; both pass under
+the counter-loop rule above, with ceilings.
+
+### What changed
+
+A trial probe of the old code showed every product re-reading the
+context's register count and width after the kernel call and dispatching
+on them (`cmpq $3, %rax; je` to `amm3`), bounds checks on the width
+(`cmpq $84, %rsi; ja` to `slice_index_fail`), an indirect `callq *%rbp`
+`memset`, and a `memset` of `512 - 8 * words` bytes. Now:
+
+- **One copy per width.** `ifma::pow` matches the modulus's width once,
+  16, 24 or 32 words, to `pow_fixed::<24>`, `<32>` or `<40>`, and inside
+  that every bound, offset and kernel choice is a constant; values are
+  `[u64; N]`. The match and the CPU check (`available`) are outside the
+  probe, as are the copy of the result into a `Uint`.
+- **No call but to code the gate reads.** A call to anything outside the
+  assembly fails; a call inside a loop voids that loop's excuse. So the
+  window loop's squaring and multiplication are the kernel inlined
+  (`Ctx::square_inline`, `mul_assign_inline`), and every other product
+  calls one out-of-line copy per width (`Ctx::mul_raw`). Nothing is copied
+  between arrays, which would be `memcpy`: one is made in the table and
+  again in the accumulator by two products, and the base is converted
+  straight into its table entry. The scratch is one `repr(C)` work area,
+  zeroed by one `memset` of a constant length on the stack and wiped as one
+  run of words.
+- **`R'^2` by two products** rather than 32 to 64 modular doublings, whose
+  loop held sixteen to thirty-two words and spilled its counter: with
+  `A = R^2 mod m` and `P = 2^(208W - 256L)` (64, 96 or 128 bits),
+  `A * (A * P / R') / R' = 2^(104W) = R'^2`.
+- **The top window like the others.** The window loop is entered
+  unconditionally, `max(1, ceil(exp_bits / 4))` times; the bits above
+  `exp_bits` are cleared in a masked copy of the exponent first, so the
+  loop has no test but its counter's. The first four squarings square one.
+- **The loop counters keep their registers.** The kernel holds twelve
+  general registers. Each of these was a finding of the gate, a counter
+  reloaded from the stack inside its loop, which the rule refuses, and is
+  answered by giving the compiler less to hold across the kernel: `MASK`
+  is read from the context rather than held in a register; the kernel
+  writes `a[0..3] << 12` itself, so no word of the accumulator is cached
+  across it; the table read's sixteen masks are made two at a time in
+  SSE2 registers, where the compiler had made all sixteen in ten general
+  registers at once; `take` no longer stores zeros above `W`, which every
+  value already has; and the work area's barrier names a field other than
+  its first, so the `memset` destination is a `lea` from the stack rather
+  than a register kept for later. The conversions into radix 2^52 are split
+  where a limb stops taking bits from the word above, rather than masking a
+  loaded word, which the compiler had turned into `cmpq $20; jae` around
+  the load.
+
+### The ceilings, read on 2026-10-13, rustc 1.99.0
+
+| Probe | counter loop | constant memset |
+| --- | --- | --- |
+| `ct_rsa_ifma_pow_1024` | 9 | 1 |
+| `ct_rsa_ifma_pow_2048` | 12 | 1 |
+
+`ct_rsa_ifma_pow_1024` (`pow_fixed::<24>`, 20 limbs of 52 bits, 16
+64-bit words), each read in the assembly with where its counter starts:
+
+- the kernel's row loop three times, `decq; jne` with the counter set by
+  `movl $20` just before the kernel: inlined for the squaring and the
+  multiplication in the window loop, and in `Ctx<24>::mul_raw`;
+- the four squarings, `decl %ecx; jne`, `movl $4, %ecx`;
+- the table read's word loop, `addq $2, %rcx; cmpq $20, %rcx; jne`, from
+  `xorl %ecx, %ecx`;
+- the window loop, `testq %rax, %rax; jne`, rax stepped only by `dec`,
+  and set before the loop from the `exp_bits` argument by `cmpq $4096;
+  cmovb` (the clamp), `addq $3; shrq $2` and `cmpq $1; adcq $0` (the
+  floor of one window): public, and no branch in computing it;
+- the masking of the exponent, `addq $2, %r15; cmpq $64, %r15; jne`, from
+  `xorl %r15d, %r15d` before the work area's `memset`, r15 being preserved
+  across the calls between;
+- the conversion out of radix 2^52 in `leave::<24>`,
+  `addq $64, %rsi; cmpq $1024, %rsi; jne`, from `xorl %esi, %esi`;
+- the wipe of the work area, eight volatile stores a pass,
+  `addq $64, %rax; cmpq $4600, %rax; jne`, from `movl $56, %eax`: 71
+  passes, 4544 bytes;
+- and `memset` of 4544 bytes at `904(%rsp)`, the work area.
+
+`Ctx<24>::rr` and `to_radix52::<64, 24>` are straight-line.
+
+`ct_rsa_ifma_pow_2048` (`pow_fixed::<40>`, 40 limbs, 32 words): the same
+nine, with 40 rows, a 40-word table read, the conversion out to 2048 bits
+and a wipe of 7232 bytes from 56 to 7288; and three loops the 1024-bit copy
+unrolls: the conversion of the modulus into the context and
+`to_radix52::<64, 40>`, each `addq $52; cmpq $2028; jne` from zero (39
+limbs taking bits from the word above; the fortieth is straight-line), and
+the masked subtraction in `leave::<40>`, `addq $2, %rax; cmpq $33, %rax;
+jne` from `movl $1, %eax`. And `memset` of 7232 bytes on the stack.
+
+The exponent length is an argument to both probes, as it is to
+`Modulus::pow`; the window loop's count is computed from it, without a
+branch, and the rule's limit -- it does not establish where a counter
+starts -- is answered for it by the reading above.
+
+### Mutations
+
+Each applied to `pow_fixed`, the gate run as `check.sh` runs it, and
+restored:
+
+- `if digit & 1 != 0 { black_box(digit) }` on the window's digit before the
+  table read: fails `ct_rsa_ifma_pow_1024: jae .LBB70_7` and
+  `ct_rsa_ifma_pow_2048: jae .LBB71_9` (the test is a `bt`).
+- The work area wiped twice: fails `ct_rsa_ifma_pow_1024: 10 findings
+  excused as counter loop, more than the 9 reviewed` and the same for
+  `ct_rsa_ifma_pow_2048`, 13 against 12.
+- The table read run twice in the window loop: fails both probes on the
+  window loop's own branch (`jne .LBB70_3`, `jne .LBB71_5`). The extra
+  masks took the counter's register, and its reload from the stack is not
+  a counter. Not the ceiling mutation it was meant to be, but it shows the
+  rule refusing a spilled counter in this code.
+
+`R'^2` computed with one bit too many fails `one_ifma_product_is_right`
+and `the_exponentiation_backends_agree`, so the tests reach the IFMA path
+on this CPU.
+
+### Not covered
+
+- **The entry.** `ifma::pow` asks the CPU (`available`, a cached atomic)
+  and matches the width; both are public. The result is then copied into a
+  `Uint`. These are outside the probes.
+- **`pow_public`.** The public-exponent path branches on the exponent's
+  bits by design; it shares the conversions, `R'^2` and the out-of-line
+  product, which the probes read.
+- **1536 bits.** `pow_fixed::<32>`, RSA-3072's primes, is the same generic
+  code and is not probed.
+- **The rule's own limit**, above: a counter is shown to be stepped only by
+  constants, not to start from a public value; the starts above were read.
+
+### Cost
+
+Measured on Zen 5 under load, release builds.
+
+- **Code size.** `ic-rsa`'s `.text`, built for x86-64 Linux with LTO off so
+  the library's own code can be counted: 79,365 bytes before, 97,666
+  after (+18,301, 23 percent). Three widths each carry the kernel inlined
+  twice in the window loop and once out of line. Inlining every product
+  instead, the first version of this, was +77 KB; most of the difference
+  was the kernel's copies outside the window loop and unrolled wipes.
+- **Speed.** RSA-2048 PKCS#1 v1.5 against Graviola 0.4.1 in the same
+  process, fifteen rounds alternating which runs first, the ratio
+  IronCrypto/Graviola per round; the old and new builds alternated five
+  times each, minutes apart. Signing: median ratio 0.71 to 0.83 per run
+  before, 0.61 to 0.70 after. Verification: 0.68 to 0.81 before, 0.47 to
+  0.60 after. Faster in every pair; the cause was not isolated. Removed
+  from each exponentiation: the 32 to 64 modular doublings for `R'^2`,
+  and the copies of operands between arrays. Added: the four squarings of
+  one in the top window, and two products where a copy was.
+
+Probe count: thirty-six on x86-64 alone, where there were thirty-four. All
+eighty pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 80 + 3 x 44 = 212 gating probe/target checks.
+
+## Prepared ECDH public keys, 2026-10-13
+
+`p256::PreparedPublicKey`, `p384::PreparedPublicKey` and
+`p521::PreparedPublicKey` hold sixteen affine multiples of the peer's point
+at each of four spacings (`nist::gentable::Comb`), and an agreement through
+one is `Comb::mul`: the private scalar recoded into signed five-bit digits as
+for `Point::mul_scalar`, then, for each position, five doublings and one
+mixed addition per window. Every loop in it runs over a count fixed by the
+curve, and the one test on the position (`i < n`, past the top digit) is on
+the loop index. What sees the secret is each digit's read of its window and
+the addition that follows.
+
+`ct_p384_comb_select` is that read, on x86-64: `AffineWindow::select` on a
+prepared P-384 window, the digit a runtime argument. It reads all sixteen
+entries under masks made from the digit's magnitude, through the SSE2 scan
+P-384 already uses for its generator table, and negates `y` by a
+conditional move for a negative digit. One finding, excused as a counter
+loop (ceiling 1): `incq %rax; cmpq $16, %rax; jne`, the scan's loop over the
+sixteen entries, rax set to zero before it and written nowhere else in it.
+The masks are read from the stack at that counter; nothing is indexed by the
+digit.
+
+Two mutations, each restored afterwards:
+
+- `if magnitude & 1 != 0 { black_box(&masks) }` in `select`: fails
+  `ct_p384_comb_select: je .LBB54_2`.
+- A second masked pass over the entries in `select`: fails
+  `ct_p384_comb_select: 2 findings excused as counter loop, more than the 1
+  reviewed`. (A pass that only touched each entry was unrolled and added no
+  loop.)
+
+### Not covered
+
+- **The multiplication as a whole, and the addition after the read.** A
+  probe of one step -- the read and `AffineWindow::add_to`'s mixed
+  addition -- was built and read, and is not in the gate. The probe build
+  has no `std` and no BMI2/ADX target feature, so it selects P-384's generic
+  field, whose multiplication and squaring keep their six-row word loop
+  rolled; the row counter is spilled to the stack and the register reused
+  inside the loop, then reloaded before `cmpq $6`, and the rule rightly
+  cannot prove a counter it does not see stepped. Those loops are on a
+  constant count. On a CPU with BMI2 and ADX, which is where P-384 runs in
+  practice, the additions and doublings are the assembly blocks probed as
+  `ct_p384_point_add_affine_adx`, `ct_p384_point_add_adx` and
+  `ct_p384_point_double_adx`, and the complete addition at the last position
+  is made of those. The scalar's recoding (`signed_digits_w`), shared with
+  `Point::mul_scalar` and the generator table, is not probed either.
+- **P-256 and P-521's prepared keys** are the same generic code over other
+  fields, and are not probed separately.
+
+Probe count: thirty-five on x86-64 alone, where there were thirty-four. All
+seventy-nine pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 79 + 3 x 44 = 211 gating probe/target checks.
 
 ## RSA on MULX/ADX in eight-word blocks, 2026-10-13
 
@@ -710,6 +967,9 @@ Applied one at a time to the library, the check run, and restored:
   `ct_rsa_adx_mont_sqr_1024: 4 findings excused as counter loop, more than
   the 2 reviewed`.
 
-Restored, all pass. Probe count: thirty-seven on x86-64 alone, where there
-were thirty-four. All eighty-one pass on x86-64, and the forty-four on each
-32-bit target are unchanged: 81 + 3 x 44 = 213 gating probe/target checks.
+Restored, all pass. Probe count, after merging the IFMA exponentiation and
+P-384 window probes from master: forty on x86-64 alone, three of them these.
+All eighty-four pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 84 + 3 x 44 = 216 gating probe/target checks. The IFMA
+exponentiation probes read their own table scan, not this one, and their
+counts are as master left them.

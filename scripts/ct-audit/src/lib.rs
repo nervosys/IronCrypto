@@ -379,6 +379,19 @@ mod x86_p256 {
     pub unsafe fn ct_p384_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 114]) {
         unsafe { ic_ec::ct_probes::p384_point_add_affine_adx(buf) }
     }
+
+    /// The secret digit's read of a window of a prepared P-384 key, for
+    /// ECDH: every entry under a mask, and the conditional negation. Its loop
+    /// over the sixteen entries is excused by rule in check-ct.py, up to a
+    /// ceiling. The additions that follow are the formulas probed above.
+    #[no_mangle]
+    pub fn ct_p384_comb_select(
+        comb: &ic_ec::ct_probes::P384Comb,
+        digit: i8,
+        out: &mut [[u64; 6]; 2],
+    ) {
+        ic_ec::ct_probes::p384_comb_select(comb, digit, out)
+    }
 }
 
 // x86-64: the sixteen-block AVX-512 ChaCha20 keystream and the four-lane AVX2
@@ -436,6 +449,7 @@ pub fn ct_rsa_cios_2048(
 #[cfg(target_arch = "x86_64")]
 mod x86_rsa {
     use ic_rsa::ct_probes::x86 as p;
+    use ic_rsa::uint::{Modulus, Uint};
 
     /// # Safety
     /// Requires BMI2 and ADX.
@@ -449,6 +463,21 @@ mod x86_rsa {
     ) {
         unsafe { p::adx_mont_mul_2048(a, b, n, n0inv, out) }
     }
+
+    /// Compiled to be read, never run: it needs AVX-512F, IFMA and BMI2.
+    #[no_mangle]
+    pub fn ct_rsa_ifma_amm_2048(
+        ctx: &mut p::IfmaCtx,
+        a: &[u64; 40],
+        b: &[u64; 40],
+        out: &mut [u64; 40],
+    ) {
+        p::ifma_amm_2048(ctx, a, b, out)
+    }
+
+    // The whole IFMA exponentiation, modulus, base and secret exponent to the
+    // reduced result, at 1024 bits (RSA-2048's primes) and 2048 bits (its
+    // modulus). The exponent length is an argument, as it is to `pow`.
 
     /// # Safety
     /// Requires BMI2 and ADX.
@@ -490,12 +519,26 @@ mod x86_rsa {
     /// # Safety
     /// Requires AVX-512F, IFMA and BMI2.
     #[no_mangle]
-    pub unsafe fn ct_rsa_ifma_amm_2048(
-        ctx: &mut p::IfmaCtx,
-        a: &[u64; 64],
-        b: &[u64; 64],
-        out: &mut [u64; 64],
+    pub unsafe fn ct_rsa_ifma_pow_1024(
+        m: &Modulus,
+        base: &Uint,
+        exp: &Uint,
+        exp_bits: usize,
+        out: &mut [u64; 24],
     ) {
-        unsafe { p::ifma_amm_2048(ctx, a, b, out) }
+        unsafe { p::ifma_pow_1024(m, base, exp, exp_bits, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512F, IFMA and BMI2.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_ifma_pow_2048(
+        m: &Modulus,
+        base: &Uint,
+        exp: &Uint,
+        exp_bits: usize,
+        out: &mut [u64; 40],
+    ) {
+        unsafe { p::ifma_pow_2048(m, base, exp, exp_bits, out) }
     }
 }
