@@ -134,6 +134,74 @@ all of them.
 
 ### Performance
 
+- **ECDSA P-256 and P-384 verification: one chain of doublings, and ahead
+  of Graviola without AVX-512.** Profiled first under `--cfg ic_no_avx512`
+  (`where_verification_spends_its_time` in `nist/ecdsa.rs`, loaded Zen 5):
+  a P-256 verification was 26.5 us, of which `u2*Q` 21.3 (256 doublings,
+  about 43 Jacobian additions and their table) and `u1*G` 3.4 (43 mixed
+  additions from the signing table), `s^-1` 0.8, and decoding, digest and
+  the final `x` comparison (already without an inversion) under 0.2 between
+  them. P-384 was 111.6 us, and 13.0 of it was `s^-1`: P-384's scalar ring
+  inverts by Fermat. Graviola 0.4.1 runs the two multiplications apart as
+  this library did, with a Jacobian window of `Q` built when its key is
+  parsed, and three field inversions and a generic modular inverse besides.
+
+  Now (`nist::verify`, `nist::verify_x86`): `u1*G + u2*Q` shares one chain
+  of doublings (Straus). `u2` is a width-5 non-adjacent form against `Q`'s
+  odd multiples to `15Q`, made affine with one inversion; `u1` a width-8
+  form against `G`'s odd multiples to `127G`, affine, in a `static` built
+  once beside the generator table (4 KiB on P-256, 6 on P-384). Every
+  addition is mixed: on P-256, 256 doublings and about 72 additions in all,
+  where there were 256 doublings and 86 additions, 43 of them Jacobian. On
+  x86-64 with BMI2 and ADX the chain runs on the generated formulas over one
+  buffer, the doubling in place, as the ECDH ladder does; the formulas are
+  called, not changed. The recoding reads the scalar in place with a carry
+  instead of subtracting and shifting a ten-limb integer per bit (1.1 us to
+  0.12 for both forms on P-256), and P-384's verification inverts `s` by
+  divsteps (13.0 us to 1.7); signing's `k^-1` is not touched. Measured
+  after: P-256 21.5-23.4 us, P-384 79.7-81.1.
+
+  All of it is variable time, which verification's public inputs allow and
+  nothing else does: the digits, table indices and the additions'
+  exceptional cases branch. The only caller is `Point::mul_double`, whose
+  only caller is ECDSA verification; signing, ECDH and key generation reach
+  none of it, and the compiled-code gate, which probes the secret paths, is
+  unchanged. Tested against the constant-time arithmetic (comb plus ladder
+  plus complete addition) and the old separate chains over edge and random
+  scalars and points (`0`, `1`, `n - 1`, powers of two and their
+  neighbours, `u1 = u2`, `u1 = -u2`, `Q = G`, `Q = -G`, `Q = 2G`), the
+  assembly chain and the field-operation chain each, on P-256, P-384 and
+  P-521; the carry recoding against the subtraction recoding digit for
+  digit at widths 2 to 8; and the ACVP and Wycheproof ECDSA suites, verdict
+  counts unchanged. Four mutations each fail them: a negative digit's entry
+  not negated, the accumulator-equals-entry case taken as the identity, a
+  digit's carry subtracted at the wrong weight, and the top table entry
+  read as the one below it.
+
+  Against Graviola 0.4.1 (`bench`, `graviola` and `graviola-p384`, master
+  dc22f6b and this build alternated, four rounds each in two layouts (ten
+  for the `ic_no_avx512` P-384 rows),
+  layout B with `-C llvm-args=-align-all-functions=6`; IronCrypto's rate
+  over Graviola's within each run; the machine loaded by other work):
+
+  | | before | after |
+  |---|---|---|
+  | P-256 verify, `ic_no_avx512`, layout A | 1.08-1.19 | 1.36-1.41 |
+  | P-256 verify, `ic_no_avx512`, layout B | 1.18-1.24 | 1.39-1.49 |
+  | P-256 verify, default, layout A | 1.19-1.71 | 1.24-1.56 |
+  | P-256 verify, default, layout B | 1.10-1.35 | 1.25-1.43 |
+  | P-384 verify, `ic_no_avx512` (`graviola-p384`), A | 1.45-1.54 | 1.46-2.30 |
+  | P-384 verify, `ic_no_avx512` (`graviola-p384`), B | 1.35-1.52 | 1.90-2.53 |
+  | P-384 verify, default (`graviola-p384`), A | 1.44-1.61 | 2.12-2.32 |
+  | P-384 verify, default (`graviola-p384`), B | 1.37-1.57 | 1.94-2.00 |
+
+  The default rows' spread is Graviola's: its P-256 verification took 31
+  to 47 us across these binaries, IronCrypto's 25.2-28.8 before and
+  21.7-25.3 after. Signing and ECDH, which this does not touch, stayed
+  level by the same ratios in both layouts; IronCrypto's own P-384 signing
+  time read 3 to 5 percent higher in the new binaries in both layouts with
+  its ratio unchanged, which is not separated from layout here.
+
 - **Short messages on x86-64: ChaCha20-Poly1305, SHA-256 and HMAC-SHA256
   ahead of Graviola, where they were level.** Each was measured first for
   what it pays per message, with an rdtsc harness taking the minimum of many

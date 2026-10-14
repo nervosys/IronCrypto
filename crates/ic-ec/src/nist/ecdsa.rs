@@ -34,6 +34,14 @@ pub trait EcdsaCurve: Curve + crate::nist::gentable::HasGeneratorTable {
     /// HMAC over the same digest, for RFC 6979. `Clone`, so a key set up
     /// once serves the two MACs RFC 6979 computes under each `K`.
     type Hmac: Mac + Clone;
+
+    /// `s^-1 mod n` for verification's public `s`. The ring's own inversion
+    /// unless the curve has a faster one; P-384's ring inverts by Fermat,
+    /// and verification uses divsteps instead. Signing's `k^-1` does not
+    /// come here.
+    fn invert_public_scalar(s: &Self::Scalar) -> Self::Scalar {
+        s.invert()
+    }
 }
 
 /// Widest scalar this module handles, for stack buffers.
@@ -365,7 +373,7 @@ fn verify_digest<C: EcdsaCurve>(public_key: &[u8], digest: &[u8], signature: &[u
 
     let e = C::scalar_reduce_slice(digest);
 
-    let w = s.invert();
+    let w = C::invert_public_scalar(&s);
     let u1 = e.mul(&w);
     let u2 = r.mul(&w);
 
@@ -533,5 +541,122 @@ mod tests {
     fn nonces_after_rejection_follow_rfc_6979() {
         nonces_agree::<P256>();
         nonces_agree::<P384>();
+    }
+
+    /// Where a verification's time goes, piece by piece, on whichever
+    /// backend this CPU and build select. A measurement, not a check: run
+    /// with `cargo test --release -p ic-ec -- --ignored --nocapture
+    /// where_verification_spends_its_time`, and with `RUSTFLAGS="--cfg
+    /// ic_no_avx512"` for the MULX/ADX path on a CPU with AVX-512.
+    #[test]
+    #[ignore = "timing; run manually with --release"]
+    fn where_verification_spends_its_time() {
+        fn ns(label: &str, iters: u32, mut f: impl FnMut()) {
+            use std::time::Instant;
+            let mut best = f64::INFINITY;
+            for _ in 0..9 {
+                let t = Instant::now();
+                for _ in 0..iters {
+                    f();
+                }
+                best = best.min(t.elapsed().as_secs_f64() * 1e9 / iters as f64);
+            }
+            std::println!("{label:40} {best:10.1} ns");
+        }
+        fn curve<C: EcdsaCurve>() {
+            use core::hint::black_box;
+            std::println!("{}", C::NAME);
+            let n = C::SCALAR_BYTES;
+            let key = std::vec![0x5au8; n];
+            let mut pk = std::vec![0u8; 1 + 2 * C::FIELD_BYTES];
+            public_key::<C>(&key, &mut pk).unwrap();
+            let mut sig = std::vec![0u8; 2 * n];
+            sign::<C>(&key, b"message", &mut sig).unwrap();
+            C::prepare_generator_table();
+            ns("verify", 300, || {
+                verify::<C>(black_box(&pk), b"message", black_box(&sig)).unwrap();
+            });
+            ns("digest", 3000, || {
+                black_box(C::Digest::digest(black_box(b"message")));
+            });
+            ns("decode public key", 3000, || {
+                black_box(AffinePoint::<C>::from_sec1(black_box(&pk)));
+            });
+            let s = C::scalar_from_slice(&sig[n..]).unwrap();
+            let r = C::scalar_from_slice(&sig[..n]).unwrap();
+            ns("s^-1 mod n", 3000, || {
+                black_box(C::invert_public_scalar(&black_box(s)));
+            });
+            let w = s.invert();
+            let u1 = r.mul(&w).mul(&w);
+            let u2 = r.mul(&w);
+            ns("u1, u2", 30000, || {
+                black_box(black_box(r).mul(&black_box(w)));
+            });
+            let q = Point::<C>::from_affine(&AffinePoint::<C>::from_sec1(&pk).unwrap());
+            ns("mul_double", 300, || {
+                black_box(Point::<C>::mul_double(&black_box(u1), &q, &black_box(u2)));
+            });
+            {
+                use super::super::point::wnaf_vartime;
+                use super::super::verify::{
+                    joint_vartime, odd_multiples_affine_vartime, G_WIDTH, Q_ODD, Q_WIDTH,
+                };
+                ns("  Q's odd multiples, affine", 3000, || {
+                    black_box(odd_multiples_affine_vartime::<C, Q_ODD>(&black_box(q)));
+                });
+                let qt: [AffinePoint<C>; Q_ODD] = odd_multiples_affine_vartime(&q);
+                let gt = C::odd_generator_multiples();
+                let (ab, bb) = (u1.to_bytes(), u2.to_bytes());
+                ns("  both non-adjacent forms", 3000, || {
+                    black_box(wnaf_vartime(black_box(ab.as_ref()), G_WIDTH));
+                    black_box(wnaf_vartime(black_box(bb.as_ref()), Q_WIDTH));
+                });
+                let (gn, gl) = wnaf_vartime(ab.as_ref(), G_WIDTH);
+                let (qn, ql) = wnaf_vartime(bb.as_ref(), Q_WIDTH);
+                let len = gl.max(ql);
+                let adds = gn[..len]
+                    .iter()
+                    .chain(&qn[..len])
+                    .filter(|d| **d != 0)
+                    .count();
+                std::println!("  {len} doublings, {adds} additions");
+                ns("  the chain, fast where there is one", 300, || {
+                    black_box(
+                        C::mul_double_vartime_fast(gt, &qt, &gn[..len], &qn[..len])
+                            .unwrap_or_else(Point::identity),
+                    );
+                });
+                ns("  the chain, field operations", 300, || {
+                    black_box(joint_vartime(gt, &qt, &gn[..len], &qn[..len]));
+                });
+            }
+            ns("  u1 * G, table, vartime", 1000, || {
+                black_box(Point::<C>::mul_generator_vartime(&black_box(u1)));
+            });
+            ns("  u2 * Q, wNAF 5", 300, || {
+                black_box(black_box(q).mul_scalar_vartime(&black_box(u2)));
+            });
+            let p = q.double();
+            ns("  double", 30000, || {
+                black_box(black_box(p).double());
+            });
+            ns("  add_vartime", 30000, || {
+                black_box(black_box(p).add_vartime(&black_box(q)));
+            });
+            let qa = AffinePoint::<C>::from_sec1(&pk).unwrap();
+            ns("  add_affine_vartime", 30000, || {
+                black_box(black_box(p).add_affine_vartime(&black_box(qa.x), &black_box(qa.y)));
+            });
+            ns("  field inversion", 3000, || {
+                black_box(black_box(qa.x).invert());
+            });
+            let x = qa.x;
+            ns("x_is_one_of_vartime", 30000, || {
+                black_box(black_box(p).x_is_one_of_vartime(&[black_box(x), black_box(x)]));
+            });
+        }
+        curve::<P256>();
+        curve::<P384>();
     }
 }

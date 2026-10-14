@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305 (at every size, also without AVX-512), SHA-256 and HMAC-SHA256 on short inputs (64 and 200 bytes), X25519 (with AVX-512), Ed25519 (with AVX-512; without it, signing narrowly, 1.07-1.10), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (also without AVX-512, P-384 against Graviola's key parsed once by 1.00 to 1.31 depending on the build's layout), ECDSA P-256 sign (also without AVX-512, 1.10-1.15), RSA (also without AVX-512: 1.12-1.14 at 2048-bit signing, 2.5 at 3072, 1.08-1.09 at 4096), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256 and HMAC-SHA256 on long inputs, SHA3-256, ML-KEM key generation | without AVX-512, X25519 and P-256 verify are level (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305 (at every size, also without AVX-512), SHA-256 and HMAC-SHA256 on short inputs (64 and 200 bytes), X25519 (with AVX-512), Ed25519 (with AVX-512; without it, signing narrowly, 1.07-1.10), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (also without AVX-512, P-384 against Graviola's key parsed once by 1.00 to 1.31 depending on the build's layout), ECDSA P-256 sign (also without AVX-512, 1.10-1.15), RSA (also without AVX-512: 1.12-1.14 at 2048-bit signing, 2.5 at 3072, 1.08-1.09 at 4096), ECDSA P-256 verify (also without AVX-512, 1.36-1.49), ECDSA P-384 (verify also without AVX-512, 1.46-2.53), SHA-512 | SHA-256 and HMAC-SHA256 on long inputs, SHA3-256, ML-KEM key generation | without AVX-512, X25519 is level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's portable field multiplication and squaring, end to end except for two argued steps, and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -222,10 +222,10 @@ IronCrypto faster). The machine was loaded by other jobs.
 | Ed25519 verify | 0.88-1.09 | 1.28-1.56 |
 | P-256 ECDH | 0.84-0.93 | 0.84-0.99 |
 | ECDSA P-256 sign | 0.89-1.05 | 1.04-1.13 |
-| ECDSA P-256 verify | 0.98-1.01 | 1.00-1.08 |
+| ECDSA P-256 verify | 0.98-1.01 (1.36-1.49 since the joint chain, below) | 1.00-1.08 (1.24-1.56 since) |
 | P-384 ECDH | 0.76-0.77 | 0.69-1.26 |
 | ECDSA P-384 sign | 2.31-2.59 | 2.26-2.32 |
-| ECDSA P-384 verify | 1.08-1.23 | 1.26-1.66 |
+| ECDSA P-384 verify | 1.08-1.23 (1.46-2.53 since the joint chain, below) | 1.26-1.66 (1.94-2.32 since) |
 | RSA-2048 PKCS#1 v1.5 sign | 0.64-0.68, before the rewrite below | 1.16-1.36 |
 | RSA-2048 PKCS#1 v1.5 verify | 0.68-0.78, before the rewrite below | 1.16-1.25 |
 | SHA-512, 4 MiB | 1.47-1.86 | 1.60-2.23 |
@@ -359,6 +359,58 @@ other build) and IronCrypto's own time did not move (25.9-27.8 us to
 24.6-33.5). P-521, which none of this touches, signed and verified in the
 same times before and after (`stack ec`, three rounds: 199-216 and
 559-591 us either way).
+
+#### ECDSA verification, the joint chain, 2026-10-14
+
+Profiled first under `--cfg ic_no_avx512` (`where_verification_spends_its_time`
+in `crates/ic-ec/src/nist/ecdsa.rs`, loaded Zen 5). A P-256 verification was
+26.5 us: `u2*Q` 21.3 of it (256 doublings at about 57 ns, 43 Jacobian
+additions at about 105, and `Q`'s eight-entry window), `u1*G` 3.4 (43 mixed
+additions from the signing table), `s^-1` 0.8, and the digest, the key's
+decoding and the final comparison under 0.2 together; the comparison was
+already `X = r Z^2` without an inversion. P-384 was 111.6 us, 13.0 of it
+`s^-1`, by Fermat in the generic scalar ring. Graviola 0.4.1's verification
+is the same shape as this one was: `u1*G` from a width-7 table of 37 mixed
+additions, `u2*Q` by a fixed width-5 window with 51 Jacobian additions over a
+window built when the key is parsed (outside the timed loop in `bench`),
+one addition joining them, and three field inversions and a generic modular
+inverse.
+
+The two halves now share one chain of doublings. `u2` is recoded to a
+width-5 non-adjacent form against `Q, 3Q, .., 15Q` made affine with one
+inversion; `u1` to a width-8 form against `G, 3G, .., 127G`, affine, built
+once into a `static` (4 KiB on P-256). On P-256 that is 256 doublings and
+about 72 mixed additions, against 256 doublings, 43 Jacobian and 43 mixed
+additions before. On MULX/ADX the chain runs on the generated formulas over
+one buffer with the doubling in place (`nist::verify_x86`). The recoding
+had cost 1.1 us for the two forms and now costs 0.12, and P-384 inverts `s`
+by divsteps, 1.7 us. After: P-256 21.5-23.4 us, P-384 79.7-81.1, in the
+same profile. All of it is variable time and reachable only from
+verification; CHANGELOG.md has the tests and the four mutations they catch.
+
+Measured with the bench binaries of master dc22f6b and this change
+alternated, `graviola` and `graviola-p384`, four rounds each (ten for
+P-384 under `ic_no_avx512`), in layout A (as built) and layout B
+(`-C llvm-args=-align-all-functions=6`), the machine loaded by other work.
+IronCrypto's rate over Graviola's within each run, the range across rounds:
+
+| | layout A, before | layout A, after | layout B, before | layout B, after |
+|---|---|---|---|---|
+| P-256 verify, `ic_no_avx512` | 1.08-1.19 | 1.36-1.41 | 1.18-1.24 | 1.39-1.49 |
+| P-256 verify, default | 1.19-1.71 | 1.24-1.56 | 1.10-1.35 | 1.25-1.43 |
+| P-384 verify, `ic_no_avx512` (`graviola-p384`) | 1.45-1.54 | 1.46-2.30 | 1.35-1.52 | 1.90-2.53 |
+| P-384 verify, default (`graviola-p384`) | 1.44-1.61 | 2.12-2.32 | 1.37-1.57 | 1.94-2.00 |
+
+So P-256 verification without AVX-512, level before (0.98 to 1.08 in the
+earlier rounds above), is now ahead in both layouts. The default build's
+P-256 spread is Graviola's, whose verification took 31 to 47 us across
+these binaries while IronCrypto's took 25.2-28.8 before and 21.7-25.3
+after. The low end of P-384 under layout A, 1.46, is one round of ten;
+the other nine read 1.65 to 2.30. Signing and ECDH, which the
+change does not touch, stayed level by their ratios in both layouts;
+IronCrypto's own P-384 signing time read 3 to 5 percent higher in the new
+binaries, with its ratio unchanged, which these runs do not separate from
+layout.
 
 #### Ed25519 signing without AVX-512, 2026-10-14
 
