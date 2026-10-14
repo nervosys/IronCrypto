@@ -163,6 +163,7 @@ mutation of the function it proves, and each failed:
 | `p256_field::mont_step` | `P[3]` replaced by `P[3] - 2` | 4 s |
 | `p256_field::montgomery_low` | three steps instead of four | 1381 s |
 | `p256_field::reduce` | two words of the upper half swapped | 1254 s, in its postcondition and in `finish`'s precondition at the call |
+| (product domain) | `a` no longer assumed below `p` | 66 s |
 | `field::Fe::weak_reduce` | `19 * c4` changed to `18 * c4` | 20 s |
 | `field::carry_reduce` | `c[4] * 19` changed to `c[4] * 18` | 30 s; as a contract, 1882 s |
 | `field::mul_columns` | `b[4] * 19` changed to `b[4] * 18` | 498 s |
@@ -171,10 +172,12 @@ mutation of the function it proves, and each failed:
 | `field::Fe::to_bytes` | `19 * q` changed to `18 * q` | 77 s |
 | `field::Fe::add` | `+` changed to `^` | 22 s |
 | `field::Fe::sub` | one limb of `2p` changed by one | 36 s |
-| `Fe::mul`, `Fe::square` call checks | domain widened to limbs below `2^53` | 73 s, in `mul_columns`' precondition at the call |
+| `Fe::mul` call check | domain widened to limbs below `2^53` | 73 s, in `mul_columns`' precondition at the call |
 
 The mutations were applied to the working tree, the proof run, and the code
-restored, one at a time, each on the solver its proof uses.
+restored, one at a time, each on the solver its proof uses. The
+constant check that `p` has the shape the specifications use has no
+symbolic input and was not mutated.
 
 ## What a proof here is not
 
