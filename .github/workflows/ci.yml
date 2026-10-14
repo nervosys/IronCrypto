@@ -67,6 +67,7 @@ jobs:
           echo "runner architecture: $arch"
           test "$arch" = "arm64"
       - run: cargo test -p ic-cipher --features aarch64-crypto
+      - run: cargo test -p ic-hash --features aarch64-crypto
       - run: cargo test -p ironcrypto --features aarch64-crypto
 
   x86-32:

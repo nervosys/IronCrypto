@@ -5,7 +5,51 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **ARMv8 backends for SHA-256, SHA-512 and GHASH**, beside the existing
+  ARMv8 AES one and behind the same off-by-default `aarch64-crypto` feature
+  (now on `ic-hash` too; `ironcrypto`'s forwards to both). SHA-256 uses
+  `SHA256H`/`SHA256H2`/`SHA256SU0`/`SHA256SU1`, SHA-512
+  `SHA512H`/`SHA512H2`/`SHA512SU0`/`SHA512SU1`, and GHASH `PMULL`/`PMULL2`
+  over bit-reversed operands, eight blocks per reduction as on x86-64. All
+  are intrinsics stable at the 1.87 MSRV, selected by runtime detection
+  (`sha2`, `sha3`, `pmull`), with the portable code as fallback and
+  reference. Each kernel's structure is a macro shared with a software model
+  of its instructions -- transcribed from the Arm ARM pseudocode for SHA-2,
+  from the definition of carry-less multiplication for `PMULL` -- so the
+  composition is checked against the portable code on every host, as
+  `aes::armv8_model` already did for AES.
+- **The ARM backends have been executed**, under QEMU user-mode emulation:
+  `scripts/test-aarch64.sh` runs them on `qemu-aarch64 -cpu max` from an
+  x86-64 Linux host, including the AES backend, which until now had only been
+  compiled. Each SHA kernel equals the portable compression for block counts
+  0 to 10, 257 and 1024 from varied states, and through `Sha256`/`Sha512` at
+  every message length 0 to 600 bytes and at 64 KiB and 1 MiB, whole and in
+  two pieces. AES-GCM on the ARM path equals an SP 800-38D reference built
+  from the portable AES and GHASH at every length 0 to 600 for all three key
+  sizes, every AAD length 0 to 100, 64 KiB, and nonces of 1 to 129 bytes; the
+  SP 800-38D and Wycheproof AES-GCM vectors and the whole facade suite pass.
+  Seven mutations -- a wrong round constant in each SHA structure, a wrong
+  byte or bit shuffle in each real kernel, GHASH powers in the wrong order, a
+  wrong reduction constant -- each failed the tests under QEMU, and the
+  model tests also caught the three in shared structure. Nothing has run on
+  ARM hardware, and nothing has been measured: emulated timings are not
+  performance.
+
 ### Changed
+
+- **The ontology reports `hardware-accelerated` on AArch64** when the
+  `aarch64-crypto` feature is on and the CPU has `aes` and `pmull`, because
+  AES-GCM then runs on both halves in hardware; `recommend` follows it.
+  Without the feature an ARM build is portable and reported as such, as
+  before. `ic-core` gains `cpu::has_armv8_aes` and `cpu::has_ghash_pmull`,
+  and an `aarch64-crypto` feature that `ic-cipher`'s turns on, so the
+  ontology and the cipher dispatch on the same predicates.
+- **AArch64 is not a target of the compiled-code gate.** The ARM kernels are
+  argued constant time from the instructions and the source, with one
+  reading of their compiled code recorded in docs/CONSTANT_TIME.md; that is
+  not a gate.
 
 - **RSA key generation draws each Miller-Rabin base at random**, as FIPS
   186-5 B.3.1 specifies, from the generator's own RNG. The bases were the

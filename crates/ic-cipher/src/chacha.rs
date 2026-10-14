@@ -978,6 +978,9 @@ mod tests {
     fn the_counter_is_refused_before_it_wraps() {
         let key = [3u8; 32];
         let nonce = [4u8; 12];
+        // `mut` is used only where there is a backend to add; on other
+        // targets it is a warning, and an aarch64 clippy run is -D warnings.
+        #[cfg_attr(not(all(target_arch = "x86_64", feature = "std")), allow(unused_mut))]
         let mut backends = std::vec![Backend::Portable];
         #[cfg(all(target_arch = "x86_64", feature = "std"))]
         {

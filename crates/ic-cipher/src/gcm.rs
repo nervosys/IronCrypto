@@ -41,16 +41,25 @@ impl GcmLimits {
     pub const RECOMMENDED_NONCE_LEN: usize = 12;
 }
 
-/// Whether GHASH can use the carry-less multiply on this CPU.
+/// Whether GHASH can use a carry-less multiply on this CPU.
 ///
-/// Needs `ssse3` for the byte-reversal shuffle as well as `pclmulqdq` for the
-/// multiply itself. Detection lives in `ic-core`, like AES-NI's, so the
-/// ontology reports the same answer this dispatches on.
+/// On x86-64, `PCLMULQDQ`, which needs `ssse3` for the byte-reversal shuffle as
+/// well. On AArch64, `PMULL`, and only with the `aarch64-crypto` feature.
+/// Detection lives in `ic-core`, like AES-NI's, so the ontology reports the
+/// same answer this dispatches on.
 #[inline]
 #[must_use]
 pub fn ghash_accelerated() -> bool {
-    ic_core::cpu::has_ghash_clmul()
+    ic_core::cpu::has_ghash_clmul() || ic_core::cpu::has_ghash_pmull()
 }
+
+// The carry-less GHASH backend this target has, if it has one. Both offer
+// `mul` and `absorb8` with the same signatures and the same safety contract:
+// call them only when `ghash_accelerated()` is true.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+use crate::clmul as ghash_hw;
+#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+use crate::pmull as ghash_hw;
 
 /// Multiply `x` by `h` in GF(2^128) using the GCM bit ordering, in place.
 ///
@@ -102,7 +111,10 @@ struct Ghash {
     /// than introducing a second reduction to get wrong.
     powers: [[u8; BLOCK_LEN]; 8],
     /// Whether `powers[4..]` has been computed.
-    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", feature = "std"),
+        all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+    ))]
     high_powers: bool,
     acc: [u8; BLOCK_LEN],
     /// Whether the `PCLMULQDQ` multiply is available. Decided once per value,
@@ -110,7 +122,10 @@ struct Ghash {
     ///
     /// Only exists where an accelerated backend could be compiled in; on other
     /// targets there is nothing to select between.
-    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[cfg(any(
+        all(target_arch = "x86_64", feature = "std"),
+        all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+    ))]
     accelerated: bool,
 }
 
@@ -119,10 +134,16 @@ impl Ghash {
         let mut me = Self {
             h,
             powers: [[0u8; BLOCK_LEN]; 8],
-            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            #[cfg(any(
+                all(target_arch = "x86_64", feature = "std"),
+                all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+            ))]
             high_powers: false,
             acc: [0u8; BLOCK_LEN],
-            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            #[cfg(any(
+                all(target_arch = "x86_64", feature = "std"),
+                all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+            ))]
             accelerated: ghash_accelerated(),
         };
         // H^2, H^3, H^4, each built from the previous one by the same multiply
@@ -139,11 +160,14 @@ impl Ghash {
     /// `x *= y` in GCM's field, via whichever backend is live.
     #[inline]
     fn mul_by(&self, x: &mut [u8; BLOCK_LEN], y: &[u8; BLOCK_LEN]) {
-        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        #[cfg(any(
+            all(target_arch = "x86_64", feature = "std"),
+            all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+        ))]
         if self.accelerated {
             // SAFETY: `accelerated` is only true when `ghash_accelerated()`
-            // confirmed both `pclmulqdq` and `ssse3`.
-            unsafe { crate::clmul::mul(x, y) };
+            // confirmed the backend's features.
+            unsafe { ghash_hw::mul(x, y) };
             return;
         }
         portable_ghash_mul(x, y);
@@ -184,11 +208,14 @@ impl Ghash {
     /// Multiply the accumulator by `H`, via whichever backend is live.
     #[inline]
     fn mul_acc(&mut self) {
-        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        #[cfg(any(
+            all(target_arch = "x86_64", feature = "std"),
+            all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+        ))]
         if self.accelerated {
             // SAFETY: `accelerated` is only true when `ghash_accelerated()`
-            // confirmed both `pclmulqdq` and `ssse3`.
-            unsafe { crate::clmul::mul(&mut self.acc, &self.h) };
+            // confirmed the backend's features.
+            unsafe { ghash_hw::mul(&mut self.acc, &self.h) };
             return;
         }
         portable_ghash_mul(&mut self.acc, &self.h);
@@ -196,9 +223,12 @@ impl Ghash {
 
     /// Absorb `data`, zero-padding the final partial block.
     fn update_padded(&mut self, mut data: &[u8]) {
-        // Whole groups of eight through the `PCLMULQDQ` kernel, which reduces
-        // once per group; see `clmul::absorb8`.
-        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        // Whole groups of eight through the carry-less kernel, which reduces
+        // once per group; see `clmul::absorb8` and `pmull::absorb8`.
+        #[cfg(any(
+            all(target_arch = "x86_64", feature = "std"),
+            all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+        ))]
         if self.accelerated && data.len() >= BLOCK_LEN * 8 {
             if !self.high_powers {
                 for slot in 4..8 {
@@ -210,9 +240,9 @@ impl Ghash {
             }
             let whole = data.len() - data.len() % (BLOCK_LEN * 8);
             // SAFETY: `accelerated` is only true when `ghash_accelerated()`
-            // confirmed both `pclmulqdq` and `ssse3`, and `whole` is a
+            // confirmed the backend's features, and `whole` is a
             // multiple of 128 bytes.
-            unsafe { crate::clmul::absorb8(&mut self.acc, &self.powers, &data[..whole]) };
+            unsafe { ghash_hw::absorb8(&mut self.acc, &self.powers, &data[..whole]) };
             data = &data[whole..];
         }
         // Then whole groups of four; the tail falls through to the serial
@@ -657,7 +687,10 @@ mod tests {
 
             // Where the kernel exists it must have run, or this is the
             // four-block path agreeing with the serial one again.
-            #[cfg(all(target_arch = "x86_64", feature = "std"))]
+            #[cfg(any(
+                all(target_arch = "x86_64", feature = "std"),
+                all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+            ))]
             assert_eq!(batched.high_powers, batched.accelerated);
         }
 
@@ -684,9 +717,15 @@ mod tests {
         // Long enough to make the eight-block path build H^5..H^8 where it
         // runs; elsewhere only the first four exist.
         g.update_padded(&[0u8; BLOCK_LEN * 8]);
-        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        #[cfg(any(
+            all(target_arch = "x86_64", feature = "std"),
+            all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+        ))]
         let built = if g.high_powers { 8 } else { 4 };
-        #[cfg(not(all(target_arch = "x86_64", feature = "std")))]
+        #[cfg(not(any(
+            all(target_arch = "x86_64", feature = "std"),
+            all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+        )))]
         let built = 4;
 
         let mut expect = h;
@@ -857,62 +896,36 @@ mod tests {
     }
 }
 
-/// The fused x86-64 kernels against an independent GCM.
-///
-/// The reference below is SP 800-38D §7 written out a block at a time: the
-/// portable AES (validated by the FIPS 197 vectors) and the portable GHASH
-/// multiply (validated by the GCM specification vectors), no batching, no
-/// precomputed powers, no SIMD. Every kernel this CPU can run -- and
-/// [`gcm_core`], the path every other CPU takes -- must agree with it on
-/// every message length from 0 to 600 bytes, AAD lengths across 0..=100 and
-/// beyond, every key size, nonces of several lengths, and counters that wrap
-/// inside a group.
-///
-/// The specification vectors alone would not do. The longest is four blocks,
-/// so they never reach a 128- or 256-byte group, never leave a ragged tail
-/// after one, and never put AAD and data in the same reduction.
-#[cfg(all(test, target_arch = "x86_64", feature = "std"))]
-mod fused_tests {
+/// SP 800-38D written out a block at a time, for the tests to hold every path
+/// to: the portable AES (validated by the FIPS 197 vectors) and the portable
+/// GHASH multiply (validated by the GCM specification vectors), no batching,
+/// no precomputed powers, no SIMD.
+#[cfg(test)]
+mod reference {
     use super::*;
-    use crate::gcm_x86::{self, best_kernel, Kernel, Wide, Wide512};
     use std::boxed::Box;
     use std::vec::Vec;
 
-    type Block = [u8; BLOCK_LEN];
+    pub(super) type Block = [u8; BLOCK_LEN];
 
     /// A small xorshift, so the sweep covers varied keys, nonces and data
     /// without an RNG dependency.
-    struct Xs(u64);
+    pub(super) struct Xs(pub(super) u64);
 
     impl Xs {
-        fn next(&mut self) -> u64 {
+        pub(super) fn next(&mut self) -> u64 {
             self.0 ^= self.0 << 13;
             self.0 ^= self.0 >> 7;
             self.0 ^= self.0 << 17;
             self.0
         }
-        fn bytes(&mut self, n: usize) -> Vec<u8> {
+        pub(super) fn bytes(&mut self, n: usize) -> Vec<u8> {
             (0..n).map(|_| (self.next() >> 24) as u8).collect()
         }
     }
 
-    /// Every path this CPU can run: `None` is [`gcm_core`].
-    fn paths() -> Vec<Option<Kernel>> {
-        let mut v = std::vec![None];
-        if crate::aes::aesni_available() && ghash_accelerated() {
-            v.push(Some(Kernel::Clmul8));
-            if Wide::detect().is_some() {
-                v.push(Some(Kernel::Vaes256));
-            }
-            if Wide512::detect().is_some() {
-                v.push(Some(Kernel::Vaes512));
-            }
-        }
-        v
-    }
-
     /// The portable block cipher for `key`.
-    fn portable(key: &[u8]) -> Box<dyn Fn(&mut Block)> {
+    pub(super) fn portable(key: &[u8]) -> Box<dyn Fn(&mut Block)> {
         match key.len() {
             16 => {
                 let c = crate::aes::Aes128::new_portable(key).unwrap();
@@ -930,7 +943,7 @@ mod fused_tests {
     }
 
     /// One serial GHASH step per 16-byte block, the last zero-padded.
-    fn ghash_serial(h: &Block, y: &mut Block, bytes: &[u8]) {
+    pub(super) fn ghash_serial(h: &Block, y: &mut Block, bytes: &[u8]) {
         for chunk in bytes.chunks(BLOCK_LEN) {
             for (a, b) in y.iter_mut().zip(chunk) {
                 *a ^= b;
@@ -939,14 +952,14 @@ mod fused_tests {
         }
     }
 
-    fn inc32(c: &mut Block) {
+    pub(super) fn inc32(c: &mut Block) {
         let n = u32::from_be_bytes([c[12], c[13], c[14], c[15]]).wrapping_add(1);
         c[12..].copy_from_slice(&n.to_be_bytes());
     }
 
     /// SP 800-38D §7.1 (and §7.2 when opening) from a given `J0`: the output
     /// and the tag.
-    fn reference_j0(
+    pub(super) fn reference_j0(
         key: &[u8],
         j0: Block,
         aad: &[u8],
@@ -983,7 +996,7 @@ mod fused_tests {
     }
 
     /// `J0` from a nonce of any length, serially.
-    fn reference_j0_of(key: &[u8], nonce: &[u8]) -> Block {
+    pub(super) fn reference_j0_of(key: &[u8], nonce: &[u8]) -> Block {
         if nonce.len() == 12 {
             let mut j0 = [0u8; BLOCK_LEN];
             j0[..12].copy_from_slice(nonce);
@@ -999,6 +1012,168 @@ mod fused_tests {
         len[8..].copy_from_slice(&((nonce.len() as u64) * 8).to_be_bytes());
         ghash_serial(&h, &mut y, &len);
         y
+    }
+}
+
+/// The path `new` installs on this build, whatever it is, against the
+/// reference.
+///
+/// On x86-64 that is the fused kernel, which `fused_tests` also covers, path
+/// by path. On AArch64 with `aarch64-crypto` it is [`gcm_core`] over the ARMv8
+/// AES backend and the `PMULL` GHASH, which nothing else here reaches; this is
+/// the test that holds them to SP 800-38D at every length. Elsewhere it is the
+/// portable path.
+#[cfg(test)]
+mod default_path_tests {
+    use super::reference::*;
+    use super::*;
+
+    /// Seal through `new`'s path and compare with the reference; open the
+    /// result; refuse it with a flipped tag bit.
+    fn agree(key: &[u8], nonce: &[u8], aad: &[u8], pt: &[u8]) {
+        let j0 = reference_j0_of(key, nonce);
+        let (want_ct, want_tag) = reference_j0(key, j0, aad, pt, true);
+        macro_rules! go {
+            ($ty:ty) => {{
+                let c = <$ty as Aead>::new(key).unwrap();
+                let mut ct = pt.to_vec();
+                let mut tag = [0u8; BLOCK_LEN];
+                c.seal_detached(nonce, aad, &mut ct, &mut tag).unwrap();
+                let what = std::format!(
+                    "key {}, nonce {}, aad {}, {} bytes",
+                    key.len(),
+                    nonce.len(),
+                    aad.len(),
+                    pt.len()
+                );
+                assert_eq!(ct, want_ct, "ciphertext: {what}");
+                assert_eq!(tag, want_tag, "tag: {what}");
+                let mut opened = ct.clone();
+                c.open_detached(nonce, aad, &mut opened, &tag).unwrap();
+                assert_eq!(opened, pt, "opened: {what}");
+                tag[BLOCK_LEN - 1] ^= 0x01;
+                assert!(
+                    c.open_detached(nonce, aad, &mut ct, &tag).is_err(),
+                    "a flipped tag bit was accepted: {what}"
+                );
+            }};
+        }
+        match key.len() {
+            16 => go!(Aes128Gcm),
+            24 => go!(Aes192Gcm),
+            _ => go!(Aes256Gcm),
+        }
+    }
+
+    /// Say which path ran, so a pass on a machine without the instructions
+    /// is not read as a pass of the backend. Where the ARMv8 backends are
+    /// compiled in and the CPU has them, they must be the ones selected.
+    #[test]
+    fn the_default_path_is_reported() {
+        let aes = crate::aes::active_backend();
+        std::println!(
+            "aes-gcm default path: aes {aes:?}, ghash {}",
+            if ghash_accelerated() {
+                "carry-less"
+            } else {
+                "portable"
+            }
+        );
+        #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+        {
+            assert_eq!(
+                aes == crate::aes::Backend::Armv8,
+                ic_core::cpu::has_armv8_aes()
+            );
+            assert_eq!(ghash_accelerated(), ic_core::cpu::has_ghash_pmull());
+        }
+    }
+
+    #[test]
+    fn the_default_path_matches_the_reference_at_every_length_to_600() {
+        let mut rng = Xs(0x6a09_e667_f3bc_c908);
+        for key_len in [16usize, 24, 32] {
+            for len in 0..=600usize {
+                let key = rng.bytes(key_len);
+                let nonce = rng.bytes(12);
+                let aad = rng.bytes((len * 37 + key_len) % 101);
+                let pt = rng.bytes(len);
+                agree(&key, &nonce, &aad, &pt);
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_path_matches_the_reference_for_every_aad_length_to_100() {
+        let mut rng = Xs(0xbb67_ae85_84ca_a73b);
+        for len in [0usize, 1, 16, 17, 127, 128, 129, 257] {
+            for aad_len in 0..=100usize {
+                let key = rng.bytes(16);
+                let nonce = rng.bytes(12);
+                let aad = rng.bytes(aad_len);
+                let pt = rng.bytes(len);
+                agree(&key, &nonce, &aad, &pt);
+            }
+        }
+    }
+
+    #[test]
+    fn the_default_path_matches_the_reference_on_large_inputs_and_odd_nonces() {
+        let mut rng = Xs(0x3c6e_f372_fe94_f82b);
+        for (aad_len, len) in [(4099usize, 1usize), (13, 4096 + 255), (300, 65536 + 17)] {
+            for key_len in [16usize, 32] {
+                let key = rng.bytes(key_len);
+                let nonce = rng.bytes(12);
+                let aad = rng.bytes(aad_len);
+                let pt = rng.bytes(len);
+                agree(&key, &nonce, &aad, &pt);
+            }
+        }
+        // Nonces other than 96 bits go through GHASH to make J0.
+        for nonce_len in [1usize, 8, 16, 60, 129] {
+            let key = rng.bytes(32);
+            let nonce = rng.bytes(nonce_len);
+            let aad = rng.bytes(20);
+            let pt = rng.bytes(200);
+            agree(&key, &nonce, &aad, &pt);
+        }
+    }
+}
+
+/// The fused x86-64 kernels against an independent GCM.
+///
+/// The reference, in `reference`, is SP 800-38D §7 written out a block at a
+/// time: the portable AES (validated by the FIPS 197 vectors) and the portable
+/// GHASH multiply (validated by the GCM specification vectors), no batching,
+/// no precomputed powers, no SIMD. Every kernel this CPU can run -- and
+/// [`gcm_core`], the path every other CPU takes -- must agree with it on
+/// every message length from 0 to 600 bytes, AAD lengths across 0..=100 and
+/// beyond, every key size, nonces of several lengths, and counters that wrap
+/// inside a group.
+///
+/// The specification vectors alone would not do. The longest is four blocks,
+/// so they never reach a 128- or 256-byte group, never leave a ragged tail
+/// after one, and never put AAD and data in the same reduction.
+#[cfg(all(test, target_arch = "x86_64", feature = "std"))]
+mod fused_tests {
+    use super::reference::*;
+    use super::*;
+    use crate::gcm_x86::{self, best_kernel, Kernel, Wide, Wide512};
+    use std::vec::Vec;
+
+    /// Every path this CPU can run: `None` is [`gcm_core`].
+    fn paths() -> Vec<Option<Kernel>> {
+        let mut v = std::vec![None];
+        if crate::aes::aesni_available() && ghash_accelerated() {
+            v.push(Some(Kernel::Clmul8));
+            if Wide::detect().is_some() {
+                v.push(Some(Kernel::Vaes256));
+            }
+            if Wide512::detect().is_some() {
+                v.push(Some(Kernel::Vaes512));
+            }
+        }
+        v
     }
 
     /// Seal through one path; open the result through it; open it again with

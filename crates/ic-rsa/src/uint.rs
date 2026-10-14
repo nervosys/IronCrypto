@@ -308,7 +308,13 @@ pub(crate) static FORCE_ADX: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
 /// Whether [`FORCE_ADX`] is set. Always false outside `ct-probes`.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
+///
+/// Only the x86-64 backends ask; on other targets it is dead, and an aarch64
+/// clippy run is `-D warnings`.
+#[cfg_attr(
+    any(not(feature = "std"), not(target_arch = "x86_64")),
+    allow(dead_code)
+)]
 #[inline(always)]
 fn adx_forced() -> bool {
     #[cfg(feature = "ct-probes")]

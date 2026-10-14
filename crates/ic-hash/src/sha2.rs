@@ -23,6 +23,22 @@ mod x86;
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 mod avx2_512;
 
+// The ARMv8 SHA-256 and SHA-512 instructions, behind the off-by-default
+// `aarch64-crypto` feature and runtime detection. See `sha2::aarch64`.
+#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+mod aarch64;
+
+// The block structure the ARMv8 backend and its model share, and the model,
+// which runs on every host so the structure is checked where the instructions
+// cannot run.
+#[cfg(test)]
+mod armv8_model;
+#[cfg(any(
+    test,
+    all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+))]
+mod armv8_rounds;
+
 /// Whether this CPU has AVX2, asked once.
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 pub(crate) fn avx2() -> bool {
@@ -258,6 +274,13 @@ impl Core256 {
             unsafe { x86::compress(&mut self.h, data) };
             return;
         }
+        #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+        if aarch64::sha256_available() {
+            // SAFETY: `sha256_available()` is exactly the feature test this
+            // requires, and the length is a whole number of blocks.
+            unsafe { aarch64::compress256(&mut self.h, data) };
+            return;
+        }
         for block in data.chunks_exact(64) {
             self.compress(block);
         }
@@ -275,6 +298,12 @@ impl Core256 {
             // SAFETY: `sha_ni()` is exactly the feature test this requires, and
             // the buffer is one whole block.
             unsafe { x86::compress(&mut self.h, &self.buf) };
+            return;
+        }
+        #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+        if aarch64::sha256_available() {
+            // SAFETY: as above; the buffer is one whole block.
+            unsafe { aarch64::compress256(&mut self.h, &self.buf) };
             return;
         }
         let block = self.buf;
@@ -421,6 +450,15 @@ impl Core512 {
     }
 
     fn compress(&mut self, block: &[u8]) {
+        // The ARMv8 instructions do the whole compression, schedule and rounds
+        // alike, so that backend shares nothing below.
+        #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+        if aarch64::sha512_available() {
+            // SAFETY: `sha512_available()` is the feature test this requires,
+            // and `block` is one block by `update`'s chunking.
+            unsafe { aarch64::compress512(&mut self.h, block) };
+            return;
+        }
         // The schedule is about a third of the work and is the only part with
         // anything to run in parallel; the rounds are a chain. So the backends
         // differ in how `w` is filled and share everything after it.
@@ -433,6 +471,24 @@ impl Core512 {
         }
         Self::schedule(&mut self.w, block);
         Self::rounds(&mut self.h, &self.w);
+    }
+
+    /// Compress a whole number of blocks.
+    ///
+    /// A run rather than a block at a time so the ARMv8 backend moves the
+    /// state into its registers once per call, not once per block.
+    fn compress_blocks(&mut self, data: &[u8]) {
+        debug_assert!(data.len().is_multiple_of(128));
+        #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+        if aarch64::sha512_available() {
+            // SAFETY: `sha512_available()` is the feature test this requires,
+            // and the length is a whole number of blocks.
+            unsafe { aarch64::compress512(&mut self.h, data) };
+            return;
+        }
+        for block in data.chunks_exact(128) {
+            self.compress(block);
+        }
     }
 
     /// Build the message schedule.
@@ -501,11 +557,9 @@ impl Core512 {
             self.compress(&block);
             self.buffered = 0;
         }
-        let mut chunks = data.chunks_exact(128);
-        for block in &mut chunks {
-            self.compress(block);
-        }
-        let rest = chunks.remainder();
+        let whole = data.len() - data.len() % 128;
+        self.compress_blocks(&data[..whole]);
+        let rest = &data[whole..];
         self.buf[..rest.len()].copy_from_slice(rest);
         self.buffered = rest.len();
     }
@@ -723,6 +777,186 @@ sha2_64!(
 mod tests {
     use super::*;
 
+    /// Bytes that vary in every position: a counter through a multiply and a
+    /// rotate, seeded so two calls need not agree.
+    fn pattern(len: usize, seed: u64) -> std::vec::Vec<u8> {
+        (0..len)
+            .map(|i| {
+                ((i as u64 ^ seed)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .rotate_left(23)
+                    >> 7) as u8
+            })
+            .collect()
+    }
+
+    /// Block counts a SHA-256 kernel is held to: every count up to ten, and
+    /// two large runs, from several starting states.
+    const KERNEL_BLOCKS: [usize; 13] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 257, 1024];
+
+    /// Hold a SHA-256 block kernel to the portable compression.
+    ///
+    /// Shared by the ARMv8 model, which runs everywhere, and the ARMv8 backend,
+    /// which runs where the instructions exist. Starting states other than the
+    /// IV, because an error in how the state is loaded into or stored out of
+    /// vector lanes can be symmetric enough to survive the IV.
+    pub(super) fn check_sha256_kernel(kernel: impl Fn(&mut [u32; 8], &[u8])) {
+        let mut checked = 0;
+        for (seed, blocks) in KERNEL_BLOCKS.iter().enumerate() {
+            let data = pattern(blocks * 64, seed as u64);
+            let start: [u32; 8] = core::array::from_fn(|i| {
+                (seed as u32 + 1).wrapping_mul(0x0101_0101) ^ (K256[i] << (i % 5))
+            });
+            let mut want = Core256::new(start);
+            for block in data.chunks_exact(64) {
+                want.compress(block);
+            }
+            let mut got = start;
+            kernel(&mut got, &data);
+            assert_eq!(got, want.h, "{blocks} blocks");
+            checked += 1;
+        }
+        assert_eq!(checked, KERNEL_BLOCKS.len());
+    }
+
+    /// Hold a SHA-512 block kernel to the portable compression, as above.
+    pub(super) fn check_sha512_kernel(kernel: impl Fn(&mut [u64; 8], &[u8])) {
+        let mut checked = 0;
+        for (seed, blocks) in KERNEL_BLOCKS.iter().enumerate() {
+            let data = pattern(blocks * 128, seed as u64 + 100);
+            let start: [u64; 8] = core::array::from_fn(|i| {
+                (seed as u64 + 1).wrapping_mul(0x0101_0101_0101_0101) ^ K512[i + 8]
+            });
+            // `schedule` and `rounds` directly: the portable path on every
+            // target, whatever `compress` dispatches to.
+            let mut want = start;
+            let mut w = [0u64; 80];
+            for block in data.chunks_exact(128) {
+                Core512::schedule(&mut w, block);
+                Core512::rounds(&mut want, &w);
+            }
+            let mut got = start;
+            kernel(&mut got, &data);
+            assert_eq!(got, want, "{blocks} blocks");
+            checked += 1;
+        }
+        assert_eq!(checked, KERNEL_BLOCKS.len());
+    }
+
+    /// SHA-256 of `msg` by the portable compression alone: FIPS 180-4 section
+    /// 5.1.1 padding built separately, then block by block.
+    fn portable_sha256(msg: &[u8]) -> [u8; 32] {
+        const IV: [u32; 8] = [
+            0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+            0x5be0cd19,
+        ];
+        let mut padded = msg.to_vec();
+        padded.push(0x80);
+        while padded.len() % 64 != 56 {
+            padded.push(0);
+        }
+        padded.extend_from_slice(&((msg.len() as u64) * 8).to_be_bytes());
+        let mut core = Core256::new(IV);
+        for block in padded.chunks_exact(64) {
+            core.compress(block);
+        }
+        let mut out = [0u8; 32];
+        for (i, w) in core.h.iter().enumerate() {
+            out[4 * i..4 * i + 4].copy_from_slice(&w.to_be_bytes());
+        }
+        out
+    }
+
+    /// SHA-512 of `msg` by the portable compression alone, section 5.1.2.
+    fn portable_sha512(msg: &[u8]) -> [u8; 64] {
+        const IV: [u64; 8] = [
+            0x6a09e667f3bcc908,
+            0xbb67ae8584caa73b,
+            0x3c6ef372fe94f82b,
+            0xa54ff53a5f1d36f1,
+            0x510e527fade682d1,
+            0x9b05688c2b3e6c1f,
+            0x1f83d9abfb41bd6b,
+            0x5be0cd19137e2179,
+        ];
+        let mut padded = msg.to_vec();
+        padded.push(0x80);
+        while padded.len() % 128 != 112 {
+            padded.push(0);
+        }
+        padded.extend_from_slice(&((msg.len() as u128) * 8).to_be_bytes());
+        let mut h = IV;
+        let mut w = [0u64; 80];
+        for block in padded.chunks_exact(128) {
+            Core512::schedule(&mut w, block);
+            Core512::rounds(&mut h, &w);
+        }
+        let mut out = [0u8; 64];
+        for (i, v) in h.iter().enumerate() {
+            out[8 * i..8 * i + 8].copy_from_slice(&v.to_be_bytes());
+        }
+        out
+    }
+
+    /// Whatever backend this build dispatches to, against the portable
+    /// compression, at every message length from 0 to 600 bytes and at two
+    /// large ones, whole and in two pieces.
+    ///
+    /// Through `Sha256` and `Sha512` themselves, so the buffered block, the
+    /// padding block and the bulk run all reach the backend: an error confined
+    /// to one of those entry points shows up at some length here.
+    #[test]
+    fn the_active_backend_matches_the_portable_compression_at_every_length() {
+        let mut lengths: std::vec::Vec<usize> = (0..=600).collect();
+        lengths.extend([64 * 1024 + 7, 1 << 20]);
+        for &len in &lengths {
+            let msg = pattern(len, len as u64);
+            let want256 = portable_sha256(&msg);
+            let want512 = portable_sha512(&msg);
+            assert_eq!(Sha256::digest(&msg), want256, "sha-256, {len} bytes");
+            assert_eq!(Sha512::digest(&msg), want512, "sha-512, {len} bytes");
+
+            let (a, b) = msg.split_at(len / 3);
+            let mut h = Sha256::new();
+            h.update(a);
+            h.update(b);
+            assert_eq!(h.finalize(), want256, "sha-256, {len} bytes in two pieces");
+            let mut h = Sha512::new();
+            h.update(a);
+            h.update(b);
+            assert_eq!(h.finalize(), want512, "sha-512, {len} bytes in two pieces");
+        }
+    }
+
+    /// The ARMv8 SHA-256 backend against the portable compression.
+    ///
+    /// Reports a skip rather than failing where the CPU lacks the
+    /// instructions, as the AES backend's tests do.
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    #[test]
+    fn the_armv8_sha256_backend_agrees_with_the_portable_one() {
+        if !aarch64::sha256_available() {
+            println!("no ARMv8 SHA-256 instructions; the backend was not exercised");
+            return;
+        }
+        // SAFETY: guarded by the detection above, and every input the check
+        // passes is a whole number of blocks.
+        check_sha256_kernel(|h, d| unsafe { aarch64::compress256(h, d) });
+    }
+
+    /// The ARMv8 SHA-512 backend against the portable compression.
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    #[test]
+    fn the_armv8_sha512_backend_agrees_with_the_portable_one() {
+        if !aarch64::sha512_available() {
+            println!("no ARMv8 SHA-512 instructions; the backend was not exercised");
+            return;
+        }
+        // SAFETY: guarded by the detection above, and every input the check
+        // passes is a whole number of blocks.
+        check_sha512_kernel(|h, d| unsafe { aarch64::compress512(h, d) });
+    }
+
     /// The hardware path must agree with the portable one, block for block.
     ///
     /// The published vectors above do not establish this. They pass whichever
@@ -823,6 +1057,25 @@ mod tests {
         println!(
             "sha-256 backend: {}",
             if sha_ni() { "SHA-NI" } else { "portable" }
+        );
+    }
+
+    /// The same report on aarch64, where the backend is feature-gated.
+    #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+    #[test]
+    fn the_active_armv8_paths_are_reported() {
+        println!(
+            "sha-256 backend: {}; sha-512 backend: {}",
+            if aarch64::sha256_available() {
+                "ARMv8 SHA2"
+            } else {
+                "portable"
+            },
+            if aarch64::sha512_available() {
+                "ARMv8 SHA512"
+            } else {
+                "portable"
+            },
         );
     }
 

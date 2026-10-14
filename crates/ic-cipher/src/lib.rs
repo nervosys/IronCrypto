@@ -31,8 +31,8 @@
 //! that table-driven AES leaves open is closed by construction.
 //!
 //! Three backends sit behind the same traits, chosen by the CPU and never by
-//! key material: AES-NI with PCLMULQDQ on x86-64, the ARMv8 crypto extensions
-//! behind a feature, and a portable one everywhere else. The portable AES path
+//! key material: AES-NI with PCLMULQDQ on x86-64, the ARMv8 AES and `PMULL`
+//! instructions behind a feature, and a portable one everywhere else. The portable AES path
 //! is bitsliced for encryption — four blocks at a time in transposed form, at
 //! roughly the rate of RustCrypto's fixsliced implementation. Decryption is
 //! not bitsliced and runs a byte at a time, which is correct and slow; the
@@ -66,6 +66,19 @@ pub mod chacha;
 // The carry-less multiply instruction.
 #[allow(unsafe_code)]
 mod clmul;
+// The ARMv8 `PMULL` GHASH, behind the `aarch64-crypto` feature and runtime
+// detection; its structure is shared with a software model, which runs under
+// test on every host.
+#[cfg(any(
+    test,
+    all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+))]
+mod armv8_ghash;
+#[cfg(test)]
+mod armv8_ghash_model;
+#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+#[allow(unsafe_code)]
+mod pmull;
 // The x86-64 ChaCha20 and Poly1305 kernels, for scripts/ct-audit.
 #[cfg(all(feature = "ct-probes", not(ic_approved_only)))]
 #[allow(unsafe_code, missing_docs)]

@@ -14,7 +14,8 @@ pub enum Backend {
     /// neither indexes memory with a secret. Correct and portable; not fast.
     PortableConstantTime,
     /// Hardware-accelerated: x86-64 AES-NI for the cipher and `PCLMULQDQ` for
-    /// GHASH.
+    /// GHASH, or on AArch64 with the `aarch64-crypto` feature, the ARMv8 AES
+    /// instructions and `PMULL`.
     ///
     /// Selected automatically when the CPU supports both. The accelerated
     /// paths are differentially tested against the portable ones, so this is a
@@ -47,8 +48,12 @@ pub fn backend() -> Backend {
     // AES-GCM is only fast when *both* are in use: without the carry-less
     // multiply, GHASH dominates and the AES speedup is invisible. Ask whether
     // the GHASH backend runs, not whether the CPU has the instruction -- a
-    // 32-bit x86 build has the instruction and no backend for it.
-    if ic_core::cpu::has_aes() && ic_core::cpu::has_ghash_clmul() {
+    // 32-bit x86 build has the instruction and no backend for it. On AArch64
+    // both predicates also require the `aarch64-crypto` feature, which is
+    // what selects those backends.
+    if (ic_core::cpu::has_aes() && ic_core::cpu::has_ghash_clmul())
+        || (ic_core::cpu::has_armv8_aes() && ic_core::cpu::has_ghash_pmull())
+    {
         Backend::HardwareAccelerated
     } else {
         Backend::PortableConstantTime
@@ -96,9 +101,11 @@ pub fn capabilities() -> impl Iterator<Item = Capability> {
             id: "hardware-acceleration",
             present: backend().fast_bulk_symmetric(),
             note: "x86-64 AES-NI and a PCLMULQDQ GHASH, selected at runtime and validated \
-                   against the portable backend. Absent on other targets, including 32-bit \
-                   x86 and ARM where AES itself may run in hardware: GHASH is portable \
-                   there, and AES-GCM runs far slower than ChaCha20-Poly1305.",
+                   against the portable backend; or, on AArch64 built with the off-by-default \
+                   aarch64-crypto feature, the ARMv8 AES instructions and a PMULL GHASH, \
+                   validated the same way under emulation and not yet measured on ARM \
+                   hardware. Absent elsewhere, including 32-bit x86, where GHASH is portable \
+                   and AES-GCM runs far slower than ChaCha20-Poly1305.",
         },
         Capability {
             id: "fips-validated",
@@ -175,7 +182,8 @@ mod tests {
     /// test does that, and caught a 32-bit x86 build that this one passed.
     #[test]
     fn backend_matches_the_cpu() {
-        let accelerated = ic_core::cpu::has_aes() && ic_core::cpu::has_ghash_clmul();
+        let accelerated = (ic_core::cpu::has_aes() && ic_core::cpu::has_ghash_clmul())
+            || (ic_core::cpu::has_armv8_aes() && ic_core::cpu::has_ghash_pmull());
         assert_eq!(
             backend(),
             if accelerated {

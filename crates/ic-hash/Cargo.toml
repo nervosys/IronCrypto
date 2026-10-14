@@ -15,6 +15,11 @@ publish.workspace = true
 [features]
 default = ["std"]
 std = ["ic-core/std"]
+# The ARMv8 SHA-256 and SHA-512 backends (sha2/aarch64.rs). Off by default, as
+# ic-cipher's ARMv8 AES backend is: they have run under QEMU user-mode
+# emulation (scripts/test-aarch64.sh) and not yet on ARM hardware. Needs `std`
+# for runtime detection; without it the feature selects nothing.
+aarch64-crypto = []
 
 # `ic_approved_only` leaves out every algorithm FIPS approved mode does not
 # permit; see docs/FIPS.md.
