@@ -222,8 +222,9 @@ pub fn run() {
     });
     verdict("ed25519 verify", d3, d4, false);
 
-    // ML-KEM-768. Graviola's public calls draw their own randomness, so both
-    // sides here include one draw from the operating system per operation.
+    // ML-KEM-768. Graviola's public calls draw their own randomness from the
+    // operating system on every call. The rows below say which of the two
+    // ways of holding a key each pair compares: from bytes, or parsed once.
     {
         use ic_mlkem::kem as m;
         let mut rng = ironcrypto::drbg::Rng::from_os().unwrap();
@@ -257,48 +258,75 @@ pub fn run() {
 
         let mut ct = Box::new([0u8; m::CIPHERTEXT_LEN]);
         let mut ss = [0u8; 32];
-        let n1 = per_op("ironcrypto ml-kem-768 encapsulate", 2000, 5, || {
-            ic_mlkem::MlKem768::encapsulate(&mut rng, &ek, &mut ct, &mut ss).unwrap();
-        });
+
+        // Graviola's encapsulation draws its 32-byte message from the operating
+        // system on every call, so the IronCrypto encapsulation rows draw from
+        // `OsEntropy` too, not from the DRBG `rng` above.
+        let mut os = ic_core::entropy::OsEntropy;
+
+        // A Graviola key for the decapsulation rows, and a ciphertext to it.
         let g_dk = graviola::key_agreement::mlkem768::DecapKey::generate().unwrap();
         let g_ek = g_dk.encapsulation_key();
-        let n2 = per_op("graviola ml-kem-768 encapsulate", 2000, 5, || {
-            std::hint::black_box(g_ek.clone().encaps().unwrap());
-        });
-        verdict("ml-kem-768 encapsulate", n1, n2, false);
-
-        let o1 = per_op("ironcrypto ml-kem-768 decapsulate", 2000, 5, || {
-            ic_mlkem::MlKem768::decapsulate(&dk, &ct, &mut ss).unwrap();
-        });
         let (_, g_ct) = g_ek.clone().encaps().unwrap();
-        let o2 = per_op("graviola ml-kem-768 decapsulate", 2000, 5, || {
-            std::hint::black_box(g_dk.decaps_internal(&g_ct));
-        });
-        verdict("ml-kem-768 decapsulate", o1, o2, false);
 
-        // The same, with each side's key parsed once outside the loop:
-        // IronCrypto's prepared keys hold A^T, t and H(ek); Graviola's
-        // `EncapKey::from_bytes` holds A^T, and its `DecapKey` is always in
-        // that form. Graviola's `encaps` consumes the key, so it is cloned
-        // per operation, as above. Both encapsulate to the same key bytes.
+        // FROM BYTES, both sides. Each call starts from the encoded key.
+        // IronCrypto's `encapsulate` checks the encoding (FIPS 203 7.2) and
+        // expands the key. Graviola's `EncapKey::from_bytes` also checks the
+        // encoding (ByteDecode12 round trip) and expands A^T. Both then compute
+        // H(ek) inside the encapsulation, as FIPS 203 requires.
+        let a1 = per_op("ironcrypto ml-kem-768 encaps, from bytes", 2000, 5, || {
+            ic_mlkem::MlKem768::encapsulate(&mut os, &ek, &mut ct, &mut ss).unwrap();
+        });
+        let a2 = per_op("graviola ml-kem-768 encaps, from bytes", 2000, 5, || {
+            let key = graviola::key_agreement::mlkem768::EncapKey::from_bytes(&ek).unwrap();
+            std::hint::black_box(key.encaps().unwrap());
+        });
+        verdict("ml-kem-768 encaps, from bytes, both", a1, a2, false);
+
+        // Decapsulation from bytes has no Graviola row. Graviola 0.4.1 has no
+        // decapsulation-key parser: its `DecapKey` comes only from `generate`
+        // (or the hidden `keygen_internal`). So Graviola never does the work
+        // a from-bytes decapsulation does, including the H(ek) hash check
+        // that FIPS 203 7.3 requires on the decapsulation key. IronCrypto's
+        // figure below includes that check, and is not compared with anything.
+        per_op(
+            "ironcrypto ml-kem-768 decaps, from bytes (no graviola row)",
+            2000,
+            5,
+            || {
+                ic_mlkem::MlKem768::decapsulate(&dk, &ct, &mut ss).unwrap();
+            },
+        );
+
+        // PARSED ONCE, both sides. IronCrypto's prepared keys hold A^T, t and
+        // H(ek) (encapsulation) and the checked s, z, t, A^T and H(ek)
+        // (decapsulation). Graviola's `EncapKey` holds A^T and its `DecapKey`
+        // is always in parsed form. Graviola's `encaps` consumes its key, so
+        // the encapsulation row clones it per call; the row after it is that
+        // clone alone, for scale.
         let p_ek = m::PreparedEncapsulationKey::new(&ek).unwrap();
-        let p1 = per_op("ironcrypto ml-kem-768 encaps, prepared", 2000, 5, || {
-            p_ek.encapsulate(&mut rng, &mut ct, &mut ss).unwrap();
+        let b1 = per_op("ironcrypto ml-kem-768 encaps, parsed once", 2000, 5, || {
+            p_ek.encapsulate(&mut os, &mut ct, &mut ss).unwrap();
         });
         let g_parsed = graviola::key_agreement::mlkem768::EncapKey::from_bytes(&ek).unwrap();
-        let p2 = per_op("graviola ml-kem-768 encaps, parsed once", 2000, 5, || {
+        let b2 = per_op("graviola ml-kem-768 encaps, parsed once", 2000, 5, || {
             std::hint::black_box(g_parsed.clone().encaps().unwrap());
         });
-        verdict("ml-kem-768 encapsulate, prepared", p1, p2, false);
+        verdict("ml-kem-768 encaps, parsed once, both", b1, b2, false);
+        per_op("  graviola EncapKey clone alone", 2000, 5, || {
+            std::hint::black_box(g_parsed.clone());
+        });
 
         let p_dk = m::PreparedDecapsulationKey::new(&dk).unwrap();
-        let q1 = per_op("ironcrypto ml-kem-768 decaps, prepared", 2000, 5, || {
+        let q1 = per_op("ironcrypto ml-kem-768 decaps, parsed once", 2000, 5, || {
             p_dk.decapsulate(&ct, &mut ss).unwrap();
         });
-        let q2 = per_op("graviola ml-kem-768 decaps", 2000, 5, || {
+        // `DecapKey::decaps` consumes the key, so the Graviola row uses the
+        // hidden `decaps_internal`, which does the same work on `&self`.
+        let q2 = per_op("graviola ml-kem-768 decaps, parsed once", 2000, 5, || {
             std::hint::black_box(g_dk.decaps_internal(&g_ct));
         });
-        verdict("ml-kem-768 decapsulate, prepared", q1, q2, false);
+        verdict("ml-kem-768 decaps, parsed once, both", q1, q2, false);
     }
 
     // RSA-2048 PKCS#1 v1.5 signing, on one key loaded into both.
@@ -308,8 +336,12 @@ pub fn run() {
                 .unwrap();
         let mut der = vec![0u8; 4096];
         let der = g_key.to_pkcs8_der(&mut der).unwrap();
-        let ic_pkix::PrivateKeyInfo::Rsa { public_exponent, prime1, prime2, .. } =
-            ic_pkix::PrivateKeyInfo::from_der(der).unwrap()
+        let ic_pkix::PrivateKeyInfo::Rsa {
+            public_exponent,
+            prime1,
+            prime2,
+            ..
+        } = ic_pkix::PrivateKeyInfo::from_der(der).unwrap()
         else {
             panic!("graviola wrote an RSA key that is not RSA");
         };
@@ -422,21 +454,31 @@ pub fn chacha() {
             }
         });
         verdict(&format!("chacha20-poly1305, {label}"), c1, c2, true);
-        bulk("  ironcrypto chacha20 keystream only", SIZE, REPEATS, || {
-            for chunk in data.chunks_mut(size).take(reps) {
-                ic_cipher::chacha20_xor(&key, &nonce, 1, chunk).unwrap();
-            }
-        });
+        bulk(
+            "  ironcrypto chacha20 keystream only",
+            SIZE,
+            REPEATS,
+            || {
+                for chunk in data.chunks_mut(size).take(reps) {
+                    ic_cipher::chacha20_xor(&key, &nonce, 1, chunk).unwrap();
+                }
+            },
+        );
         bulk("  ironcrypto poly1305 only", SIZE, REPEATS, || {
             for chunk in data.chunks(size).take(reps) {
                 std::hint::black_box(<ic_cipher::Poly1305 as Mac>::mac(&key, chunk).unwrap());
             }
         });
-        bulk("  ironcrypto both halves, back to back", SIZE, REPEATS, || {
-            for chunk in data.chunks_mut(size).take(reps) {
-                ic_cipher::chacha20_xor(&key, &nonce, 1, chunk).unwrap();
-                std::hint::black_box(<ic_cipher::Poly1305 as Mac>::mac(&key, chunk).unwrap());
-            }
-        });
+        bulk(
+            "  ironcrypto both halves, back to back",
+            SIZE,
+            REPEATS,
+            || {
+                for chunk in data.chunks_mut(size).take(reps) {
+                    ic_cipher::chacha20_xor(&key, &nonce, 1, chunk).unwrap();
+                    std::hint::black_box(<ic_cipher::Poly1305 as Mac>::mac(&key, chunk).unwrap());
+                }
+            },
+        );
     }
 }

@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (more variable under load), ChaCha20-Poly1305, X25519, Ed25519, ML-KEM with a prepared key, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly; ML-KEM encapsulation and decapsulation from key bytes |
+| Speed, x86-64 | AES-GCM (more variable under load), ChaCha20-Poly1305, X25519, Ed25519, ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA product by the gate alone, and its IFMA exponentiation as a whole by neither |
@@ -82,9 +82,15 @@ here), with the range across rounds:
 | SHA-512, 4 MiB | 1.27-2.05 | | ECDSA P-384 sign | 2.33-2.79 |
 | SHA3-256, 4 MiB | 0.95-0.97 | | ECDSA P-384 verify | 1.41-1.56 |
 | HMAC-SHA256, 4 MiB | 0.92-0.99 | | ML-KEM-768 keygen, like for like | 0.98-1.39 |
-| HMAC-SHA256, 200 B | 0.93 | | ML-KEM-768 encapsulate / decapsulate | 0.74-0.88 / 0.75-0.91 |
-| SHA-256, 64 B | 1.01-1.03 | | the same, key prepared | 1.73-2.08 / 0.97-1.52 |
-| RSA-2048 sign / verify | 1.16-1.30 | | | |
+| HMAC-SHA256, 200 B | 0.93 | | ML-KEM-768 encapsulate, from bytes, both | 1.82-2.08 |
+| SHA-256, 64 B | 1.01-1.03 | | ML-KEM-768 encapsulate, parsed once, both | 1.71-2.27 |
+| RSA-2048 sign / verify | 1.16-1.30 | | ML-KEM-768 decapsulate, parsed once, both | 1.31-1.38 |
+
+The ML-KEM rows in this table were re-measured for this change, not in the
+run above: three rounds, each with the previous bench binary and the new
+one run alternately, both libraries in every run, on the branch that adds
+them. Decapsulation from key bytes has no Graviola counterpart (below), and
+the ML-KEM key generation row is unchanged from the run above.
 
 The AES-GCM outliers are drops in IronCrypto's own rate (2.9 and 13.7
 GB/s against 19 to 25 in the other runs) while Graviola's held at 15 to
@@ -93,12 +99,18 @@ the first measurement of each run.
 
 Where it is not ahead:
 
-- **ML-KEM encapsulation and decapsulation from key bytes** are behind, at
-  0.74 to 0.91 of Graviola's rate. This API takes the key's bytes and
-  checks and expands it on every call; Graviola's keys are parsed once.
-  With a prepared key, which does that once, encapsulation leads by 1.7 to
-  2.1 times and decapsulation is level to ahead.
-
+- **ML-KEM decapsulation from key bytes** has no Graviola row. Graviola
+  0.4.1 cannot parse a decapsulation key from bytes: its `DecapKey` comes
+  only from `generate`. So Graviola has no from-bytes decapsulation to time,
+  and it never runs the hash check that FIPS 203 section 7.3 requires on the
+  decapsulation key, which IronCrypto runs on every from-bytes call (7.8 to
+  8.7 us here, not compared). Graviola's encapsulation-key parse does check
+  the encoding, as IronCrypto's does (FIPS 203 section 7.2), so nothing is
+  skipped on that side. The earlier "behind" figures set a from-bytes
+  IronCrypto call against Graviola's key already in memory, which was not
+  like for like. Graviola's `encaps` consumes its key, so the parsed-once row
+  clones it per call; that clone is about 0.1 us, against 4.9 to 6.1 us for
+  the encapsulation.
 - **P-384 ECDH** is level to slightly behind: 0.83 to 0.98 of Graviola's
   rate in the last run. It was 1.7 times slower while the field arithmetic here was generic in the modulus; specialised to the
   prime, with a squaring of its own and divsteps inversion, it came out at
