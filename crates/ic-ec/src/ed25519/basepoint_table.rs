@@ -67,6 +67,7 @@ const TABLES: usize = DIGITS / 2;
 /// `(y+x, y-x, 2d·x·y)` makes that addition three multiplications instead of
 /// nine, and stores three field elements instead of four, which is a quarter
 /// less for the conditional-move scan below to walk.
+#[repr(transparent)]
 pub(crate) struct Window<F>([AffineNiels<F>; ENTRIES]);
 
 impl<F: EdField> Window<F> {

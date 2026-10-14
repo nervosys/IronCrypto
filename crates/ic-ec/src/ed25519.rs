@@ -90,6 +90,10 @@ pub(crate) trait EdField: Field + core::fmt::Debug + 'static {
     const D2: Self;
     /// `sqrt(-1)`.
     const SQRT_M1: Self;
+    /// Whether an inversion costs well under a square root here, so that
+    /// verification compares encodings rather than decompressing R; see
+    /// [`check_one_shot`].
+    const CHEAP_INVERSION: bool = false;
 
     /// The same element in the portable field.
     #[cfg(all(feature = "std", any(test, feature = "bench-internals")))]
@@ -125,6 +129,8 @@ impl EdField for crate::fe64::Fe64 {
     const D: Self = crate::fe64::Fe64::from_limbs51(D_LIMBS);
     const D2: Self = crate::fe64::Fe64::from_limbs51(D2_LIMBS);
     const SQRT_M1: Self = crate::fe64::Fe64::from_limbs51(SQRT_M1_LIMBS);
+    // Divsteps, against an exponentiation for the square root.
+    const CHEAP_INVERSION: bool = true;
 }
 
 /// A point on the curve, in extended twisted Edwards coordinates.
@@ -222,8 +228,12 @@ pub(crate) struct Niels<F> {
 /// [`Niels`] without the `Z`, which removes the one multiplication that used
 /// it. Worth the field inversion it costs to build, for a table entry that
 /// will be added sixty-four times per signature and never changes.
+///
+/// `repr(C)`, so that on the four-limb field an entry is twelve limbs in
+/// this order, which the assembly table read in `fe64::edwards` relies on.
 #[cfg(feature = "std")]
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub(crate) struct AffineNiels<F> {
     ypx: F,
     ymx: F,
@@ -682,8 +692,9 @@ impl<F: EdField> Ext<F> {
     ///
     /// The exponentiation is 252 squarings in a single dependency chain, and
     /// two of them interleaved cost little more than one: each squaring has
-    /// the other chain's to overlap with. One-shot verification decompresses
-    /// both the public key and R, and this is how.
+    /// the other chain's to overlap with. One-shot verification on a field
+    /// whose inversion is no cheaper than this decompresses both the public
+    /// key and R, and this is how; see [`check_one_shot`].
     fn decompress_pair(a: &[u8; 32], b: &[u8; 32]) -> (Option<Ext<F>>, Option<Ext<F>>) {
         match (Decompression::<F>::start(a), Decompression::<F>::start(b)) {
             (Some(sa), Some(sb)) => {
@@ -1428,24 +1439,65 @@ enum OneShot {
     Signature(Check),
 }
 
-/// One-shot verification on the field `F`: the key and R decompressed
-/// together, then the key's checks, then the signature's.
+/// One-shot verification on the field `F`: the key decompressed and
+/// checked, then the signature's equation.
+///
+/// Where the field inverts by divsteps, R is left compressed and [`verdict`]
+/// compares encodings: a square root and an inversion. Where it inverts by
+/// exponentiation, as the portable field does, that would be two
+/// exponentiations in a row, and the key and R are instead decompressed
+/// together, their exponentiations interleaved, which costs less. The
+/// verdicts are the same either way.
 fn check_one_shot<F: Curve>(
     pk: &[u8; 32],
     big_r: &[u8; 32],
     k: &[u8; 32],
     s: &[u8; 32],
 ) -> OneShot {
-    let (a, r) = Ext::<F>::decompress_pair(pk, big_r);
+    let (a, r) = if F::CHEAP_INVERSION {
+        (Ext::<F>::decompress(pk), None)
+    } else {
+        let (a, r) = Ext::<F>::decompress_pair(pk, big_r);
+        (a, Some(r))
+    };
     let a = match a {
         None => return OneShot::Key(KeyDecode::Malformed),
         Some(a) if a.has_small_order() => return OneShot::Key(KeyDecode::SmallOrder),
         Some(a) => a,
     };
-    OneShot::Signature(equation_holds(&a.negate(), r, k, s))
+    OneShot::Signature(match r {
+        None => verdict(&a.negate(), big_r, k, s),
+        Some(r) => verdict_decoded(&a.negate(), r, k, s),
+    })
 }
 
-/// `[S]B + [k](-A) == R`, on the field `F`, everything public.
+/// [`verdict`] with R already decompressed, `None` if it did not decode.
+fn verdict_decoded<F: Curve>(
+    neg_a: &Ext<F>,
+    r: Option<Ext<F>>,
+    k: &[u8; 32],
+    s: &[u8; 32],
+) -> Check {
+    match r {
+        None => Check::RMalformed,
+        Some(r) if r.has_small_order() => Check::RSmallOrder,
+        Some(r) if left_side(neg_a, k, s).eq_projective(&r) => Check::Holds,
+        Some(_) => Check::Mismatch,
+    }
+}
+
+/// `[S]B + [k](-A)`, in one interleaved pass sharing a single chain of
+/// doublings. Everything here is public, so neither multiplication is
+/// constant time.
+fn left_side<F: Curve>(neg_a: &Ext<F>, k: &[u8; 32], s: &[u8; 32]) -> Ext<F> {
+    #[cfg(feature = "std")]
+    let lhs = double_scalar_mul_vartime(neg_a, k, s);
+    #[cfg(not(feature = "std"))]
+    let lhs = double_scalar_mul_vartime_no_table(neg_a, k, s);
+    lhs
+}
+
+/// `[S]B + [k](-A) == R`, on the field `F`, for a key already decoded.
 fn check_equation<F: Curve>(
     neg_a: &([u8; 32], [u8; 32]),
     big_r: &[u8; 32],
@@ -1453,37 +1505,39 @@ fn check_equation<F: Curve>(
     s: &[u8; 32],
 ) -> Check {
     let a = Ext::from_affine(F::from_bytes(&neg_a.0), F::from_bytes(&neg_a.1));
-    equation_holds(&a, Ext::<F>::decompress(big_r), k, s)
+    verdict(&a, big_r, k, s)
 }
 
-/// `[S]B + [k](-A) == R` for `-A` and a decompressed R.
-fn equation_holds<F: Curve>(
-    neg_a: &Ext<F>,
-    r_point: Option<Ext<F>>,
-    k: &[u8; 32],
-    s: &[u8; 32],
-) -> Check {
-    let r_point = match r_point {
-        None => return Check::RMalformed,
-        Some(p) => p,
-    };
-    // An R of small order is what a signature made without a private key
-    // looks like; a correct signer's R is a multiple of the basepoint and
-    // never has one. Refused as dalek's verify_strict and libsodium do.
-    if r_point.has_small_order() {
-        return Check::RSmallOrder;
-    }
-    // [S]B + [k](-A) == R, in one interleaved pass sharing a single chain of
-    // doublings. Everything here is public, so neither multiplication is
-    // constant time.
-    #[cfg(feature = "std")]
-    let lhs = double_scalar_mul_vartime(neg_a, k, s);
-    #[cfg(not(feature = "std"))]
-    let lhs = double_scalar_mul_vartime_no_table(neg_a, k, s);
-    if lhs.eq_projective(&r_point) {
-        Check::Holds
+/// Whether `[S]B + [k](-A) == R`, and if not why not; everything public.
+///
+/// R is refused if it does not decode, and if it decodes to a point of
+/// small order: that is what a signature made without a private key looks
+/// like, and a correct signer's R, a multiple of the basepoint, never has
+/// one. Refused as dalek's `verify_strict` and libsodium do.
+///
+/// R is not decompressed to find out. The left side is computed and
+/// compressed, and its encoding compared with R's bytes: an inversion,
+/// where decompressing R is a square root, nearly three times the cost.
+/// `compress` writes only canonical encodings, and a canonical encoding
+/// names one point, so the bytes are equal exactly when R decodes and is
+/// that point; and then R has small order exactly when the left side does.
+/// Only when they differ is R decoded, to say why: not a point, of small
+/// order, or a mismatch -- the verdicts, in the order, that decoding R
+/// first gave.
+fn verdict<F: Curve>(neg_a: &Ext<F>, big_r: &[u8; 32], k: &[u8; 32], s: &[u8; 32]) -> Check {
+    let lhs = left_side(neg_a, k, s);
+    if lhs.compress() == *big_r {
+        if lhs.has_small_order() {
+            Check::RSmallOrder
+        } else {
+            Check::Holds
+        }
     } else {
-        Check::Mismatch
+        match Ext::<F>::decompress(big_r) {
+            None => Check::RMalformed,
+            Some(r) if r.has_small_order() => Check::RSmallOrder,
+            Some(_) => Check::Mismatch,
+        }
     }
 }
 
@@ -1802,6 +1856,11 @@ mod tests {
         );
         let err = vk.verify(message, &sig).unwrap_err();
         assert_eq!(err.kind(), ic_core::ErrorKind::MalformedEncoding);
+        // The left side compresses to R's bytes here, so this is the path
+        // that refuses R by the left side's order; one-shot as well.
+        assert_eq!(lhs.compress(), r);
+        let err = Ed25519::verify(&key.public, message, &sig).unwrap_err();
+        assert_eq!(err.kind(), ic_core::ErrorKind::MalformedEncoding);
     }
 
     /// RFC 8032 section 5.1.3: a y field of p or more fails to decode, even
@@ -1894,6 +1953,32 @@ mod tests {
         let mut other_pk = [0u8; 32];
         Ed25519::public_key(&[0x43u8; 32], &mut other_pk).unwrap();
         assert!(Ed25519::verify(&other_pk, b"authentic", &sig).is_err());
+
+        // And each says why, one-shot and with the key held: a valid R that
+        // does not satisfy the equation is a failed authentication, an R
+        // that is not a point a malformed encoding. Verification learns the
+        // second only after the first comparison fails, so both are checked.
+        use ic_core::ErrorKind::{AuthenticationFailed, MalformedEncoding};
+        let vk = Ed25519VerifyKey::from_bytes(&pk).unwrap();
+        let kind = |r: Result<()>| r.unwrap_err().kind();
+        assert_eq!(
+            kind(Ed25519::verify(&pk, b"forged", &sig)),
+            AuthenticationFailed
+        );
+        assert_eq!(kind(vk.verify(b"forged", &sig)), AuthenticationFailed);
+        let mut bad = sig;
+        bad[40] ^= 1;
+        assert_eq!(kind(vk.verify(b"authentic", &bad)), AuthenticationFailed);
+        // y = 2 is not on the curve.
+        let mut bad = sig;
+        bad[..32].copy_from_slice(&[0u8; 32]);
+        bad[0] = 2;
+        assert!(Ext::<Fe>::decompress(&bad[..32].try_into().unwrap()).is_none());
+        assert_eq!(
+            kind(Ed25519::verify(&pk, b"authentic", &bad)),
+            MalformedEncoding
+        );
+        assert_eq!(kind(vk.verify(b"authentic", &bad)), MalformedEncoding);
     }
 
     /// A signature with `S >= L` must be rejected even though it would

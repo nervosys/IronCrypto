@@ -55,6 +55,14 @@ fn get_ext(ws: &Ws) -> Ext<Fe64> {
     }
 }
 
+/// The operand slots of half `H` of a two-accumulator workspace.
+fn operand<const H: usize>(two: &mut Ws2) -> &mut [u64; 16] {
+    let at = H * 64 + slot::YPX;
+    // Sixteen limbs at a constant offset inside 128: the conversion cannot
+    // fail, and the optimiser removes the check.
+    (&mut two.0[at..at + 16]).try_into().expect("sixteen limbs")
+}
+
 /// A workspace holding the identity, `(0 : 1 : 1 : 0)`.
 fn identity() -> Ws {
     let mut ws = Ws([0; 64]);
@@ -81,13 +89,9 @@ pub(super) fn mul_base(scalar: &[u8; 32]) -> Ext<Fe64> {
         two.0[half + slot::Z..half + slot::Z + 4].copy_from_slice(&Fe64::ONE.0);
     }
     for j in 0..32 {
-        let odd = window::<Fe64>(j).select(digits[2 * j + 1]);
-        let even = window::<Fe64>(j).select(digits[2 * j]);
-        for (half, n) in [(0, &odd), (64, &even)] {
-            two.0[half + slot::YPX..half + slot::YPX + 4].copy_from_slice(&n.ypx.0);
-            two.0[half + slot::YMX..half + slot::YMX + 4].copy_from_slice(&n.ymx.0);
-            two.0[half + slot::T2D..half + slot::T2D + 4].copy_from_slice(&n.t2d.0);
-        }
+        let table = window::<Fe64>(j).entries();
+        e::select(operand::<0>(&mut two), e::limbs(table), digits[2 * j + 1]);
+        e::select(operand::<1>(&mut two), e::limbs(table), digits[2 * j]);
         e::madd_ext2(&mut two);
     }
 
@@ -222,6 +226,16 @@ mod tests {
                 );
             }
         });
+        let mut dst = [0u64; 16];
+        time("64 selects, assembly", &mut || {
+            for i in 0..64 {
+                e::select(
+                    &mut dst,
+                    e::limbs(window::<Fe64>(i / 2).entries()),
+                    core::hint::black_box(digits[i]),
+                );
+            }
+        });
         let mut two = Ws2([7; 128]);
         time("32 madd_ext2", &mut || {
             for _ in 0..32 {
@@ -240,6 +254,83 @@ mod tests {
         });
         time("mul_generic", &mut || {
             core::hint::black_box(mul_generic::<Fe64>(core::hint::black_box(&[0x5au8; 32])));
+        });
+        let p = mul_base(&[0x5au8; 32]);
+        time("compress", &mut || {
+            core::hint::black_box(core::hint::black_box(&p).compress());
+        });
+        let msg = [0x42u8; 17];
+        time("hash_to_scalar (2 parts)", &mut || {
+            core::hint::black_box(super::super::hash_to_scalar(&[
+                core::hint::black_box(&[0x5au8; 32]),
+                &msg,
+            ]));
+        });
+        time("hash_to_scalar (3 parts)", &mut || {
+            core::hint::black_box(super::super::hash_to_scalar(&[
+                core::hint::black_box(&[0x5au8; 32]),
+                &[0x33u8; 32],
+                &msg,
+            ]));
+        });
+        time("scalar::reduce_wide", &mut || {
+            core::hint::black_box(crate::scalar::reduce_wide(core::hint::black_box(
+                &[0x9cu8; 64],
+            )));
+        });
+        time("sha-512, 81 bytes", &mut || {
+            use ic_core::traits::internal::Digest;
+            let mut h = ic_hash::Sha512::new();
+            h.update(core::hint::black_box(&[0x5au8; 81]));
+            core::hint::black_box(h.finalize());
+        });
+        time("scalar::mul_add", &mut || {
+            core::hint::black_box(crate::scalar::mul_add(
+                core::hint::black_box(&[0x0au8; 32]),
+                &[0x0bu8; 32],
+                &[0x0cu8; 32],
+            ));
+        });
+        let k = [0x3cu8; 32];
+        let mut s2 = [0x77u8; 32];
+        s2[31] = 0x0f;
+        let a = mul_base(&[0x29u8; 32]);
+        time("double_mul (vartime)", &mut || {
+            core::hint::black_box(double_mul(
+                core::hint::black_box(&a),
+                core::hint::black_box(&k),
+                &s2,
+            ));
+        });
+        let mut one = Ws([7; 64]);
+        time("253 dbl + to_proj", &mut || {
+            for _ in 0..253 {
+                e::dbl(&mut one);
+                e::to_proj(&mut one);
+            }
+        });
+        time("70 dbl+to_ext+nadd+to_proj", &mut || {
+            for _ in 0..70 {
+                e::dbl(&mut one);
+                e::to_ext(&mut one);
+                e::nadd(&mut one);
+                e::to_proj(&mut one);
+            }
+        });
+        time("odd_multiples (A table)", &mut || {
+            core::hint::black_box(odd_multiples(core::hint::black_box(&a)));
+        });
+        let enc = a.compress();
+        time("decompress", &mut || {
+            core::hint::black_box(Ext::<Fe64>::decompress(core::hint::black_box(&enc)));
+        });
+        time("has_small_order", &mut || {
+            core::hint::black_box(core::hint::black_box(&a).has_small_order());
+        });
+        let key = super::super::Ed25519Key::from_seed(&[7u8; 32]).unwrap();
+        let mut sig = [0u8; 64];
+        time("Ed25519Key::sign", &mut || {
+            key.sign(core::hint::black_box(&msg), &mut sig).unwrap();
         });
     }
 
@@ -295,6 +386,35 @@ mod tests {
             }
         }
         assert_eq!(checked, 12 * 12 * 4);
+    }
+
+    /// The assembly table read against the generic one, limb for limb, for
+    /// every digit of every window, into a workspace whose other limbs it
+    /// must leave alone.
+    #[test]
+    fn the_assembly_select_is_the_generic_one() {
+        if skip() {
+            return;
+        }
+        basepoint_table::prepare::<Fe64>();
+        let mut checked = 0;
+        for j in 0..32 {
+            let w = window::<Fe64>(j);
+            for digit in -8i8..=8 {
+                let want = w.select(digit);
+                let mut dst = [0x5a5a_5a5a_5a5a_5a5au64; 16];
+                e::select(&mut dst, e::limbs(w.entries()), digit);
+                assert_eq!(dst[0..4], want.ypx.0, "y + x, window {j}, digit {digit}");
+                assert_eq!(dst[4..8], want.ymx.0, "y - x, window {j}, digit {digit}");
+                assert_eq!(dst[12..16], want.t2d.0, "2dxy, window {j}, digit {digit}");
+                assert!(
+                    dst[8..12].iter().all(|&l| l == 0x5a5a_5a5a_5a5a_5a5a),
+                    "the Z slot was written"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 32 * 17);
     }
 
     /// The block paths against the generic ones on the same field, and those

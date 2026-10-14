@@ -98,6 +98,10 @@ fn main() {
         graviola::p384();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("graviola-25519") {
+        graviola::curve25519();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("graviola-chacha") {
         graviola::chacha();
         return;

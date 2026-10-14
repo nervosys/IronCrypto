@@ -20,6 +20,54 @@ all of them.
   prints the X25519 and RSA-2048 backends. `docs/GRAVIOLA.md` ("Without
   AVX-512") has the measured effect on the Graviola comparison.
 
+### Performance
+
+- **Curve25519 on MULX/ADX, the backend for x86-64 CPUs without AVX-512
+  IFMA.** Measured against Graviola 0.4.1 with `--cfg ic_no_avx512` on a
+  loaded Zen 5, alternating batches (`bench`, `graviola-25519`), three
+  rounds, IronCrypto's rate over Graviola's before and after: Ed25519
+  signing 0.74-0.78 to 0.84-0.93, verification with the key held on both
+  sides 1.07-1.18 to 1.12-1.19, one-shot 1.00-1.03 to 1.02-1.05, X25519
+  0.95-0.97 to 0.97-1.02. Not ahead on signing or X25519; docs/GRAVIOLA.md
+  ("Curve25519 on MULX/ADX") has why. The default IFMA build moved by noise
+  or a little up in the same rounds (X25519 1.42-1.47 to 1.46-1.50,
+  signing 1.21-1.24 to 1.23-1.32, verification with the key held 1.49-1.57
+  to 1.66-1.71).
+  - Signing's table read is one assembly block, `fe64::edwards::select`:
+    eight entries scanned by `CMOV`, the sign applied by `CMOV`, about 12 ns
+    against 20 for the generic Rust scan. Probed (`ct_ed25519_fe64_select`).
+  - The field inversion runs its divsteps twenty at a time on words that
+    pack `f` or `g` with their row of the transition matrix, so one
+    addition moves all three: half the instructions a step, and the step's
+    chain an addition, two `CMOV`s and a shift. 600 steps where there were
+    590, still above the bound. About 0.75 us against 1.05. Compared with
+    Bernstein and Yang's definition on whole integers over 400,000 inputs
+    (`packed_divsteps_agree_with_the_definition`), and with Fermat's
+    inversion as before.
+  - X25519's ladder takes the bits clamping fixes as fixed: bit 254 is a
+    doubling alone, and bits 2 to 0 three doublings after the last
+    selection, so 251 full steps run instead of 255. The four-limb ladder
+    and the dispatch now require a clamped scalar, which every caller
+    passes; the tests give those two clamped scalars and the others both.
+  - The Edwards blocks fold the carries of their additions and
+    subtractions once where the operands' bounds allow it, which is all of
+    them but one in the doubling.
+  - Verification no longer decompresses R where the field inverts by
+    divsteps: it compresses `[S]B + [k](-A)` and compares bytes, an
+    inversion where R's square root is an exponentiation. R is decoded only
+    if the bytes differ, to report why; the verdicts and error kinds are
+    the same. On the portable field, whose inversion is an exponentiation,
+    one-shot verification keeps decompressing the key and R together.
+  - `bench`: `graviola-25519`, the Curve25519 rows alone in alternating
+    batches, and a verification row with the key held on both sides.
+  - Fifteen mutations, each caught by the tests: wrong table entry, sign
+    swap and fold constant in the select; the fold constant in the
+    one-fold addition; the doubling's sign, the ladder's starting bit and
+    final doublings; the divstep conditions, unpacking rounding and matrix
+    scale; and the verdicts. Inserting a branch into the select, the
+    doubling or the divsteps fails the compiled-code gate. 36 probes on
+    x86-64 alone, 80 there, 212 gating probe/target checks.
+
 ### Changed
 
 - **RSA key generation draws each Miller-Rabin base at random**, as FIPS

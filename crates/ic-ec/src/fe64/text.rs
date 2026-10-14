@@ -251,61 +251,9 @@ macro_rules! fe_reduce_store {
     };
 }
 
-/// `[d] = [a] + [b]`, as [`super::Fe64::add`].
-#[cfg(any(feature = "std", feature = "ct-probes"))]
-macro_rules! fe_add {
-    ($d:literal, $a:literal, $b:literal) => {
-        concat!(
-            "mov r8, qword ptr [rdi + ",
-            $a,
-            "]\n",
-            "add r8, qword ptr [rdi + ",
-            $b,
-            "]\n",
-            "mov r9, qword ptr [rdi + ",
-            $a,
-            " + 8]\n",
-            "adc r9, qword ptr [rdi + ",
-            $b,
-            " + 8]\n",
-            "mov r10, qword ptr [rdi + ",
-            $a,
-            " + 16]\n",
-            "adc r10, qword ptr [rdi + ",
-            $b,
-            " + 16]\n",
-            "mov r11, qword ptr [rdi + ",
-            $a,
-            " + 24]\n",
-            "adc r11, qword ptr [rdi + ",
-            $b,
-            " + 24]\n",
-            "sbb rax, rax\n",
-            "and eax, 38\n",
-            "add r8, rax\n",
-            "adc r9, 0\n",
-            "adc r10, 0\n",
-            "adc r11, 0\n",
-            "sbb rax, rax\n",
-            "and eax, 38\n",
-            "add r8, rax\n",
-            "mov qword ptr [rdi + ",
-            $d,
-            "], r8\n",
-            "mov qword ptr [rdi + ",
-            $d,
-            " + 8], r9\n",
-            "mov qword ptr [rdi + ",
-            $d,
-            " + 16], r10\n",
-            "mov qword ptr [rdi + ",
-            $d,
-            " + 24], r11\n",
-        )
-    };
-}
-
-/// `[d] = [a] - [b]`, as [`super::Fe64::sub`].
+/// `[d] = [a] - [b]`, as [`super::Fe64::sub`]: the borrow folded twice,
+/// for any two 256-bit operands. The other additions and subtractions fold
+/// once; see `fe_add_once!` and `fe_sub_once!` for when that is enough.
 #[cfg(any(feature = "std", feature = "ct-probes"))]
 macro_rules! fe_sub {
     ($d:literal, $a:literal, $b:literal) => {
@@ -471,7 +419,8 @@ macro_rules! fe_cmovnz {
 /// Correct when `a + b < 2^257 - 38`, so that folding the carry cannot carry
 /// again: true whenever one operand is below `2^256 - 38`, and in particular
 /// whenever both are outputs of [`fe_mul!`] or [`fe_sqr!`], which are below
-/// `2^255 + 19 * 77`. The ladder step uses it only on such operands.
+/// `2^255 + 19 * 77`. The ladder step and the Edwards blocks use it only on
+/// such operands; `edwards.rs` gives the bounds there.
 macro_rules! fe_add_once {
     ($d:literal, $a:literal, $b:literal) => {
         concat!(

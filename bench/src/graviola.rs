@@ -4,6 +4,7 @@
 //! cargo run --release -- graviola
 //! cargo run --release -- graviola-p384   # the P-384 rows alone
 //! cargo run --release -- graviola-chacha # ChaCha20-Poly1305, split in halves
+//! cargo run --release -- graviola-25519  # X25519 and Ed25519 alone
 //! ```
 //!
 //! Graviola runs only on x86-64 with AES, AVX2, ADX, BMI2 and PCLMULQDQ, or on
@@ -222,6 +223,14 @@ pub fn run() {
         g_ed_pk.verify(&ed_sig, msg).unwrap();
     });
     verdict("ed25519 verify", d3, d4, false);
+    // Graviola's verifying key is decoded once, when it is made, so the row
+    // above also counts the decoding of A on IronCrypto's side only. This one
+    // holds the decoded key on both.
+    let ic_vk = ic_ec::Ed25519VerifyKey::from_bytes(&ed_pk).unwrap();
+    let d5 = per_op("ironcrypto ed25519 verify, key held", 3000, 5, || {
+        ic_vk.verify(msg, &ed_sig).unwrap();
+    });
+    verdict("ed25519 verify, key held", d5, d4, false);
 
     // ML-KEM-768. Graviola's public calls draw their own randomness from the
     // operating system on every call. The rows below say which of the two
@@ -486,12 +495,98 @@ pub fn chacha() {
     }
 }
 
+/// X25519 and Ed25519 alone, for before-and-after comparisons of the
+/// Curve25519 code on a machine that is not idle.
+///
+/// The rows `run` has, with the same keys, but measured differently: the two
+/// libraries alternate in short batches, forty times, and each side's figure
+/// is its fastest batch. Load that comes and goes over seconds then reaches
+/// both sides alike, where `per_op` runs one library's five repeats and then
+/// the other's.
+pub fn curve25519() {
+    println!();
+    println!("IronCrypto vs Graviola 0.4.1, Curve25519, interleaved, best batch of 40");
+    backends();
+    let sk = [0x77u8; 32];
+    let mut pk = [0u8; 32];
+    ironcrypto::ec::X25519::public_key(&sk, &mut pk).unwrap();
+    let mut shared = [0u8; 32];
+    let g_sk = graviola::key_agreement::x25519::StaticPrivateKey::from_array(&sk);
+    let g_pk = graviola::key_agreement::x25519::PublicKey::from_array(&pk);
+    pair(
+        "x25519 agree",
+        &mut || ironcrypto::ec::X25519::agree(&sk, &pk, &mut shared).unwrap(),
+        &mut || {
+            std::hint::black_box(g_sk.diffie_hellman(&g_pk).unwrap());
+        },
+    );
+
+    let msg = b"benchmark message";
+    let mut ed_sig = [0u8; 64];
+    let ic_key = ironcrypto::ec::Ed25519Key::from_seed(&sk).unwrap();
+    let g_ed = graviola::signing::eddsa::Ed25519SigningKey::from_bytes(&sk).unwrap();
+    pair(
+        "ed25519 sign",
+        &mut || ic_key.sign(msg, &mut ed_sig).unwrap(),
+        &mut || {
+            std::hint::black_box(g_ed.sign(msg));
+        },
+    );
+    let mut ed_pk = [0u8; 32];
+    ironcrypto::ec::Ed25519::public_key(&sk, &mut ed_pk).unwrap();
+    let g_ed_pk = g_ed.public_key();
+    pair(
+        "ed25519 verify",
+        &mut || ironcrypto::ec::Ed25519::verify(&ed_pk, msg, &ed_sig).unwrap(),
+        &mut || g_ed_pk.verify(&ed_sig, msg).unwrap(),
+    );
+    // Graviola's verifying key is decoded once, when it is made, so the row
+    // above also counts the decoding of A on IronCrypto's side only. This one
+    // holds the decoded key on both.
+    let ic_vk = ic_ec::Ed25519VerifyKey::from_bytes(&ed_pk).unwrap();
+    pair(
+        "ed25519 verify, key held",
+        &mut || ic_vk.verify(msg, &ed_sig).unwrap(),
+        &mut || g_ed_pk.verify(&ed_sig, msg).unwrap(),
+    );
+}
+
+/// `ic` and `other` alternately, 200 calls a batch, 40 batches each; prints
+/// each side's fastest batch per call and the verdict.
+fn pair<'a>(what: &str, ic: &'a mut dyn FnMut(), other: &'a mut dyn FnMut()) {
+    const BATCH: usize = 200;
+    let mut best = [f64::INFINITY; 2];
+    for _ in 0..40 {
+        for (i, f) in [&mut *ic, &mut *other].into_iter().enumerate() {
+            let t = std::time::Instant::now();
+            for _ in 0..BATCH {
+                f();
+            }
+            best[i] = best[i].min(t.elapsed().as_secs_f64() / BATCH as f64 * 1e6);
+        }
+    }
+    println!(
+        "  {:<40} {:>12.2} us/op",
+        format!("ironcrypto {what}"),
+        best[0]
+    );
+    println!(
+        "  {:<40} {:>12.2} us/op",
+        format!("graviola {what}"),
+        best[1]
+    );
+    verdict(what, best[0], best[1], false);
+}
+
 /// The backends this build selects, so a run says which paths it measured.
 /// `--cfg ic_no_avx512` turns the AVX-512 paths off. The ChaCha20 and AES-GCM
 /// kernels have no public reporter; their choice is pinned by unit tests in
 /// `ic-cipher` instead.
 fn backends() {
-    println!("IronCrypto X25519 backend: {:?}", ic_ec::curve25519_backend());
+    println!(
+        "IronCrypto X25519 backend: {:?}",
+        ic_ec::curve25519_backend()
+    );
     println!(
         "IronCrypto RSA-2048 backend: {:?}",
         ic_rsa::uint::backend_for(32)

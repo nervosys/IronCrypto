@@ -78,7 +78,11 @@ Curve25519, P-256 and P-384 work merged), Graviola 0.4.1, both x86-64, rustc
   targets, and fails on them with the barriers removed; see
   docs/CONSTANT_TIME.md. Valgrind runs the portable Curve25519 field only,
   since it hides ADX from CPUID and the MULX/ADX field is chosen by CPUID;
-  that field is held by the compiled-code probes instead.
+  that field is held by the compiled-code probes instead. That includes its
+  signing table read, X25519's doubling step and the packed divstep
+  inversion added later the same day (`ct_ed25519_fe64_select`,
+  `ct_x25519_fe64_double`, `ct_fe64_invert`; docs/CONSTANT_TIME.md,
+  "Curve25519 without AVX-512").
 - **P-256 and P-384, fixed.** Exponentiation is now a fixed four-bit window
   whose table is read by masked scan, with no branch on the exponent, and on
   64-bit targets P-256 inverts by branch-free divsteps instead. Rerun on master

@@ -450,10 +450,10 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V, and thirty-four more on x86-64 alone for its
+Cortex-M0, Cortex-M4 and RISC-V, and thirty-six more on x86-64 alone for its
 Curve25519, P-256 and P-384 assembly, its divsteps inversions, its
 AVX-512 ChaCha20 and AVX2 Poly1305 kernels, and RSA's table read and its
-MULX/ADX, AVX-512 IFMA and portable Montgomery products: **210 gating
+MULX/ADX, AVX-512 IFMA and portable Montgomery products: **212 gating
 probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the

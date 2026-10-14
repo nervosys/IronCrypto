@@ -12,11 +12,17 @@
 //! machine words. This follows the form libsecp256k1 published and analysed
 //! as `secp256k1_modinv64` (constant-time variant; see its
 //! `doc/safegcd_implementation.md`), written here independently from that
-//! description: 59 divsteps at a time on the low 64 bits of `f` and `g`,
-//! collected into a 2x2 transition matrix scaled by 2^62, then applied to the
-//! full-width `f`, `g` and to the Bezout coefficients `d`, `e` in signed
-//! 62-bit limbs. Ten rounds make 590 divsteps, the bound that analysis
-//! establishes for any input below 2^256.
+//! description: divsteps on the low bits of `f` and `g`, collected into a
+//! 2x2 transition matrix scaled by 2^62, then applied to the full-width `f`,
+//! `g` and to the Bezout coefficients `d`, `e` in signed 62-bit limbs. Ten
+//! rounds of 60 make 600 divsteps, above the 590 that analysis establishes
+//! for any input below 2^256.
+//!
+//! Where libsecp256k1 runs 59 steps on whole words, each step updating `f`,
+//! `g` and four matrix entries apart, this runs three batches of twenty
+//! with each of `f` and `g` packed into one word beside its row of the
+//! matrix, so that a step is half the instructions; Bernstein and Yang's
+//! own code packs the same way. See [`divsteps_20`].
 //!
 //! # Constant time
 //!
@@ -63,7 +69,7 @@ fn opaque(mut x: u64) -> u64 {
     x
 }
 
-/// The transition matrix of 59 divsteps, scaled by 2^62.
+/// The transition matrix of 60 divsteps, scaled by 2^62.
 struct Trans {
     u: i64,
     v: i64,
@@ -71,100 +77,155 @@ struct Trans {
     r: i64,
 }
 
-/// 59 divsteps on the low words `f0` (odd) and `g0`, from `zeta`.
+/// 20 divsteps on the low 20 bits of `f` (odd) and `g`, from `zeta`, with
+/// `f`, `g` and their rows of the transition matrix packed into one word
+/// each. Returns the new `zeta` and the matrix scaled by 2^20, `[u, v, q, r]`.
 ///
 /// `zeta` is `-(delta + 1/2)` in Bernstein and Yang's terms. Each step:
 /// when `delta > 0` and `g` is odd, `(delta, f, g) <- (1 - delta, g, (g -
 /// f) / 2)`; otherwise when `g` is odd, `g <- (g + f) / 2`, else `g <- g /
-/// 2`, with `delta <- 1 + delta`. The matrix records what was done to `f`
-/// and `g` so the full-width values can follow.
+/// 2`, with `delta <- 1 + delta`.
 ///
-/// Assembly, all 59 steps in one straight-line block. As Rust, LTO moved the
-/// matrix entries into vector registers and paid a transfer between register
-/// files on every step, which doubled the cost of the inversion. In assembly
-/// every choice is a mask or a `CMOV` by construction, so it needs no
-/// barrier either; `CMOV` on `g`'s parity rather than a mask built from it
-/// takes two instructions off the dependency chain each step carries.
+/// # The packing
+///
+/// A word holds `f + u * 2^21 + v * 2^42`: the low bits of `f`, below 2^20
+/// in magnitude, and the row `(u, v)` of the matrix that takes the starting
+/// `f` and `g` to this one, as an exact sum of signed integers. A divstep is
+/// linear in `f` and `g` and moves their rows by the same operations, so one
+/// addition, subtraction, move or halving of the packed words performs it on
+/// all three fields at once: half the instructions of tracking the six
+/// values apart. The fields do not disturb one another: the matrix starts
+/// as the identity scaled by `-2^20`, so its entries are multiples of 2^20
+/// that are halved at most twenty times and stay integers, and every entry
+/// stays in `[-2^20, 2^20)`, which is what a 21-bit field holds. (Only an
+/// entry of a row never halved reaches `2^20` in magnitude, and those start
+/// at `-2^20`; a halved row's entries are below the larger of two entries
+/// that bound them, and so below `2^20`.) The low field's parity is `g`'s,
+/// since the fields above it are multiples of 2^21.
+///
+/// Assembly, straight-line, with every choice a `CMOV`. The step computes
+/// both `g + f` and `g - f` before it knows which it wants, so its chain is
+/// an addition, two `CMOV`s and a shift.
 #[inline(always)]
-fn divsteps_59(zeta: i64, f0: u64, g0: u64) -> (i64, Trans) {
-    // The identity times 8: the caller wants the matrix times 2^62, and 59
-    // steps double each entry 59 times.
-    let (mut u, mut v, mut q, mut r) = (8u64, 0u64, 0u64, 8u64);
-    let (mut f, mut g, mut z) = (f0, g0, zeta as u64);
+fn divsteps_20(zeta: i64, f0: u64, g0: u64) -> (i64, [i64; 4]) {
+    const LOW: u64 = (1 << 20) - 1;
+    // f + (-2^20) * 2^21, and g + (-2^20) * 2^42.
+    let mut f = ((f0 & LOW) as i64).wrapping_sub(1 << 41);
+    let mut g = ((g0 & LOW) as i64).wrapping_sub(1 << 62);
+    let mut z = zeta;
     // SAFETY: integer instructions on registers only (`nomem`), present on
-    // every x86-64 CPU; `.rept` repeats the block at assembly time, so no
+    // every x86-64 CPU; `.rept` repeats the text at assembly time, so no
     // branch is emitted.
     unsafe {
         core::arch::asm!(
-            "xor {zero:e}, {zero:e}",
-            ".rept 59",
-            // c1 = zeta < 0 (delta > 0), as a mask.
-            "mov {c1}, {z}",
-            "sar {c1}, 63",
-            // x, y, w = f, u, v, negated when c1.
-            "mov {x}, {f}",
-            "xor {x}, {c1}",
-            "sub {x}, {c1}",
-            "mov {y}, {u}",
-            "xor {y}, {c1}",
-            "sub {y}, {c1}",
-            "mov {w}, {v}",
-            "xor {w}, {c1}",
-            "sub {w}, {c1}",
-            // When g is even, none of it applies: zero x, y, w and c1 by
-            // CMOV, which moves or not in the same time either way. c1 is
-            // then the mask for both conditions.
+            ".rept 10",
+            // Step one: from f, g, z into f2, g1, zs.
+            "lea {g1}, [{g} + {f}]",
+            "mov {g2}, {g}",
+            "sub {g2}, {f}",
+            "mov {zs}, -2",
+            "sub {zs}, {z}",
+            "lea {zm}, [{z} - 1]",
+            "mov {f2}, {f}",
+            // delta > 0: g - f, f taking g's place, zeta to -zeta - 2.
+            "test {z}, {z}",
+            "cmovs {g1}, {g2}",
+            "cmovs {f2}, {g}",
+            "cmovns {zs}, {zm}",
+            // g even: g alone, f kept, zeta to zeta - 1.
             "test {g}, 1",
-            "cmovz {x}, {zero}",
-            "cmovz {y}, {zero}",
-            "cmovz {w}, {zero}",
-            "cmovz {c1}, {zero}",
-            // g, q, r += x, y, w.
-            "add {g}, {x}",
-            "add {q}, {y}",
-            "add {r}, {w}",
-            // When both: zeta <- -zeta - 2 and f, u, v += g, q, r (the new
-            // ones, so f becomes the old g); otherwise zeta <- zeta - 1.
-            "xor {z}, {c1}",
-            "sub {z}, 1",
-            "mov {x}, {g}",
-            "and {x}, {c1}",
-            "add {f}, {x}",
-            "mov {y}, {q}",
-            "and {y}, {c1}",
-            "add {u}, {y}",
-            "mov {w}, {r}",
-            "and {w}, {c1}",
-            "add {v}, {w}",
-            // Halve g; double u and v instead of halving q and r.
-            "shr {g}, 1",
-            "add {u}, {u}",
-            "add {v}, {v}",
+            "cmovz {g1}, {g}",
+            "cmovz {f2}, {f}",
+            "cmovz {zs}, {zm}",
+            "sar {g1}, 1",
+            // Step two: the same, from f2, g1, zs back into f, g, z.
+            "lea {g}, [{g1} + {f2}]",
+            "mov {g2}, {g1}",
+            "sub {g2}, {f2}",
+            "mov {z}, -2",
+            "sub {z}, {zs}",
+            "lea {zm}, [{zs} - 1]",
+            "mov {f}, {f2}",
+            "test {zs}, {zs}",
+            "cmovs {g}, {g2}",
+            "cmovs {f}, {g1}",
+            "cmovns {z}, {zm}",
+            "test {g1}, 1",
+            "cmovz {g}, {g1}",
+            "cmovz {f}, {f2}",
+            "cmovz {z}, {zm}",
+            "sar {g}, 1",
             ".endr",
-            z = inout(reg) z,
             f = inout(reg) f,
             g = inout(reg) g,
-            u = inout(reg) u,
-            v = inout(reg) v,
-            q = inout(reg) q,
-            r = inout(reg) r,
-            c1 = out(reg) _,
-            zero = out(reg) _,
-            x = out(reg) _,
-            y = out(reg) _,
-            w = out(reg) _,
+            z = inout(reg) z,
+            f2 = out(reg) _,
+            g1 = out(reg) _,
+            g2 = out(reg) _,
+            zs = out(reg) _,
+            zm = out(reg) _,
             options(pure, nomem, nostack),
         );
     }
-    let _ = f;
-    let _ = g;
+    // Unpack. `f + 2^20` is in (0, 2^21), so adding it clears the low field
+    // without a borrow and the shift leaves u + v * 2^21 exactly; then the
+    // same for u. The matrix is the negation of the fields'.
+    let (u, v) = unpack(f);
+    let (q, r) = unpack(g);
     (
-        z as i64,
+        z,
+        [
+            u.wrapping_neg(),
+            v.wrapping_neg(),
+            q.wrapping_neg(),
+            r.wrapping_neg(),
+        ],
+    )
+}
+
+/// The two matrix fields of a packed word; see [`divsteps_20`].
+#[inline(always)]
+fn unpack(w: i64) -> (i64, i64) {
+    let t = w.wrapping_add(1 << 20) >> 21;
+    let hi = t.wrapping_add(1 << 20) >> 21;
+    (t.wrapping_sub(hi << 21), hi)
+}
+
+/// `(a * x + b * y) / 2^20` on the low words, wrapping: the low 44 bits are
+/// exact, and the next batch reads 20.
+#[inline(always)]
+fn next_low(a: i64, b: i64, x: u64, y: u64) -> u64 {
+    ((a.wrapping_mul(x as i64)).wrapping_add(b.wrapping_mul(y as i64)) >> 20) as u64
+}
+
+/// 60 divsteps on the low words `f0` (odd) and `g0`, from `zeta`: three
+/// batches of [`divsteps_20`], each starting from the low words the last
+/// one's matrix gives, and their matrices multiplied together.
+///
+/// The product is the matrix of 60 steps scaled by 2^60, and its entries
+/// are below 2^60 in magnitude; times four it is scaled by 2^62, the bound
+/// `update_de` and `update_fg` are written for, as the 59 steps times eight
+/// of libsecp256k1's form are.
+#[inline(always)]
+fn divsteps_60(zeta: i64, f0: u64, g0: u64) -> (i64, Trans) {
+    let (z, [u1, v1, q1, r1]) = divsteps_20(zeta, f0, g0);
+    let (f1, g1) = (next_low(u1, v1, f0, g0), next_low(q1, r1, f0, g0));
+    let (z, [u2, v2, q2, r2]) = divsteps_20(z, f1, g1);
+    let (f2, g2) = (next_low(u2, v2, f1, g1), next_low(q2, r2, f1, g1));
+    let (z, [u3, v3, q3, r3]) = divsteps_20(z, f2, g2);
+    // M2 * M1, entries below 2^40; then M3 times that, below 2^60.
+    let w = |a: i64, b: i64, c: i64, d: i64| a.wrapping_mul(b).wrapping_add(c.wrapping_mul(d));
+    let (u21, v21) = (w(u2, u1, v2, q1), w(u2, v1, v2, r1));
+    let (q21, r21) = (w(q2, u1, r2, q1), w(q2, v1, r2, r1));
+    let (u, v) = (w(u3, u21, v3, q21), w(u3, v21, v3, r21));
+    let (q, r) = (w(q3, u21, r3, q21), w(q3, v21, r3, r21));
+    (
+        z,
         Trans {
-            u: u as i64,
-            v: v as i64,
-            q: q as i64,
-            r: r as i64,
+            u: u << 2,
+            v: v << 2,
+            q: q << 2,
+            r: r << 2,
         },
     )
 }
@@ -280,14 +341,16 @@ struct State {
     zeta: i64,
 }
 
-/// One round: 59 divsteps on the low words, then their matrix applied to
+/// One round: 60 divsteps on the low words, then their matrix applied to
 /// the full-width values.
 #[inline(never)]
 fn round(st: &mut State) {
-    let (z, t) = divsteps_59(st.zeta, st.f[0] as u64, st.g[0] as u64);
+    let (z, t) = divsteps_60(st.zeta, st.f[0] as u64, st.g[0] as u64);
     st.zeta = z;
-    update_de(&mut st.d, &mut st.e, &t);
+    // f and g first: the next round's divsteps wait on them and not on d
+    // and e, so this order lets the core start those while d and e finish.
     update_fg(&mut st.f, &mut st.g, &t);
+    update_de(&mut st.d, &mut st.e, &t);
 }
 
 /// `x^-1 mod p` for canonical `x` (below p) in four 64-bit limbs, with
@@ -308,7 +371,7 @@ pub(super) fn invert(x: [u64; 4]) -> [u64; 4] {
         // zeta = -(delta + 1/2) with delta = 1/2 to start.
         zeta: -1,
     };
-    // Ten rounds of 59, written out rather than looped: the count is fixed,
+    // Ten rounds of 60, written out rather than looped: the count is fixed,
     // and as calls they leave no loop branch in the compiled code for the
     // constant-time gate to have to tell from a secret one.
     round(&mut st);
@@ -336,6 +399,100 @@ pub(super) fn invert(x: [u64; 4]) -> [u64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Divsteps exactly as Bernstein and Yang define them, on whole `i128`
+    /// values with the matrix in rationals made integers by scaling by
+    /// 2^60: the reference the packed batches are compared with.
+    fn reference_60(zeta: i64, f0: i128, g0: i128) -> (i64, [i128; 4]) {
+        let (mut z, mut f, mut g) = (zeta, f0, g0);
+        let (mut u, mut v, mut q, mut r) = (1i128 << 60, 0i128, 0i128, 1i128 << 60);
+        for _ in 0..60 {
+            assert!(f & 1 == 1, "f stays odd");
+            if z < 0 && g & 1 == 1 {
+                // delta > 0 and g odd: (1 - delta, g, (g - f) / 2).
+                (z, f, g) = (-z - 2, g, (g - f) / 2);
+                (u, v, q, r) = (q, r, (q - u) / 2, (r - v) / 2);
+            } else if g & 1 == 1 {
+                (z, g) = (z - 1, (g + f) / 2);
+                (q, r) = ((q + u) / 2, (r + v) / 2);
+            } else {
+                (z, g) = (z - 1, g / 2);
+                (q, r) = (q / 2, r / 2);
+            }
+        }
+        // The matrix takes the start to 2^60 times the end.
+        assert_eq!(u * f0 + v * g0, f << 60);
+        assert_eq!(q * f0 + r * g0, g << 60);
+        (z, [u, v, q, r])
+    }
+
+    /// The packed batches against [`reference_60`]: random words, words
+    /// with long runs of zeros and ones (long runs of halvings and of
+    /// swaps), and `zeta` across the range ten rounds reach.
+    #[test]
+    fn packed_divsteps_agree_with_the_definition() {
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            x.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        };
+        let n = if cfg!(debug_assertions) {
+            20_000
+        } else {
+            400_000
+        };
+        let mut checked = 0;
+        for i in 0..n {
+            let shape = |w: u64, k: u64| match k % 4 {
+                0 => w,
+                1 => w & (w >> 7) & (w >> 13),
+                2 => w | (w << 9) | (w << 17),
+                _ => w >> (k % 61),
+            };
+            let f0 = shape(next(), i) | 1;
+            let g0 = shape(next(), i / 4);
+            let zeta = (next() % 1201) as i64 - 600;
+            let (z, t) = divsteps_60(zeta, f0, g0);
+            // The reference needs only the low 60 bits to agree on the
+            // decisions; give it the full words, sign-extended both ways.
+            for (f, g) in [
+                (f0 as i128, g0 as i128),
+                (f0 as i64 as i128, g0 as i64 as i128),
+            ] {
+                let (rz, m) = reference_60(zeta, f, g);
+                assert_eq!(z, rz, "zeta for {f0:x} {g0:x} {zeta}");
+                assert_eq!(
+                    [t.u as i128, t.v as i128, t.q as i128, t.r as i128],
+                    m.map(|e| e * 4),
+                    "matrix for {f0:x} {g0:x} {zeta}"
+                );
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, n);
+    }
+
+    /// [`unpack`] at the edges of its ranges, which random divsteps rarely
+    /// reach: the low field at both ends of `(-2^20, 2^20)` and the matrix
+    /// fields at both ends of `[-2^20, 2^20)`, every combination.
+    #[test]
+    fn unpacking_holds_at_the_edges() {
+        let lows = [-(1i64 << 20) + 1, -1, 0, 1, (1 << 20) - 1];
+        let fields = [-(1i64 << 20), -(1 << 20) + 1, -1, 0, 1, (1 << 20) - 1];
+        let mut checked = 0;
+        for f in lows {
+            for u in fields {
+                for v in fields {
+                    let w = f.wrapping_add(u << 21).wrapping_add(v << 42);
+                    assert_eq!(unpack(w), (u, v), "f {f} u {u} v {v}");
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 5 * 6 * 6);
+    }
 
     #[test]
     fn the_inverse_constant_is_an_inverse() {

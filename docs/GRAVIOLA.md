@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly; without AVX-512, AES-GCM at 1 KiB and 4 MiB, X25519, Ed25519 and RSA-2048 fall behind (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly; without AVX-512, AES-GCM at 1 KiB and 4 MiB, Ed25519 signing and RSA-2048 fall behind, and X25519 is level (see "Without AVX-512") |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA product by the gate alone, and its IFMA exponentiation as a whole by neither |
@@ -140,9 +140,10 @@ Where it is not ahead:
   measured on aarch64.
 - **CPUs without AVX-512.** Measured on the same Zen 5 machine with
   `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
-  below). Without them, AES-GCM at 1 KiB and 4 MiB, X25519 and RSA-2048 fall
-  behind Graviola, Ed25519 drops to parity or behind, and ChaCha20-Poly1305
-  and ECDSA P-384 keep a lead, the ChaCha20 one smaller. Graviola needs only AVX2 and ADX, so it is the
+  below). Without them, AES-GCM at 1 KiB and 4 MiB and RSA-2048 fall behind
+  Graviola, X25519 is level, Ed25519 signs at about 0.85 to 0.93 of
+  Graviola's rate and verifies ahead with the key held, and
+  ChaCha20-Poly1305 and ECDSA P-384 keep a lead, the ChaCha20 one smaller. Graviola needs only AVX2 and ADX, so it is the
   fair comparison on such a CPU.
 
 ### Without AVX-512
@@ -175,6 +176,42 @@ IronCrypto faster). The machine was loaded by other jobs.
 | SHA-512, 4 MiB | 1.47-1.86 | 1.60-2.23 |
 | ML-KEM-768 encapsulate, key prepared (control) | 1.74-2.15 | 1.80-2.00 |
 | SHA-256, 4 MiB (control) | 0.92-1.20 | 0.95-0.98 |
+
+#### Curve25519 on MULX/ADX, after the changes of 2026-10-13
+
+The X25519 and Ed25519 rows above are from before the MULX/ADX field's
+changes listed in CHANGELOG.md (Unreleased, Performance). Measured since
+with `cargo run --release -- graviola-25519`, which alternates the two
+libraries in batches of 200 calls, forty times, and takes each side's
+fastest batch, so that load reaching one reaches the other. Three rounds,
+the build before the changes and after alternating, both configurations,
+on a machine other jobs held near fully loaded (Graviola's X25519 took 16.5
+to 17.4 us in these runs, against 12.8 when quieter). IronCrypto's rate over
+Graviola's, the range across rounds:
+
+| operation | AVX2 only, before | AVX2 only, after | default, before | default, after |
+|---|---|---|---|---|
+| X25519 | 0.95-0.97 | 0.97-1.02 | 1.42-1.47 | 1.46-1.50 |
+| Ed25519 sign | 0.74-0.78 | 0.84-0.93 | 1.21-1.24 | 1.23-1.32 |
+| Ed25519 verify, one-shot | 1.00-1.03 | 1.02-1.05 | 1.34-1.38 | 1.39-1.43 |
+| Ed25519 verify, key held on both sides | 1.07-1.18 | 1.12-1.19 | 1.49-1.57 | 1.66-1.71 |
+
+The last row is the like-for-like one: Graviola's verifying key holds its
+point decoded, and the one-shot row decodes IronCrypto's on every call.
+
+Not ahead, then, without AVX-512: X25519 is level and signing behind. The
+diagnosis is that both libraries run the same instructions where it counts.
+A field multiplication here and in s2n-bignum is the same sixteen `MULX`
+products on `ADCX`/`ADOX` and the same fold by 38 -- about 80 instructions,
+4.8 ns each when eight independent ones run back to back on this core, 7 ns
+in a dependent chain -- and the ladder step, the mixed addition and the
+doubling make the same number of them. Rewriting the carry chains with
+`ADC` alone did not change that throughput, and reordering the ladder step
+made it slower. What was left to take was outside the field operations:
+the table read, the inversion, the steps the clamped scalar makes
+unnecessary, R's decompression in verification. A 64-window signing table,
+which drops four doublings, measured slower under this load, its 48 KiB
+competing for the L1, and was not kept.
 
 Read the rows with care. The two controls have no AVX-512 path, so their
 spread between the builds is noise, and the P-384 ECDH row moves as much
@@ -240,7 +277,7 @@ expected, not a weakness.
 
 Beyond Valgrind, which only sees the build and CPU it runs on:
 
-- `scripts/check-ct.py` disassembles the compiled code of 67 probes on
+- `scripts/check-ct.py` disassembles the compiled code of 80 probes on
   x86-64 and 44 on Cortex-M0, Cortex-M4 and 32-bit RISC-V, and fails the
   build on any branch or secret-indexed load in them. It has caught
   compiled code that branched on a secret where the source did not, on

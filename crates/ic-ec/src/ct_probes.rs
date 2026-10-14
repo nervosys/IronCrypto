@@ -146,6 +146,16 @@ pub mod x86 {
     pub fn x25519_step(ws: &mut [u64; 76], swap: u64) {
         crate::fe64::ladder_step(ws, swap & 1)
     }
+    /// X25519's doubling alone, at the top bit and the three clamped ones.
+    #[inline(always)]
+    pub fn x25519_double(ws: &mut [u64; 76]) {
+        crate::fe64::ladder_double(ws)
+    }
+    /// Signing's table read: a window's entry by the secret digit.
+    #[inline(always)]
+    pub fn ed25519_select(dst: &mut [u64; 16], table: &[[u64; 12]; 8], digit: i8) {
+        edwards::select(dst, table, digit)
+    }
     /// Signing's step: two mixed additions, interleaved.
     #[inline(always)]
     pub fn ed25519_madd_ext2(ws: &mut Ws2) {

@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and thirty-four more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and thirty-six more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -48,7 +48,8 @@ release profile; this is not the workspace binary's overflow-checked profile.
 - On x86-64 only, the Curve25519 backends that exist only there: the
   MULX/ADX field's multiplication, squaring, addition, subtraction,
   multiplication by 121666 and divstep inversion, each from and back to
-  bytes; X25519's ladder step on it; signing's group operations on it; and
+  bytes; X25519's ladder step and its doubling alone on it; signing's
+  table read and group operations on it; and
   the AVX-512 IFMA four-lane ladder step, table selection, mixed addition and
   doubling. See "Curve25519 on x86-64" below.
 - On x86-64 only: P-256's field multiplication and squaring on
@@ -297,8 +298,9 @@ tests check both halves of that.
 They are constant time by construction rather than by barrier: the field
 operations and X25519's ladder step are assembly with no branch in them, the
 carry folds are `sbb`/`and` masks inside it, the ladder's selection is
-`CMOV`, the divstep inversion's 590 steps are one `.rept` block of masks and
-`CMOV` in ten calls written out, and the IFMA code is vector instructions
+`CMOV`, the divstep inversion's steps are `.rept` blocks of masks and
+`CMOV` in ten calls written out (590 then; 600 in packed batches since, see
+"Curve25519 without AVX-512"), and the IFMA code is vector instructions
 selected by blends under masks. Where Rust computes a mask from a secret
 bit, it goes through `fe64::mask`, a one-instruction `neg` in an assembly
 block the optimiser cannot see into -- `nomem`, unlike `black_box`, whose
@@ -312,10 +314,9 @@ read compiled code; whether the CPU's `MULX`, `ADCX`, `ADOX`, `CMOV` and
 hardware, not something the gate checked.
 
 Not probed: the full scalar multiplications, whose loops over public counts
-stay rolled; `Window::select` on the MULX/ADX field, which needs the `std`
-tables the probe build does not have (its masks go through the same
-`fe64::mask`); and verification, which is variable time by design on public
-data. Valgrind (docs/CTGRIND.md) cannot see these backends either: it does
+stay rolled; and verification, which is variable time by design on public
+data. (Signing's table read on the MULX/ADX field was not probed either,
+being Rust over the `std` tables; it is now an assembly block, probed below.) Valgrind (docs/CTGRIND.md) cannot see these backends either: it does
 not report ADX or AVX-512 in CPUID, so under it the portable field runs.
 
 The `ic timing` targets `hash-to-curve` (a fixed versus a random password),
@@ -324,6 +325,35 @@ fixed versus a random key) were added and run on 2026-10-12 on a development
 machine that was not quiet: |t| was 1.79, 0.91, 3.11 and 3.19, against 1686
 for the positive control in the same session. That is no evidence of
 leakage on that machine, not a proof of its absence.
+
+## Curve25519 without AVX-512, 2026-10-13
+
+The MULX/ADX field's signing table read, X25519's doubling step and the
+field inversion changed (CHANGELOG.md, Unreleased). Two probes are new:
+
+- `ct_ed25519_fe64_select`: `fe64::edwards::select`, the scan of a window's
+  eight entries by the secret digit. Every entry is read, the one wanted kept
+  by `CMOV` on a comparison of the magnitude with its index, and the sign
+  applied by `CMOV` too. It replaces `Window::select` in Rust on this field,
+  which the gate could not read.
+- `ct_x25519_fe64_double`: `fe64::ladder_double`, the ladder's doubling
+  alone, which the clamped ladder runs at bit 254 and at bits 2 to 0.
+
+`ct_fe64_invert` reads the new inversion: 600 divsteps in thirty `.rept`
+blocks of twenty, on words packing `f` or `g` with their row of the
+transition matrix, every choice a `CMOV`; the unpacking and the products
+of the three batches' matrices are arithmetic.
+
+Breaking them: a `test rcx, rcx; jz 2f; nop; 2:` inserted at the top of the
+select's assembly fails `ct_ed25519_fe64_select` with `je`; the same in the
+doubling's fails `ct_x25519_fe64_double`; in the divsteps' `.rept` body it
+fails `ct_fe64_invert`. Restored, all pass.
+
+Probe count: thirty-six on x86-64 alone, where there were thirty-four. All
+eighty pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 80 + 3 x 44 = 212 gating probe/target checks. Valgrind
+(docs/CTGRIND.md) runs none of this: it reports no ADX, so the portable
+field runs under it.
 
 ## P-256 on x86-64 in assembly, 2026-10-13
 
