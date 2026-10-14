@@ -676,6 +676,63 @@ mod x86_chacha {
     pub unsafe fn ct_poly1305_avx2_finish(h: &[[u64; 4]; 5], powers: &[[u32; 5]; 4]) -> [u64; 5] {
         unsafe { p::poly1305_avx2_finish(h, powers) }
     }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_chacha20_avx2_pair(
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        out: &mut [u8; 128],
+    ) {
+        unsafe { p::chacha20_avx2_pair(key, nonce, counter, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_chacha20_avx2_two_pairs(
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        out: &mut [u8; 256],
+    ) {
+        unsafe { p::chacha20_avx2_two_pairs(key, nonce, counter, out) }
+    }
+
+    #[no_mangle]
+    pub fn ct_poly1305_short(key: &[u8; 32], aad: &[u8; 13], ct: &[u8; 64]) -> [u8; 16] {
+        p::poly1305_short(key, aad, ct)
+    }
+}
+
+// x86-64: HMAC-SHA256's SHA-NI compositions, which hold key-derived chaining
+// values: the two key-pad blocks together, and the inner hash's last blocks
+// with the outer block built from its digest in registers, here over one
+// whole block and one padding block. Compiled to be read, never run.
+#[cfg(target_arch = "x86_64")]
+mod x86_hmac {
+    use ic_hash::ct_probes as h;
+
+    /// # Safety
+    /// Requires SHA-NI and SSE4.1.
+    #[no_mangle]
+    pub unsafe fn ct_hmac_sha256_pads(inner: &mut [u32; 8], outer: &mut [u32; 8], ipad: &[u8; 64]) {
+        unsafe { h::hmac_sha256_pads(inner, outer, ipad) }
+    }
+
+    /// # Safety
+    /// Requires SHA-NI and SSE4.1.
+    #[no_mangle]
+    pub unsafe fn ct_hmac_sha256_tail(
+        inner: &[u32; 8],
+        block: &[u8; 64],
+        tail: &[u8; 64],
+        outer: &mut [u32; 8],
+    ) {
+        unsafe { h::hmac_sha256_tail(inner, block, tail, outer) }
+    }
 }
 
 // RSA's Montgomery products at 2048 bits: the portable CIOS product on every

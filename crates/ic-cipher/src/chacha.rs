@@ -105,8 +105,13 @@ fn chacha20_block(key: &[u8; 32], counter: u32, nonce: &[u8; 12], out: &mut [u8;
 // The x86-64 backends, selected by `std`'s run-time detection. The AVX-512
 // keystream and the AVX2 Poly1305 are also compiled for `ct-probes`, whose
 // harness reads them.
-#[cfg(all(target_arch = "x86_64", feature = "std"))]
-mod avx2;
+#[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
+pub(crate) mod avx2;
+// Poly1305 in radix 2^64, for the AEAD's short messages. Pure Rust and no
+// detection, so on every x86-64 build.
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod poly64;
 #[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
 #[cfg_attr(not(feature = "std"), allow(dead_code))]
 pub(crate) mod poly_avx2;
@@ -252,6 +257,21 @@ fn xor_keystream(
         data = groups.into_remainder();
     }
 
+    // What is left, under eight blocks, two or four at a time on AVX2 -- but
+    // a last single block by the block function, which is the faster for
+    // one: the pair kernel's twenty rounds are one dependent chain of vector
+    // operations, the block function's four chains of scalar ones. The
+    // kernel computes whole pairs; a block past the message is computed and
+    // not used, and its counter may wrap, which is harmless because the
+    // check above has bounded every block that is used.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    if backend != Backend::Portable && data.len() > 64 {
+        // SAFETY: both wide backends are chosen only where `avx2()`
+        // confirmed AVX2.
+        unsafe { avx2_tail(k, n, counter, data) };
+        return Ok(());
+    }
+
     // What is left one block at a time; on the portable backend, all of it.
     let mut block = [0u8; 64];
     for (i, chunk) in data.chunks_mut(64).enumerate() {
@@ -262,6 +282,35 @@ fn xor_keystream(
     }
     block.zeroize();
     Ok(())
+}
+
+/// The tail of [`xor_keystream`] on AVX2, under eight blocks: four blocks at
+/// a time, then two. Out of line, so that the bulk path around it compiles as
+/// it did before it existed.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[inline(never)]
+unsafe fn avx2_tail(k: &[u8; 32], n: &[u8; 12], mut counter: u32, data: &mut [u8]) {
+    let mut ks = [0u8; 256];
+    let mut used = 128;
+    for chunk in data.chunks_mut(256) {
+        let pairs = if chunk.len() > 128 {
+            used = 256;
+            avx2::Pairs::Two
+        } else {
+            avx2::Pairs::One
+        };
+        // SAFETY: AVX2, as the caller guarantees.
+        unsafe { avx2::short_blocks(k, n, counter, pairs, &mut ks) };
+        for (d, b) in chunk.iter_mut().zip(ks.iter()) {
+            *d ^= b;
+        }
+        counter = counter.wrapping_add(4);
+    }
+    ks[..used].zeroize();
 }
 
 /// RFC 8439 Poly1305 one-time authenticator.
@@ -649,6 +698,15 @@ impl ChaCha20Poly1305 {
     /// checked.
     fn tag(&self, nonce: &[u8], aad: &[u8], ciphertext: &[u8]) -> Result<[u8; 16]> {
         let mut poly_key = self.poly_key(nonce)?;
+        // The body of `tag_under`, written out again rather than called: as
+        // a call, with the key passed through memory, it cost the bulk path
+        // measurably in one of the benchmark's builds.
+        #[cfg(target_arch = "x86_64")]
+        if aad.len().saturating_add(ciphertext.len()) <= POLY64_MAX {
+            let t = poly64::aead_tag(&poly_key, aad, ciphertext);
+            poly_key.zeroize();
+            return Ok(t);
+        }
         let mut m = Poly1305::new(&poly_key)?;
         poly_key.zeroize();
 
@@ -663,6 +721,100 @@ impl ChaCha20Poly1305 {
         m.update(&lens);
         Ok(m.finalize())
     }
+
+    /// Seal or open a message of at most [`SHORT_MAX`] bytes in one call of
+    /// the two-block kernel: blocks 0 and 1, or 0 to 3, block 0 the Poly1305
+    /// key and the rest the message's keystream. Opening checks the tag over
+    /// the ciphertext before the keystream touches it, as the long path does.
+    ///
+    /// Out of line: inlined into `seal_detached`, it cost the long path about
+    /// two percent at 1 KiB (rdtsc, minimum of many, against the build
+    /// without it), and out of line nothing measurable at either length.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[inline(never)]
+    unsafe fn short(
+        &self,
+        nonce: &[u8; 12],
+        aad: &[u8],
+        in_out: &mut [u8],
+        tag: &mut [u8; 16],
+        seal: bool,
+    ) -> Result<()> {
+        debug_assert!(in_out.len() <= SHORT_MAX);
+        let (pairs, used) = if in_out.len() <= 64 {
+            (avx2::Pairs::One, 128)
+        } else {
+            (avx2::Pairs::Two, 256)
+        };
+        let mut ks = [0u8; 256];
+        // SAFETY: AVX2, as the caller guarantees.
+        unsafe { avx2::short_blocks(&self.key, nonce, 0, pairs, &mut ks) };
+        let (head, stream) = ks.split_at(64);
+        let mut poly_key = [0u8; 32];
+        poly_key.copy_from_slice(&head[..32]);
+        let result = if seal {
+            for (d, k) in in_out.iter_mut().zip(stream) {
+                *d ^= k;
+            }
+            tag_under(&poly_key, aad, in_out).map(|t| *tag = t)
+        } else {
+            match tag_under(&poly_key, aad, in_out) {
+                Ok(expected) if ic_core::ct::verify(&expected, tag) => {
+                    for (d, k) in in_out.iter_mut().zip(stream) {
+                        *d ^= k;
+                    }
+                    Ok(())
+                }
+                Ok(_) => {
+                    in_out.zeroize();
+                    Err(ic_core::err!(AuthenticationFailed, "chacha20-poly1305"))
+                }
+                Err(e) => Err(e),
+            }
+        };
+        poly_key.zeroize();
+        ks[..used].zeroize();
+        result
+    }
+}
+
+/// The longest message [`ChaCha20Poly1305`] seals and opens by its short
+/// path: three blocks, so that with the Poly1305 key's block it is one call
+/// of the two-block kernel on two pairs.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+const SHORT_MAX: usize = 192;
+
+/// The longest associated data and ciphertext, together, whose tag is
+/// computed in radix 2^64 ([`poly64`]) rather than by [`Poly1305`], whose
+/// AVX2 path is the faster from about here.
+#[cfg(target_arch = "x86_64")]
+const POLY64_MAX: usize = 256;
+
+/// The AEAD tag (RFC 8439 section 2.8) under the one-time key `poly_key`:
+/// Poly1305 over `aad`, padding, `ciphertext`, padding and the two lengths.
+/// For the short path, whose key comes out of the same kernel call as its
+/// keystream.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+fn tag_under(poly_key: &[u8; 32], aad: &[u8], ciphertext: &[u8]) -> Result<[u8; 16]> {
+    if aad.len().saturating_add(ciphertext.len()) <= POLY64_MAX {
+        return Ok(poly64::aead_tag(poly_key, aad, ciphertext));
+    }
+
+    let mut m = Poly1305::new(poly_key)?;
+    m.update(aad);
+    m.update(&[0u8; 16][..(16 - aad.len() % 16) % 16]);
+    m.update(ciphertext);
+    m.update(&[0u8; 16][..(16 - ciphertext.len() % 16) % 16]);
+
+    let mut lens = [0u8; 16];
+    lens[..8].copy_from_slice(&(aad.len() as u64).to_le_bytes());
+    lens[8..].copy_from_slice(&(ciphertext.len() as u64).to_le_bytes());
+    m.update(&lens);
+    Ok(m.finalize())
 }
 
 impl Aead for ChaCha20Poly1305 {
@@ -691,6 +843,17 @@ impl Aead for ChaCha20Poly1305 {
             InvalidLength,
             "chacha20-poly1305 tag buffer"
         );
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if in_out.len() <= SHORT_MAX && avx2() {
+            let n: &[u8; 12] = nonce
+                .try_into()
+                .map_err(|_| ic_core::err!(InvalidLength, "chacha20-poly1305 nonce"))?;
+            let mut t = [0u8; 16];
+            // SAFETY: `avx2()` confirmed AVX2.
+            unsafe { self.short(n, aad, in_out, &mut t, true)? };
+            tag.copy_from_slice(&t);
+            return Ok(());
+        }
         // Block 0 is reserved for the Poly1305 key, so data starts at block 1.
         chacha20_xor(&self.key, nonce, 1, in_out)?;
         let t = self.tag(nonce, aad, in_out)?;
@@ -701,6 +864,16 @@ impl Aead for ChaCha20Poly1305 {
     fn open_detached(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &[u8]) -> Result<()> {
         ic_core::module::operational()?;
         ensure!(tag.len() == 16, InvalidLength, "chacha20-poly1305 tag");
+        #[cfg(all(target_arch = "x86_64", feature = "std"))]
+        if in_out.len() <= SHORT_MAX && avx2() {
+            let n: &[u8; 12] = nonce
+                .try_into()
+                .map_err(|_| ic_core::err!(InvalidLength, "chacha20-poly1305 nonce"))?;
+            let mut t = [0u8; 16];
+            t.copy_from_slice(tag);
+            // SAFETY: `avx2()` confirmed AVX2.
+            return unsafe { self.short(n, aad, in_out, &mut t, false) };
+        }
         let expected = self.tag(nonce, aad, in_out)?;
         if !ic_core::ct::verify(&expected, tag) {
             in_out.zeroize();
@@ -1329,6 +1502,139 @@ mod tests {
                 c.open_detached(&nonce, aad, &mut buf[1..], &tag).unwrap();
                 assert!(&buf[1..] == pt, "round trip at {len} bytes");
             }
+        }
+
+        // The short path (to 192 bytes) and the radix-2^64 tag (to 256 bytes
+        // of associated data and ciphertext together) with associated data
+        // of every length to 48, from an unaligned start, either side of both
+        // limits; and a forged tag refused there, with the buffer wiped.
+        let aad_all = &source[3..3 + 48];
+        let mut checked = 0;
+        for aad_len in 0..=48 {
+            let aad = &aad_all[..aad_len];
+            for len in 0..=300 {
+                let pt = &source[1..1 + len];
+                let (want_ct, want_tag) = reference(aad, pt);
+                let mut buf = source[..1 + len].to_vec();
+                let mut tag = [0u8; 16];
+                c.seal_detached(&nonce, aad, &mut buf[1..], &mut tag)
+                    .unwrap();
+                assert!(buf[1..] == want_ct[..], "ciphertext at {len}+{aad_len}");
+                assert_eq!(tag, want_tag, "tag at {len}+{aad_len}");
+                let mut forged = tag;
+                forged[(len + aad_len) % 16] ^= 0x10;
+                let mut copy = buf.clone();
+                assert!(c
+                    .open_detached(&nonce, aad, &mut copy[1..], &forged)
+                    .is_err());
+                assert!(
+                    copy[1..].iter().all(|&b| b == 0),
+                    "a refused open left output at {len}+{aad_len}"
+                );
+                c.open_detached(&nonce, aad, &mut buf[1..], &tag).unwrap();
+                assert!(&buf[1..] == pt, "round trip at {len}+{aad_len}");
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 49 * 301, "the comparison did not run");
+    }
+
+    /// The radix-2^64 Poly1305 at the top of its bounds: every message bit
+    /// set, under the largest `r` clamping allows and under ordinary keys,
+    /// against the 26-bit one-block path that the RFC 8439 vector validates.
+    /// `h2` reaches its largest values only with message limbs this large,
+    /// and the fold of everything above 2^130 is what a wrong bound breaks.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_short_poly1305_agrees_at_its_largest_limbs() {
+        let mut keys = Vec::new();
+        let mut largest = [0xffu8; 32];
+        largest[..16].copy_from_slice(&[
+            0xff, 0xff, 0xff, 0x0f, 0xfc, 0xff, 0xff, 0x0f, 0xfc, 0xff, 0xff, 0x0f, 0xfc, 0xff,
+            0xff, 0x0f,
+        ]);
+        keys.push(largest);
+        keys.push([0xffu8; 32]);
+        keys.push([0u8; 32]);
+        for seed in 0u8..29 {
+            keys.push(core::array::from_fn(|i| {
+                (i as u8)
+                    .wrapping_mul(0x9d)
+                    .wrapping_add(seed.wrapping_mul(0x3b))
+                    ^ seed
+            }));
+        }
+        let mut checked = 0;
+        for key in &keys {
+            for fill in [0xffu8, 0xfe, 0x00] {
+                for aad_len in [0usize, 1, 15, 16, 17, 64] {
+                    for len in 0..=192 {
+                        let aad = vec![fill; aad_len];
+                        let ct = vec![fill; len];
+                        let mut input = aad.clone();
+                        input.resize(aad_len.div_ceil(16) * 16, 0);
+                        input.extend_from_slice(&ct);
+                        input.resize(input.len().div_ceil(16) * 16, 0);
+                        input.extend_from_slice(&(aad_len as u64).to_le_bytes());
+                        input.extend_from_slice(&(len as u64).to_le_bytes());
+                        let mut serial = Poly1305::new(key).unwrap();
+                        for block in input.chunks(16) {
+                            serial.absorb_block(block);
+                        }
+                        assert_eq!(
+                            poly64::aead_tag(key, &aad, &ct),
+                            serial.finalize(),
+                            "{len} bytes and {aad_len} of {fill:#04x}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 32 * 3 * 6 * 193, "the comparison did not run");
+    }
+
+    /// The final reduction, which takes `h - p` only when `h >= p`: random
+    /// inputs reach that with probability about 2^-128, so no test of
+    /// random or patterned messages above ever has. With `r = 1` the
+    /// accumulator is the sum of the blocks, each with its 2^128 bit, so a
+    /// first block chosen against the lengths block puts `h` at `p + d`
+    /// exactly, for `d` from -2 to 4. The tag is then known by the rule, `(h
+    /// mod p + s) mod 2^128` with `s = 0`: `d` itself at and above `p`, `2^128
+    /// - 5 + d` below it. Both Poly1305 forms are held to that.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_short_poly1305_reduces_at_and_above_p() {
+        let mut key = [0u8; 32];
+        key[0] = 1;
+        // aad empty, 32 bytes of ciphertext: blocks m1, 0, and (0, 32).
+        let lens = 32u128 << 64;
+        for d in -2i128..=4 {
+            // 2^128 - 5 + d - lens, so that m1 + 2^128 + 2^128 + lens + 2^128
+            // is 2^130 - 5 + d.
+            let m1 = 0u128
+                .wrapping_sub(5)
+                .wrapping_add(d as u128)
+                .wrapping_sub(lens);
+            let mut ct = [0u8; 32];
+            ct[..16].copy_from_slice(&m1.to_le_bytes());
+            let want = if d >= 0 {
+                d as u128
+            } else {
+                (u128::MAX - 4).wrapping_add(d as u128)
+            };
+            let got = poly64::aead_tag(&key, &[], &ct);
+            assert_eq!(u128::from_le_bytes(got), want, "radix 2^64, h = p + {d}");
+
+            let mut serial = Poly1305::new(&key).unwrap();
+            serial.absorb_block(&ct[..16]);
+            serial.absorb_block(&ct[16..]);
+            serial.absorb_block(&lens.to_le_bytes());
+            assert_eq!(
+                u128::from_le_bytes(serial.finalize()),
+                want,
+                "radix 2^26, h = p + {d}"
+            );
         }
     }
 

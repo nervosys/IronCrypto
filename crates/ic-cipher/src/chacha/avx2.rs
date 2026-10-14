@@ -171,3 +171,205 @@ pub unsafe fn eight_blocks(key: &[u8; 32], nonce: &[u8; 12], counter: u32, data:
         }
     }
 }
+
+/// One double round on two blocks side by side.
+///
+/// The other layout: each register holds one *row* of the 4x4 state, for two
+/// blocks, one in each 128-bit lane. The column round is then elementwise;
+/// the diagonal round rotates rows 1 to 3 by one, two and three words
+/// (`vpshufd`, within each lane), runs the same elementwise steps, and
+/// rotates them back. Six shuffles per double round, which the by-word
+/// layout above does not pay -- but this needs only four registers where
+/// that needs sixteen, and it produces two blocks rather than eight. For a
+/// message of a block or three that is the whole point: the eight-block
+/// kernel would compute five to seven blocks that nothing uses.
+///
+/// A macro rather than a function so that the intrinsics expand inside the
+/// caller's `#[target_feature(enable = "avx2")]`.
+macro_rules! double_round {
+    ($v:expr) => {{
+        macro_rules! steps {
+            () => {{
+                $v[0] = _mm256_add_epi32($v[0], $v[1]);
+                $v[3] = rotl(_mm256_xor_si256($v[3], $v[0]), 16);
+                $v[2] = _mm256_add_epi32($v[2], $v[3]);
+                $v[1] = rotl(_mm256_xor_si256($v[1], $v[2]), 12);
+                $v[0] = _mm256_add_epi32($v[0], $v[1]);
+                $v[3] = rotl(_mm256_xor_si256($v[3], $v[0]), 8);
+                $v[2] = _mm256_add_epi32($v[2], $v[3]);
+                $v[1] = rotl(_mm256_xor_si256($v[1], $v[2]), 7);
+            }};
+        }
+        // Columns.
+        steps!();
+        // Diagonals: word j of row i moves to column j - i, and back.
+        $v[1] = _mm256_shuffle_epi32($v[1], 0b00_11_10_01);
+        $v[2] = _mm256_shuffle_epi32($v[2], 0b01_00_11_10);
+        $v[3] = _mm256_shuffle_epi32($v[3], 0b10_01_00_11);
+        steps!();
+        $v[1] = _mm256_shuffle_epi32($v[1], 0b10_01_00_11);
+        $v[2] = _mm256_shuffle_epi32($v[2], 0b01_00_11_10);
+        $v[3] = _mm256_shuffle_epi32($v[3], 0b00_11_10_01);
+    }};
+}
+
+/// Store a finished pair of blocks, in block order: the low lanes of the
+/// four rows are the first block, the high lanes the second.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn store_pair(v: &[__m256i; 4], out: &mut [u8]) {
+    debug_assert!(out.len() >= 128);
+    let p = out.as_mut_ptr() as *mut __m256i;
+    // SAFETY: `out` holds at least 128 bytes, four unaligned 32-byte stores.
+    unsafe {
+        _mm256_storeu_si256(p, _mm256_permute2x128_si256(v[0], v[1], 0x20));
+        _mm256_storeu_si256(p.add(1), _mm256_permute2x128_si256(v[2], v[3], 0x20));
+        _mm256_storeu_si256(p.add(2), _mm256_permute2x128_si256(v[0], v[1], 0x31));
+        _mm256_storeu_si256(p.add(3), _mm256_permute2x128_si256(v[2], v[3], 0x31));
+    }
+}
+
+/// How many blocks [`short_blocks`] computes: two, or four.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pairs {
+    /// Blocks `counter` and `counter + 1`: 128 bytes.
+    One,
+    /// Blocks `counter` to `counter + 3`: 256 bytes, as two independent
+    /// pairs whose rounds the CPU overlaps.
+    Two,
+}
+
+/// The four starting rows of the pair of blocks at `counter` and
+/// `counter + 1`, one block in each 128-bit lane.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+#[inline]
+unsafe fn start(key: &[u8; 32], nonce: &[u8; 12], counter: u32) -> [__m256i; 4] {
+    let k = |i: usize| -> i32 {
+        u32::from_le_bytes([key[i * 4], key[i * 4 + 1], key[i * 4 + 2], key[i * 4 + 3]]) as i32
+    };
+    let n = |i: usize| -> i32 {
+        u32::from_le_bytes([
+            nonce[i * 4],
+            nonce[i * 4 + 1],
+            nonce[i * 4 + 2],
+            nonce[i * 4 + 3],
+        ]) as i32
+    };
+    [
+        _mm256_setr_epi32(
+            0x6170_7865,
+            0x3320_646e,
+            0x7962_2d32,
+            0x6b20_6574,
+            0x6170_7865,
+            0x3320_646e,
+            0x7962_2d32,
+            0x6b20_6574,
+        ),
+        _mm256_setr_epi32(k(0), k(1), k(2), k(3), k(0), k(1), k(2), k(3)),
+        _mm256_setr_epi32(k(4), k(5), k(6), k(7), k(4), k(5), k(6), k(7)),
+        _mm256_setr_epi32(
+            counter as i32,
+            n(0),
+            n(1),
+            n(2),
+            counter.wrapping_add(1) as i32,
+            n(0),
+            n(1),
+            n(2),
+        ),
+    ]
+}
+
+/// Ten times, written out: the twenty rounds with no loop, so the kernels
+/// below are straight-line code with no branch at all.
+macro_rules! ten {
+    ($($e:tt)*) => {
+        $($e)* $($e)* $($e)* $($e)* $($e)* $($e)* $($e)* $($e)* $($e)* $($e)*
+    };
+}
+
+/// Blocks `counter` and `counter + 1`, in order, into `out`.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub unsafe fn pair(key: &[u8; 32], nonce: &[u8; 12], counter: u32, out: &mut [u8; 128]) {
+    // SAFETY: AVX2, as the caller guarantees.
+    let a0 = unsafe { start(key, nonce, counter) };
+    let mut a = a0;
+    ten! { double_round!(a); }
+    for (x, s) in a.iter_mut().zip(a0) {
+        *x = _mm256_add_epi32(*x, s);
+    }
+    // SAFETY: AVX2 is enabled here; `out` is 128 bytes.
+    unsafe { store_pair(&a, out) };
+}
+
+/// Blocks `counter` to `counter + 3`, in order, into `out`: two independent
+/// pairs, a double round of each in turn, which the CPU overlaps.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub unsafe fn two_pairs(key: &[u8; 32], nonce: &[u8; 12], counter: u32, out: &mut [u8; 256]) {
+    // SAFETY: AVX2, as the caller guarantees.
+    let a0 = unsafe { start(key, nonce, counter) };
+    // SAFETY: as above.
+    let b0 = unsafe { start(key, nonce, counter.wrapping_add(2)) };
+    let (mut a, mut b) = (a0, b0);
+    ten! { double_round!(a); double_round!(b); }
+    for (x, s) in a.iter_mut().zip(a0) {
+        *x = _mm256_add_epi32(*x, s);
+    }
+    for (x, s) in b.iter_mut().zip(b0) {
+        *x = _mm256_add_epi32(*x, s);
+    }
+    // SAFETY: AVX2 is enabled here; each half of `out` is 128 bytes.
+    unsafe {
+        store_pair(&a, &mut out[..128]);
+        store_pair(&b, &mut out[128..]);
+    }
+}
+
+/// Keystream blocks from `counter`, in order, into the front of `out`: 128
+/// bytes for [`Pairs::One`], all 256 for [`Pairs::Two`]. The counter of each
+/// later block wraps rather than stopping, so a caller that uses fewer blocks
+/// than this computes must check its own count, as `xor_keystream` does.
+///
+/// For the short messages the eight-block kernel is too wide for: an AEAD
+/// takes its Poly1305 key from block 0 and the first three blocks of message
+/// keystream from the same call.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub unsafe fn short_blocks(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    counter: u32,
+    pairs: Pairs,
+    out: &mut [u8; 256],
+) {
+    match pairs {
+        Pairs::One => {
+            if let Some(first) = out.first_chunk_mut::<128>() {
+                // SAFETY: AVX2, as the caller guarantees.
+                unsafe { pair(key, nonce, counter, first) };
+            }
+        }
+        // SAFETY: AVX2, as the caller guarantees.
+        Pairs::Two => unsafe { two_pairs(key, nonce, counter, out) },
+    }
+}

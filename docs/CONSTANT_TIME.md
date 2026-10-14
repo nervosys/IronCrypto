@@ -22,8 +22,8 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-seventy more on x86-64, and seven more on aarch64: 297 gating probe/target
-checks in all, 114 on x86-64, 51 on aarch64, and 44 on each of the three other
+seventy-five more on x86-64, and seven more on aarch64: 302 gating probe/target
+checks in all, 119 on x86-64, 51 on aarch64, and 44 on each of the three other
 targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -588,6 +588,53 @@ loop is not unrolled in the source.
 
 Probe count: thirty-one on x86-64 alone, with the RSA probe above, where
 there were twenty-seven. All seventy-five pass on x86-64, and the forty-four on each 32-bit target are
+unchanged.
+
+## Short messages on x86-64, 2026-10-14
+
+Three new pieces of code handle keys on x86-64's short-message paths, and
+five probes read them, all x86-64 only.
+
+- `ct_chacha20_avx2_pair` and `ct_chacha20_avx2_two_pairs`: ChaCha20's
+  two-block AVX2 kernel (`ic-cipher/src/chacha/avx2.rs`, `pair` and
+  `two_pairs`), which gives an AEAD of up to 192 bytes its Poly1305 key and
+  its keystream in one call, and the keystream's tail of under eight
+  blocks. Two blocks side by side in each register, one per 128-bit lane;
+  the diagonal rounds rotate rows with `vpshufd`. The ten double rounds are
+  written out by a macro, so the compiled body is straight-line: adds,
+  xors, shifts, byte shuffles, the feed-forward and the stores. The choice
+  between one pair and two is made by the caller on the message length.
+- `ct_poly1305_short`: the AEAD's tag in radix 2^64
+  (`ic-cipher/src/chacha/poly64.rs`) over thirteen bytes of associated data
+  and sixty-four of ciphertext, so that a zero-padded partial block and
+  whole blocks are both in the code read. `MUL`, `ADD`/`ADC`, shifts and
+  masks; the final subtraction of `p` selects by mask. Its loops are over
+  the lengths, which are fixed in the probe and unrolled by LLVM; in the
+  library they are public.
+- `ct_hmac_sha256_pads` and `ct_hmac_sha256_tail`: HMAC-SHA256's SHA-NI
+  compositions (`ic-hash/src/sha2/x86.rs`): the inner and outer key-pad
+  blocks compressed together, the outer pad made from the inner in
+  registers; and the inner hash's last blocks followed by the outer block
+  built from the inner digest in registers, here over one block of message
+  and one of padding. The SHA-NI compression itself was not probed before;
+  these read it, the gate following the call where it is not inlined.
+
+All five pass with nothing excused. Two mutations, each restored after:
+adding `s1 / (h0 | 1) >> 1` to the radix-2^64 fold fails
+`ct_poly1305_short` on `divq` and `divl` and on the `je` LLVM puts around
+them; an early `return` when the inner state's first word is `0x1234`,
+inserted at the top of `hmac_tail`, fails `ct_hmac_sha256_tail` on `je`,
+reported through the call into the kernel's body.
+
+Not covered: the dispatch around them (`seal_detached`'s choice of the short
+path, `xor_keystream`'s loop over the tail, `hmac_sha256_one_shot`'s XOR of
+the key into the pad, over the key's public length) branches on lengths and
+is not probed, and the wipes of the keystream buffer and the padded tail
+are not checked by any test: a wipe deleted from the SHA-256 one-shot digest
+passes the whole suite.
+
+Probe count: seventy-five on x86-64 alone, where there were seventy: 119 on
+x86-64, and 302 gating probe/target checks with the other four targets
 unchanged.
 
 ## Loops on x86-64, 2026-10-13

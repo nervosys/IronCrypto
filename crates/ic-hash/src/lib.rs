@@ -50,16 +50,22 @@ pub use blake2::{blake2b_long, Blake2b, Blake2s};
 #[cfg(not(ic_approved_only))]
 pub use blake3::{Blake3, Blake3Reader};
 pub use sha2::{Sha224, Sha256, Sha384, Sha512, Sha512_224, Sha512_256};
+// HMAC-SHA256 in one pass on SHA-NI, for `ic_mac`. Not API.
+#[doc(hidden)]
+pub use sha2::{hmac_sha256_finish, hmac_sha256_one_shot};
 pub use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256, XofReader};
 // Four SHAKE or SHA3-256 streams in step, for ML-KEM. Not API: hidden, and free
 // to change in any release.
 #[doc(hidden)]
 pub use sha3::{KeccakX4, Rate136};
-// The ARMv8 SHA-2 kernels, for scripts/ct-audit. Not API.
+// The ARMv8 SHA-2 kernels and the x86-64 HMAC-SHA256 compositions, for
+// scripts/ct-audit. Not API.
 #[cfg(all(
-    target_arch = "aarch64",
-    feature = "aarch64-crypto",
-    feature = "ct-probes"
+    feature = "ct-probes",
+    any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", feature = "aarch64-crypto")
+    )
 ))]
 #[doc(hidden)]
 pub use sha2::ct_probes;
