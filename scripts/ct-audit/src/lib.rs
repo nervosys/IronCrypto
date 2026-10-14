@@ -236,6 +236,16 @@ mod x86 {
     }
 
     #[no_mangle]
+    pub fn ct_x25519_fe64_double(ws: &mut [u64; 76]) {
+        p::x25519_double(ws)
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_fe64_select(dst: &mut [u64; 16], table: &[[u64; 12]; 8], digit: i8) {
+        p::ed25519_select(dst, table, digit)
+    }
+
+    #[no_mangle]
     pub fn ct_ed25519_fe64_madd_ext2(ws: &mut p::Ws2) {
         p::ed25519_madd_ext2(ws)
     }

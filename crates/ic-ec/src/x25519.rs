@@ -31,7 +31,8 @@ fn clamp(scalar: &[u8], out: &mut [u8; 32]) {
 }
 
 /// The Montgomery ladder: compute `scalar * u`, on the fastest field this
-/// CPU runs. See [`ladder_in`].
+/// CPU runs. See [`ladder_in`]. `scalar` must be clamped: the four-limb
+/// field's ladder takes the bits clamping fixes as fixed.
 fn ladder(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
     // On the four-limb field each step is one assembly block, which is what
     // makes that field pay; see `fe64::ladder_step`. It computes what
@@ -359,19 +360,32 @@ mod tests {
     /// Every ladder this build has: the one `ladder` dispatches to, the
     /// generic one on the portable field, the RFC's own form, and on x86-64
     /// the four-limb field's block ladder and the generic ladder on that field.
-    fn ladders() -> std::vec::Vec<(&'static str, Ladder)> {
-        let mut v: std::vec::Vec<(&'static str, Ladder)> = std::vec![
-            ("dispatched", ladder),
-            ("generic, portable field", ladder_in::<crate::field::Fe>),
+    ///
+    /// The flag marks a ladder that takes the bits clamping fixes as fixed,
+    /// and so is only to be given clamped scalars: the four-limb block ladder,
+    /// and the dispatch, which may choose it.
+    fn ladders() -> std::vec::Vec<(&'static str, Ladder, bool)> {
+        let mut v: std::vec::Vec<(&'static str, Ladder, bool)> = std::vec![
+            ("dispatched", ladder, true),
+            (
+                "generic, portable field",
+                ladder_in::<crate::field::Fe>,
+                false
+            ),
             (
                 "RFC form, portable field",
-                ladder_rfc_in::<crate::field::Fe>
+                ladder_rfc_in::<crate::field::Fe>,
+                false,
             ),
         ];
         #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
         if crate::fe64::available() {
-            v.push(("block, four-limb field", crate::fe64::x25519_ladder));
-            v.push(("generic, four-limb field", ladder_in::<crate::fe64::Fe64>));
+            v.push(("block, four-limb field", crate::fe64::x25519_ladder, true));
+            v.push((
+                "generic, four-limb field",
+                ladder_in::<crate::fe64::Fe64>,
+                false,
+            ));
         }
         #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
         if crate::f51x4::Ifma::get().is_some() {
@@ -381,7 +395,7 @@ mod tests {
                     None => unreachable!("checked above"),
                 }
             }
-            v.push(("four lanes, IFMA", four_lane));
+            v.push(("four lanes, IFMA", four_lane, false));
         }
         v
     }
@@ -393,7 +407,7 @@ mod tests {
     /// diverges.
     #[test]
     fn rfc7748_iterated_vectors_through_every_ladder() {
-        for (name, f) in ladders() {
+        for (name, f, _) in ladders() {
             let mut k = [0u8; 32];
             k[0] = 9;
             let mut u = k;
@@ -421,7 +435,9 @@ mod tests {
 
     /// All the ladders against each other on scalars and points from a
     /// counter: clamped and unclamped scalars, u with the top bit set (which
-    /// is ignored), u at and above p, and the small-order points.
+    /// is ignored), u at and above p, and the small-order points. A ladder
+    /// that requires a clamped scalar is given the clamped form of each one,
+    /// and compared with the RFC form on that.
     #[test]
     fn the_ladders_agree() {
         use ic_core::traits::internal::Digest;
@@ -450,8 +466,19 @@ mod tests {
                 ic_hash::Sha256::digest(&(i ^ 0x8000_0000).to_le_bytes())
             };
             let want = ladder_rfc_in::<crate::field::Fe>(&k, &u);
-            for (name, f) in &ladders {
-                assert_eq!(f(&k, &u), want, "{name} differs for k={k:02x?} u={u:02x?}");
+            let mut kc = [0u8; 32];
+            clamp(&k, &mut kc);
+            let want_c = ladder_rfc_in::<crate::field::Fe>(&kc, &u);
+            for (name, f, clamped_only) in &ladders {
+                if *clamped_only {
+                    assert_eq!(
+                        f(&kc, &u),
+                        want_c,
+                        "{name} differs for k={kc:02x?} u={u:02x?}"
+                    );
+                } else {
+                    assert_eq!(f(&k, &u), want, "{name} differs for k={k:02x?} u={u:02x?}");
+                }
                 checked += 1;
             }
         }

@@ -151,8 +151,62 @@ pub fn ladder_step(ws: &mut [u64; slot::LEN], swap: u64) {
     }
 }
 
-/// X25519's ladder on this field: [`ladder_step`] 255 times, then the
-/// inversion. The caller must have checked [`available`].
+/// The doubling half of [`ladder_step`] alone, on the point in `xn`, `zn`:
+/// what the ladder does at a bit it knows is zero, and at the top bit it
+/// knows is one.
+///
+/// The operations and slots of [`ladder_step`]'s doubling, in its order;
+/// both inputs are products or squares, or the starting values `x1 < 2^255`
+/// and 1, which is the bound the one-fold additions need.
+#[inline(never)]
+pub fn ladder_double(ws: &mut [u64; slot::LEN]) {
+    // SAFETY: as in `ladder_step`: constant offsets below 608 into a live
+    // exclusive borrow of `ws`, every register written declared, nothing
+    // pushed, and the one caller, `x25519_ladder`, reached only after
+    // `available()`.
+    unsafe {
+        asm!(
+            fe_add_once!(288, 96, 128),       // s = xn + zn
+            fe_sub_once!(320, 96, 128),       // d = xn - zn
+            fe_sqr!(448, 320),                // dd = d^2
+            fe_sqr!(416, 288),                // ss = s^2
+            fe_sub_once!(544, 416, 448),      // e = ss - dd
+            fe_mul121666_add!(576, 544, 448), // t3 = 121666 e + dd
+            fe_mul!(96, 416, 448),            // xn = ss * dd
+            fe_mul!(128, 544, 576),           // zn = e * t3
+            in("rdi") ws.as_mut_ptr(),
+            out("rax") _,
+            out("rcx") _,
+            out("rdx") _,
+            out("rsi") _,
+            out("r8") _,
+            out("r9") _,
+            out("r10") _,
+            out("r11") _,
+            out("r12") _,
+            out("r13") _,
+            out("r14") _,
+            out("r15") _,
+            options(nostack),
+        );
+    }
+}
+
+/// X25519's ladder on this field, for a clamped scalar, then the inversion.
+/// The caller must have checked [`available`].
+///
+/// RFC 7748's clamping fixes four bits, and this takes them as fixed. Bit
+/// 254 is one: the generic ladder's first step, from `(1 : 0)` and
+/// `(x1 : 1)`, only ever doubles `(x1 : 1)` and leaves the sum `(x1 : 1)`,
+/// so that step is the doubling alone. Bits 2 to 0 are zero: the last three
+/// steps double the point the ladder has reached and nothing else, so after
+/// bit 3 the result is selected and doubled three times. [`ladder_step`]
+/// runs at the 251 bits from 253 to 3, the same in number and order for
+/// every scalar; only the selection inside it reads the scalar.
+///
+/// The bits it reads are those positions of `scalar`, so a scalar not
+/// clamped gives the result for its clamped form. The callers clamp first;
+/// the tests compare this with the generic ladder on clamped scalars.
 pub fn x25519_ladder(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
     use ic_core::Zeroize;
     let mut ws = [0u64; slot::LEN];
@@ -166,21 +220,30 @@ pub fn x25519_ladder(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
     };
     let x1 = Fe64::from_bytes(u);
     put(&mut ws, slot::X1, x1);
+    // Bit 254: m is the sum, (x1 : 1), and n twice that.
     put(&mut ws, slot::XM, x1);
     put(&mut ws, slot::ZM, Fe64::ONE);
-    put(&mut ws, slot::XN, Fe64::ONE);
-    put(&mut ws, slot::ZN, Fe64::ZERO);
+    put(&mut ws, slot::XN, x1);
+    put(&mut ws, slot::ZN, Fe64::ONE);
+    ladder_double(&mut ws);
 
-    let mut prev = 0u64;
-    for pos in (0..255).rev() {
+    let mut prev = 1u64;
+    for pos in (3..254).rev() {
         let bit = u64::from((scalar[pos / 8] >> (pos & 7)) & 1);
         ladder_step(&mut ws, bit ^ prev);
         prev = bit;
     }
 
+    // The point the generic ladder carries into bit 2, then bits 2 to 0.
     let m = mask(prev);
     let x = Fe64::select_mask(&get(&ws, slot::XN), &get(&ws, slot::XM), m);
     let z = Fe64::select_mask(&get(&ws, slot::ZN), &get(&ws, slot::ZM), m);
+    put(&mut ws, slot::XN, x);
+    put(&mut ws, slot::ZN, z);
+    ladder_double(&mut ws);
+    ladder_double(&mut ws);
+    ladder_double(&mut ws);
+    let (x, z) = (get(&ws, slot::XN), get(&ws, slot::ZN));
     ws.zeroize();
     x.mul(&z.invert()).to_bytes()
 }
@@ -189,6 +252,7 @@ pub fn x25519_ladder(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
 ///
 /// Any 256-bit value; see the module note.
 #[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
 pub struct Fe64(pub(crate) [u64; 4]);
 
 /// Whether this CPU can run the code in this module.
@@ -960,6 +1024,100 @@ mod tests {
                 "{l:x?}"
             );
         }
+    }
+
+    /// Where an X25519 agreement on this field spends its time: the ladder
+    /// steps against the inversion and the encodings around them; and the
+    /// ladder against the 255-step form it replaced, timed alternately.
+    #[test]
+    #[ignore = "diagnostic"]
+    fn where_x25519_spends_its_time() {
+        use std::time::Instant;
+        if skip() {
+            return;
+        }
+        let time = |label: &str, n: u32, f: &mut dyn FnMut()| {
+            let mut best = f64::INFINITY;
+            for _ in 0..9 {
+                let s = Instant::now();
+                for _ in 0..n {
+                    f();
+                }
+                best = best.min(s.elapsed().as_secs_f64() / n as f64 * 1e9);
+            }
+            std::println!("{label:<32} {best:>9.1} ns");
+        };
+        let mut ws = [7u64; slot::LEN];
+        time("251 ladder steps", 2000, &mut || {
+            for i in 0..251u64 {
+                ladder_step(core::hint::black_box(&mut ws), i & 1);
+            }
+        });
+        time("ladder_double", 200_000, &mut || {
+            ladder_double(core::hint::black_box(&mut ws));
+        });
+        let x = Fe64([1, 2, 3, 4]);
+        time("invert", 20_000, &mut || {
+            core::hint::black_box(core::hint::black_box(x).invert());
+        });
+        time("100 mul", 20_000, &mut || {
+            let mut y = x;
+            for _ in 0..100 {
+                y = y.mul(&x);
+            }
+            core::hint::black_box(y);
+        });
+        time("100 square", 20_000, &mut || {
+            let mut y = x;
+            for _ in 0..100 {
+                y = y.square();
+            }
+            core::hint::black_box(y);
+        });
+
+        // The 255-step ladder, for the alternating comparison.
+        fn all_steps(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
+            let mut ws = [0u64; slot::LEN];
+            let x1 = Fe64::from_bytes(u);
+            ws[slot::X1..slot::X1 + 4].copy_from_slice(&x1.0);
+            ws[slot::XM..slot::XM + 4].copy_from_slice(&x1.0);
+            ws[slot::ZM] = 1;
+            ws[slot::XN] = 1;
+            let mut prev = 0u64;
+            for pos in (0..255).rev() {
+                let bit = u64::from((scalar[pos / 8] >> (pos & 7)) & 1);
+                ladder_step(&mut ws, bit ^ prev);
+                prev = bit;
+            }
+            let m = mask(prev);
+            let g = |at: usize| Fe64([ws[at], ws[at + 1], ws[at + 2], ws[at + 3]]);
+            let x = Fe64::select_mask(&g(slot::XN), &g(slot::XM), m);
+            let z = Fe64::select_mask(&g(slot::ZN), &g(slot::ZM), m);
+            x.mul(&z.invert()).to_bytes()
+        }
+        let mut k = [0x5au8; 32];
+        k[0] &= 248;
+        k[31] = (k[31] & 127) | 64;
+        let u = [9u8; 32];
+        assert_eq!(all_steps(&k, &u), x25519_ladder(&k, &u));
+        let mut best = [f64::INFINITY; 2];
+        for _ in 0..40 {
+            for (i, f) in [
+                all_steps as fn(&[u8; 32], &[u8; 32]) -> [u8; 32],
+                x25519_ladder,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let s = Instant::now();
+                for _ in 0..100 {
+                    core::hint::black_box(f(core::hint::black_box(&k), &u));
+                }
+                best[i] = best[i].min(s.elapsed().as_secs_f64() / 100.0 * 1e9);
+            }
+        }
+        std::println!("{:<32} {:>9.1} ns", "x25519, 255 steps", best[0]);
+        std::println!("{:<32} {:>9.1} ns", "x25519_ladder", best[1]);
     }
 
     #[test]

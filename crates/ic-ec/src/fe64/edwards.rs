@@ -10,11 +10,26 @@
 //! glue, and these chains of operations are what signing and verification
 //! are made of.
 //!
+//! # Bounds
+//!
+//! The additions and subtractions fold their carry once, not twice
+//! (`fe_add_once!`, `fe_sub_once!`), wherever their operands allow it: an
+//! addition needs the two below `2^257 - 38` together, a subtraction its
+//! second operand below `2^256 - 38`. Products and squares are below
+//! `2^255 + 19 * 77`, and every coordinate of the accumulator these blocks
+//! are given is one -- the output of a conversion, or the identity's 0 and
+//! 1 -- and every addition here is of products, or of a product and a sum
+//! of two. The one exception is in [`dbl`], which subtracts a sum, and
+//! there the full fold stays. Operands of the addition (`y + x`, `y - x`,
+//! `2d t`, `Z`) are only ever multiplied, which takes any 256-bit value.
+//!
 //! Nothing here branches or indexes memory by data. Which block runs is the
 //! caller's choice; on the signing path that choice is fixed (a mixed
 //! addition every step), and only verification, on public data, chooses by
 //! the scalar.
 
+#[cfg(feature = "std")]
+use crate::ed25519::AffineNiels;
 use core::arch::asm;
 
 /// Slots, each a field element, as limb indices into [`Ws`].
@@ -88,26 +103,26 @@ macro_rules! block2 {
 pub fn madd_ext2(ws: &mut Ws2) {
     block2!(
         ws,
-        fe_add!(384, 32, 0),
-        fe_add!(896, 544, 512),
-        fe_sub!(416, 32, 0),
-        fe_sub!(928, 544, 512),
+        fe_add_once!(384, 32, 0),
+        fe_add_once!(896, 544, 512),
+        fe_sub_once!(416, 32, 0),
+        fe_sub_once!(928, 544, 512),
         fe_mul!(384, 384, 256),
         fe_mul!(896, 896, 768),
         fe_mul!(416, 416, 288),
         fe_mul!(928, 928, 800),
         fe_mul!(448, 96, 352),
         fe_mul!(960, 608, 864),
-        fe_add!(480, 64, 64),
-        fe_add!(992, 576, 576),
-        fe_sub!(128, 384, 416),
-        fe_sub!(640, 896, 928),
-        fe_add!(160, 384, 416),
-        fe_add!(672, 896, 928),
-        fe_add!(192, 480, 448),
-        fe_add!(704, 992, 960),
-        fe_sub!(224, 480, 448),
-        fe_sub!(736, 992, 960),
+        fe_add_once!(480, 64, 64),
+        fe_add_once!(992, 576, 576),
+        fe_sub_once!(128, 384, 416),
+        fe_sub_once!(640, 896, 928),
+        fe_add_once!(160, 384, 416),
+        fe_add_once!(672, 896, 928),
+        fe_add_once!(192, 480, 448),
+        fe_add_once!(704, 992, 960),
+        fe_sub_once!(224, 480, 448),
+        fe_sub_once!(736, 992, 960),
         fe_mul!(0, 128, 224),
         fe_mul!(512, 640, 736),
         fe_mul!(32, 160, 192),
@@ -156,16 +171,17 @@ macro_rules! block {
 pub fn dbl(ws: &mut Ws) {
     block!(
         ws,
-        fe_sqr!(384, 0),        // A = X^2
-        fe_sqr!(416, 32),       // B = Y^2
-        fe_sqr!(448, 64),       // C = Z^2
-        fe_add!(448, 448, 448), // C = 2 Z^2
-        fe_add!(480, 0, 32),    // D = X + Y
-        fe_sqr!(480, 480),      // D = (X + Y)^2
-        fe_add!(160, 416, 384), // CY = B + A
-        fe_sub!(192, 416, 384), // CZ = B - A
-        fe_sub!(128, 480, 160), // CX = D - CY
-        fe_sub!(224, 448, 192), // CT = C - CZ
+        fe_sqr!(384, 0),             // A = X^2
+        fe_sqr!(416, 32),            // B = Y^2
+        fe_sqr!(448, 64),            // C = Z^2
+        fe_add_once!(448, 448, 448), // C = 2 Z^2
+        fe_add_once!(480, 0, 32),    // D = X + Y
+        fe_sqr!(480, 480),           // D = (X + Y)^2
+        fe_add_once!(160, 416, 384), // CY = B + A
+        fe_sub_once!(192, 416, 384), // CZ = B - A
+        // CY is a sum and may be within 38 of 2^256: the full fold.
+        fe_sub!(128, 480, 160),      // CX = D - CY
+        fe_sub_once!(224, 448, 192), // CT = C - CZ
     );
 }
 
@@ -197,16 +213,16 @@ pub fn to_proj(ws: &mut Ws) {
 pub fn madd(ws: &mut Ws) {
     block!(
         ws,
-        fe_add!(384, 32, 0),    // A = Y + X
-        fe_sub!(416, 32, 0),    // B = Y - X
-        fe_mul!(384, 384, 256), // A = A * YPX
-        fe_mul!(416, 416, 288), // B = B * YMX
-        fe_mul!(448, 96, 352),  // C = T * T2D
-        fe_add!(480, 64, 64),   // D = 2 Z
-        fe_sub!(128, 384, 416), // CX = A - B
-        fe_add!(160, 384, 416), // CY = A + B
-        fe_add!(192, 480, 448), // CZ = D + C
-        fe_sub!(224, 480, 448), // CT = D - C
+        fe_add_once!(384, 32, 0),    // A = Y + X
+        fe_sub_once!(416, 32, 0),    // B = Y - X
+        fe_mul!(384, 384, 256),      // A = A * YPX
+        fe_mul!(416, 416, 288),      // B = B * YMX
+        fe_mul!(448, 96, 352),       // C = T * T2D
+        fe_add_once!(480, 64, 64),   // D = 2 Z
+        fe_sub_once!(128, 384, 416), // CX = A - B
+        fe_add_once!(160, 384, 416), // CY = A + B
+        fe_add_once!(192, 480, 448), // CZ = D + C
+        fe_sub_once!(224, 480, 448), // CT = D - C
     );
 }
 
@@ -215,16 +231,16 @@ pub fn madd(ws: &mut Ws) {
 pub fn msub(ws: &mut Ws) {
     block!(
         ws,
-        fe_add!(384, 32, 0),    // A = Y + X
-        fe_sub!(416, 32, 0),    // B = Y - X
-        fe_mul!(384, 384, 288), // A = A * YMX
-        fe_mul!(416, 416, 256), // B = B * YPX
-        fe_mul!(448, 96, 352),  // C = T * T2D
-        fe_add!(480, 64, 64),   // D = 2 Z
-        fe_sub!(128, 384, 416), // CX = A - B
-        fe_add!(160, 384, 416), // CY = A + B
-        fe_sub!(192, 480, 448), // CZ = D - C
-        fe_add!(224, 480, 448), // CT = D + C
+        fe_add_once!(384, 32, 0),    // A = Y + X
+        fe_sub_once!(416, 32, 0),    // B = Y - X
+        fe_mul!(384, 384, 288),      // A = A * YMX
+        fe_mul!(416, 416, 256),      // B = B * YPX
+        fe_mul!(448, 96, 352),       // C = T * T2D
+        fe_add_once!(480, 64, 64),   // D = 2 Z
+        fe_sub_once!(128, 384, 416), // CX = A - B
+        fe_add_once!(160, 384, 416), // CY = A + B
+        fe_sub_once!(192, 480, 448), // CZ = D - C
+        fe_add_once!(224, 480, 448), // CT = D + C
     );
 }
 
@@ -233,17 +249,17 @@ pub fn msub(ws: &mut Ws) {
 pub fn nadd(ws: &mut Ws) {
     block!(
         ws,
-        fe_add!(384, 32, 0),    // A = Y + X
-        fe_sub!(416, 32, 0),    // B = Y - X
-        fe_mul!(384, 384, 256), // A = A * YPX
-        fe_mul!(416, 416, 288), // B = B * YMX
-        fe_mul!(448, 96, 352),  // C = T * T2D
-        fe_mul!(480, 64, 320),  // D = Z * NZ
-        fe_add!(480, 480, 480), // D = 2 D
-        fe_sub!(128, 384, 416), // CX = A - B
-        fe_add!(160, 384, 416), // CY = A + B
-        fe_add!(192, 480, 448), // CZ = D + C
-        fe_sub!(224, 480, 448), // CT = D - C
+        fe_add_once!(384, 32, 0),    // A = Y + X
+        fe_sub_once!(416, 32, 0),    // B = Y - X
+        fe_mul!(384, 384, 256),      // A = A * YPX
+        fe_mul!(416, 416, 288),      // B = B * YMX
+        fe_mul!(448, 96, 352),       // C = T * T2D
+        fe_mul!(480, 64, 320),       // D = Z * NZ
+        fe_add_once!(480, 480, 480), // D = 2 D
+        fe_sub_once!(128, 384, 416), // CX = A - B
+        fe_add_once!(160, 384, 416), // CY = A + B
+        fe_add_once!(192, 480, 448), // CZ = D + C
+        fe_sub_once!(224, 480, 448), // CT = D - C
     );
 }
 
@@ -252,16 +268,200 @@ pub fn nadd(ws: &mut Ws) {
 pub fn nsub(ws: &mut Ws) {
     block!(
         ws,
-        fe_add!(384, 32, 0),    // A = Y + X
-        fe_sub!(416, 32, 0),    // B = Y - X
-        fe_mul!(384, 384, 288), // A = A * YMX
-        fe_mul!(416, 416, 256), // B = B * YPX
-        fe_mul!(448, 96, 352),  // C = T * T2D
-        fe_mul!(480, 64, 320),  // D = Z * NZ
-        fe_add!(480, 480, 480), // D = 2 D
-        fe_sub!(128, 384, 416), // CX = A - B
-        fe_add!(160, 384, 416), // CY = A + B
-        fe_sub!(192, 480, 448), // CZ = D - C
-        fe_add!(224, 480, 448), // CT = D + C
+        fe_add_once!(384, 32, 0),    // A = Y + X
+        fe_sub_once!(416, 32, 0),    // B = Y - X
+        fe_mul!(384, 384, 288),      // A = A * YMX
+        fe_mul!(416, 416, 256),      // B = B * YPX
+        fe_mul!(448, 96, 352),       // C = T * T2D
+        fe_mul!(480, 64, 320),       // D = Z * NZ
+        fe_add_once!(480, 480, 480), // D = 2 D
+        fe_sub_once!(128, 384, 416), // CX = A - B
+        fe_add_once!(160, 384, 416), // CY = A + B
+        fe_sub_once!(192, 480, 448), // CZ = D - C
+        fe_add_once!(224, 480, 448), // CT = D + C
     );
+}
+
+/// A window's entries as the twelve limbs each that [`select`] reads.
+#[cfg(feature = "std")]
+pub fn limbs(table: &[AffineNiels<super::Fe64>; 8]) -> &[[u64; 12]; 8] {
+    const _: () = assert!(core::mem::size_of::<[AffineNiels<super::Fe64>; 8]>() == 768);
+    const _: () = assert!(core::mem::align_of::<AffineNiels<super::Fe64>>() == 8);
+    // SAFETY: `AffineNiels` is `repr(C)` over three `Fe64`s, each a
+    // `repr(transparent)` `[u64; 4]`: twelve `u64`s in field order, aligned
+    // as `u64`, without padding (the size and alignment are asserted above).
+    // An array of eight is then exactly an array of eight `[u64; 12]`, and
+    // the borrow's lifetime carries over.
+    unsafe { &*(table as *const [AffineNiels<super::Fe64>; 8]).cast::<[[u64; 12]; 8]>() }
+}
+
+/// One entry of [`select`]'s scan: the four limbs at byte `$off` of entry
+/// `$n` (1 to 8, each 96 bytes from `rsi`) into four registers when `rcx`,
+/// the magnitude, equals `$n`. The `CMOV`s read memory whichever way they go.
+macro_rules! sel_entry {
+    ($n:literal, $base:literal, $off:literal, $r0:literal, $r1:literal, $r2:literal, $r3:literal) => {
+        concat!(
+            "cmp rcx, ",
+            $n,
+            "\n",
+            "cmove ",
+            $r0,
+            ", qword ptr [rsi + ",
+            $base,
+            " + ",
+            $off,
+            "]\n",
+            "cmove ",
+            $r1,
+            ", qword ptr [rsi + ",
+            $base,
+            " + ",
+            $off,
+            " + 8]\n",
+            "cmove ",
+            $r2,
+            ", qword ptr [rsi + ",
+            $base,
+            " + ",
+            $off,
+            " + 16]\n",
+            "cmove ",
+            $r3,
+            ", qword ptr [rsi + ",
+            $base,
+            " + ",
+            $off,
+            " + 24]\n",
+        )
+    };
+}
+
+/// One field element of [`select`]: every entry's limbs at byte `$off`,
+/// scanned in order, into four registers already holding the identity's.
+macro_rules! sel_pass {
+    ($off:literal, $r0:literal, $r1:literal, $r2:literal, $r3:literal) => {
+        concat!(
+            sel_entry!("1", "0", $off, $r0, $r1, $r2, $r3),
+            sel_entry!("2", "96", $off, $r0, $r1, $r2, $r3),
+            sel_entry!("3", "192", $off, $r0, $r1, $r2, $r3),
+            sel_entry!("4", "288", $off, $r0, $r1, $r2, $r3),
+            sel_entry!("5", "384", $off, $r0, $r1, $r2, $r3),
+            sel_entry!("6", "480", $off, $r0, $r1, $r2, $r3),
+            sel_entry!("7", "576", $off, $r0, $r1, $r2, $r3),
+            sel_entry!("8", "672", $off, $r0, $r1, $r2, $r3),
+        )
+    };
+}
+
+/// Signing's table read: `digit` times a window's point, for `digit` in
+/// `[-8, 8]`, into an operand's slots.
+///
+/// `table` holds the multiples `1..=8` as affine Niels points, twelve limbs
+/// each, `y + x`, `y - x`, `2d x y`; [`limbs`] gives a window's that way.
+/// `dst` is an operand's sixteen limbs as the workspaces lay them out:
+/// `y + x` at 0, `y - x` at 4, `2d x y` at 12.
+///
+/// Every entry is read, and the one wanted kept by `CMOV` on a comparison of
+/// the magnitude with its index; the identity `(1, 1, 0)` stands when the
+/// digit is zero. A negative digit then swaps the first two elements and
+/// negates the third, by `CMOV` again. Nothing branches on the digit or
+/// indexes memory by it. The values are those of
+/// `basepoint_table::Window::select`, limb for limb: the negation is
+/// `Fe64::neg`'s subtraction from zero.
+#[inline(never)]
+pub fn select(dst: &mut [u64; 16], table: &[[u64; 12]; 8], digit: i8) {
+    // SAFETY: reads the 768 bytes of `table` and writes the 128 bytes of
+    // `dst`, both live borrows, at constant offsets within them; registers
+    // only otherwise, all declared, and nothing pushed. Integer instructions
+    // present on every x86-64 CPU.
+    unsafe {
+        asm!(
+            // rdx = all ones when the digit is negative; rcx = |digit|.
+            "mov rdx, rcx",
+            "sar rdx, 63",
+            "xor rcx, rdx",
+            "sub rcx, rdx",
+            // y + x and y - x, from the identity's (1, 0, 0, 0).
+            "mov r8d, 1",
+            "xor r9d, r9d",
+            "xor r10d, r10d",
+            "xor r11d, r11d",
+            "mov r12d, 1",
+            "xor r13d, r13d",
+            "xor r14d, r14d",
+            "xor r15d, r15d",
+            sel_pass!("0", "r8", "r9", "r10", "r11"),
+            sel_pass!("32", "r12", "r13", "r14", "r15"),
+            // Negative: swap them.
+            "test rdx, rdx",
+            "mov rax, r8",
+            "cmovnz r8, r12",
+            "cmovnz r12, rax",
+            "mov rax, r9",
+            "cmovnz r9, r13",
+            "cmovnz r13, rax",
+            "mov rax, r10",
+            "cmovnz r10, r14",
+            "cmovnz r14, rax",
+            "mov rax, r11",
+            "cmovnz r11, r15",
+            "cmovnz r15, rax",
+            "mov qword ptr [rdi], r8",
+            "mov qword ptr [rdi + 8], r9",
+            "mov qword ptr [rdi + 16], r10",
+            "mov qword ptr [rdi + 24], r11",
+            "mov qword ptr [rdi + 32], r12",
+            "mov qword ptr [rdi + 40], r13",
+            "mov qword ptr [rdi + 48], r14",
+            "mov qword ptr [rdi + 56], r15",
+            // 2d x y, from the identity's zero.
+            "xor r8d, r8d",
+            "xor r9d, r9d",
+            "xor r10d, r10d",
+            "xor r11d, r11d",
+            sel_pass!("64", "r8", "r9", "r10", "r11"),
+            // Its negation, 0 - t with the borrow folded twice as
+            // `Fe64::sub` does.
+            "xor r12d, r12d",
+            "xor r13d, r13d",
+            "xor r14d, r14d",
+            "xor r15d, r15d",
+            "sub r12, r8",
+            "sbb r13, r9",
+            "sbb r14, r10",
+            "sbb r15, r11",
+            "sbb rax, rax",
+            "and eax, 38",
+            "sub r12, rax",
+            "sbb r13, 0",
+            "sbb r14, 0",
+            "sbb r15, 0",
+            "sbb rax, rax",
+            "and eax, 38",
+            "sub r12, rax",
+            "test rdx, rdx",
+            "cmovnz r8, r12",
+            "cmovnz r9, r13",
+            "cmovnz r10, r14",
+            "cmovnz r11, r15",
+            "mov qword ptr [rdi + 96], r8",
+            "mov qword ptr [rdi + 104], r9",
+            "mov qword ptr [rdi + 112], r10",
+            "mov qword ptr [rdi + 120], r11",
+            in("rdi") dst.as_mut_ptr(),
+            in("rsi") table.as_ptr(),
+            inout("rcx") i64::from(digit) => _,
+            out("rax") _,
+            out("rdx") _,
+            out("r8") _,
+            out("r9") _,
+            out("r10") _,
+            out("r11") _,
+            out("r12") _,
+            out("r13") _,
+            out("r14") _,
+            out("r15") _,
+            options(nostack),
+        );
+    }
 }

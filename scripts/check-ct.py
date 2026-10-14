@@ -46,6 +46,7 @@ SYMBOLS += ED25519
 X86_ONLY = (
     "ct_fe64_mul", "ct_fe64_square", "ct_fe64_add", "ct_fe64_sub",
     "ct_fe64_mul121666", "ct_fe64_invert", "ct_x25519_fe64_step",
+    "ct_x25519_fe64_double", "ct_ed25519_fe64_select",
     "ct_ed25519_fe64_madd_ext2", "ct_ed25519_fe64_dbl_nadd",
     "ct_x25519_ifma_step", "ct_ed25519_ifma_select", "ct_ed25519_ifma_add",
     "ct_ed25519_ifma_double",
