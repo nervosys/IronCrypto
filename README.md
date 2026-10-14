@@ -450,10 +450,11 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V, and thirty-four more on x86-64 alone for its
+Cortex-M0, Cortex-M4 and RISC-V, and forty-one more on x86-64 alone for its
 Curve25519, P-256 and P-384 assembly, its divsteps inversions, its
 AVX-512 ChaCha20 and AVX2 Poly1305 kernels, and RSA's table read and its
-MULX/ADX, AVX-512 IFMA and portable Montgomery products: **210 gating
+MULX/ADX, AVX-512 IFMA and portable Montgomery products, and its AES-NI and
+VAES-256 AES-GCM loops: **217 gating
 probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
@@ -461,9 +462,9 @@ P-256 Montgomery loop stays rolled; its counter branches, and a constant-length
 `memset` on RISC-V, are excused by rules about the surrounding instructions,
 each capped at the count that was read, and Cortex-M0's runtime multiply is
 disassembled from the toolchain and checked like a probe. On x86-64 the RSA
-products' loops over the width are excused by a rule that finds each loop in
+products' loops over the width and the AES-GCM loops over their groups are excused by a rule that finds each loop in
 the control-flow graph and accepts a branch only where it exits or closes the
-loop on a counter stepped by constants, in the three probes named, up to the
+loop on a counter stepped by constants, in the seven probes named, up to the
 count read in each.
 The full local gate and CI run the checker. These checks cover the compiled
 probes, not whole algorithms, memory-access timing or every caller context;
@@ -640,7 +641,7 @@ slow:
 | | portable | accelerated |
 |---|---|---|
 | AES-256, raw blocks | ~1.5 MiB/s | ~11 GiB/s (AES-NI) |
-| AES-256-GCM | ~1 MiB/s | ~23 GiB/s (VAES + VPCLMULQDQ, AVX-512); ~5 GiB/s (AES-NI + PCLMULQDQ) |
+| AES-256-GCM | ~1 MiB/s | ~23 GiB/s (VAES + VPCLMULQDQ, AVX-512); ~12 GiB/s (the same on 256-bit registers); ~6 GiB/s (AES-NI + PCLMULQDQ) |
 | ChaCha20-Poly1305 | ~0.4 GiB/s | ~3 GiB/s (AVX-512F keystream, AVX2 Poly1305); ~1.5 GiB/s (AVX2, before the Poly1305 lanes) |
 | SHA-256 | ~0.3 GiB/s | ~2.3 GiB/s (SHA-NI) |
 

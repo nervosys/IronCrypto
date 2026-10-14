@@ -1082,6 +1082,10 @@ mod fused_tests {
             // this build measures the 256-bit one.
             #[cfg(ic_no_avx512)]
             assert_ne!(c.kernel(), Some(Kernel::Vaes512));
+            // And under `--cfg ic_no_vaes` neither wide one, so this build
+            // measures the AES-NI kernel that CPUs without VAES run.
+            #[cfg(ic_no_vaes)]
+            assert_eq!(c.kernel(), Some(Kernel::Clmul8));
             std::eprintln!("AES-GCM kernel on this CPU: {:?}", best_kernel());
         } else {
             assert_eq!(c.kernel(), None);
@@ -1148,6 +1152,62 @@ mod fused_tests {
                 agree(&key, &nonce, &aad, &pt);
             }
         }
+    }
+
+    /// The kernels load and store the message unaligned, and the eight-block
+    /// one's aligned memory operands must never be the message: every path
+    /// on buffers at each of the sixteen offsets from a 16-byte boundary,
+    /// sealing and opening in place, against the reference.
+    #[test]
+    fn every_path_matches_the_reference_on_unaligned_buffers() {
+        let mut rng = Xs(0x510e_527f_ade6_82d1);
+        let mut checked = 0;
+        for key_len in [16usize, 24, 32] {
+            for offset in 0..16usize {
+                for len in [1usize, 127, 128, 129, 256, 300, 512 + 17, 1024, 2048 + 255] {
+                    let key = rng.bytes(key_len);
+                    let nonce = rng.bytes(12);
+                    let aad = rng.bytes((len + offset) % 41);
+                    let pt = rng.bytes(len);
+                    let j0 = reference_j0_of(&key, &nonce);
+                    let (want_ct, want_tag) = reference_j0(&key, j0, &aad, &pt, true);
+                    for path in paths() {
+                        macro_rules! go {
+                            ($ty:ty) => {{
+                                let c = <$ty>::with_kernel(&key, path).unwrap();
+                                assert_eq!(c.kernel(), path);
+                                // A 16-byte-aligned allocation, entered at `offset`.
+                                let mut store = std::vec![0u128; (len + offset) / 16 + 2];
+                                let base = store.as_mut_ptr() as *mut u8;
+                                // SAFETY: `store` holds at least `len + offset` bytes,
+                                // all initialised, exclusively borrowed here.
+                                let buf = unsafe {
+                                    core::slice::from_raw_parts_mut(base.add(offset), len)
+                                };
+                                assert_eq!((buf.as_ptr() as usize) % 16, offset);
+                                buf.copy_from_slice(&pt);
+                                let mut tag = [0u8; BLOCK_LEN];
+                                c.seal_detached(&nonce, &aad, buf, &mut tag).unwrap();
+                                let what = std::format!(
+                                    "{path:?}, key {key_len}, offset {offset}, {len} bytes"
+                                );
+                                assert!(buf == &want_ct[..], "ciphertext: {what}");
+                                assert_eq!(tag, want_tag, "tag: {what}");
+                                c.open_detached(&nonce, &aad, buf, &tag).unwrap();
+                                assert!(buf == &pt[..], "opened: {what}");
+                            }};
+                        }
+                        match key_len {
+                            16 => go!(Aes128Gcm),
+                            24 => go!(Aes192Gcm),
+                            _ => go!(Aes256Gcm),
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked >= 3 * 16 * 9, "only {checked} cases ran");
     }
 
     /// Past what the reference can do quickly in a debug build: every path

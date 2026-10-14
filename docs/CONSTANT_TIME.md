@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and thirty-four more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and forty-one more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -80,6 +80,12 @@ release profile; this is not the workspace binary's overflow-checked profile.
   products loop over the width, and their loop branches are excused by the
   x86-64 counter-loop rule, per probe, up to a ceiling. See "Loops on
   x86-64" below.
+- On x86-64 only, AES-GCM's eight-block (AES-NI, `PCLMULQDQ`) and
+  sixteen-block (VAES, `VPCLMULQDQ` on `ymm`) loops at AES-256: sealing and
+  opening a fixed three groups (`ct_gcm_clmul8_seal`, `ct_gcm_clmul8_open`,
+  `ct_gcm_vaes256_seal`, `ct_gcm_vaes256_open`), a one-group message
+  (`ct_gcm_clmul8_group`, `ct_gcm_vaes256_group`), and the twist of a power
+  of `H` at key setup (`ct_gcm_twist`). See "AES-GCM on x86-64" below.
   `X86_ONLY` in the checker requires all of these on that target and no other.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
@@ -640,3 +646,53 @@ Restored, all 78 pass.
 Probe count: thirty-four on x86-64 alone, where there were thirty-one. All
 seventy-eight pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 78 + 3 x 44 = 210 gating probe/target checks.
+
+## AES-GCM on x86-64, 2026-10-13
+
+The 128- and 256-bit fused AES-GCM kernels became assembly
+(`ic-cipher/src/gcm_x86_asm.rs`), and with that a body the gate can read as
+written. Seven probes, in `ic_cipher::ct_probes`, all at AES-256 (the round
+count is a const parameter; `.if` assembles the extra rounds in or out, so
+there is no branch on the key size either):
+
+- `ct_gcm_clmul8_seal`, `ct_gcm_clmul8_open`: the eight-block loop over three
+  groups, sealing (the first group encrypted alone, two stitched iterations,
+  the last group hashed alone) and opening (three stitched iterations).
+- `ct_gcm_vaes256_seal`, `ct_gcm_vaes256_open`: the same on the sixteen-block
+  `ymm` loop.
+- `ct_gcm_clmul8_group`, `ct_gcm_vaes256_group`: a one-group message,
+  counter mode then GHASH, two straight-line blocks.
+- `ct_gcm_twist`: a power of `H` multiplied by `x^-1` at key setup, which
+  reads `H`'s top bit as a mask (`psrad`), not a branch.
+
+The loops' only branch is their back edge. Each excused finding, read in
+`target/ct-audit/probes/x86_64-unknown-linux-gnu.s` (rustc 1.99.0):
+
+| Probe | counter loop | where |
+| --- | --- | --- |
+| `ct_gcm_clmul8_seal` | 1 | `movl $2, %r9d` before the loop; `decq %r9; jne` closes it; nothing else in the loop writes r9 |
+| `ct_gcm_clmul8_open` | 1 | the same with `movl $3, %r9d` |
+| `ct_gcm_vaes256_seal` | 1 | `movl $2, %r9d`; `decq %r9; jne` |
+| `ct_gcm_vaes256_open` | 1 | `movl $3, %r9d`; `decq %r9; jne` |
+
+The counter is the group count, a length. The data pointer is stepped by
+`addq $256, %rdi` (or 128) beside it. `X86_EXCUSE_CEILINGS` holds each at 1.
+
+Mutation: `ptest xmm10, xmm10; jz 7f; nop; 7:` inserted into the eight-block
+reduction, on the unreduced GHASH sum, fails `ct_gcm_clmul8_seal` (twice:
+in the loop and in the last group's hash), `ct_gcm_clmul8_open` and
+`ct_gcm_clmul8_group`, each on the `je`; restored, all pass. The branch
+inside the loop is not excused: it is in the loop but is neither its exit
+nor its back edge.
+
+Not covered: the 512-bit kernel's loops (`zmm_groups`, `zmm32_groups` in
+`gcm_x86.rs`), which branch on the round count inside the assembly
+(`cmp {rounds}, 10; je`) -- public, but not a loop counter, so the rule
+does not excuse it; the AAD, tail, length-block and tag code (`Pending`,
+`finish`), intrinsics that branch on lengths; and the choice of kernel,
+which branches on the CPU's features. Valgrind (docs/CTGRIND.md) runs the
+AES-GCM path the CPU it runs on selects.
+
+Probe count: forty-one on x86-64 alone, where there were thirty-four. All
+eighty-five pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 85 + 3 x 44 = 217 gating probe/target checks.

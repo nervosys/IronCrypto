@@ -78,6 +78,13 @@ X86_ONLY = (
     # its loop tests do not fit the 32-bit counter shapes, so it is not
     # required there.
     "ct_rsa_adx_mont_mul_2048", "ct_rsa_ifma_amm_2048", "ct_rsa_cios_2048",
+    # AES-GCM's eight-block (AES-NI, PCLMULQDQ) and sixteen-block (VAES-256)
+    # loops at AES-256 over a fixed three groups, sealing and opening, one
+    # group alone, and the twist of a power of H. The loops' back edges are
+    # excused by the x86-64 counter-loop rule below.
+    "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
+    "ct_gcm_vaes256_seal", "ct_gcm_vaes256_open", "ct_gcm_vaes256_group",
+    "ct_gcm_twist",
 )
 SYMBOLS += X86_ONLY
 
@@ -133,6 +140,13 @@ X86_EXCUSE_CEILINGS = {
     # loop's back edge, and the zeroing of the 34-word accumulator.
     "ct_rsa_cios_2048": {"counter loop": 4, "unconditional jump": 2,
                          "constant memset": 1},
+    # AES-GCM: each loop's `decq; jne` back edge, the counter the fixed group
+    # count (2 sealing, the first group being encrypted before the loop; 3
+    # opening), written nowhere else in the loop.
+    "ct_gcm_clmul8_seal": {"counter loop": 1},
+    "ct_gcm_clmul8_open": {"counter loop": 1},
+    "ct_gcm_vaes256_seal": {"counter loop": 1},
+    "ct_gcm_vaes256_open": {"counter loop": 1},
 }
 
 # Loads and stores, which do not set the flags a conditional branch reads, and
