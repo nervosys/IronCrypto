@@ -162,6 +162,51 @@ all of them.
     scale; and the verdicts. Inserting a branch into the select, the
     doubling or the divsteps fails the compiled-code gate. 36 probes on
     x86-64 alone, 80 there, 212 gating probe/target checks.
+- **`--cfg ic_no_vaes`, for testing and measuring only**, in `ic-cipher`:
+  VAES detection reports false as well, so AES-GCM runs the eight-block
+  AES-NI kernel that CPUs without VAES (Skylake, Zen 2) run. Declared in the
+  crate's check-cfg; a test asserts the kernel it selects; docs/CI.md has the
+  command. The bench gains `graviola-gcm`, the three AES-GCM sealing rows
+  alone, best of 15.
+
+### Performance
+
+- **AES-GCM on x86-64 without AVX-512 leads Graviola, and the 512-bit
+  kernel is faster.** The eight-block (AES-NI, `PCLMULQDQ`) and
+  sixteen-block (VAES, `VPCLMULQDQ` on `ymm`) loops are now assembly
+  (`ic-cipher/src/gcm_x86_asm.rs`), one `asm!` block per seal or open: the
+  intrinsic versions kept the stitched step out of line, passed all eight
+  AES states through the stack every iteration, and multiplied four times a
+  block. Each product is now Karatsuba's, three multiplies. The powers of `H`
+  are twisted by `x^-1` at key setup, so a product needs no one-bit
+  correction and the reduction is two carry-less multiplies instead of
+  `clmul::reduce`'s forty shifts and XORs, which shared the AES pipes; the
+  512-bit kernel takes the same reduction (about 9 percent off its time per
+  byte). The round count is a const parameter, assembled by `.if`, so the
+  loops have no branch on the key size. `E_K(J0)` is computed before the
+  bulk loop, where its latency hides, and the tail's AES batch has a fixed
+  count per length, held in registers instead of reloaded every round,
+  which took an empty message from about 150 cycles to 65.
+  IronCrypto over Graviola sealing AES-256-GCM, four rounds, before -> after,
+  Graviola on its own AES-NI path where the CPU would have no AVX-512
+  (docs/GRAVIOLA.md, "AES-GCM without AVX-512"): AES-NI only, 4 MiB
+  0.80-0.84 -> 1.04-1.09, 1 KiB 0.74-0.84 -> 1.09-1.22; VAES-256, 4 MiB
+  1.55-1.97 -> 1.99-2.28, 1 KiB 1.24-1.40 -> 1.91-2.08; the default 512-bit
+  build against Graviola's AVX-512 path, 4 MiB 1.28-1.38 -> 1.42-1.53, 1 KiB
+  1.08-1.10 -> 1.45-1.59, 64 B 1.29-1.36 -> 2.12-2.29. The AES-NI lead at
+  4 MiB is narrow. Other schedules were measured and made no difference worth
+  keeping, and some earlier single-run readings that seemed to favour them
+  were noise; the module notes list them. Tests: every kernel against the
+  byte-at-a-time reference, now also at all sixteen buffer alignments; under
+  `ic_no_avx512` and `ic_no_vaes` as the default. Sixteen deliberate breaks
+  -- a round key, each reduction term, the Karatsuba factor, the counter
+  step, a lane offset, the hashed group, the twist, each 512-bit reduction,
+  the tail batch -- each fail them. `scripts/check_gcm_twist.py` checks the
+  twisted reduction against SP 800-38D Algorithm 1 (docs/FIPS.md). The
+  compiled-code gate gains seven AES-GCM probes, the loops' back edges
+  excused as counter loops, one each: 41 probes on x86-64 alone, 85 there,
+  217 gating probe/target checks (docs/CONSTANT_TIME.md, "AES-GCM on
+  x86-64").
 
 ### Changed
 

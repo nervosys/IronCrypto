@@ -515,3 +515,97 @@ mod x86_rsa {
         unsafe { p::ifma_pow_2048(m, base, exp, exp_bits, out) }
     }
 }
+
+// x86-64: AES-GCM's eight-block (AES-NI, PCLMULQDQ) and sixteen-block (VAES,
+// VPCLMULQDQ on ymm) loops at AES-256, sealing and opening a fixed three
+// groups, one group alone, and the twist of a power of H. Compiled to be
+// read, never run. The loops' back edges are excused by the counter-loop
+// rule, one per probe that loops.
+#[cfg(target_arch = "x86_64")]
+mod x86_gcm {
+    use core::arch::x86_64::__m128i;
+    use ic_cipher::ct_probes as p;
+
+    /// # Safety
+    /// Requires AES-NI, PCLMULQDQ and SSSE3.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_clmul8_seal(
+        data: &mut [u8; 384],
+        rk: &[__m128i; 15],
+        pw: &p::Powers,
+        pk: &p::Powers,
+        st: &mut [u8; 32],
+    ) {
+        unsafe { p::gcm_clmul8_seal(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AES-NI, PCLMULQDQ and SSSE3.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_clmul8_open(
+        data: &mut [u8; 384],
+        rk: &[__m128i; 15],
+        pw: &p::Powers,
+        pk: &p::Powers,
+        st: &mut [u8; 32],
+    ) {
+        unsafe { p::gcm_clmul8_open(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AES-NI, PCLMULQDQ and SSSE3.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_clmul8_group(
+        data: &mut [u8; 128],
+        rk: &[__m128i; 15],
+        pw: &p::Powers,
+        pk: &p::Powers,
+        st: &mut [u8; 32],
+    ) {
+        unsafe { p::gcm_clmul8_group(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AVX2, VAES and VPCLMULQDQ.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_vaes256_seal(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &p::Powers,
+        pk: &p::Powers,
+        st: &mut [u8; 32],
+    ) {
+        unsafe { p::gcm_vaes256_seal(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AVX2, VAES and VPCLMULQDQ.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_vaes256_open(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &p::Powers,
+        pk: &p::Powers,
+        st: &mut [u8; 32],
+    ) {
+        unsafe { p::gcm_vaes256_open(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AVX2, VAES and VPCLMULQDQ.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_vaes256_group(
+        data: &mut [u8; 256],
+        rk: &[__m128i; 15],
+        pw: &p::Powers,
+        pk: &p::Powers,
+        st: &mut [u8; 32],
+    ) {
+        unsafe { p::gcm_vaes256_group(data, rk, pw, pk, st) }
+    }
+
+    #[no_mangle]
+    pub fn ct_gcm_twist(h: &[u8; 16]) -> [u8; 16] {
+        p::gcm_twist(h)
+    }
+}

@@ -88,6 +88,13 @@ X86_ONLY = (
     # to X86_EXCUSE_CEILINGS. The additions after it are the point formulas
     # above; the multiplication as a whole is not a probe (CONSTANT_TIME.md).
     "ct_p384_comb_select",
+    # AES-GCM's eight-block (AES-NI, PCLMULQDQ) and sixteen-block (VAES-256)
+    # loops at AES-256 over a fixed three groups, sealing and opening, one
+    # group alone, and the twist of a power of H. The loops' back edges are
+    # excused by the x86-64 counter-loop rule below.
+    "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
+    "ct_gcm_vaes256_seal", "ct_gcm_vaes256_open", "ct_gcm_vaes256_group",
+    "ct_gcm_twist",
 )
 SYMBOLS += X86_ONLY
 
@@ -160,6 +167,13 @@ X86_EXCUSE_CEILINGS = {
     # A prepared P-384 key's window read: the loop over its sixteen entries,
     # `incq`/`cmpq $16`/`jne` on the entry counter.
     "ct_p384_comb_select": {"counter loop": 1},
+    # AES-GCM: each loop's `decq; jne` back edge, the counter the fixed group
+    # count (2 sealing, the first group being encrypted before the loop; 3
+    # opening), written nowhere else in the loop.
+    "ct_gcm_clmul8_seal": {"counter loop": 1},
+    "ct_gcm_clmul8_open": {"counter loop": 1},
+    "ct_gcm_vaes256_seal": {"counter loop": 1},
+    "ct_gcm_vaes256_open": {"counter loop": 1},
 }
 
 # Loads and stores, which do not set the flags a conditional branch reads, and

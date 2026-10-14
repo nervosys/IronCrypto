@@ -1,15 +1,200 @@
-//! The x86-64 ChaCha20 and Poly1305 kernels, for `scripts/ct-audit` to
-//! inspect after LTO. Not API, not covered by semver; behind the `ct-probes`
-//! feature.
+//! The x86-64 ChaCha20, Poly1305 and AES-GCM kernels, for `scripts/ct-audit`
+//! to inspect after LTO. Not API, not covered by semver; behind the
+//! `ct-probes` feature.
 //!
-//! Each is one straight-line piece: a sixteen-block keystream group, one
-//! four-lane Poly1305 step, and the lanes' final multiplication and folding.
-//! What the library composes from them adds only loops over the message
-//! length, which is public. Never executed: they need AVX-512F or AVX2, and
-//! are compiled to be read.
+//! The ChaCha20 and Poly1305 ones are each one straight-line piece: a
+//! sixteen-block keystream group, one four-lane Poly1305 step, and the lanes'
+//! final multiplication and folding. The AES-GCM ones are the 128- and
+//! 256-bit bulk loops over a fixed count of groups. What the library composes
+//! from them adds only loops and choices over the message length, which is
+//! public. Never executed: they need AVX-512F, AVX2, VAES or AES-NI, and are
+//! compiled to be read.
 
 #[cfg(target_arch = "x86_64")]
+pub use gcm::*;
+#[cfg(target_arch = "x86_64")]
 pub use x86::*;
+
+/// The 128- and 256-bit AES-GCM loops (`gcm_x86_asm`) at AES-256, and the
+/// twist of a power of `H`. Each seal and open runs its loop over a fixed
+/// count of groups; the loop's back edge is the only branch, and its counter
+/// is that count. What the library adds around them -- choosing the call by
+/// the message length -- branches only on lengths.
+#[cfg(target_arch = "x86_64")]
+mod gcm {
+    use crate::gcm_x86_asm as k;
+    use core::arch::x86_64::*;
+
+    /// Sixteen powers of `H` (or their Karatsuba factors), aligned as the
+    /// eight-block kernel's legacy-encoded memory operands require.
+    #[repr(C, align(16))]
+    pub struct Powers(pub [[u8; 16]; 16]);
+
+    /// Three groups of eight blocks sealed: one alone, two stitched
+    /// iterations, the last group hashed alone. `st` is the accumulator, then
+    /// the counter.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI, `PCLMULQDQ` and SSSE3.
+    pub unsafe fn gcm_clmul8_seal(
+        data: &mut [u8; 384],
+        rk: &[__m128i; 15],
+        pw: &Powers,
+        pk: &Powers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as the caller guarantees; every region is the size the
+        // kernel's contract names.
+        unsafe {
+            k::x8_seal::<14>(
+                data.as_mut_ptr(),
+                2,
+                rk.as_ptr().cast(),
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
+        }
+    }
+
+    /// Three groups of eight blocks opened, each hashed by its own iteration.
+    ///
+    /// # Safety
+    ///
+    /// As [`gcm_clmul8_seal`].
+    pub unsafe fn gcm_clmul8_open(
+        data: &mut [u8; 384],
+        rk: &[__m128i; 15],
+        pw: &Powers,
+        pk: &Powers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as above.
+        unsafe {
+            k::x8_open::<14>(
+                data.as_mut_ptr(),
+                3,
+                rk.as_ptr().cast(),
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
+        }
+    }
+
+    /// One group of eight blocks sealed alone, as a one-group message is:
+    /// counter mode, then GHASH.
+    ///
+    /// # Safety
+    ///
+    /// As [`gcm_clmul8_seal`].
+    pub unsafe fn gcm_clmul8_group(
+        data: &mut [u8; 128],
+        rk: &[__m128i; 15],
+        pw: &Powers,
+        pk: &Powers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as above.
+        unsafe {
+            k::x8_aes::<14>(data.as_mut_ptr(), rk.as_ptr().cast(), st.as_mut_ptr());
+            k::x8_ghash(
+                data.as_ptr(),
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            );
+        }
+    }
+
+    /// [`gcm_clmul8_seal`] on the sixteen-block kernel: three groups.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AVX2, `VAES` and `VPCLMULQDQ`.
+    pub unsafe fn gcm_vaes256_seal(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &Powers,
+        pk: &Powers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as above.
+        unsafe {
+            k::y16_seal::<14>(
+                data.as_mut_ptr(),
+                2,
+                rk.as_ptr().cast(),
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
+        }
+    }
+
+    /// [`gcm_clmul8_open`] on the sixteen-block kernel.
+    ///
+    /// # Safety
+    ///
+    /// As [`gcm_vaes256_seal`].
+    pub unsafe fn gcm_vaes256_open(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &Powers,
+        pk: &Powers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as above.
+        unsafe {
+            k::y16_open::<14>(
+                data.as_mut_ptr(),
+                3,
+                rk.as_ptr().cast(),
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
+        }
+    }
+
+    /// [`gcm_clmul8_group`] on the sixteen-block kernel.
+    ///
+    /// # Safety
+    ///
+    /// As [`gcm_vaes256_seal`].
+    pub unsafe fn gcm_vaes256_group(
+        data: &mut [u8; 256],
+        rk: &[__m128i; 15],
+        pw: &Powers,
+        pk: &Powers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as above.
+        unsafe {
+            k::y16_aes::<14>(data.as_mut_ptr(), rk.as_ptr().cast(), st.as_mut_ptr());
+            k::y16_ghash(
+                data.as_ptr(),
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            );
+        }
+    }
+
+    /// A power of `H` multiplied by `x^-1`, as the key setup twists each one:
+    /// a shift and a masked XOR, on a secret's top bit.
+    pub fn gcm_twist(h: &[u8; 16]) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        // SAFETY: both are 16 bytes; the load and store are unaligned. SSE2
+        // is part of x86-64.
+        unsafe {
+            let t = k::twist(_mm_loadu_si128(h.as_ptr().cast()));
+            _mm_storeu_si128(out.as_mut_ptr().cast(), t);
+        }
+        out
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
 mod x86 {

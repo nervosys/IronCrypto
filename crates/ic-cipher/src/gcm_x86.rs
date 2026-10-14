@@ -19,12 +19,16 @@
 //! - GHASH is aggregated: a group of `n` blocks is
 //!   `Y' = (Y ^ X0)*H^n ^ X1*H^(n-1) ^ .. ^ X(n-1)*H`, `n` independent
 //!   products summed unreduced and reduced once. The algebra is the same
-//!   distributivity argument as `gcm::Ghash::absorb4`, and the multiply and
-//!   reduction are `clmul::product` and `clmul::reduce` unchanged -- except
-//!   that the 512-bit kernel forms each product by Karatsuba, three
-//!   multiplies instead of four, and transcribes `reduce` into assembly.
-//! - The message tail, the length block and `E_K(J0)` share one batch, so a
-//!   short message costs one pass of AES latency and one reduction.
+//!   distributivity argument as `gcm::Ghash::absorb4`. In the kernels each
+//!   product is Karatsuba's, three carry-less multiplies instead of four,
+//!   by a power of `H` twisted by `x^-1` ([`twist`]) so that the sum needs no
+//!   one-bit correction and reduces with two more multiplies; the AAD, the
+//!   tail and the length block use `clmul::product` and `clmul::reduce`
+//!   unchanged ([`Pending`]).
+//! - `E_K(J0)` is computed before a bulk loop, where its latency hides
+//!   behind the loop's. Without one, the message tail and `J0` share one
+//!   batch, so a short message costs one pass of AES latency; either way the
+//!   tail, the length block and anything still queued share one reduction.
 //!
 //! Three kernels:
 //!
@@ -38,29 +42,31 @@
 //!   has AVX-512F and AVX-512BW. See the notes above `z32_ctr!` for why
 //!   thirty-two and why stitched.
 //!
-//! # Why the wide instructions are written as `asm!`
+//! The first two have their loops in [`crate::gcm_x86_asm`], which has the
+//! schedule and what was measured; the third's are below.
+//!
+//! # Why the loops are written as `asm!`
 //!
 //! The intrinsics and the `vaes`/`vpclmulqdq`/`avx512*` target features were
 //! stabilised in Rust 1.89, and this workspace promises 1.87. Without a build
-//! script there is no way to `cfg` on the compiler version, so:
+//! script there is no way to `cfg` on the compiler version, and the 512-bit
+//! kernel cannot even name a `zmm` register as an operand without the
+//! `avx512f` target feature. So each bulk loop is one self-contained `asm!`
+//! block: explicit registers, every one declared clobbered, inputs and
+//! outputs through memory, in a function that is never inlined. The
+//! 128-bit loop could have been intrinsics, and was; written out it keeps
+//! every state in a register, which the compiler's version did not. The
+//! tail, length block and tag are the shared intrinsic code. When the MSRV
+//! reaches 1.89 the wide loops could become intrinsics, if the compiler then
+//! does as well as the assembly.
 //!
-//! - The 256-bit kernel needs three instructions it cannot name --
-//!   `VAESENC`, `VAESENCLAST` and `VPCLMULQDQ` on `ymm` registers -- and each
-//!   is one line of inline assembly with register operands, `pure` and
-//!   `nomem`, so the compiler still allocates and schedules around them.
-//!   Everything else is ordinary AVX2 intrinsics.
-//! - The 512-bit kernel cannot even name a `zmm` register as an operand
-//!   without the `avx512f` target feature, so its bulk loops are each one
-//!   self-contained `asm!` block: explicit registers `zmm0`..`zmm15`, every
-//!   one declared clobbered, inputs and outputs through memory, in a function
-//!   that is never inlined. Its tail, length block and tag are the shared
-//!   intrinsic code. When the MSRV reaches 1.89 these can become intrinsics.
-//!
-//! Executing one of those instructions on a CPU without it is an illegal
+//! Executing one of the wide instructions on a CPU without it is an illegal
 //! instruction, so they are only reachable with a [`Wide`] or [`Wide512`]
-//! token, and the only way to get one is its `detect`.
+//! token, and the only way to get one is its `detect`. `--cfg ic_no_avx512`
+//! makes `Wide512::detect` report false and `--cfg ic_no_vaes` both, so one
+//! machine can test and measure each narrower kernel as the default.
 //!
-//! Both build and pass the tests under 1.87 as well as the current compiler;
+//! All build and pass the tests under 1.87 as well as the current compiler;
 //! `cargo check` alone would not show that, because it never assembles.
 //!
 //! # Trusting it
@@ -70,18 +76,21 @@
 //! multiply (`gcm::fused_tests`), each kernel forced in turn: every length
 //! from 0 to 600 bytes, every AAD length from 0 to 100 and some far longer,
 //! random keys and nonces, sealing and opening, every key size, nonces of
-//! other lengths, and counters arranged to wrap inside a group. The
-//! specification vectors and Wycheproof run through whichever kernel the CPU
-//! selects. Breaking a power of `H`, a counter increment, or the stitched
-//! loop's source offset each fails those tests; the specification vectors
-//! alone catch none of the three.
+//! other lengths, buffers at every alignment, and counters arranged to wrap
+//! inside a group. The specification vectors and Wycheproof run through
+//! whichever kernel the CPU selects. Breaking a power of `H`, a counter
+//! increment, a round key, a reduction term, or the stitched loop's source
+//! offset each fails those tests; the specification vectors alone catch few
+//! of them. The twisted reduction was also checked, before it was written,
+//! against SP 800-38D's bit-serial multiply (docs/FIPS.md).
 //!
 //! # Constant-time properties
 //!
 //! Nothing here branches on or indexes by key, plaintext, or tag. The loop
 //! bounds and the choice of kernel depend on the lengths and the CPU, which
 //! are public. `AESENC` and `PCLMULQDQ` and their wide forms have
-//! data-independent timing.
+//! data-independent timing. `scripts/ct-audit` reads the 128- and 256-bit
+//! loops' compiled form (`ct_probes`).
 //!
 //! # Safety
 //!
@@ -91,13 +100,15 @@
 //! contract is that detection has happened. Inside, the raw-pointer loads and
 //! stores are the only other unsafe operations, each bounded by a
 //! `chunks_exact` or an explicit length -- and the `asm!` blocks, whose
-//! contracts are on [`zmm_groups`] and [`zmm32_groups`].
+//! contracts are on [`zmm_groups`], [`zmm32_groups`] and the functions of
+//! [`crate::gcm_x86_asm`].
 
 use core::arch::asm;
 use core::arch::x86_64::*;
 
 use crate::aes::x86::Keys;
 use crate::clmul::{product, reduce};
+use crate::gcm_x86_asm::twist;
 use ic_core::Zeroize;
 
 const BLOCK: usize = 16;
@@ -153,8 +164,11 @@ pub struct Wide(());
 impl Wide {
     /// The token, if the CPU has everything the 256-bit kernel uses.
     pub fn detect() -> Option<Wide> {
-        cached_detect!("avx2", "vaes", "vpclmulqdq", "aes", "pclmulqdq", "ssse3")
-            .then_some(Wide(()))
+        // `--cfg ic_no_vaes` reports this false, and with it `Wide512`, for
+        // measuring the AES-NI kernel that CPUs without VAES run.
+        let have = !cfg!(ic_no_vaes)
+            && cached_detect!("avx2", "vaes", "vpclmulqdq", "aes", "pclmulqdq", "ssse3");
+        have.then_some(Wide(()))
     }
 }
 
@@ -195,19 +209,29 @@ enum Path {
 }
 
 /// The per-key GHASH state: powers of `H`, computed once.
+///
+/// Aligned, and `repr(C)` so that each table starts at a multiple of sixteen
+/// bytes: the eight-block kernel's legacy-encoded `PCLMULQDQ` takes `twisted`
+/// and `kara` as memory operands, which must be 16-byte aligned.
+#[repr(C, align(64))]
 pub(crate) struct HashKey {
     /// `powers[i]` is `H^(32-i)`, byte-reversed: the form `clmul::product`
-    /// multiplies. Descending, so a group of `n` blocks takes the last `n`
-    /// entries in order, and two or four adjacent entries are the multipliers
-    /// one 256- or 512-bit register needs.
+    /// multiplies, for the AAD, the tail and the length block (`Pending`).
+    /// Descending, so a group of `n` blocks takes the last `n` entries in
+    /// order.
     powers: [[u8; BLOCK]; NPOW],
     /// `H` in GCM byte order, for deriving `J0` from a nonce that is not 96
     /// bits long.
     h: [u8; BLOCK],
-    /// `kara[i]` is the XOR of the two 64-bit halves of `powers[i]`, in both
-    /// halves: the second factor of Karatsuba's middle product, which the
-    /// 512-bit kernel uses to multiply with three carry-less multiplies
-    /// instead of four.
+    /// `twisted[i]` is `powers[i]` multiplied by `x^-1` in the field
+    /// ([`twist`]), the form the assembly kernels multiply: their products
+    /// need no one-bit correction, and are reduced with two carry-less
+    /// multiplies instead of `clmul::reduce`'s shifts. Two or four adjacent
+    /// entries are the multipliers one 256- or 512-bit register needs.
+    twisted: [[u8; BLOCK]; NPOW],
+    /// `kara[i]` is the XOR of the two 64-bit halves of `twisted[i]`, in both
+    /// halves: the second factor of Karatsuba's middle product, with which
+    /// the kernels multiply with three carry-less multiplies instead of four.
     kara: [[u8; BLOCK]; NPOW],
     path: Path,
 }
@@ -237,6 +261,7 @@ impl HashKey {
         let mut hk = HashKey {
             powers: [[0u8; BLOCK]; NPOW],
             h: [0u8; BLOCK],
+            twisted: [[0u8; BLOCK]; NPOW],
             kara: [[0u8; BLOCK]; NPOW],
             path,
         };
@@ -269,22 +294,26 @@ impl HashKey {
         unsafe { _mm_loadu_si128(self.powers[i].as_ptr() as *const __m128i) }
     }
 
-    /// `(H^(32-i), H^(31-i))` as one 256-bit register, low lane first.
-    #[inline]
-    #[target_feature(enable = "avx2")]
-    fn power_pair(&self, i: usize) -> __m256i {
-        let pair = &self.powers[i..i + 2];
-        // SAFETY: `pair` is two contiguous 16-byte arrays, 32 bytes (an
-        // out-of-range `i` panics on the slice, it does not read past the
-        // array); the load is unaligned.
-        unsafe { _mm256_loadu_si256(pair.as_ptr() as *const __m256i) }
+    /// The last `n` entries of `twisted` and of `kara`, `H^n..H^1`, as the
+    /// assembly kernels take them. Both are 16-byte aligned (`HashKey`'s
+    /// layout).
+    fn last_powers(&self, n: usize) -> (*const u8, *const u8) {
+        let pw = self.twisted[NPOW - n..].as_ptr() as *const u8;
+        let pk = self.kara[NPOW - n..].as_ptr() as *const u8;
+        debug_assert!((pw as usize | pk as usize) & 15 == 0);
+        (pw, pk)
     }
 }
 
 impl Drop for HashKey {
     fn drop(&mut self) {
         // As key-derived as `H` itself.
-        for p in self.powers.iter_mut().chain(self.kara.iter_mut()) {
+        for p in self
+            .powers
+            .iter_mut()
+            .chain(self.twisted.iter_mut())
+            .chain(self.kara.iter_mut())
+        {
             p.zeroize();
         }
         self.h.zeroize();
@@ -304,11 +333,12 @@ fn compute_powers(keys: &Keys, hk: &mut HashKey) {
             let (lo, mid, hi) = product(p, hs);
             p = reduce(lo, mid, hi);
         }
-        let k = _mm_xor_si128(p, _mm_shuffle_epi32::<0x4e>(p));
-        // SAFETY: `powers[i]` and `kara[i]` are 16 bytes; the stores are
-        // unaligned.
+        let t = twist(p);
+        let k = _mm_xor_si128(t, _mm_shuffle_epi32::<0x4e>(t));
+        // SAFETY: each destination is 16 bytes; the stores are unaligned.
         unsafe {
             _mm_storeu_si128(hk.powers[i].as_mut_ptr() as *mut __m128i, p);
+            _mm_storeu_si128(hk.twisted[i].as_mut_ptr() as *mut __m128i, t);
             _mm_storeu_si128(hk.kara[i].as_mut_ptr() as *mut __m128i, k);
         }
     }
@@ -398,6 +428,24 @@ fn aes1(rk: &[__m128i; 15], rounds: usize, block: __m128i) -> __m128i {
         b = _mm_aesenc_si128(b, *k);
     }
     _mm_aesenclast_si128(b, rk[rounds])
+}
+
+/// The first `N` of `s` through AES together.
+#[inline]
+#[target_feature(enable = "aes")]
+fn aes_batch<const N: usize>(rk: &[__m128i; 15], rounds: usize, s: &mut [__m128i]) {
+    let mut b = [_mm_setzero_si128(); N];
+    for (x, v) in b.iter_mut().zip(s.iter()) {
+        *x = _mm_xor_si128(*v, rk[0]);
+    }
+    for k in &rk[1..rounds] {
+        for x in b.iter_mut() {
+            *x = _mm_aesenc_si128(*x, *k);
+        }
+    }
+    for (x, v) in b.iter().zip(s.iter_mut()) {
+        *v = _mm_aesenclast_si128(*x, rk[rounds]);
+    }
 }
 
 /// GHASH blocks that are waiting to be multiplied in as one group.
@@ -505,9 +553,11 @@ fn wipe(regs: &mut [__m128i]) {
 
 /// The message tail (under eight blocks), the length block, and the tag.
 ///
-/// The tail's counter blocks and `J0` go through AES as one batch, so a short
-/// message pays AES latency once, and the tail, the length block and anything
-/// still queued are reduced together.
+/// Without a bulk part (`ekj0` is `None`), the tail's counter blocks and `J0`
+/// go through AES as one batch, so a short message pays AES latency once.
+/// After one, `E_K(J0)` was computed before the bulk loop, where its latency
+/// hid behind the loop's, and only the tail's blocks are left. The tail, the
+/// length block and anything still queued are reduced together.
 #[inline]
 #[target_feature(enable = "aes,pclmulqdq,ssse3")]
 #[allow(clippy::too_many_arguments)]
@@ -517,6 +567,7 @@ fn finish(
     g: &mut Pending,
     ctr: &mut Counter,
     j0: __m128i,
+    ekj0: Option<__m128i>,
     tail: &mut [u8],
     aad_len: usize,
     data_len: usize,
@@ -527,23 +578,35 @@ fn finish(
     let mask = bswap();
     let blocks = tail.len().div_ceil(BLOCK);
 
-    // Slot 0 is J0, for the tag; slots 1..=blocks are the tail's keystream.
+    // Slot 0 is `E_K(J0)`, for the tag; slots 1..=blocks are the tail's
+    // keystream.
     let mut s = [_mm_setzero_si128(); 9];
-    s[0] = j0;
     for slot in s[1..=blocks].iter_mut() {
         *slot = ctr.next();
     }
-    let live = &mut s[..=blocks];
-    for b in live.iter_mut() {
-        *b = _mm_xor_si128(*b, rk[0]);
-    }
-    for k in &rk[1..rounds] {
-        for b in live.iter_mut() {
-            *b = _mm_aesenc_si128(*b, *k);
+    let (batch, n) = match ekj0 {
+        Some(e) => {
+            s[0] = e;
+            (&mut s[1..], blocks)
         }
-    }
-    for b in live.iter_mut() {
-        *b = _mm_aesenclast_si128(*b, rk[rounds]);
+        None => {
+            s[0] = j0;
+            (&mut s[..], blocks + 1)
+        }
+    };
+    // A fixed count for each length, so the batch is held in registers
+    // through the rounds rather than stored and reloaded at each one.
+    match n {
+        0 => {}
+        1 => aes_batch::<1>(rk, rounds, batch),
+        2 => aes_batch::<2>(rk, rounds, batch),
+        3 => aes_batch::<3>(rk, rounds, batch),
+        4 => aes_batch::<4>(rk, rounds, batch),
+        5 => aes_batch::<5>(rk, rounds, batch),
+        6 => aes_batch::<6>(rk, rounds, batch),
+        7 => aes_batch::<7>(rk, rounds, batch),
+        8 => aes_batch::<8>(rk, rounds, batch),
+        _ => aes_batch::<9>(rk, rounds, batch),
     }
 
     let mut whole = tail.chunks_exact_mut(BLOCK);
@@ -605,156 +668,106 @@ fn finish(
 // ---------------------------------------------------------------------------
 // The narrow kernel: AES-NI and PCLMULQDQ, eight blocks per iteration.
 
-/// Eight counter blocks through AES, with -- when `G` -- the eight blocks at
-/// `gsrc` multiplied into `y` between the rounds.
-///
-/// Rounds 1 to 8 each carry one GHASH product; every AES key size has at
-/// least ten rounds, so the eight always fit before the last.
-///
-/// # Safety
-///
-/// When `G`, `gsrc` must point to 128 readable bytes.
-#[inline]
-#[target_feature(enable = "aes,pclmulqdq,ssse3")]
-unsafe fn aes8_ghash8<const G: bool>(
-    rk: &[__m128i; 15],
-    rounds: usize,
-    ctr: &mut Counter,
-    gsrc: *const u8,
-    y: &mut __m128i,
-    h: &[__m128i; 8],
-) -> [__m128i; 8] {
-    let mask = bswap();
-    let mut s = [_mm_setzero_si128(); 8];
-    for b in s.iter_mut() {
-        *b = _mm_xor_si128(ctr.next(), rk[0]);
-    }
-    let (mut lo, mut mid, mut hi) = (
-        _mm_setzero_si128(),
-        _mm_setzero_si128(),
-        _mm_setzero_si128(),
-    );
-    for j in 0..8 {
-        let k = rk[1 + j];
-        for b in s.iter_mut() {
-            *b = _mm_aesenc_si128(*b, k);
-        }
-        if G {
-            // SAFETY: the caller guarantees 128 readable bytes at `gsrc`, so
-            // block `j` is in bounds; the load is unaligned.
-            let raw = unsafe { _mm_loadu_si128(gsrc.add(j * BLOCK) as *const __m128i) };
-            let mut x = _mm_shuffle_epi8(raw, mask);
-            if j == 0 {
-                x = _mm_xor_si128(x, *y);
-            }
-            let (l, m, u) = product(x, h[j]);
-            lo = _mm_xor_si128(lo, l);
-            mid = _mm_xor_si128(mid, m);
-            hi = _mm_xor_si128(hi, u);
-        }
-    }
-    if G {
-        *y = reduce(lo, mid, hi);
-    }
-    for k in &rk[9..rounds] {
-        for b in s.iter_mut() {
-            *b = _mm_aesenc_si128(*b, *k);
-        }
-    }
-    for b in s.iter_mut() {
-        *b = _mm_aesenclast_si128(*b, rk[rounds]);
-    }
-    s
-}
+/// The state the assembly loops read and write: the accumulator `Y`
+/// (byte-reversed), then the counter in [`Counter`]'s form.
+struct State([u8; 2 * BLOCK]);
 
-/// GHASH alone over eight blocks at `src`.
-///
-/// # Safety
-///
-/// `src` must point to 128 readable bytes.
-#[inline]
-#[target_feature(enable = "pclmulqdq,ssse3")]
-unsafe fn ghash8(src: *const u8, y: __m128i, h: &[__m128i; 8]) -> __m128i {
-    let mask = bswap();
-    let (mut lo, mut mid, mut hi) = (
-        _mm_setzero_si128(),
-        _mm_setzero_si128(),
-        _mm_setzero_si128(),
-    );
-    for (j, hj) in h.iter().enumerate() {
-        // SAFETY: the caller guarantees 128 readable bytes at `src`.
-        let raw = unsafe { _mm_loadu_si128(src.add(j * BLOCK) as *const __m128i) };
-        let mut x = _mm_shuffle_epi8(raw, mask);
-        if j == 0 {
-            x = _mm_xor_si128(x, y);
-        }
-        let (l, m, u) = product(x, *hj);
-        lo = _mm_xor_si128(lo, l);
-        mid = _mm_xor_si128(mid, m);
-        hi = _mm_xor_si128(hi, u);
-    }
-    reduce(lo, mid, hi)
-}
-
-/// XOR eight keystream blocks into the 128 bytes at `p`.
-///
-/// # Safety
-///
-/// `p` must point to 128 readable and writable bytes.
-#[inline]
-#[target_feature(enable = "sse2")]
-unsafe fn xor8(p: *mut u8, ks: &[__m128i; 8]) {
-    for (j, k) in ks.iter().enumerate() {
-        // SAFETY: the caller guarantees 128 bytes at `p`; unaligned.
+impl State {
+    #[inline]
+    #[target_feature(enable = "sse2")]
+    fn new(y: __m128i, ctr: &Counter) -> State {
+        let mut s = State([0u8; 2 * BLOCK]);
+        // SAFETY: `s.0` is 32 bytes; the stores are unaligned.
         unsafe {
-            let q = p.add(j * BLOCK) as *mut __m128i;
-            _mm_storeu_si128(q, _mm_xor_si128(_mm_loadu_si128(q), *k));
+            _mm_storeu_si128(s.0.as_mut_ptr() as *mut __m128i, y);
+            _mm_storeu_si128(s.0.as_mut_ptr().add(BLOCK) as *mut __m128i, ctr.0);
+        }
+        s
+    }
+
+    /// `Y` back out, and the counter into `ctr`.
+    #[inline]
+    #[target_feature(enable = "sse2")]
+    fn finish(&self, ctr: &mut Counter) -> __m128i {
+        // SAFETY: `self.0` is 32 bytes; the loads are unaligned.
+        unsafe {
+            ctr.0 = _mm_loadu_si128(self.0.as_ptr().add(BLOCK) as *const __m128i);
+            _mm_loadu_si128(self.0.as_ptr() as *const __m128i)
         }
     }
 }
 
-/// Counter mode and GHASH over whole 128-byte groups, stitched.
-///
-/// Encrypting, GHASH needs the ciphertext, so each iteration hashes the
-/// previous group while encrypting this one, and the last group is hashed
-/// after the loop. Decrypting, it hashes the group it is about to decrypt.
+impl Drop for State {
+    fn drop(&mut self) {
+        // `Y`, as `Pending` wipes it.
+        self.0.zeroize();
+    }
+}
+
+/// Counter mode and GHASH over whole 128-byte groups, stitched: see
+/// [`crate::gcm_x86_asm`] for the loops.
 #[target_feature(enable = "aes,pclmulqdq,ssse3")]
 fn bulk_narrow(
     keys: &Keys,
     hk: &HashKey,
     ctr: &mut Counter,
     data: &mut [u8],
-    mut y: __m128i,
+    y: __m128i,
     encrypting: bool,
 ) -> __m128i {
     debug_assert_eq!(data.len() % NARROW, 0);
-    let (rk, rounds) = keys.enc_round_keys();
-    let mut h = [_mm_setzero_si128(); 8];
-    for (j, slot) in h.iter_mut().enumerate() {
-        *slot = hk.power(NPOW - 8 + j);
-    }
     let groups = data.len() / NARROW;
-    let base = data.as_mut_ptr();
-    for i in 0..groups {
-        // SAFETY: `i < groups`, so group `i` (and `i - 1`) lies inside
-        // `data`, 128 bytes each.
-        unsafe {
-            let p = base.add(i * NARROW);
-            let ks = if !encrypting {
-                aes8_ghash8::<true>(rk, rounds, ctr, p, &mut y, &h)
-            } else if i > 0 {
-                aes8_ghash8::<true>(rk, rounds, ctr, p.sub(NARROW), &mut y, &h)
-            } else {
-                aes8_ghash8::<false>(rk, rounds, ctr, p, &mut y, &h)
-            };
-            xor8(p, &ks);
+    if groups == 0 {
+        return y;
+    }
+    let (rk, rounds) = keys.enc_round_keys();
+    let rk = rk.as_ptr() as *const u8;
+    let mut st = State::new(y, ctr);
+    let p = data.as_mut_ptr();
+    // SAFETY: `HashKey::new`'s contract: AES-NI, PCLMULQDQ and SSSE3. `p`
+    // is `groups * 128` bytes with `groups > 0`; `rk` is an AES-NI schedule
+    // of `rounds` rounds, `__m128i`-aligned.
+    unsafe {
+        match rounds {
+            10 => narrow_groups::<10>(p, groups, rk, hk, &mut st, encrypting),
+            12 => narrow_groups::<12>(p, groups, rk, hk, &mut st, encrypting),
+            _ => narrow_groups::<14>(p, groups, rk, hk, &mut st, encrypting),
         }
     }
-    if encrypting && groups > 0 {
-        // SAFETY: the last group is inside `data`.
-        y = unsafe { ghash8(base.add((groups - 1) * NARROW), y, &h) };
+    st.finish(ctr)
+}
+
+/// Sealing two groups or more, one call: the first encrypted alone, the
+/// stitched loop, the last hashed alone. One group, encrypted and then
+/// hashed. Opening, one call, every group stitched to itself.
+///
+/// # Safety
+///
+/// As [`bulk_narrow`] establishes: the features, `p` and `rk`.
+#[inline]
+unsafe fn narrow_groups<const R: usize>(
+    p: *mut u8,
+    groups: usize,
+    rk: *const u8,
+    hk: &HashKey,
+    st: &mut State,
+    encrypting: bool,
+) {
+    use crate::gcm_x86_asm::{x8_aes, x8_ghash, x8_open, x8_seal};
+    let s = st.0.as_mut_ptr();
+    let (pw, pk) = hk.last_powers(8);
+    // SAFETY: the caller's: `groups * 128` bytes at `p`, `groups > 0`; `pw`
+    // and `pk` are the eight aligned powers each function names.
+    unsafe {
+        if !encrypting {
+            x8_open::<R>(p, groups, rk, pw, pk, s);
+        } else if groups > 1 {
+            x8_seal::<R>(p, groups - 1, rk, pw, pk, s);
+        } else {
+            x8_aes::<R>(p, rk, s);
+            x8_ghash(p, pw, pk, s);
+        }
     }
-    y
 }
 
 #[target_feature(enable = "aes,pclmulqdq,ssse3")]
@@ -774,7 +787,11 @@ fn run_narrow(
     let data_len = data.len();
     let whole = data_len - data_len % NARROW;
     let (body, tail) = data.split_at_mut(whole);
+    let mut ekj0 = None;
     if !body.is_empty() {
+        // `E_K(J0)` first, so its latency overlaps the loop's.
+        let (rk, rounds) = keys.enc_round_keys();
+        ekj0 = Some(aes1(rk, rounds, j0));
         // The bulk loop takes `y` reduced. Without one, the AAD stays queued
         // and shares the tail's reduction.
         g.flush(hk);
@@ -786,6 +803,7 @@ fn run_narrow(
         &mut g,
         &mut ctr,
         j0,
+        ekj0,
         tail,
         aad.len(),
         data_len,
@@ -797,253 +815,68 @@ fn run_narrow(
 // The wide kernel: VAES and VPCLMULQDQ on ymm registers, sixteen blocks per
 // iteration.
 
-/// One `ymm`-register instruction taking two register operands; `$tmpl` names
-/// them `{r}` (out), `{a}` and `{b}`.
-macro_rules! wide_op {
-    ($(#[$doc:meta])* $name:ident, $tmpl:literal) => {
-        $(#[$doc])*
-        #[inline]
-        #[target_feature(enable = "avx2")]
-        fn $name(_: Wide, a: __m256i, b: __m256i) -> __m256i {
-            let r: __m256i;
-            // SAFETY: the `Wide` token proves the CPU has VAES and
-            // VPCLMULQDQ, and this function's `avx2` feature that it has
-            // AVX2. The instruction reads two registers and writes a third;
-            // it touches no memory, no stack and no flags.
-            unsafe {
-                asm!(
-                    $tmpl,
-                    r = lateout(ymm_reg) r,
-                    a = in(ymm_reg) a,
-                    b = in(ymm_reg) b,
-                    options(pure, nomem, nostack, preserves_flags),
-                );
-            }
-            r
-        }
-    };
-}
-
-wide_op!(
-    /// `VAESENC`: one AES round on each 128-bit lane.
-    aesenc2,
-    "vaesenc {r}, {a}, {b}"
-);
-wide_op!(
-    /// `VAESENCLAST`: the final AES round on each 128-bit lane.
-    aesenclast2,
-    "vaesenclast {r}, {a}, {b}"
-);
-wide_op!(
-    /// `VPCLMULQDQ` with selector `0x00`: low halves, per lane.
-    clmul2_00,
-    "vpclmulqdq {r}, {a}, {b}, 0x00"
-);
-wide_op!(
-    /// `VPCLMULQDQ` with selector `0x01`: high half of `a`, low half of `b`.
-    clmul2_01,
-    "vpclmulqdq {r}, {a}, {b}, 0x01"
-);
-wide_op!(
-    /// `VPCLMULQDQ` with selector `0x10`: low half of `a`, high half of `b`.
-    clmul2_10,
-    "vpclmulqdq {r}, {a}, {b}, 0x10"
-);
-wide_op!(
-    /// `VPCLMULQDQ` with selector `0x11`: high halves, per lane.
-    clmul2_11,
-    "vpclmulqdq {r}, {a}, {b}, 0x11"
-);
-
-/// Byte reversal within each 128-bit lane.
-#[inline]
-#[target_feature(enable = "avx2")]
-fn bswap2() -> __m256i {
-    _mm256_set_m128i(bswap(), bswap())
-}
-
-/// The unreduced product of two blocks per register, as `clmul::product`
-/// computes for one.
-#[inline]
-#[target_feature(enable = "avx2")]
-fn product2(w: Wide, a: __m256i, b: __m256i) -> (__m256i, __m256i, __m256i) {
-    (
-        clmul2_00(w, a, b),
-        _mm256_xor_si256(clmul2_10(w, a, b), clmul2_01(w, a, b)),
-        clmul2_11(w, a, b),
-    )
-}
-
-/// Sum the two lanes of each of `lo`, `mid`, `hi` and reduce once.
-#[inline]
-#[target_feature(enable = "avx2,pclmulqdq,ssse3")]
-fn reduce2(lo: __m256i, mid: __m256i, hi: __m256i) -> __m128i {
-    reduce(fold2(lo), fold2(mid), fold2(hi))
-}
-
-/// The XOR of a register's two 128-bit lanes.
-#[inline]
-#[target_feature(enable = "avx2")]
-fn fold2(v: __m256i) -> __m128i {
-    _mm_xor_si128(_mm256_castsi256_si128(v), _mm256_extracti128_si256::<1>(v))
-}
-
-/// Sixteen counter blocks through AES in eight registers, with -- when `G` --
-/// the sixteen blocks at `gsrc` multiplied into `y` between the rounds.
-///
-/// # Safety
-///
-/// When `G`, `gsrc` must point to 256 readable bytes.
-#[inline]
-#[target_feature(enable = "avx2,aes,pclmulqdq,ssse3")]
-#[allow(clippy::too_many_arguments)]
-unsafe fn aes16_ghash16<const G: bool>(
-    w: Wide,
-    rk: &[__m256i; 15],
-    rounds: usize,
-    ctr: &mut Counter,
-    gsrc: *const u8,
-    y: &mut __m128i,
-    hk: &HashKey,
-) -> [__m256i; 8] {
-    // Pair `k` is counters `2k` and `2k + 1` past the current one.
-    let swap = _mm256_set_m128i(ctr_swap(), ctr_swap());
-    let base = _mm256_add_epi32(
-        _mm256_set_m128i(ctr.0, ctr.0),
-        _mm256_set_epi32(1, 0, 0, 0, 0, 0, 0, 0),
-    );
-    let mut s = [_mm256_setzero_si256(); 8];
-    for (k, b) in s.iter_mut().enumerate() {
-        let step = (2 * k) as i32;
-        let c = _mm256_add_epi32(base, _mm256_set_epi32(step, 0, 0, 0, step, 0, 0, 0));
-        *b = _mm256_xor_si256(_mm256_shuffle_epi8(c, swap), rk[0]);
-    }
-    ctr.0 = _mm_add_epi32(ctr.0, _mm_set_epi32(16, 0, 0, 0));
-
-    let mask = bswap2();
-    let (mut lo, mut mid, mut hi) = (
-        _mm256_setzero_si256(),
-        _mm256_setzero_si256(),
-        _mm256_setzero_si256(),
-    );
-    for j in 0..8 {
-        let k = rk[1 + j];
-        for b in s.iter_mut() {
-            *b = aesenc2(w, *b, k);
-        }
-        if G {
-            // SAFETY: the caller guarantees 256 readable bytes at `gsrc`, so
-            // the pair at `32 * j` is in bounds; the load is unaligned.
-            let raw = unsafe { _mm256_loadu_si256(gsrc.add(j * 2 * BLOCK) as *const __m256i) };
-            let mut x = _mm256_shuffle_epi8(raw, mask);
-            if j == 0 {
-                x = _mm256_xor_si256(x, _mm256_set_m128i(_mm_setzero_si128(), *y));
-            }
-            let (l, m, u) = product2(w, x, hk.power_pair(NPOW - 16 + 2 * j));
-            lo = _mm256_xor_si256(lo, l);
-            mid = _mm256_xor_si256(mid, m);
-            hi = _mm256_xor_si256(hi, u);
-        }
-    }
-    if G {
-        *y = reduce2(lo, mid, hi);
-    }
-    for k in &rk[9..rounds] {
-        for b in s.iter_mut() {
-            *b = aesenc2(w, *b, *k);
-        }
-    }
-    for b in s.iter_mut() {
-        *b = aesenclast2(w, *b, rk[rounds]);
-    }
-    s
-}
-
-/// GHASH alone over sixteen blocks at `src`.
-///
-/// # Safety
-///
-/// `src` must point to 256 readable bytes.
-#[inline]
-#[target_feature(enable = "avx2,pclmulqdq,ssse3")]
-unsafe fn ghash16(w: Wide, src: *const u8, y: __m128i, hk: &HashKey) -> __m128i {
-    let mask = bswap2();
-    let (mut lo, mut mid, mut hi) = (
-        _mm256_setzero_si256(),
-        _mm256_setzero_si256(),
-        _mm256_setzero_si256(),
-    );
-    for j in 0..8 {
-        // SAFETY: the caller guarantees 256 readable bytes at `src`.
-        let raw = unsafe { _mm256_loadu_si256(src.add(j * 2 * BLOCK) as *const __m256i) };
-        let mut x = _mm256_shuffle_epi8(raw, mask);
-        if j == 0 {
-            x = _mm256_xor_si256(x, _mm256_set_m128i(_mm_setzero_si128(), y));
-        }
-        let (l, m, u) = product2(w, x, hk.power_pair(NPOW - 16 + 2 * j));
-        lo = _mm256_xor_si256(lo, l);
-        mid = _mm256_xor_si256(mid, m);
-        hi = _mm256_xor_si256(hi, u);
-    }
-    reduce2(lo, mid, hi)
-}
-
-/// XOR sixteen keystream blocks into the 256 bytes at `p`.
-///
-/// # Safety
-///
-/// `p` must point to 256 readable and writable bytes.
-#[inline]
-#[target_feature(enable = "avx2")]
-unsafe fn xor16(p: *mut u8, ks: &[__m256i; 8]) {
-    for (j, k) in ks.iter().enumerate() {
-        // SAFETY: the caller guarantees 256 bytes at `p`; unaligned.
-        unsafe {
-            let q = p.add(j * 2 * BLOCK) as *mut __m256i;
-            _mm256_storeu_si256(q, _mm256_xor_si256(_mm256_loadu_si256(q), *k));
-        }
-    }
-}
-
 /// [`bulk_narrow`], sixteen blocks at a time.
-#[target_feature(enable = "avx2,aes,pclmulqdq,ssse3")]
+#[target_feature(enable = "aes,pclmulqdq,ssse3")]
 fn bulk_wide(
-    w: Wide,
+    _w: Wide,
     keys: &Keys,
     hk: &HashKey,
     ctr: &mut Counter,
     data: &mut [u8],
-    mut y: __m128i,
+    y: __m128i,
     encrypting: bool,
 ) -> __m128i {
     debug_assert_eq!(data.len() % WIDE, 0);
-    let (rk1, rounds) = keys.enc_round_keys();
-    let mut rk = [_mm256_setzero_si256(); 15];
-    for (wide, narrow) in rk.iter_mut().zip(rk1.iter()).take(rounds + 1) {
-        *wide = _mm256_broadcastsi128_si256(*narrow);
-    }
     let groups = data.len() / WIDE;
-    let base = data.as_mut_ptr();
-    for i in 0..groups {
-        // SAFETY: `i < groups`, so group `i` (and `i - 1`) lies inside
-        // `data`, 256 bytes each.
-        unsafe {
-            let p = base.add(i * WIDE);
-            let ks = if !encrypting {
-                aes16_ghash16::<true>(w, &rk, rounds, ctr, p, &mut y, hk)
-            } else if i > 0 {
-                aes16_ghash16::<true>(w, &rk, rounds, ctr, p.sub(WIDE), &mut y, hk)
-            } else {
-                aes16_ghash16::<false>(w, &rk, rounds, ctr, p, &mut y, hk)
-            };
-            xor16(p, &ks);
+    if groups == 0 {
+        return y;
+    }
+    let (rk, rounds) = keys.enc_round_keys();
+    let rk = rk.as_ptr() as *const u8;
+    let mut st = State::new(y, ctr);
+    let p = data.as_mut_ptr();
+    // SAFETY: `_w` proves AVX2, VAES and VPCLMULQDQ. `p` is `groups * 256`
+    // bytes with `groups > 0`; `rk` is an AES-NI schedule of `rounds`
+    // rounds.
+    unsafe {
+        match rounds {
+            10 => wide_groups::<10>(p, groups, rk, hk, &mut st, encrypting),
+            12 => wide_groups::<12>(p, groups, rk, hk, &mut st, encrypting),
+            _ => wide_groups::<14>(p, groups, rk, hk, &mut st, encrypting),
         }
     }
-    if encrypting && groups > 0 {
-        // SAFETY: the last group is inside `data`.
-        y = unsafe { ghash16(w, base.add((groups - 1) * WIDE), y, hk) };
+    st.finish(ctr)
+}
+
+/// [`narrow_groups`], sixteen blocks a group.
+///
+/// # Safety
+///
+/// As [`bulk_wide`] establishes.
+#[inline]
+unsafe fn wide_groups<const R: usize>(
+    p: *mut u8,
+    groups: usize,
+    rk: *const u8,
+    hk: &HashKey,
+    st: &mut State,
+    encrypting: bool,
+) {
+    use crate::gcm_x86_asm::{y16_aes, y16_ghash, y16_open, y16_seal};
+    let s = st.0.as_mut_ptr();
+    let (pw, pk) = hk.last_powers(16);
+    // SAFETY: as in `narrow_groups`, with `groups * 256` bytes and sixteen
+    // powers.
+    unsafe {
+        if !encrypting {
+            y16_open::<R>(p, groups, rk, pw, pk, s);
+        } else if groups > 1 {
+            y16_seal::<R>(p, groups - 1, rk, pw, pk, s);
+        } else {
+            y16_aes::<R>(p, rk, s);
+            y16_ghash(p, pw, pk, s);
+        }
     }
-    y
 }
 
 /// Which wide bulk loop [`run_wide`] uses, with its proof.
@@ -1073,8 +906,12 @@ fn run_wide(
     let (body, rest) = data.split_at_mut(wide);
     let narrow = rest.len() - rest.len() % NARROW;
     let (mid, tail) = rest.split_at_mut(narrow);
+    let mut ekj0 = None;
     if !body.is_empty() || !mid.is_empty() {
-        // As in `run_narrow`: only a bulk loop needs `y` reduced first.
+        // As in `run_narrow`: `E_K(J0)` first, and only a bulk loop needs `y`
+        // reduced first.
+        let (rk, rounds) = keys.enc_round_keys();
+        ekj0 = Some(aes1(rk, rounds, j0));
         g.flush(hk);
     }
     if !body.is_empty() {
@@ -1092,6 +929,7 @@ fn run_wide(
         &mut g,
         &mut ctr,
         j0,
+        ekj0,
         tail,
         aad.len(),
         data_len,
@@ -1113,17 +951,18 @@ fn run_wide(
 // `state`, and the constants below.
 //
 // The arithmetic is the 256-bit kernel's, widened: the same counter layout,
-// the same field arithmetic -- products by Karatsuba, see `zmm_ghash!` -- and
-// `clmul::reduce` transcribed instruction for instruction.
+// the same field arithmetic -- products by Karatsuba with twisted powers, see
+// `zmm_ghash!`, and the two-multiply reduction of `gcm_x86_asm::x8_reduce!`.
 
 /// Masks and increments for the 512-bit kernel, one 128-bit lane per block:
 /// the byte reversal, the counter-field reversal, `+4` in each lane's counter,
-/// and the lane offsets `0, 1, 2, 3`.
+/// and the lane offsets `0, 1, 2, 3`; then, at 256, the reduction's constant
+/// `x^-1` (as `gcm_x86_asm::CONSTS` holds it at 144).
 #[repr(C, align(64))]
-struct ZmmConsts([u8; 256]);
+struct ZmmConsts([u8; 272]);
 
 static ZMM_CONSTS: ZmmConsts = ZmmConsts({
-    let mut c = [0u8; 256];
+    let mut c = [0u8; 272];
     let mut lane = 0;
     while lane < 4 {
         let mut i = 0;
@@ -1140,6 +979,9 @@ static ZMM_CONSTS: ZmmConsts = ZmmConsts({
         c[192 + lane * 16 + 12] = lane as u8;
         lane += 1;
     }
+    // `x^-1`, byte-reversed: the reduction's constant, as in `gcm_x86_asm`.
+    c[256] = 1;
+    c[256 + 15] = 0xc2;
     c
 });
 
@@ -1255,6 +1097,10 @@ macro_rules! zmm_load {
 ///   `(a0^a1)*(b0^b1)`, from which the middle term is recovered as that
 ///   XOR `lo ^ hi` once, after the sums. Three multiplies a block, not four.
 ///   `kara` at `{pk}` holds `b0^b1` for each power.
+/// - The powers are twisted ([`twist`]), so the sums are the product in place
+///   and the reduction is two more multiplies, as in
+///   `gcm_x86_asm::x8_reduce!`, rather than `clmul::reduce`'s shifts: nine
+///   percent off the 512-bit loop's time per byte, measured.
 ///
 /// `zmm6`/`zmm7`/`zmm8` collect lo, Karatsuba middle, and hi.
 macro_rules! zmm_ghash {
@@ -1298,37 +1144,19 @@ macro_rules! zmm_ghash {
             // The true middle term: Karatsuba's, minus lo and hi.
             "vpxor xmm7, xmm7, xmm6\n",
             "vpxor xmm7, xmm7, xmm8\n",
-            // `clmul::reduce(lo = xmm6, mid = xmm7, hi = xmm8)`, line for line.
+            // lo ^= mid << 64; hi ^= mid >> 64; then the two folds of
+            // `gcm_x86_asm::x8_reduce!`, the powers being twisted.
             "vpslldq xmm14, xmm7, 8\n",
             "vpxor xmm6, xmm6, xmm14\n",
             "vpsrldq xmm14, xmm7, 8\n",
             "vpxor xmm8, xmm8, xmm14\n",
-            "vpsrld xmm14, xmm6, 31\n",
-            "vpsrld xmm15, xmm8, 31\n",
-            "vpslld xmm6, xmm6, 1\n",
-            "vpslld xmm8, xmm8, 1\n",
-            "vpslldq xmm7, xmm14, 4\n",
-            "vpor xmm6, xmm6, xmm7\n",
-            "vpslldq xmm7, xmm15, 4\n",
-            "vpor xmm8, xmm8, xmm7\n",
-            "vpsrldq xmm14, xmm14, 12\n",
-            "vpor xmm8, xmm8, xmm14\n",
-            "vpslld xmm14, xmm6, 31\n",
-            "vpslld xmm15, xmm6, 30\n",
-            "vpxor xmm14, xmm14, xmm15\n",
-            "vpslld xmm15, xmm6, 25\n",
-            "vpxor xmm14, xmm14, xmm15\n",
-            "vpsrldq xmm15, xmm14, 4\n",
-            "vpslldq xmm14, xmm14, 12\n",
+            "vpclmulqdq xmm14, xmm6, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm6, xmm6, 0x4e\n",
             "vpxor xmm6, xmm6, xmm14\n",
-            "vpsrld xmm14, xmm6, 1\n",
-            "vpxor xmm15, xmm15, xmm14\n",
-            "vpsrld xmm14, xmm6, 2\n",
-            "vpxor xmm15, xmm15, xmm14\n",
-            "vpsrld xmm14, xmm6, 7\n",
-            "vpxor xmm15, xmm15, xmm14\n",
-            "vpxor xmm6, xmm6, xmm15\n",
-            "vpxor xmm9, xmm8, xmm6\n",
+            "vpclmulqdq xmm14, xmm6, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm6, xmm6, 0x4e\n",
+            "vpxor xmm6, xmm6, xmm8\n",
+            "vpxor xmm9, xmm6, xmm14\n",
         )
     };
 }
@@ -1370,7 +1198,7 @@ macro_rules! zmm_mul_acc {
 ///   `groups` must be at least one.
 /// - `rk` must point to the 15 round keys of an AES-NI schedule with `rounds`
 ///   rounds (10, 12 or 14), and `rk_last` to round key `rounds`.
-/// - `pw` and `pk` must point to [`HashKey::powers`] and [`HashKey::kara`],
+/// - `pw` and `pk` must point to [`HashKey::twisted`] and [`HashKey::kara`],
 ///   256 bytes each; `state` to 32 readable and writable bytes.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
@@ -1676,37 +1504,18 @@ macro_rules! z32_reduce {
             "vpxor xmm11, xmm11, xmm13\n",
             "vpxor xmm11, xmm11, xmm10\n",
             "vpxor xmm11, xmm11, xmm12\n",
-            // `clmul::reduce(lo = xmm10, mid = xmm11, hi = xmm12)`.
+            // lo ^= mid << 64; hi ^= mid >> 64; then the two folds.
             "vpslldq xmm14, xmm11, 8\n",
             "vpxor xmm10, xmm10, xmm14\n",
             "vpsrldq xmm14, xmm11, 8\n",
             "vpxor xmm12, xmm12, xmm14\n",
-            "vpsrld xmm14, xmm10, 31\n",
-            "vpsrld xmm15, xmm12, 31\n",
-            "vpslld xmm10, xmm10, 1\n",
-            "vpslld xmm12, xmm12, 1\n",
-            "vpslldq xmm11, xmm14, 4\n",
-            "vpor xmm10, xmm10, xmm11\n",
-            "vpslldq xmm11, xmm15, 4\n",
-            "vpor xmm12, xmm12, xmm11\n",
-            "vpsrldq xmm14, xmm14, 12\n",
-            "vpor xmm12, xmm12, xmm14\n",
-            "vpslld xmm14, xmm10, 31\n",
-            "vpslld xmm15, xmm10, 30\n",
-            "vpxor xmm14, xmm14, xmm15\n",
-            "vpslld xmm15, xmm10, 25\n",
-            "vpxor xmm14, xmm14, xmm15\n",
-            "vpsrldq xmm15, xmm14, 4\n",
-            "vpslldq xmm14, xmm14, 12\n",
+            "vpclmulqdq xmm14, xmm10, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm10, xmm10, 0x4e\n",
             "vpxor xmm10, xmm10, xmm14\n",
-            "vpsrld xmm14, xmm10, 1\n",
-            "vpxor xmm15, xmm15, xmm14\n",
-            "vpsrld xmm14, xmm10, 2\n",
-            "vpxor xmm15, xmm15, xmm14\n",
-            "vpsrld xmm14, xmm10, 7\n",
-            "vpxor xmm15, xmm15, xmm14\n",
-            "vpxor xmm10, xmm10, xmm15\n",
-            "vpxor xmm9, xmm12, xmm10\n",
+            "vpclmulqdq xmm14, xmm10, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm10, xmm10, 0x4e\n",
+            "vpxor xmm10, xmm10, xmm12\n",
+            "vpxor xmm9, xmm10, xmm14\n",
         )
     };
 }
@@ -1792,7 +1601,7 @@ macro_rules! z32_ghash_only {
 /// # Safety
 ///
 /// As [`zmm_groups`], with `p` pointing to `groups * 512` bytes, and `pw`
-/// and `pk` to all 32 entries (512 bytes) of [`HashKey::powers`] and
+/// and `pk` to all 32 entries (512 bytes) of [`HashKey::twisted`] and
 /// [`HashKey::kara`].
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
@@ -1904,8 +1713,7 @@ fn bulk_zmm(
     let (head, rest) = data.split_at_mut(big * WIDE32);
     if big > 0 {
         // All 32 powers.
-        let pw = hk.powers.as_ptr() as *const u8;
-        let pk = hk.kara.as_ptr() as *const u8;
+        let (pw, pk) = hk.last_powers(NPOW);
         // SAFETY: `_w` proves the features; `head` is `big * 512` bytes with
         // `big > 0`; `rk`, `rk_last` and `rounds` come from one AES-NI
         // schedule; `pw` and `pk` are 512 bytes each and `st` 32.
@@ -1920,8 +1728,7 @@ fn bulk_zmm(
     let small = rest.len() / WIDE;
     if small > 0 {
         // The last sixteen powers, H^16..H^1.
-        let pw = hk.powers[NPOW - 16..].as_ptr() as *const u8;
-        let pk = hk.kara[NPOW - 16..].as_ptr() as *const u8;
+        let (pw, pk) = hk.last_powers(16);
         // SAFETY: as above, with `rest` `small * 256` bytes, `small > 0`, and
         // `pw` and `pk` 256 bytes each.
         unsafe {

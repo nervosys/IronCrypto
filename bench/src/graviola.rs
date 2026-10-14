@@ -617,6 +617,58 @@ fn pair<'a>(what: &str, ic: &'a mut dyn FnMut(), other: &'a mut dyn FnMut()) {
     verdict(what, best[0], best[1], false);
 }
 
+/// AES-256-GCM sealing alone, with more rounds than `run` gives it.
+///
+/// ```text
+/// cargo run --release -- graviola-gcm
+/// ```
+///
+/// Graviola 0.4.1 has two AES-GCM paths on x86-64: one on VAES, VPCLMULQDQ
+/// and AVX-512, taken for messages of 256 bytes and more when the CPU has
+/// AVX-512F, BW and VL, and one on AES-NI and `PCLMULQDQ` otherwise. So on a
+/// CPU with AVX-512, IronCrypto's `--cfg ic_no_avx512` build is set against
+/// Graviola's AVX-512 path, which is not what a CPU without AVX-512 runs.
+///
+/// Graviola's switch for this (`GRAVIOLA_CPU_DISABLE_avx512f`) is read only
+/// in its debug builds, and there it is read on every call, which swamps the
+/// short rows. The like-for-like figure comes from a copy of Graviola 0.4.1
+/// whose `HaveAvx512ForAesGcm::check` returns `None`, patched in for the run
+/// and nowhere else:
+///
+/// ```text
+/// cargo run --release --config "patch.crates-io.graviola.path='<copy>'" -- graviola-gcm
+/// ```
+///
+/// docs/GRAVIOLA.md ("Without AVX-512") has the steps.
+pub fn gcm() {
+    const ROUNDS: usize = 15;
+    println!();
+    println!("IronCrypto vs Graviola 0.4.1, AES-256-GCM seal — best of {ROUNDS}");
+    backends();
+    let key = [0x2au8; 32];
+    let nonce = [0x24u8; 12];
+    let mut data = vec![0u8; SIZE];
+    let mut tag = [0u8; 16];
+    let ic = ironcrypto::cipher::Aes256Gcm::new(&key).unwrap();
+    let g = graviola::aead::AesGcm::new(&key);
+    for (label, size) in [("4 MiB", SIZE), ("1 KiB", 1024), ("64 B", 64)] {
+        println!();
+        println!("{label} messages");
+        let reps = SIZE / size;
+        let a1 = bulk("ironcrypto aes-256-gcm", SIZE, ROUNDS, || {
+            for chunk in data.chunks_mut(size).take(reps) {
+                ic.seal_detached(&nonce, b"", chunk, &mut tag).unwrap();
+            }
+        });
+        let a2 = bulk("graviola aes-256-gcm", SIZE, ROUNDS, || {
+            for chunk in data.chunks_mut(size).take(reps) {
+                g.encrypt(&nonce, b"", chunk, &mut tag);
+            }
+        });
+        verdict(&format!("aes-256-gcm, {label}"), a1, a2, true);
+    }
+}
+
 /// The backends this build selects, so a run says which paths it measured.
 /// `--cfg ic_no_avx512` turns the AVX-512 paths off. The ChaCha20 and AES-GCM
 /// kernels have no public reporter; their choice is pinned by unit tests in
@@ -632,5 +684,8 @@ fn backends() {
     );
     if cfg!(ic_no_avx512) {
         println!("IronCrypto built with --cfg ic_no_avx512 (AVX-512 paths off)");
+    }
+    if cfg!(ic_no_vaes) {
+        println!("IronCrypto built with --cfg ic_no_vaes (AES-GCM on AES-NI alone)");
     }
 }

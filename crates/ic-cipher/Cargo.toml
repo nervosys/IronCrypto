@@ -35,7 +35,7 @@ ct-probes = []
 # `ic_approved_only` leaves out every algorithm FIPS approved mode does not
 # permit; see docs/FIPS.md.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)", "cfg(ic_no_avx512)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_approved_only)", "cfg(ic_no_avx512)", "cfg(ic_no_vaes)"] }
 
 [dependencies]
 ic-core = { workspace = true }

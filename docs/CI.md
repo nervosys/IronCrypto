@@ -233,6 +233,20 @@ RUSTFLAGS="--cfg ic_no_avx512" CARGO_TARGET_DIR=target-avx2 \
   cargo test -p ic-ec -p ic-rsa -p ic-cipher -p ic-hash -p ic-mlkem
 ```
 
+`--cfg ic_no_vaes` goes one step further for AES-GCM: it also turns off the
+VAES detection, so the 256-bit kernel is skipped as well and the eight-block
+AES-NI kernel that CPUs without VAES run (Skylake, Zen 2) is the default:
+
+```bash
+RUSTFLAGS="--cfg ic_no_avx512 --cfg ic_no_vaes" CARGO_TARGET_DIR=target-aesni \
+  cargo test -p ic-cipher -p ironcrypto
+```
+
+The fused-kernel tests force every kernel the CPU has whatever the flags, so
+these builds add that the specification vectors and Wycheproof run through
+the narrower kernels as the default, and a test asserts which kernel is
+chosen under each flag.
+
 This is not a step in `scripts/check.sh`. It rebuilds the dependency graph
 under different flags, a full build of several minutes, so it belongs in its
 own target directory and a separate job if CI wants it. The benchmark

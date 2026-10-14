@@ -265,6 +265,7 @@ of unknown origin would conceal that gap rather than close it.
 | AES Key Wrap | RFC 3394 sections 4.1 through 4.6, all six published vectors across three KEK sizes |
 | AES Key Wrap with padding | RFC 5649 section 6, both published vectors, including the single-block path |
 | AES-GCM | the McGrew–Viega specification test cases |
+| AES-GCM on x86-64, the twisted GHASH reduction | No vector: an arithmetic identity. The x86-64 kernels multiply by powers of `H` twisted by `x^-1` and reduce with two carry-less multiplies (`ic-cipher/src/gcm_x86_asm.rs`, `x8_reduce!`). `scripts/check_gcm_twist.py` models the twist, the Karatsuba product, the reduction and an eight-block aggregate on Python integers and compares them with SP 800-38D section 6.3 Algorithm 1, transcribed from the standard, over 5,049 products (edge values included) and 1,000 groups; removing the twist's XOR or the second fold's product fails it. The kernels themselves are checked against an independent byte-at-a-time GCM at every length to 600 bytes and beyond, every key size, every buffer alignment (`gcm::fused_tests`), and through the vectors above and Wycheproof. That checks the instructions as written; the script checks that the scheme they implement is the field multiply |
 | CMAC | SP 800-38B examples for all three key sizes |
 | HMAC | RFC 4231 (case 6, the hashed long key, for SHA-256, SHA-384 and SHA-512; the SHA-384 and SHA-512 tags also checked against Python's `hmac`); NIST HMAC-SHA3 samples |
 | HKDF | RFC 5869 test cases 1–3 |

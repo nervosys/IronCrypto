@@ -95,6 +95,14 @@ pub mod gcm_siv;
 // inline assembly because their intrinsics postdate the MSRV.
 #[allow(unsafe_code)]
 mod gcm_x86;
+// The 128- and 256-bit fused kernels' bulk loops, in assembly. Needs no `std`
+// itself, so `ct_probes` can reach it in the build `scripts/ct-audit` reads.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(feature = "std", all(feature = "ct-probes", not(ic_approved_only)))
+))]
+#[allow(unsafe_code)]
+mod gcm_x86_asm;
 pub mod gf;
 pub mod keywrap;
 pub mod modes;

@@ -44,7 +44,7 @@ graviola = "0.4.1"
 # crate detects AES-NI at runtime and the comparison is against hardware.
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_no_avx512)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_no_avx512)", "cfg(ic_no_vaes)"] }
 
 [profile.release]
 opt-level = 3

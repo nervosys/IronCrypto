@@ -453,11 +453,12 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V, and thirty-nine more on x86-64 alone for its
+Cortex-M0, Cortex-M4 and RISC-V, and forty-six more on x86-64 alone for its
 Curve25519, P-256 and P-384 assembly, a prepared P-384 key's window read, Ed25519's MULX/ADX table read and X25519's doubling, its divsteps inversions, its
 AVX-512 ChaCha20 and AVX2 Poly1305 kernels, RSA's table read and its
-MULX/ADX, AVX-512 IFMA and portable Montgomery products, and RSA's whole
-AVX-512 IFMA exponentiation at 1024 and 2048 bits: **215 gating
+MULX/ADX, AVX-512 IFMA and portable Montgomery products, RSA's whole
+AVX-512 IFMA exponentiation at 1024 and 2048 bits, and the AES-NI and VAES-256
+AES-GCM loops: **222 gating
 probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
@@ -466,9 +467,9 @@ P-256 Montgomery loop stays rolled; its counter branches, and a constant-length
 each capped at the count that was read, and Cortex-M0's runtime multiply is
 disassembled from the toolchain and checked like a probe. On x86-64 the RSA
 products' loops over the width, and the window read's loop over its sixteen
-entries, are excused by a rule that finds each loop in
+entries, and the AES-GCM loops over their groups, are excused by a rule that finds each loop in
 the control-flow graph and accepts a branch only where it exits or closes the
-loop on a counter stepped by constants, in the six probes named, up to the
+loop on a counter stepped by constants, in the probes named, up to the
 count read in each.
 The full local gate and CI run the checker. These checks cover the compiled
 probes, not whole algorithms, memory-access timing or every caller context;
@@ -646,7 +647,7 @@ slow:
 | | portable | accelerated |
 |---|---|---|
 | AES-256, raw blocks | ~1.5 MiB/s | ~11 GiB/s (AES-NI) |
-| AES-256-GCM | ~1 MiB/s | ~23 GiB/s (VAES + VPCLMULQDQ, AVX-512); ~5 GiB/s (AES-NI + PCLMULQDQ) |
+| AES-256-GCM | ~1 MiB/s | ~23 GiB/s (VAES + VPCLMULQDQ, AVX-512); ~12 GiB/s (the same on 256-bit registers); ~6 GiB/s (AES-NI + PCLMULQDQ) |
 | ChaCha20-Poly1305 | ~0.4 GiB/s | ~3 GiB/s (AVX-512F keystream, AVX2 Poly1305); ~1.5 GiB/s (AVX2, before the Poly1305 lanes) |
 | SHA-256 | ~0.3 GiB/s | ~2.3 GiB/s (SHA-NI) |
 

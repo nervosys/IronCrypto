@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation, P-256 and P-384 ECDH from key bytes | without AVX-512, AES-GCM at 1 KiB and 4 MiB, Ed25519 signing and RSA-2048 fall behind, and X25519 is level (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation, P-256 and P-384 ECDH from key bytes | without AVX-512, Ed25519 signing and RSA-2048 fall behind, and X25519 is level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -175,10 +175,14 @@ Where it is not ahead:
   GHASH run one after the other, not a fused kernel like x86-64's.
 - **CPUs without AVX-512.** Measured on the same Zen 5 machine with
   `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
-  below). Without them, AES-GCM at 1 KiB and 4 MiB and RSA-2048 fall behind
-  Graviola, X25519 is level, Ed25519 signs at about 0.85 to 0.93 of
-  Graviola's rate and verifies ahead with the key held, and
-  ChaCha20-Poly1305 and ECDSA P-384 keep a lead, the ChaCha20 one smaller. Graviola needs only AVX2 and ADX, so it is the
+  below). Without them, RSA-2048 falls behind Graviola, X25519 is level,
+  Ed25519 signs at about 0.85 to 0.93 of Graviola's rate and verifies ahead
+  with the key held, and ChaCha20-Poly1305 and ECDSA P-384 keep a lead, the
+  ChaCha20 one smaller. AES-GCM leads at every size, by 1.9 to 2.3 times on a
+  CPU with VAES and, at 1 KiB and 4 MiB, by 1.04 to 1.22 on AES-NI alone
+  ("AES-GCM without AVX-512", below); the earlier reading of it as behind set
+  IronCrypto without AVX-512 against Graviola's own AVX-512 path. Graviola
+  needs only AVX2 and ADX, so it is the
   fair comparison on such a CPU.
 
 ### Without AVX-512
@@ -260,9 +264,75 @@ rounds used the earlier bench row that set it against a Graviola key parsed
 once, which is not like for like (see the last run above for the corrected
 rows).
 
-Graviola's own paths are the same in both columns, since it does not use
-AVX-512. The AVX2 column is a Zen 5 with AVX-512 switched off, not an older
-CPU; frequency and cache are the same as in the default column.
+Graviola's own paths are the same in both columns -- except AES-GCM's.
+Graviola 0.4.1 has an AES-GCM path on VAES and AVX-512 that it takes for
+messages of 256 bytes and more when the CPU has AVX-512F, BW and VL, so in
+the two AES-GCM rows above at 1 KiB and 4 MiB it ran that path in both
+columns: the AVX2 column set IronCrypto without AVX-512 against Graviola
+with it, which is not what a CPU without AVX-512 runs. The next section
+corrects those rows. The AVX2 column is a Zen 5 with AVX-512 switched off,
+not an older CPU; frequency and cache are the same as in the default column.
+
+### AES-GCM without AVX-512
+
+Two changes, and a corrected comparison. The 128- and 256-bit AES-GCM
+kernels were rewritten as assembly with a cheaper GHASH reduction, and the
+512-bit kernel took the same reduction (CHANGELOG.md, Unreleased). And
+`--cfg ic_no_vaes` was added, which switches off VAES as well, so that the
+eight-block AES-NI kernel -- what Skylake or Zen 2 runs -- can be measured
+on this machine as the default.
+
+On Graviola's side, its switch for the AVX-512 path,
+`GRAVIOLA_CPU_DISABLE_avx512f`, is read only in its debug builds, and there
+on every call, which swamps the short rows. So the like-for-like rows use a
+local copy of Graviola 0.4.1 in which `HaveAvx512ForAesGcm::check` returns
+`None`, patched in for those builds only:
+
+```text
+cd bench
+RUSTFLAGS="--cfg ic_no_avx512" cargo run --release \
+  --config "patch.crates-io.graviola.path='<copy>'" -- graviola-gcm
+RUSTFLAGS="--cfg ic_no_avx512 --cfg ic_no_vaes" cargo run --release \
+  --config "patch.crates-io.graviola.path='<copy>'" -- graviola-gcm
+```
+
+`graviola-gcm` runs the three AES-256-GCM sealing rows alone, best of 15.
+Four rounds on 2026-10-13, the build before this change (`base`) and after
+it run alternately in each configuration, Graviola in every run; the
+machine was loaded by other jobs throughout. IronCrypto's rate over
+Graviola's within each run, range across rounds:
+
+| configuration | Graviola runs | 4 MiB | 1 KiB | 64 B |
+|---|---|---|---|---|
+| default (512-bit kernel), before | its AVX-512 path | 1.28-1.38 | 1.08-1.10 | 1.29-1.36 |
+| default, after | its AVX-512 path | 1.42-1.53 | 1.45-1.59 | 2.12-2.29 |
+| VAES-256 (`ic_no_avx512`), before | its AES-NI path | 1.55-1.97 | 1.24-1.40 | 1.17-1.22 |
+| VAES-256, after | its AES-NI path | 1.99-2.28 | 1.91-2.08 | 1.98-2.02 |
+| AES-NI (`ic_no_avx512 ic_no_vaes`), before | its AES-NI path | 0.80-0.84 | 0.74-0.84 | 1.09-1.24 |
+| AES-NI, after | its AES-NI path | 1.04-1.09 | 1.09-1.22 | 1.87-2.10 |
+| VAES-256, before | its AVX-512 path (not like for like) | 0.68-0.74 | 0.74-0.77 | 1.36-1.44 |
+| VAES-256, after | its AVX-512 path (not like for like) | 0.80-0.87 | 0.93-1.14 | 2.15-2.22 |
+
+IronCrypto's own rate, the same rounds: the 512-bit kernel at 4 MiB went
+from 17621-20953 MiB/s to 21345-23627; VAES-256 from 9270-11887 to 11494-12650; the
+AES-NI kernel from 4827-5118 to 6085-6453.
+
+Read the AES-NI row at 4 MiB as a lead, but a narrow one. A second harness,
+the minimum over thousands of short alternating trials rather than the best
+of fifteen long ones, which filters out moments when another process holds
+the core's other thread, put it at 1.24 at 4 MiB and 1.21 at 1 KiB. The
+eight-block loop is within about a quarter of what the AES unit alone
+allows on this CPU -- eight blocks of AES-256 take sixty cycles at two
+`AESENC` a cycle, and the loop takes some 75 to 80 -- so there is little
+left to take on the kernel's side; Graviola's eight-block loop is not
+stitched, and takes about a hundred.
+
+The VAES-256 kernel against Graviola's AVX-512 path (the last two rows) is
+behind at 4 MiB and level at 1 KiB: two blocks per instruction against
+four, on a CPU whose 512-bit units are full width. That is the comparison
+on Zen 4 and on Intel CPUs with AVX-512 -- but there IronCrypto runs its own
+512-bit kernel, the default rows. A CPU without AVX-512 runs neither
+library's 512-bit path.
 
 ## Proved arithmetic
 
