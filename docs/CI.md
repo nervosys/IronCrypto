@@ -190,3 +190,19 @@ grows its own copy of a check the other has. It compares the environment too,
 not just the commands: CI set `RUSTDOCFLAGS: -D warnings` on its docs job and
 the local gate did not, so nine broken intra-doc links were warnings in one
 place and errors in the other, and nobody read either.
+
+## Testing the AVX2 paths on an AVX-512 machine
+
+On a CPU with AVX-512, the default build never runs the AVX2-only paths.
+`--cfg ic_no_avx512` turns the AVX-512 detection off, so this runs the AVX2,
+VAES-256 and MULX/ADX code instead:
+
+```bash
+RUSTFLAGS="--cfg ic_no_avx512" CARGO_TARGET_DIR=target-avx2 \
+  cargo test -p ic-ec -p ic-rsa -p ic-cipher -p ic-hash -p ic-mlkem
+```
+
+This is not a step in `scripts/check.sh`. It rebuilds the dependency graph
+under different flags, a full build of several minutes, so it belongs in its
+own target directory and a separate job if CI wants it. The benchmark
+comparison that uses the same switch is in `docs/GRAVIOLA.md`.

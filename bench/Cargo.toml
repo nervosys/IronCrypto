@@ -43,6 +43,9 @@ graviola = "0.4.1"
 # like-for-like comparison for IronCrypto's portable backend. Without it the
 # crate detects AES-NI at runtime and the comparison is against hardware.
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_no_avx512)"] }
+
 [profile.release]
 opt-level = 3
 lto = true

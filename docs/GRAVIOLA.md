@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (more variable under load), ChaCha20-Poly1305, X25519, Ed25519, ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly |
+| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly; without AVX-512, AES-GCM at 1 KiB and 4 MiB, X25519, Ed25519 and RSA-2048 fall behind (see "Without AVX-512") |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA product by the gate alone, and its IFMA exponentiation as a whole by neither |
@@ -138,12 +138,59 @@ Where it is not ahead:
   algorithm runs the portable code. Graviola carries aarch64 assembly and
   requires the `aes`, `sha2`, `pmull` and `neon` features there. Nothing was
   measured on aarch64.
-- **CPUs without AVX-512.** Several of the leads above (X25519, the AES-GCM
-  wide kernels, RSA's exponentiation, the ChaCha20 keystream) come from
-  AVX-512 or IFMA paths. On a
-  CPU with only AVX2, BMI2 and ADX the MULX/ADX paths run instead; those
-  have not been measured against Graviola on such a CPU, and the leads
-  should be expected to narrow.
+- **CPUs without AVX-512.** Measured on the same Zen 5 machine with
+  `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
+  below). Without them, AES-GCM at 1 KiB and 4 MiB, X25519 and RSA-2048 fall
+  behind Graviola, Ed25519 drops to parity or behind, and ChaCha20-Poly1305
+  and ECDSA P-384 keep a lead, the ChaCha20 one smaller. Graviola needs only AVX2 and ADX, so it is the
+  fair comparison on such a CPU.
+
+### Without AVX-512
+
+`RUSTFLAGS="--cfg ic_no_avx512" cargo run --release -- graviola` (and
+`graviola-p384`, `graviola-chacha`), three rounds each, alternating with the
+default build in the same window. Each cell is IronCrypto's rate over
+Graviola's within one run, as a range across the three rounds (above 1 is
+IronCrypto faster). The machine was loaded by other jobs.
+
+| operation | AVX2 only | default build, same rounds |
+|---|---|---|
+| AES-256-GCM seal, 4 MiB | 0.44-0.66 | 0.40-1.36 |
+| AES-256-GCM seal, 1 KiB | 0.68-0.77 | 1.05-1.34 |
+| AES-256-GCM seal, 64 B | 1.24-1.40 | 1.20-1.58 |
+| ChaCha20-Poly1305 seal, 4 MiB | 1.65-1.84 | 3.24-3.54 |
+| ChaCha20-Poly1305 seal, 1 KiB | 1.41-1.66 | 2.22-2.69 |
+| ChaCha20-Poly1305 seal, 64 B | 0.93-1.38 | 1.30-1.31 |
+| X25519 | 0.89-0.99 | 1.18-1.64 |
+| Ed25519 sign | 0.85-0.94 | 0.95-1.25 |
+| Ed25519 verify | 0.88-1.09 | 1.28-1.56 |
+| P-256 ECDH | 0.84-0.93 | 0.84-0.99 |
+| ECDSA P-256 sign | 0.89-1.05 | 1.04-1.13 |
+| ECDSA P-256 verify | 0.98-1.01 | 1.00-1.08 |
+| P-384 ECDH | 0.76-0.77 | 0.69-1.26 |
+| ECDSA P-384 sign | 2.31-2.59 | 2.26-2.32 |
+| ECDSA P-384 verify | 1.08-1.23 | 1.26-1.66 |
+| RSA-2048 PKCS#1 v1.5 sign | 0.64-0.68 | 1.16-1.36 |
+| RSA-2048 PKCS#1 v1.5 verify | 0.68-0.78 | 1.16-1.25 |
+| SHA-512, 4 MiB | 1.47-1.86 | 1.60-2.23 |
+| ML-KEM-768 encapsulate, key prepared (control) | 1.74-2.15 | 1.80-2.00 |
+| SHA-256, 4 MiB (control) | 0.92-1.20 | 0.95-0.98 |
+
+Read the rows with care. The two controls have no AVX-512 path, so their
+spread between the builds is noise, and the P-384 ECDH row moves as much
+(0.69 to 1.26 in the default build) though nothing it runs changed. The
+AES-GCM 4 MiB default range is wide for the same reason. The AVX2 figures are
+tighter, and the drops that separate from the default build (AES-GCM at
+1 KiB, X25519, RSA-2048) are the clearest reading. Without AVX-512, P-256 ECDH,
+SHA-3, HMAC and ML-KEM with a prepared key stay within the default build's
+spread. ML-KEM encapsulation from key bytes was left out of the table: these
+rounds used the earlier bench row that set it against a Graviola key parsed
+once, which is not like for like (see the last run above for the corrected
+rows).
+
+Graviola's own paths are the same in both columns, since it does not use
+AVX-512. The AVX2 column is a Zen 5 with AVX-512 switched off, not an older
+CPU; frequency and cache are the same as in the default column.
 
 ## Proved arithmetic
 

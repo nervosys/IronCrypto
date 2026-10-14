@@ -1563,7 +1563,8 @@ mod tests {
         #[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
         {
             let adx = std::is_x86_feature_detected!("bmi2") && std::is_x86_feature_detected!("adx");
-            let ifma = std::is_x86_feature_detected!("avx512f")
+            let ifma = !cfg!(ic_no_avx512)
+                && std::is_x86_feature_detected!("avx512f")
                 && std::is_x86_feature_detected!("avx512ifma")
                 && std::is_x86_feature_detected!("bmi2");
             std::eprintln!("this CPU: adx {adx}, ifma {ifma}");

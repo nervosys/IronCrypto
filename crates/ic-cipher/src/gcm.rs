@@ -1078,6 +1078,10 @@ mod fused_tests {
                 Kernel::Clmul8
             };
             assert_eq!(best_kernel(), expect);
+            // Under `--cfg ic_no_avx512` the 512-bit kernel must stay off, so
+            // this build measures the 256-bit one.
+            #[cfg(ic_no_avx512)]
+            assert_ne!(c.kernel(), Some(Kernel::Vaes512));
             std::eprintln!("AES-GCM kernel on this CPU: {:?}", best_kernel());
         } else {
             assert_eq!(c.kernel(), None);

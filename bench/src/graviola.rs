@@ -29,6 +29,7 @@ pub fn run() {
         "IronCrypto AES backend: {:?}",
         ic_cipher::aes::active_backend()
     );
+    backends();
 
     let key = [0x2au8; 32];
     let nonce = [0x24u8; 12];
@@ -370,6 +371,7 @@ pub fn run() {
 /// The P-384 rows alone: `cargo run --release -- graviola-p384`.
 pub fn p384() {
     println!();
+    backends();
     println!("P-384, per operation (lower is better)");
     let msg = b"benchmark message";
     // The same three rows as P-256, on one key loaded into both.
@@ -433,6 +435,7 @@ pub fn p384() {
 pub fn chacha() {
     println!();
     println!("IronCrypto vs Graviola 0.4.1, ChaCha20-Poly1305 — best of {REPEATS}");
+    backends();
     let key = [0x2au8; 32];
     let nonce = [0x24u8; 12];
     let mut data = vec![0u8; SIZE];
@@ -480,5 +483,20 @@ pub fn chacha() {
                 }
             },
         );
+    }
+}
+
+/// The backends this build selects, so a run says which paths it measured.
+/// `--cfg ic_no_avx512` turns the AVX-512 paths off. The ChaCha20 and AES-GCM
+/// kernels have no public reporter; their choice is pinned by unit tests in
+/// `ic-cipher` instead.
+fn backends() {
+    println!("IronCrypto X25519 backend: {:?}", ic_ec::curve25519_backend());
+    println!(
+        "IronCrypto RSA-2048 backend: {:?}",
+        ic_rsa::uint::backend_for(32)
+    );
+    if cfg!(ic_no_avx512) {
+        println!("IronCrypto built with --cfg ic_no_avx512 (AVX-512 paths off)");
     }
 }

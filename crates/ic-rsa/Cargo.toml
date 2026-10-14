@@ -23,7 +23,7 @@ ct-probes = []
 # `ic_limb32` selects the 32-bit word arithmetic on any target; see
 # `src/uint.rs`.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)", "cfg(ic_no_avx512)"] }
 
 [dependencies]
 ic-core = { workspace = true }

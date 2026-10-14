@@ -5,6 +5,21 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **`--cfg ic_no_avx512`, for testing and measuring only.** Set through
+  `RUSTFLAGS`, it makes every AVX-512-family detection report false: the
+  sixteen-block ChaCha20 kernel and the 512-bit AES-GCM kernel (`ic-cipher`),
+  SHA-3's AVX-512VL permutation (`ic-hash`), the IFMA RSA exponentiation
+  (`ic-rsa`) and the IFMA Curve25519 field (`ic-ec`). The AVX2, VAES-256 and
+  MULX/ADX paths then run on a CPU that has AVX-512. Nothing else changes: it
+  is not a Cargo feature, reads no environment variable, and is not a
+  production setting. The four crates declare it in their check-cfg lints;
+  the `ic-ec`, `ic-rsa`, `ic-cipher` and `ic-hash` test suites pass under it,
+  and two tests assert that the 512-bit kernels stay off. The bench header
+  prints the X25519 and RSA-2048 backends. `docs/GRAVIOLA.md` ("Without
+  AVX-512") has the measured effect on the Graviola comparison.
+
 ### Changed
 
 - **RSA key generation draws each Miller-Rabin base at random**, as FIPS

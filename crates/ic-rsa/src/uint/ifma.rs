@@ -95,7 +95,9 @@ pub(crate) fn available() -> bool {
             1 => true,
             2 => false,
             _ => {
-                let have = std::is_x86_feature_detected!("avx512f")
+                // `--cfg ic_no_avx512` reports this false, for measuring the AVX2 paths.
+                let have = !cfg!(ic_no_avx512)
+                    && std::is_x86_feature_detected!("avx512f")
                     && std::is_x86_feature_detected!("avx512ifma")
                     && std::is_x86_feature_detected!("bmi2");
                 CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
