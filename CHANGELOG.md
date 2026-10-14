@@ -3,6 +3,22 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Changed
+
+- **RSA key generation draws each Miller-Rabin base at random**, as FIPS
+  186-5 B.3.1 specifies, from the generator's own RNG. The bases were the
+  first eight primes, fixed. Wycheproof's primality vectors include twenty
+  composites built to pass that set; they are now refused, and every one of
+  the 303 cases that can be checked agrees with its label, where 0.3.0 listed
+  those twenty as known failures. The error bound is 4^-8 for any composite.
+  Key generation's candidates come from the DRBG, not from an adversary, so
+  the fixed bases were not an attacker-reachable weakness. Generated keys
+  change: the RNG is consumed differently. Rounds stay at 8; FIPS 186-5 Table
+  B.1 was not checked against the standard, so no lower count is taken.
+  `ic_rsa::key::probable_prime_be`, hidden and test-only, now takes an RNG.
+
 ## 0.3.0
 
 A breaking release: the changes under **Breaking** change signatures every
