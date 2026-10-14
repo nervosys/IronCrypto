@@ -79,6 +79,9 @@ X86_ONLY = (
     # its loop tests do not fit the 32-bit counter shapes, so it is not
     # required there.
     "ct_rsa_adx_mont_mul_2048", "ct_rsa_ifma_amm_2048", "ct_rsa_cios_2048",
+    # The MULX/ADCX/ADOX square at 2048 bits, and the straight-line product
+    # and square at 1024 bits that RSA-2048 signing runs on.
+    "ct_rsa_adx_mont_sqr_2048", "ct_rsa_adx_mont_mul_1024", "ct_rsa_adx_mont_sqr_1024",
     # RSA's whole exponentiation on AVX-512 IFMA, compiled once per width:
     # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
     # bits, its modulus. Its loops are excused the same way.
@@ -137,12 +140,20 @@ EXCUSE_CEILINGS = {
 # ceiling fails. Counted per probe, following calls. Read on 2026-10-13,
 # rustc 1.99.0.
 X86_EXCUSE_CEILINGS = {
-    # The kernel's two inner passes (`jrcxz` on rcx, stepped by `lea 4(rcx)`,
-    # each closed by a `jmp`), its row loop (`dec`/`jne` on the row count),
-    # the masked subtraction's word loop (`cmp $32`), and the zeroing of the
-    # 66-word accumulator on the stack.
-    "ct_rsa_adx_mont_mul_2048": {"counter loop": 4, "unconditional jump": 2,
-                                 "constant memset": 1},
+    # MULX/ADX at 2048 bits, on the loop kernels: each block's loop over its
+    # groups of eight steps (`test`/`je` on the group count in rbp, `dec`, a
+    # `jmp` back) -- four product blocks and four reduction blocks -- and the
+    # final subtraction's two loops (`jrcxz` on rcx, stepped by `lea`).
+    "ct_rsa_adx_mont_mul_2048": {"counter loop": 10, "unconditional jump": 10},
+    # The same for the square: four blocks of cross products, the diagonal's
+    # `jrcxz` loop, four reduction blocks, and the final subtraction.
+    "ct_rsa_adx_mont_sqr_2048": {"counter loop": 11, "unconditional jump": 11},
+    # MULX/ADX at 1024 bits: the kernels are straight-line, and the two loops
+    # are the final subtraction's.
+    "ct_rsa_adx_mont_mul_1024": {"counter loop": 2, "unconditional jump": 2},
+    "ct_rsa_adx_mont_sqr_1024": {"counter loop": 2, "unconditional jump": 2},
+    # The table read's SSE2 scan: one `jrcxz` loop over pairs of words.
+    "ct_rsa_select_2048": {"counter loop": 1, "unconditional jump": 1},
     # The kernel's row loop: `dec`/`jne` on the 40 rows.
     "ct_rsa_ifma_amm_2048": {"counter loop": 1},
     # The two inner j loops and the outer i loop of CIOS, the masked

@@ -5,6 +5,7 @@
 //! cargo run --release -- graviola-p384   # the P-384 rows alone
 //! cargo run --release -- graviola-chacha # ChaCha20-Poly1305, split in halves
 //! cargo run --release -- graviola-25519  # X25519 and Ed25519 alone
+//! cargo run --release -- graviola-rsa    # RSA at 2048, 3072 and 4096 bits
 //! ```
 //!
 //! Graviola runs only on x86-64 with AES, AVX2, ADX, BMI2 and PCLMULQDQ, or on
@@ -353,42 +354,65 @@ pub fn run() {
         verdict("ml-kem-768 decaps, parsed once, both", q1, q2, false);
     }
 
-    // RSA-2048 PKCS#1 v1.5 signing, on one key loaded into both.
-    {
-        let g_key =
-            graviola::signing::rsa::SigningKey::generate(graviola::signing::rsa::KeySize::Rsa2048)
-                .unwrap();
-        let mut der = vec![0u8; 4096];
-        let der = g_key.to_pkcs8_der(&mut der).unwrap();
-        let ic_pkix::PrivateKeyInfo::Rsa {
-            public_exponent,
-            prime1,
-            prime2,
-            ..
-        } = ic_pkix::PrivateKeyInfo::from_der(der).unwrap()
-        else {
-            panic!("graviola wrote an RSA key that is not RSA");
-        };
-        let ic_key = ic_rsa::RsaPrivateKey::from_primes(prime1, prime2, public_exponent).unwrap();
-        let mut sig = vec![0u8; 256];
-        let r1 = per_op("ironcrypto rsa-2048 pkcs1 sign", 200, 5, || {
-            ic_rsa::Pkcs1Sha256::sign(&ic_key, msg, &mut sig).unwrap();
-        });
-        let mut g_sig = vec![0u8; 256];
-        let r2 = per_op("graviola rsa-2048 pkcs1 sign", 200, 5, || {
-            std::hint::black_box(g_key.sign_pkcs1_sha256(&mut g_sig, msg).unwrap());
-        });
-        verdict("rsa-2048 sign", r1, r2, false);
-        let public = ic_key.public_key();
-        let r3 = per_op("ironcrypto rsa-2048 pkcs1 verify", 5000, 5, || {
-            ic_rsa::Pkcs1Sha256::verify(&public, msg, &sig).unwrap();
-        });
-        let g_pub = g_key.public_key();
-        let r4 = per_op("graviola rsa-2048 pkcs1 verify", 5000, 5, || {
-            g_pub.verify_pkcs1_sha256(&sig, msg).unwrap();
-        });
-        verdict("rsa-2048 verify", r3, r4, false);
+    rsa(graviola::signing::rsa::KeySize::Rsa2048, 2048, msg);
+}
+
+/// The RSA rows at every size both libraries take:
+/// `cargo run --release -- graviola-rsa`.
+pub fn rsa_sizes() {
+    println!();
+    backends();
+    println!("RSA PKCS#1 v1.5 with SHA-256, per operation (lower is better)");
+    let msg = b"benchmark message";
+    use graviola::signing::rsa::KeySize;
+    for (size, bits) in [
+        (KeySize::Rsa2048, 2048),
+        (KeySize::Rsa3072, 3072),
+        (KeySize::Rsa4096, 4096),
+    ] {
+        rsa(size, bits, msg);
     }
+}
+
+/// PKCS#1 v1.5 signing and verification, on one key loaded into both.
+fn rsa(size: graviola::signing::rsa::KeySize, bits: usize, msg: &[u8]) {
+    let g_key = graviola::signing::rsa::SigningKey::generate(size).unwrap();
+    let mut der = vec![0u8; 4096];
+    let der = g_key.to_pkcs8_der(&mut der).unwrap();
+    let ic_pkix::PrivateKeyInfo::Rsa {
+        public_exponent,
+        prime1,
+        prime2,
+        ..
+    } = ic_pkix::PrivateKeyInfo::from_der(der).unwrap()
+    else {
+        panic!("graviola wrote an RSA key that is not RSA");
+    };
+    let ic_key = ic_rsa::RsaPrivateKey::from_primes(prime1, prime2, public_exponent).unwrap();
+    // Fewer iterations as the key grows: signing is cubic in the size.
+    let (sign_iters, verify_iters) = match bits {
+        2048 => (200, 5000),
+        3072 => (60, 2000),
+        _ => (30, 1000),
+    };
+    let mut sig = vec![0u8; bits / 8];
+    let r1 = per_op(&format!("ironcrypto rsa-{bits} pkcs1 sign"), sign_iters, 5, || {
+        ic_rsa::Pkcs1Sha256::sign(&ic_key, msg, &mut sig).unwrap();
+    });
+    let mut g_sig = vec![0u8; bits / 8];
+    let r2 = per_op(&format!("graviola rsa-{bits} pkcs1 sign"), sign_iters, 5, || {
+        std::hint::black_box(g_key.sign_pkcs1_sha256(&mut g_sig, msg).unwrap());
+    });
+    verdict(&format!("rsa-{bits} sign"), r1, r2, false);
+    let public = ic_key.public_key();
+    let r3 = per_op(&format!("ironcrypto rsa-{bits} pkcs1 verify"), verify_iters, 5, || {
+        ic_rsa::Pkcs1Sha256::verify(&public, msg, &sig).unwrap();
+    });
+    let g_pub = g_key.public_key();
+    let r4 = per_op(&format!("graviola rsa-{bits} pkcs1 verify"), verify_iters, 5, || {
+        g_pub.verify_pkcs1_sha256(&sig, msg).unwrap();
+    });
+    verdict(&format!("rsa-{bits} verify"), r3, r4, false);
 }
 
 /// The P-384 rows alone: `cargo run --release -- graviola-p384`.

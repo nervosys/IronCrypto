@@ -640,6 +640,15 @@ pub(crate) fn select(table: &[Limbs; 16], limbs: usize, digit: u64, out: &mut Li
     // One barrier for all sixteen, so the compiler cannot see that exactly
     // one mask is set and turn the scan into an indexed load.
     let masks = core::hint::black_box(masks);
+    // The same scan, two words at a time in SSE2 registers.
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(feature = "std", feature = "ct-probes"),
+        not(ic_limb32)
+    ))]
+    if x86::select(table, limbs, &masks, out) {
+        return;
+    }
     let out = &mut out[..limbs];
     out.fill(0);
     for (entry, &mask) in table.iter().zip(&masks) {
@@ -793,9 +802,7 @@ impl Modulus {
         let t = &mut scratch.0[..];
 
         #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
-        if !force_portable() && x86::mont_mul(t, a, b, n, self.n0inv) {
-            let (lo, hi) = t.split_at(2 * l);
-            finish(out, &lo[l..], hi[0], n);
+        if !force_portable() && x86::mont_mul(t, a, b, n, self.n0inv, out) {
             return;
         }
 
@@ -814,9 +821,7 @@ impl Modulus {
         let t = &mut scratch.0[..];
 
         #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
-        if !force_portable() && x86::mont_mul(t, a, a, n, self.n0inv) {
-            let (lo, hi) = t.split_at(2 * l);
-            finish(out, &lo[l..], hi[0], n);
+        if !force_portable() && x86::mont_sqr(t, a, n, self.n0inv, out) {
             return;
         }
 

@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and forty-six more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and forty-nine more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -76,11 +76,13 @@ release profile; this is not the workspace binary's overflow-checked profile.
   `ct_poly1305_avx2_finish`). See "ChaCha20 and Poly1305 on x86-64" below.
 - On x86-64 only, RSA at 2048 bits: the windowed exponentiation's table
   read (`ct_rsa_select_2048`), and the three Montgomery products -- on
-  MULX/ADCX/ADOX (`ct_rsa_adx_mont_mul_2048`), on AVX-512 IFMA
-  (`ct_rsa_ifma_amm_2048`) and the portable CIOS (`ct_rsa_cios_2048`). The
-  products loop over the width, and their loop branches are excused by the
+  MULX/ADCX/ADOX (`ct_rsa_adx_mont_mul_2048`, and its square
+  `ct_rsa_adx_mont_sqr_2048`), on AVX-512 IFMA (`ct_rsa_ifma_amm_2048`) and
+  the portable CIOS (`ct_rsa_cios_2048`); and at 1024 bits the straight-line
+  MULX/ADCX/ADOX product and square (`ct_rsa_adx_mont_mul_1024`,
+  `ct_rsa_adx_mont_sqr_1024`). The loops over the width are excused by the
   x86-64 counter-loop rule, per probe, up to a ceiling. See "Loops on
-  x86-64" below.
+  x86-64" and "RSA on MULX/ADX in eight-word blocks" below.
 - On x86-64 only, RSA's whole exponentiation on AVX-512 IFMA, from the
   modulus, base and secret exponent to the reduced result, at 1024 bits
   (`ct_rsa_ifma_pow_1024`, each of RSA-2048's two CRT exponentiations) and
@@ -984,3 +986,80 @@ AES-GCM path the CPU it runs on selects.
 Probe count: forty-one on x86-64 alone, where there were thirty-four. All
 eighty-five pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 85 + 3 x 44 = 217 gating probe/target checks.
+
+## RSA on MULX/ADX in eight-word blocks, 2026-10-13
+
+The MULX/ADCX/ADOX backend (`ic-rsa/src/uint/x86.rs`) was rewritten for
+speed: a straight-line product and square at 16 words, the width of an
+RSA-2048 prime; product, square and reduction in eight-word register blocks
+at the other multiples of eight; the final conditional subtraction in
+assembly, by mask; and the exponentiation's table read (`select`) as an SSE2
+masked scan. The older interleaved kernel remains for widths that are a
+multiple of four but not of eight, which no RSA key has. Squaring, which was
+not probed (above, "Not covered"), now has its own kernels and probes.
+
+Probes: `ct_rsa_adx_mont_mul_2048` now reads the block kernels;
+`ct_rsa_adx_mont_sqr_2048` is new, for the block square; and
+`ct_rsa_adx_mont_mul_1024` and `ct_rsa_adx_mont_sqr_1024` are new, for the
+straight-line kernels that RSA-2048 signing spends its time in. Each runs the
+kernel and the final subtraction on an uninitialised scratch buffer, as the
+library now does: the kernels write every word of it before reading it, so
+the 66-word `memset` the old probe had is gone, and with it that ceiling.
+`ct_rsa_select_2048` reads the SSE2 scan, which is a loop.
+
+### The ceilings, read on 2026-10-13, rustc 1.99.0
+
+| Probe | counter loop | unconditional jump | constant memset |
+| --- | --- | --- | --- |
+| `ct_rsa_adx_mont_mul_2048` | 10 | 10 | 0 |
+| `ct_rsa_adx_mont_sqr_2048` | 11 | 11 | 0 |
+| `ct_rsa_adx_mont_mul_1024` | 2 | 2 | 0 |
+| `ct_rsa_adx_mont_sqr_1024` | 2 | 2 | 0 |
+| `ct_rsa_select_2048` | 1 | 1 | 0 |
+
+Each excused finding, read in `target/ct-audit/probes/x86_64-unknown-linux-gnu.s`:
+
+- The 16-word kernels have no branch at all. Both 1024-bit probes' four
+  findings are the final subtraction (`x86::finish`): two loops, each
+  `jrcxz` leaving and `jmp` closing it, rcx set to `-4` (16 words, four a
+  turn) before each and stepped only by `lea 1(%rcx)`, which leaves the
+  borrow chain alone.
+- `ct_rsa_adx_mont_mul_2048`: four product blocks and four reduction blocks,
+  each a loop over its groups of eight steps -- `testq %rbp, %rbp; je` at
+  the top, `decq %rbp`, `jmp` back -- with rbp loaded from rcx or rax, set
+  to `$4` (product) and `$3` (reduction) before each block; and the final
+  subtraction's two loops, rcx `$-8`.
+- `ct_rsa_adx_mont_sqr_2048`: four blocks of cross products, the same loop
+  shape with the group count `$3`, `$2`, `$1` and `0`; the diagonal's loop,
+  `jrcxz`/`jmp` with rcx `$-8`; four reduction blocks, `$3` each; and the
+  final subtraction.
+- `ct_rsa_select_2048`: the scan's loop over pairs of words, `jrcxz`/`jmp`,
+  rcx `$-16`. Inside it, sixteen `movdqu`/`pand`/`por` at fixed offsets from
+  the table, one per entry; the masks are computed in Rust as before.
+
+Every count starts at a constant derived from the width. Nothing in any of
+the kernels indexes memory by a value.
+
+### Mutations
+
+Applied one at a time to the library, the check run, and restored:
+
+- `test rax, 1; jz 7f; nop; 7:` in every step of the 16-word kernels: fails
+  `ct_rsa_adx_mont_mul_1024 -> ...x8611mont_mul_16: je .Ltmp19`.
+- The same in every step of the block kernels: fails
+  `ct_rsa_adx_mont_mul_2048 -> ...x8611mont_mul_8n: je .Ltmp21`.
+- A branch on the selected words in the SSE2 table read: fails
+  `ct_rsa_select_2048: je .Ltmp17`.
+- The final subtraction run twice in the 1024-bit square: fails
+  `ct_rsa_adx_mont_sqr_1024: 4 findings excused as counter loop, more than
+  the 2 reviewed`.
+
+Restored, all pass. Probe count, after merging the IFMA exponentiation and
+P-384 window probes from master: forty on x86-64 alone, three of them these.
+All eighty-four pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 84 + 3 x 44 = 216 gating probe/target checks. The IFMA
+exponentiation probes read their own table scan, not this one, and their
+counts are as master left them.
+
+After this merged with the AES-GCM probes above: forty-nine on x86-64
+alone, ninety-three there, 93 + 3 x 44 = 225 gating probe/target checks.

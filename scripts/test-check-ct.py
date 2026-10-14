@@ -238,6 +238,7 @@ class X86LoopTests(unittest.TestCase):
     X86 = "x86_64-unknown-linux-gnu"
     IFMA = "ct_rsa_ifma_amm_2048"   # ceiling: one counter loop, nothing else
     ADX = "ct_rsa_adx_mont_mul_2048"
+    CIOS = "ct_rsa_cios_2048"
 
     def run_on(self, lines, probe=None):
         probe = probe or self.ADX
@@ -273,11 +274,14 @@ class X86LoopTests(unittest.TestCase):
                  "callq *memset@GOTPCREL(%rip)", "retq"], {"constant memset": 1}),
         }
         for name, (lines, rules) in cases.items():
+            # The MULX/ADX probe no longer clears a buffer, and has no memset
+            # ceiling; CIOS still zeroes its accumulator, and has one.
+            probe = self.CIOS if name == "constant memset" else self.ADX
             with self.subTest(name):
-                failures, excused = self.run_on(lines)
+                failures, excused = self.run_on(lines, probe)
                 self.assertEqual(failures, [])
                 self.assertEqual(excused, collections.Counter(
-                    {(self.ADX, rule): count for rule, count in rules.items()}))
+                    {(probe, rule): count for rule, count in rules.items()}))
 
     def test_a_branch_on_anything_but_a_counter_is_not(self):
         cases = {
