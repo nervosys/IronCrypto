@@ -62,6 +62,31 @@ all of them.
   argued constant time from the instructions and the source, with one
   reading of their compiled code recorded in docs/CONSTANT_TIME.md; that is
   not a gate.
+- **RSA's whole AVX-512 IFMA exponentiation is in the compiled-code gate**,
+  at 1024 bits (`ct_rsa_ifma_pow_1024`, each of RSA-2048's CRT
+  exponentiations) and 2048 bits (`ct_rsa_ifma_pow_2048`), with no rule
+  added or widened: every branch in it is a loop's own counter, and the
+  ceilings, 9 and 12 counter loops and one `memset` each, were read branch
+  by branch. Valgrind cannot run AVX-512, so this is the only tool that
+  reads it. `ic_rsa::uint::ifma` is now one copy of the exponentiation per
+  width, chosen once by the modulus's width, with fixed-size arrays; the
+  window loop runs the kernel inlined and everything else calls one
+  out-of-line copy per width; `R'^2` is two products instead of 32 to 64
+  modular doublings; the top window is handled like the others, from a
+  masked copy of the exponent; nothing is copied between arrays. The rest
+  keeps the compiler from spilling the loop counters around a kernel that
+  holds twelve registers: `MASK` comes from memory, the kernel writes the
+  shifted words of `a` itself, the table read's masks are made in SSE2
+  registers (docs/CONSTANT_TIME.md, "The IFMA exponentiation"). Results
+  are unchanged; the tests compare every width with the portable path, now
+  also for 0- and 2-bit and zero exponents, in-place products and the
+  radix conversions. A branch on an exponent digit fails both probes, as
+  does one loop more than a ceiling. 36 probes on x86-64 alone, 80 there,
+  212 gating probe/target checks. Cost: `ic-rsa`'s `.text` grows by 18 KB
+  (79 to 98 KB, x86-64, LTO off). RSA-2048 against Graviola in the same
+  process, old and new builds alternated five times under load: signing
+  went from a median 0.71 to 0.83 of Graviola's time per run to 0.61 to
+  0.70, verification from 0.68 to 0.81 to 0.47 to 0.60.
 
 - **RSA key generation draws each Miller-Rabin base at random**, as FIPS
   186-5 B.3.1 specifies, from the generator's own RNG. The bases were the
@@ -91,8 +116,8 @@ all of them.
   probe/target checks. A branch on a limb inserted into the IFMA product,
   in Rust or in its assembly, into CIOS, or into the MULX/ADX kernel's
   assembly, fails the gate; so does one loop more than a ceiling. Not
-  covered: the IFMA exponentiation as a whole, which dispatches on the
-  width for every product (docs/CONSTANT_TIME.md, "Loops on x86-64").
+  covered then: the IFMA exponentiation as a whole, which dispatched on
+  the width for every product; see the entry above.
 - **ic-rsa:** `Ctx::amm` reads the width once, before the IFMA kernel,
   instead of after it, where the kernel's pointer into the context made
   every read a reload. The same value; the probe needs it to fold. Under
