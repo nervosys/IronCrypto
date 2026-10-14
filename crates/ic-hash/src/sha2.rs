@@ -1515,6 +1515,63 @@ mod tests {
         Sha512_256::self_test().unwrap();
     }
 
+    /// The ARMv8 probe wrappers, executed on fixed inputs against the portable
+    /// compression (`ct_probes`, which the audit only reads). Needs the SHA
+    /// instructions, so it runs under QEMU via `scripts/test-aarch64.sh`; it
+    /// asserts the detection rather than skipping, since a probe that never ran
+    /// is not a pass.
+    #[cfg(all(
+        test,
+        target_arch = "aarch64",
+        feature = "aarch64-crypto",
+        feature = "ct-probes"
+    ))]
+    mod armv8_probe_tests {
+        use super::*;
+
+        #[test]
+        fn sha256_probe_matches_the_portable_compression() {
+            assert!(
+                aarch64::sha256_available(),
+                "no ARMv8 SHA-256 instructions: the probe was not run"
+            );
+            let data: [u8; 256] =
+                core::array::from_fn(|i| (i as u8).wrapping_mul(29).wrapping_add(3));
+            let start: [u32; 8] =
+                core::array::from_fn(|i| 0x6a09_e667u32.wrapping_mul(i as u32 + 1));
+            let mut want = Core256::new(start);
+            for block in data.chunks_exact(64) {
+                want.compress(block);
+            }
+            let mut got = start;
+            // SAFETY: guarded by the detection above.
+            unsafe { ct_probes::sha256_armv8_compress(&mut got, &data) };
+            assert_eq!(got, want.h, "sha256_armv8_compress");
+        }
+
+        #[test]
+        fn sha512_probe_matches_the_portable_compression() {
+            assert!(
+                aarch64::sha512_available(),
+                "no ARMv8 SHA-512 instructions: the probe was not run"
+            );
+            let data: [u8; 256] =
+                core::array::from_fn(|i| (i as u8).wrapping_mul(29).wrapping_add(9));
+            let start: [u64; 8] =
+                core::array::from_fn(|i| 0x6a09_e667_f3bc_c908u64.wrapping_mul(i as u64 + 1));
+            let mut want = start;
+            let mut w = [0u64; 80];
+            for block in data.chunks_exact(128) {
+                Core512::schedule(&mut w, block);
+                Core512::rounds(&mut want, &w);
+            }
+            let mut got = start;
+            // SAFETY: guarded by the detection above.
+            unsafe { ct_probes::sha512_armv8_compress(&mut got, &data) };
+            assert_eq!(got, want, "sha512_armv8_compress");
+        }
+    }
+
     /// What the schedule wipe costs SHA-512, measured in one process.
     ///
     /// Ignored: a measurement. Run it with

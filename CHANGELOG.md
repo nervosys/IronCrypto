@@ -642,6 +642,12 @@ all of them.
 
 ### Changed
 
+- **The ARMv8 probe wrappers now run, under QEMU.** `scripts/test-aarch64.sh`
+  builds the backends with `ct-probes` and executes the AES, PMULL GHASH,
+  SHA-256 and SHA-512 probe wrappers against FIPS 197 C.3 and the portable
+  backends; before, `ct-audit` only read them and nothing ran them. The script
+  also finds `qemu-aarch64` or `qemu-aarch64-static` on `PATH` or in
+  `~/.local/bin` (docs/CI.md).
 - **`scripts/advisories.sh` gates on `cargo audit`'s findings.** When
   `cargo audit` is installed it now fails the check on a vulnerability in a
   crate the build compiles, naming the advisory, crate, version and fixed
