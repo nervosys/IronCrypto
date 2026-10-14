@@ -790,7 +790,16 @@ pub(crate) fn prepare_tables() {
     fn prepare<F: Curve>() {
         basepoint_table::prepare::<F>();
     }
-    dispatch!(prepare())
+    dispatch!(prepare());
+    // The radix-32 windows, where signing will read them: the four-limb
+    // field without IFMA, with AVX2.
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    if crate::fe64::available()
+        && crate::f51x4::Ifma::get().is_none()
+        && crate::fe64::edwards::Avx2::get().is_some()
+    {
+        fast::prepare_wide();
+    }
 }
 
 /// `scalar * B`, through the precomputed table where there is one.
@@ -908,6 +917,54 @@ fn odd_multiples<F: EdField>(p: &Ext<F>) -> [Niels<F>; 8] {
         odd[i] = odd[i - 1].add(&twice);
     }
     core::array::from_fn(|i| odd[i].to_niels())
+}
+
+/// Signed radix-32 digits per scalar: 51 cover 255 bits, and the 52nd takes
+/// the last carry.
+#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+pub(crate) const DIGITS32: usize = 52;
+
+#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
+/// A scalar below `2^256` as 52 signed radix-32 digits, each in `[-16, 16]`,
+/// `sum d_i 32^i`; the last is the final carry, 0 or 1 for a scalar below
+/// `2^255`.
+///
+/// Five-bit fields, then each digit above 15 traded for one more in the
+/// next: arithmetic only, the same for every scalar, as [`signed_digits`]
+/// does in radix 16.
+pub(crate) fn signed_digits32(scalar: &[u8; 32]) -> [i8; DIGITS32] {
+    // The field at bit 5i, from the two bytes it can span.
+    #[inline(always)]
+    fn field(scalar: &[u8; 32], i: usize) -> i8 {
+        let bit = 5 * i;
+        let lo = u16::from(scalar[bit / 8]);
+        let hi = u16::from(*scalar.get(bit / 8 + 1).unwrap_or(&0));
+        (((lo | (hi << 8)) >> (bit % 8)) & 31) as i8
+    }
+    // Written out with literal indices, as `scalar::reduce_wide_portable`'s
+    // steps are: as loops LLVM kept them rolled, and a rolled loop is a jump
+    // the compiled-code gate cannot tell from a secret one
+    // (`ct_ed25519_digits32` in scripts/check-ct.py).
+    macro_rules! fields {
+        ($($i:literal)*) => { [$(field(scalar, $i)),*] };
+    }
+    let mut d: [i8; DIGITS32] = fields!(
+        0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+        26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51
+    );
+    macro_rules! carries {
+        ($($i:literal)*) => {$({
+            let carry = (d[$i] + 16) >> 5;
+            d[$i] -= carry << 5;
+            d[$i + 1] += carry;
+        })*};
+    }
+    carries!(
+        0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+        26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50
+    );
+    d
 }
 
 /// The scalar as 64 signed radix-16 digits, each in `[-8, 8]`.

@@ -1,6 +1,7 @@
 //! Whether this CPU, and the operating system on it, can run the AVX-512
 //! IFMA code in this crate: Curve25519's four-lane field (`f51x4`) and the
-//! NIST curves' (`nist::ifma`).
+//! NIST curves' (`nist::ifma`). And, by the same questions, whether it can
+//! run AVX2, which Ed25519 signing's table read uses on the four-limb field.
 //!
 //! The crate's declared minimum Rust predates the stabilisation of the
 //! AVX-512 target features, so support is asked of CPUID and XGETBV here
@@ -54,17 +55,66 @@ fn cpuid(leaf: u32, sub: u32) -> (u32, u32, u32, u32) {
     (a, b as u32, c, d)
 }
 
+/// Whether the CPU has AVX2 and the OS saves the AVX register state, for
+/// signing's table read on the four-limb field (`fe64::edwards`). Asked once
+/// and cached. Not affected by `ic_no_avx512`, which stands for a CPU without
+/// IFMA, and every CPU with `MULX` and `ADX` has AVX2.
+#[inline]
+#[cfg_attr(
+    any(not(feature = "std"), ic_limb32, ic_ec_portable, ic_approved_only),
+    allow(dead_code)
+)]
+pub(crate) fn avx2() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    // 0 not yet asked, 1 yes, 2 no.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ => {
+            let have = detect_avx2();
+            CACHED.store(if have { 1 } else { 2 }, Ordering::Relaxed);
+            have
+        }
+    }
+}
+
+#[cfg_attr(
+    any(not(feature = "std"), ic_limb32, ic_ec_portable, ic_approved_only),
+    allow(dead_code)
+)]
+fn detect_avx2() -> bool {
+    let Some(xcr0) = xcr0() else {
+        return false;
+    };
+    // SSE (1) and AVX (2) state.
+    if xcr0 & 0b110 != 0b110 {
+        return false;
+    }
+    let (_, ebx7, _, _) = cpuid(7, 0);
+    // AVX2 (5).
+    ebx7 & (1 << 5) != 0
+}
+
 fn detect() -> bool {
+    let Some(xcr0) = xcr0() else {
+        return false;
+    };
+    detect_with(xcr0)
+}
+
+/// XCR0, or `None` without CPUID leaf 7, OSXSAVE or AVX.
+fn xcr0() -> Option<u64> {
     let (max, _, _, _) = cpuid(0, 0);
     if max < 7 {
-        return false;
+        return None;
     }
     let (_, _, ecx1, _) = cpuid(1, 0);
     // OSXSAVE (27) and AVX (28).
     if ecx1 & (1 << 27) == 0 || ecx1 & (1 << 28) == 0 {
-        return false;
+        return None;
     }
-    let xcr0: u64 = {
+    Some({
         let (lo, hi): (u32, u32);
         // SAFETY: XGETBV with ecx = 0 is available when OSXSAVE is set,
         // which was just checked; it reads XCR0 into edx:eax and nothing
@@ -79,7 +129,10 @@ fn detect() -> bool {
             );
         }
         (u64::from(hi) << 32) | u64::from(lo)
-    };
+    })
+}
+
+fn detect_with(xcr0: u64) -> bool {
     // SSE (1), AVX (2), and AVX-512's opmask (5), ZMM_Hi256 (6) and
     // Hi16_ZMM (7) state: without them EVEX instructions fault.
     let needed = 0b1110_0110;

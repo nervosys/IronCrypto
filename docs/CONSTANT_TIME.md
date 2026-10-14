@@ -22,7 +22,7 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-sixty-seven more on x86-64, and seven more on aarch64. Their public sizes
+seventy more on x86-64, and seven more on aarch64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -46,7 +46,8 @@ release profile; this is not the workspace binary's overflow-checked profile.
 - Ed25519 scalar arithmetic modulo L: the reduction of a 512-bit value, which
   makes the secret nonce from a hash and finishes `S`, and `a * b + c`, which
   is `S`. Straight-line on all five targets; see "Ed25519 scalar reduction"
-  below.
+  below. On x86-64 these are the 64-bit Barrett form, elsewhere the portable
+  21-bit fold; see "Ed25519 signing on AVX2".
 - On x86-64 only, the Curve25519 backends that exist only there: the
   MULX/ADX field's multiplication, squaring, addition, subtraction,
   multiplication by 121666 and divstep inversion, each from and back to
@@ -395,6 +396,45 @@ eighty pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 80 + 3 x 44 = 212 gating probe/target checks. Valgrind
 (docs/CTGRIND.md) runs none of this: it reports no ADX, so the portable
 field runs under it.
+
+## Ed25519 signing on AVX2, 2026-10-14
+
+Signing without AVX-512 IFMA changed twice (CHANGELOG.md, Unreleased): the
+basepoint multiplication on the MULX/ADX field now takes signed radix-32
+digits against sixteen-entry windows, read in vector registers inside the
+additions, where the CPU has AVX2; and on x86-64 the scalar arithmetic
+modulo L runs on four 64-bit limbs, by Barrett's method. Three probes are
+new, on x86-64 only:
+
+- `ct_ed25519_fe64_scan`: `fe64::edwards::scan`, the read of two secret
+  digits' entries from one window. Every entry is loaded, each half's kept by
+  `VPBLENDVB` under a mask from comparing its magnitude with the entry's
+  index; a negative digit swaps two elements by masked `XOR`s and negates the
+  third by subtraction and `CMOV`.
+- `ct_ed25519_fe64_madd_ext2_scan`: `fe64::edwards::madd_ext2_scan`, the
+  same read placed inside the two interleaved mixed additions of a step.
+- `ct_ed25519_digits32`: the secret scalar's radix-32 recoding. As loops,
+  the field extraction and the carries stayed rolled and failed this probe
+  with `jne`/`je`/`jmp` on the loop counters; they are written out with
+  literal indices, as the portable reduction's steps are, and pass.
+
+`ct_ed25519_reduce_wide` and `ct_ed25519_mul_add` keep their names and read
+the 64-bit code on x86-64 and the portable code on the other four targets.
+The 64-bit form's final choice is a mask through `fe64::mask`; replacing it
+with an early `return` on the borrow fails both probes with `jb`/`jmp`. A
+`test rax, rax; jz 2f; 2:` inserted into the table read's setup fails
+`ct_ed25519_fe64_scan` and `ct_ed25519_fe64_madd_ext2_scan`. Restored, all
+pass.
+
+Valgrind (docs/CTGRIND.md) runs the 64-bit scalar arithmetic, which is Rust
+on baseline x86-64 instructions, but not the table read: it reports no ADX,
+so signing takes the portable field under it. Rerun on this change
+(`scripts/ctgrind.sh`, WSL Debian), `ic-ed25519-sign` reports 0 branches and
+0 addresses depending on the seed, with both positive controls caught.
+
+Probe count: seventy on x86-64 alone, where there were sixty-seven: 114 on
+x86-64, and 297 gating probe/target checks with the other four targets
+unchanged.
 
 ## P-256 on x86-64 in assembly, 2026-10-13
 
@@ -892,8 +932,8 @@ instructions, failed nine of those.
   `PSTATE.DIT`, and the gate does not look at timing.
 
 Probe count: seven on aarch64 alone, and the forty-four shared, fifty-one
-there, all passing. With 111 on x86-64 and 44 on each 32-bit target:
-111 + 3 x 44 + 51 = 294 gating probe/target checks.
+there, all passing. With 114 on x86-64 and 44 on each 32-bit target:
+114 + 3 x 44 + 51 = 297 gating probe/target checks.
 
 ## The IFMA exponentiation, 2026-10-13
 

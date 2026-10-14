@@ -465,3 +465,430 @@ pub fn select(dst: &mut [u64; 16], table: &[[u64; 12]; 8], digit: i8) {
         );
     }
 }
+
+/// Proof that the CPU has AVX2 and the OS saves its registers, for the
+/// blocks below that read a table in vector registers.
+#[derive(Clone, Copy)]
+pub struct Avx2(());
+
+impl Avx2 {
+    /// `Some` on a CPU with AVX2. Asked once and cached; depends only on the
+    /// CPU, never on data.
+    #[inline]
+    #[cfg_attr(not(feature = "std"), allow(dead_code))]
+    pub fn get() -> Option<Avx2> {
+        crate::avx512::avx2().then_some(Avx2(()))
+    }
+}
+
+/// [`Ws2`] and, from byte 1024, what `madd_ext2_scan` and `scan` need to
+/// read a window: `ctl[0]` its address, `ctl[1]` and `ctl[2]` the digits for
+/// halves 0 and 1, as sign-extended `i64`s. The blocks write the digits'
+/// sign masks into `ctl[3]` and `ctl[4]`.
+#[repr(C)]
+pub struct Ws2Scan {
+    /// The two workspaces.
+    pub two: Ws2,
+    /// The controls above.
+    pub ctl: [u64; 8],
+}
+
+const _: () = assert!(core::mem::size_of::<Ws2>() == 1024);
+const _: () = assert!(core::mem::size_of::<Ws2Scan>() == 1088);
+
+/// A radix-32 window's sixteen entries as the twelve limbs each that
+/// [`madd_ext2_scan`] and [`scan`] read.
+#[cfg(feature = "std")]
+pub fn limbs16(table: &[AffineNiels<super::Fe64>; 16]) -> &[[u64; 12]; 16] {
+    const _: () = assert!(core::mem::size_of::<[AffineNiels<super::Fe64>; 16]>() == 1536);
+    const _: () = assert!(core::mem::align_of::<AffineNiels<super::Fe64>>() == 8);
+    // SAFETY: as in `limbs`: `AffineNiels` is `repr(C)` over three `Fe64`s,
+    // each a `repr(transparent)` `[u64; 4]`, without padding.
+    unsafe { &*(table as *const [AffineNiels<super::Fe64>; 16]).cast::<[[u64; 12]; 16]>() }
+}
+
+/// The start of a table read: the window's address into `rsi`, the two
+/// digits' magnitudes broadcast into `ymm6` and `ymm7` and their sign masks
+/// stored at `ctl[3]` and `ctl[4]`, the running index (from one) in `ymm8`
+/// and its step in `ymm9`, and the identity `(1, 1, 0)` in both halves'
+/// registers, `ymm0`-`ymm2` and `ymm3`-`ymm5`.
+macro_rules! scan_setup {
+    () => {
+        concat!(
+            "mov rsi, qword ptr [rdi + 1024]\n",
+            "mov rax, qword ptr [rdi + 1032]\n",
+            "mov rdx, rax\n",
+            "sar rdx, 63\n",
+            "xor rax, rdx\n",
+            "sub rax, rdx\n",
+            "mov qword ptr [rdi + 1048], rdx\n",
+            "vmovq xmm6, rax\n",
+            "vpbroadcastq ymm6, xmm6\n",
+            "mov rax, qword ptr [rdi + 1040]\n",
+            "mov rdx, rax\n",
+            "sar rdx, 63\n",
+            "xor rax, rdx\n",
+            "sub rax, rdx\n",
+            "mov qword ptr [rdi + 1056], rdx\n",
+            "vmovq xmm7, rax\n",
+            "vpbroadcastq ymm7, xmm7\n",
+            "vpcmpeqq ymm9, ymm9, ymm9\n",
+            "vpsrlq ymm9, ymm9, 63\n",
+            "vmovdqa ymm8, ymm9\n",
+            "mov eax, 1\n",
+            "vmovq xmm0, rax\n",
+            "vmovdqa ymm1, ymm0\n",
+            "vpxor xmm2, xmm2, xmm2\n",
+            "vmovdqa ymm3, ymm0\n",
+            "vmovdqa ymm4, ymm0\n",
+            "vpxor xmm5, xmm5, xmm5\n",
+        )
+    };
+}
+
+/// One entry of a table read: the entry at byte `$off` from `rsi`, loaded
+/// once and blended into each half's registers where that half's magnitude
+/// equals the running index, which then steps.
+macro_rules! scan_entry {
+    ($off:literal) => {
+        concat!(
+            "vpcmpeqq ymm10, ymm6, ymm8\n",
+            "vpcmpeqq ymm11, ymm7, ymm8\n",
+            "vpaddq ymm8, ymm8, ymm9\n",
+            "vmovdqu ymm12, ymmword ptr [rsi + ",
+            $off,
+            "]\n",
+            "vmovdqu ymm13, ymmword ptr [rsi + ",
+            $off,
+            " + 32]\n",
+            "vmovdqu ymm14, ymmword ptr [rsi + ",
+            $off,
+            " + 64]\n",
+            "vpblendvb ymm0, ymm0, ymm12, ymm10\n",
+            "vpblendvb ymm1, ymm1, ymm13, ymm10\n",
+            "vpblendvb ymm2, ymm2, ymm14, ymm10\n",
+            "vpblendvb ymm3, ymm3, ymm12, ymm11\n",
+            "vpblendvb ymm4, ymm4, ymm13, ymm11\n",
+            "vpblendvb ymm5, ymm5, ymm14, ymm11\n",
+        )
+    };
+}
+
+/// Entries 1-4, 5-8, 9-12 or 13-16 of a window (`$q` 0 to 3). `rsi` is
+/// reloaded first, since the field operations between the quarters use it.
+macro_rules! scan_quarter {
+    (0) => {
+        concat!(
+            "mov rsi, qword ptr [rdi + 1024]\n",
+            scan_entry!("0"),
+            scan_entry!("96"),
+            scan_entry!("192"),
+            scan_entry!("288"),
+        )
+    };
+    (1) => {
+        concat!(
+            "mov rsi, qword ptr [rdi + 1024]\n",
+            scan_entry!("384"),
+            scan_entry!("480"),
+            scan_entry!("576"),
+            scan_entry!("672"),
+        )
+    };
+    (2) => {
+        concat!(
+            "mov rsi, qword ptr [rdi + 1024]\n",
+            scan_entry!("768"),
+            scan_entry!("864"),
+            scan_entry!("960"),
+            scan_entry!("1056"),
+        )
+    };
+    (3) => {
+        concat!(
+            "mov rsi, qword ptr [rdi + 1024]\n",
+            scan_entry!("1152"),
+            scan_entry!("1248"),
+            scan_entry!("1344"),
+            scan_entry!("1440"),
+        )
+    };
+}
+
+/// The end of a table read: for a negative digit, `y + x` and `y - x`
+/// swapped (masked `XOR`s); then both halves' entries stored into their
+/// operand slots, `y + x` at 256, `y - x` at 288, `2d x y` at 352 (half 1 at
+/// 512 more).
+macro_rules! scan_store {
+    () => {
+        concat!(
+            "vpbroadcastq ymm10, qword ptr [rdi + 1048]\n",
+            "vpxor ymm12, ymm0, ymm1\n",
+            "vpand ymm12, ymm12, ymm10\n",
+            "vpxor ymm0, ymm0, ymm12\n",
+            "vpxor ymm1, ymm1, ymm12\n",
+            "vmovdqu ymmword ptr [rdi + 256], ymm0\n",
+            "vmovdqu ymmword ptr [rdi + 288], ymm1\n",
+            "vmovdqu ymmword ptr [rdi + 352], ymm2\n",
+            "vpbroadcastq ymm11, qword ptr [rdi + 1056]\n",
+            "vpxor ymm12, ymm3, ymm4\n",
+            "vpand ymm12, ymm12, ymm11\n",
+            "vpxor ymm3, ymm3, ymm12\n",
+            "vpxor ymm4, ymm4, ymm12\n",
+            "vmovdqu ymmword ptr [rdi + 768], ymm3\n",
+            "vmovdqu ymmword ptr [rdi + 800], ymm4\n",
+            "vmovdqu ymmword ptr [rdi + 864], ymm5\n",
+        )
+    };
+}
+
+/// `2d x y` at `[$t]` negated in place when the sign mask at `[$sign]` is
+/// set: `0 - t` with the borrow folded twice, as [`select`] negates, then
+/// `CMOV`s.
+macro_rules! scan_negate {
+    ($t:literal, $sign:literal) => {
+        concat!(
+            "mov r8, qword ptr [rdi + ",
+            $t,
+            "]\n",
+            "mov r9, qword ptr [rdi + ",
+            $t,
+            " + 8]\n",
+            "mov r10, qword ptr [rdi + ",
+            $t,
+            " + 16]\n",
+            "mov r11, qword ptr [rdi + ",
+            $t,
+            " + 24]\n",
+            "xor r12d, r12d\n",
+            "xor r13d, r13d\n",
+            "xor r14d, r14d\n",
+            "xor r15d, r15d\n",
+            "sub r12, r8\n",
+            "sbb r13, r9\n",
+            "sbb r14, r10\n",
+            "sbb r15, r11\n",
+            "sbb rax, rax\n",
+            "and eax, 38\n",
+            "sub r12, rax\n",
+            "sbb r13, 0\n",
+            "sbb r14, 0\n",
+            "sbb r15, 0\n",
+            "sbb rax, rax\n",
+            "and eax, 38\n",
+            "sub r12, rax\n",
+            "mov rdx, qword ptr [rdi + ",
+            $sign,
+            "]\n",
+            "test rdx, rdx\n",
+            "cmovnz r8, r12\n",
+            "cmovnz r9, r13\n",
+            "cmovnz r10, r14\n",
+            "cmovnz r11, r15\n",
+            "mov qword ptr [rdi + ",
+            $t,
+            "], r8\n",
+            "mov qword ptr [rdi + ",
+            $t,
+            " + 8], r9\n",
+            "mov qword ptr [rdi + ",
+            $t,
+            " + 16], r10\n",
+            "mov qword ptr [rdi + ",
+            $t,
+            " + 24], r11\n",
+        )
+    };
+}
+
+/// Run one block over a [`Ws2Scan`]: the text macros, with the vector
+/// registers the table reads use declared clobbered.
+macro_rules! block_scan {
+    ($ws:expr, $($text:expr),+ $(,)?) => {{
+        let ws: *mut Ws2Scan = $ws;
+        // SAFETY: the field operations access the 1024 bytes of `ws.two` at
+        // constant offsets, and the table read the 64 bytes of `ws.ctl` and
+        // the 1536 bytes at `ctl[0]`, which the caller sets to a borrowed
+        // window; every register used is declared clobbered and nothing is
+        // pushed. The enclosing function enables AVX2, and is reached only
+        // with an `Avx2`, which proves the CPU has it; BMI2 and ADX are the
+        // caller's dispatch's, as for every block here.
+        unsafe {
+            asm!(
+                $($text),+,
+                "vzeroupper",
+                in("rdi") ws.cast::<u64>(),
+                out("rax") _,
+                out("rcx") _,
+                out("rdx") _,
+                out("rsi") _,
+                out("r8") _,
+                out("r9") _,
+                out("r10") _,
+                out("r11") _,
+                out("r12") _,
+                out("r13") _,
+                out("r14") _,
+                out("r15") _,
+                out("ymm0") _,
+                out("ymm1") _,
+                out("ymm2") _,
+                out("ymm3") _,
+                out("ymm4") _,
+                out("ymm5") _,
+                out("ymm6") _,
+                out("ymm7") _,
+                out("ymm8") _,
+                out("ymm9") _,
+                out("ymm10") _,
+                out("ymm11") _,
+                out("ymm12") _,
+                out("ymm13") _,
+                out("ymm14") _,
+                options(nostack),
+            );
+        }
+    }};
+}
+
+/// Signing's table read for a pair of digits: `d0` and `d1` times `table`'s
+/// point, for each in `[-16, 16]`, into halves 0 and 1's operands, `y + x`,
+/// `y - x` and `2d x y` as [`select`] lays them out (and as it would compute
+/// them, for a window of sixteen).
+///
+/// `table` holds the multiples `1..=16`. Every entry is read, each half's
+/// wanted one kept by `VPBLENDVB` under a mask from comparing its magnitude
+/// with the entry's index; the identity `(1, 1, 0)` stands for zero. A
+/// negative digit swaps the first two by masked `XOR`s and negates the third
+/// by [`select`]'s subtraction and `CMOV`s. Nothing branches on a digit or
+/// indexes memory by it.
+pub fn scan(t: Avx2, ws: &mut Ws2Scan, table: &[[u64; 12]; 16], d0: i8, d1: i8) {
+    set_scan(ws, table, d0, d1);
+    // SAFETY: `t` proves AVX2; `ctl[0]` is `table`, borrowed for the call.
+    unsafe { scan_avx2(t, ws) }
+}
+
+/// [`madd_ext2`] on `ws.two`, with [`scan`]'s read of the next window run
+/// inside it: the operands the addition reads are replaced, after its last
+/// read of them, by `d0` and `d1` times `table`'s point.
+///
+/// Signing's loop alternated a table read and an addition, and the two did
+/// not overlap: the addition is some 1400 instructions, beyond the reach of
+/// the out-of-order window, and the next read was behind it; measured apart
+/// they summed to the whole loop. The read depends only on the digits, not
+/// on the accumulator, so here it sits inside the addition's block, in vector
+/// registers the field arithmetic does not use, and runs on the vector units
+/// while the integer ones multiply. What made a wider window affordable: a
+/// sixteen-entry read costs the addition a few percent, where a separate
+/// eight-entry one cost a fifth of it.
+pub fn madd_ext2_scan(t: Avx2, ws: &mut Ws2Scan, table: &[[u64; 12]; 16], d0: i8, d1: i8) {
+    set_scan(ws, table, d0, d1);
+    // SAFETY: `t` proves AVX2; `ctl[0]` is `table`, borrowed for the call.
+    unsafe { madd_ext2_scan_avx2(t, ws) }
+}
+
+fn set_scan(ws: &mut Ws2Scan, table: &[[u64; 12]; 16], d0: i8, d1: i8) {
+    ws.ctl[0] = table.as_ptr() as u64;
+    ws.ctl[1] = i64::from(d0) as u64;
+    ws.ctl[2] = i64::from(d1) as u64;
+}
+
+/// [`scan`]'s block.
+///
+/// # Safety
+///
+/// `ctl[0]` must be the address of a window, 1536 readable bytes.
+#[inline(never)]
+#[target_feature(enable = "avx2")]
+unsafe fn scan_avx2(_: Avx2, ws: &mut Ws2Scan) {
+    block_scan!(
+        ws,
+        scan_setup!(),
+        scan_quarter!(0),
+        scan_quarter!(1),
+        scan_quarter!(2),
+        scan_quarter!(3),
+        scan_store!(),
+        scan_negate!(352, 1048),
+        scan_negate!(864, 1056),
+    );
+}
+
+/// [`madd_ext2_scan`]'s block: [`madd_ext2`]'s operations, with the read's
+/// quarters between the first ones and its stores after the last
+/// multiplication that reads an operand.
+///
+/// # Safety
+///
+/// `ctl[0]` must be the address of a window, 1536 readable bytes.
+#[inline(never)]
+#[target_feature(enable = "avx2")]
+unsafe fn madd_ext2_scan_avx2(_: Avx2, ws: &mut Ws2Scan) {
+    block_scan!(
+        ws,
+        scan_setup!(),
+        scan_quarter!(0),
+        fe_add_once!(384, 32, 0),
+        scan_quarter!(1),
+        fe_add_once!(896, 544, 512),
+        scan_quarter!(2),
+        fe_sub_once!(416, 32, 0),
+        scan_quarter!(3),
+        fe_sub_once!(928, 544, 512),
+        fe_mul!(384, 384, 256),
+        fe_mul!(896, 896, 768),
+        fe_mul!(416, 416, 288),
+        fe_mul!(928, 928, 800),
+        fe_mul!(448, 96, 352),
+        fe_mul!(960, 608, 864),
+        // The operands have been read; the next ones replace them.
+        scan_store!(),
+        fe_add_once!(480, 64, 64),
+        fe_add_once!(992, 576, 576),
+        scan_negate!(352, 1048),
+        fe_sub_once!(128, 384, 416),
+        fe_sub_once!(640, 896, 928),
+        fe_add_once!(160, 384, 416),
+        fe_add_once!(672, 896, 928),
+        scan_negate!(864, 1056),
+        fe_add_once!(192, 480, 448),
+        fe_add_once!(704, 992, 960),
+        fe_sub_once!(224, 480, 448),
+        fe_sub_once!(736, 992, 960),
+        fe_mul!(0, 128, 224),
+        fe_mul!(512, 640, 736),
+        fe_mul!(32, 160, 192),
+        fe_mul!(544, 672, 704),
+        fe_mul!(64, 192, 224),
+        fe_mul!(576, 704, 736),
+        fe_mul!(96, 128, 160),
+        fe_mul!(608, 640, 672),
+    );
+}
+
+/// The radix-32 table read and step for `ct_probes`, which are compiled to
+/// be read and never run; `unsafe` because they need AVX2 and do not ask.
+#[cfg(feature = "ct-probes")]
+pub mod probes {
+    use super::{Avx2, Ws2Scan};
+
+    /// `edwards::scan`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AVX2.
+    #[inline(always)]
+    pub unsafe fn scan(ws: &mut Ws2Scan, table: &[[u64; 12]; 16], d0: i8, d1: i8) {
+        super::scan(Avx2(()), ws, table, d0, d1)
+    }
+
+    /// `edwards::madd_ext2_scan`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AVX2.
+    #[inline(always)]
+    pub unsafe fn madd_ext2_scan(ws: &mut Ws2Scan, table: &[[u64; 12]; 16], d0: i8, d1: i8) {
+        super::madd_ext2_scan(Avx2(()), ws, table, d0, d1)
+    }
+}

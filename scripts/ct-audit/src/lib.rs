@@ -251,6 +251,28 @@ mod x86 {
     }
 
     #[no_mangle]
+    pub fn ct_ed25519_fe64_scan(ws: &mut p::Ws2Scan, table: &[[u64; 12]; 16], d0: i8, d1: i8) {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::wide::scan(ws, table, d0, d1) }
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_fe64_madd_ext2_scan(
+        ws: &mut p::Ws2Scan,
+        table: &[[u64; 12]; 16],
+        d0: i8,
+        d1: i8,
+    ) {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::wide::madd_ext2_scan(ws, table, d0, d1) }
+    }
+
+    #[no_mangle]
+    pub fn ct_ed25519_digits32(scalar: &[u8; 32]) -> [i8; 52] {
+        p::ed25519_digits32(scalar)
+    }
+
+    #[no_mangle]
     pub fn ct_ed25519_fe64_dbl_nadd(ws: &mut p::Ws) {
         p::ed25519_dbl_nadd(ws)
     }

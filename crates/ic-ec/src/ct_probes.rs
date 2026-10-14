@@ -161,6 +161,17 @@ pub mod x86 {
     pub fn ed25519_madd_ext2(ws: &mut Ws2) {
         edwards::madd_ext2(ws);
     }
+    pub use crate::fe64::edwards::Ws2Scan;
+
+    /// Signing's radix-32 table read on AVX2, two secret digits' entries of
+    /// a sixteen-entry window, and its step, two mixed additions with that
+    /// read inside them; `unsafe` because they need AVX2.
+    pub use crate::fe64::edwards::probes as wide;
+    /// The secret scalar's signed radix-32 digits.
+    #[inline(always)]
+    pub fn ed25519_digits32(scalar: &[u8; 32]) -> [i8; 52] {
+        crate::ed25519::signed_digits32(scalar)
+    }
     /// Signing's doublings and final addition.
     #[inline(always)]
     pub fn ed25519_dbl_nadd(ws: &mut Ws) {

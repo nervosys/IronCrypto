@@ -96,6 +96,40 @@ all of them.
 
 ### Performance
 
+- **Ed25519 signing on x86-64 without AVX-512 IFMA: ahead of Graviola.**
+  Two changes. (1) The basepoint multiplication on the MULX/ADX field takes
+  signed radix-32 digits against 26 windows of sixteen affine Niels points
+  (39 KiB, built on first use) instead of radix 16 against 32 windows of
+  eight: 26 steps of two interleaved mixed additions instead of 32, and five
+  doublings at the end instead of four. A sixteen-entry read is affordable
+  because it no longer runs between the additions: the profile showed the
+  separate eight-entry read and the addition summing exactly, the next read
+  out of the out-of-order window's reach, so the read of the next window is
+  now placed inside the addition's assembly block, in `ymm` registers on
+  AVX2 (`fe64::edwards::madd_ext2_scan`), blended under masks while the
+  integer units multiply. Basepoint multiplication alone, the two forms
+  alternated in one process under load: 3.23-3.26 to 2.68-2.71 us (1.20x).
+  CPUs with BMI2 and ADX but no AVX2 keep the radix-16 path. (2) The scalar
+  arithmetic modulo L on x86-64 runs on four 64-bit limbs with 128-bit
+  products, reduced by Barrett's method with one final masked subtraction
+  (the quotient estimate is at most one short for this L; the argument and a
+  test that checks its premise are in `scalar.rs`): `reduce_wide` 80 to 13
+  ns, `mul_add` 100 to 21 ns. The portable 21-bit code remains on every
+  other target and is the tests' reference. Measured against Graviola 0.4.1
+  with `--cfg ic_no_avx512` on a loaded Zen 5 (`graviola-25519`, base and
+  new binaries alternated, three rounds), IronCrypto's signing rate over
+  Graviola's: 0.90-0.91 before, 1.07-1.10 after. X25519 and verification
+  unchanged within noise. The default IFMA build signs through the IFMA
+  path and gains only the scalar arithmetic: 1.22-1.33 to 1.31-1.41.
+  Tests: each new block limb for limb against the generic read and the
+  addition then the read, every digit pair in every window; the digits
+  against the scalar; both basepoint forms against the generic one; the
+  64-bit scalar functions against the portable ones and long division at
+  the edges (multiples of L and their neighbours, powers of two from 2^251
+  to 2^511, limbs at extremes) and over four million random inputs; the
+  Barrett constant recomputed from L. Three new constant-time probes
+  (docs/CONSTANT_TIME.md, "Ed25519 signing on AVX2").
+
 - **P-256 and P-384 scalar multiplication on AVX-512 IFMA**: ECDH from key
   bytes, ECDH with a prepared key, and signing's `k * G`. Four field
   elements to a `ymm` register (`VPMADD52LUQ`/`VPMADD52HUQ`; P-256 five

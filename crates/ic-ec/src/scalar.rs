@@ -3,10 +3,22 @@
 //! `L = 2^252 + 27742317777372353535851937790883648493`
 //!
 //! Ed25519 signing needs `(r + h*a) mod L` where every operand is secret, so
-//! reduction must be constant-time. This module uses a fixed 512-iteration
-//! shift-and-conditional-subtract loop: slower than a Barrett or Montgomery
-//! reduction, but with no data-dependent control flow and short enough to
-//! audit by reading it.
+//! reduction must be constant-time.
+//!
+//! Two implementations of the same two functions. The portable one works in
+//! 21-bit limbs and folds the part above `2^252` down by the digits of `-c`
+//! ([`reduce_wide_portable`]); it is what every target but x86-64 runs, and
+//! it needs nothing wider than a 32x32-bit product. On x86-64 (outside
+//! `ic_limb32` and `ic_ec_portable`, as for the four-limb field) the scalars
+//! are four 64-bit limbs instead, multiplied with 128-bit products, and
+//! reduced by Barrett's method ([`w64`]): a fifth of the time. The tests hold
+//! the two to the same answers, and to long division.
+
+// On x86-64 the portable functions are the tests' oracle, not the path.
+#![cfg_attr(
+    all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))),
+    allow(dead_code)
+)]
 
 /// The group order `L`, little-endian.
 pub const L: [u8; 32] = [
@@ -133,6 +145,18 @@ fn fold_round(limbs: &mut [i64; LIMBS]) {
 /// the final subtractions are masked. The scalar being reduced is secret when
 /// signing.
 pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    {
+        w64::reduce_wide(input)
+    }
+    #[cfg(not(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable)))))]
+    {
+        reduce_wide_portable(input)
+    }
+}
+
+/// [`reduce_wide`] in 21-bit limbs, by folding; see there.
+fn reduce_wide_portable(input: &[u8; 64]) -> [u8; 32] {
     // Unpack into 21-bit limbs, eight bytes at a time.
     //
     // A limb spans at most four bytes, so one unaligned 64-bit read and a
@@ -249,6 +273,18 @@ pub fn reduce(input: &[u8; 32]) -> [u8; 32] {
 
 /// Compute `(a * b + c) mod L` for little-endian 32-byte scalars.
 pub fn mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    {
+        w64::mul_add(a, b, c)
+    }
+    #[cfg(not(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable)))))]
+    {
+        mul_add_portable(a, b, c)
+    }
+}
+
+/// [`mul_add`] in 32-bit limbs, reduced by [`reduce_wide_portable`].
+fn mul_add_portable(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
     let al = to_limbs(a);
     let bl = to_limbs(b);
 
@@ -290,7 +326,156 @@ pub fn mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
     for i in 0..16 {
         wide[i * 4..i * 4 + 4].copy_from_slice(&(prod[i] as u32).to_le_bytes());
     }
-    reduce_wide(&wide)
+    reduce_wide_portable(&wide)
+}
+
+/// [`reduce_wide`] and [`mul_add`] on four 64-bit limbs, for x86-64.
+///
+/// Barrett reduction (Menezes, van Oorschot and Vanstone, *Handbook of
+/// Applied Cryptography*, algorithm 14.42) with `b = 2^64` and `k = 4`, `L`
+/// having four limbs: `q = floor(floor(x / b^3) * mu / b^5)` with `mu =
+/// floor(b^8 / L)` is in general at most two below `floor(x / L)`. For this
+/// `L` it is at most one: write `x = X b^3 + x0`; then `x / L - X mu / b^5 =
+/// x0 / L + X e / b^5`, where `e = b^8 / L - mu` is the fraction dropped
+/// from `mu`, and that is below `2^-60 + e`. `e` is about 0.225
+/// (`barrett_constant_is_the_quotient` checks it is below `1 - 2^-59`), so
+/// the two quotients' floors differ by at most one, `x - q L` lies in `[0,
+/// 2L)`, and one masked subtraction of `L` finishes it. A second was
+/// measured never to act, over every input the tests try, before the
+/// argument was written down. `2L` is below
+/// `2^254`, so that difference is computed modulo `2^256`, which `L`'s form
+/// makes cheap: its limbs are `l0`, `l1`, 0 and `2^60`, and modulo `2^256`
+/// the last contributes only `q0 << 252`.
+///
+/// Every operand is secret when signing. The products and carries are the
+/// same instructions for every value, the loops have constant counts, and
+/// the final choice is a mask through [`crate::fe64::mask`], which the
+/// optimiser cannot see is one of two values; `ct_ed25519_reduce_wide` and
+/// `ct_ed25519_mul_add` in `scripts/check-ct.py` hold the compiled code to
+/// having no branch.
+#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+mod w64 {
+    /// `L`, little-endian 64-bit limbs.
+    pub(super) const L64: [u64; 4] = [0x5812_631a_5cf5_d3ed, 0x14de_f9de_a2f7_9cd6, 0, 1 << 60];
+
+    /// `floor(2^512 / L)`, 260 bits. `barrett_constant_is_the_quotient`
+    /// recomputes it from `L` by long division.
+    pub(super) const MU: [u64; 5] = [
+        0xed9c_e5a3_0a2c_131b,
+        0x2106_215d_0863_29a7,
+        0xffff_ffff_ffff_ffeb,
+        0xffff_ffff_ffff_ffff,
+        0xf,
+    ];
+
+    /// `a * b + c`, low limbs first.
+    #[inline(always)]
+    fn mac(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
+        // At most (2^64 - 1)^2 + 2 (2^64 - 1) = 2^128 - 1: no overflow.
+        let t = u128::from(a) * u128::from(b) + u128::from(c) + u128::from(carry);
+        (t as u64, (t >> 64) as u64)
+    }
+
+    /// `x mod L` for `x` below `2^512`, eight limbs.
+    #[inline(always)]
+    pub(super) fn reduce(x: &[u64; 8]) -> [u64; 4] {
+        // q1 = floor(x / b^3), five limbs; q2 = q1 * mu, ten; q3 = q2's top
+        // five, of which the product with L below needs only four.
+        let mut q2 = [0u64; 10];
+        for i in 0..5 {
+            let mut carry = 0;
+            for j in 0..5 {
+                (q2[i + j], carry) = mac(x[3 + i], MU[j], q2[i + j], carry);
+            }
+            q2[i + 5] = carry;
+        }
+        let q = [q2[5], q2[6], q2[7], q2[8]];
+
+        // q L mod 2^256: q * (l0 + l1 b), then q0 * 2^252.
+        let mut ql = [0u64; 4];
+        for i in 0..4 {
+            let mut carry = 0;
+            for j in 0..2 {
+                if i + j < 4 {
+                    (ql[i + j], carry) = mac(q[i], L64[j], ql[i + j], carry);
+                }
+            }
+            if i + 2 < 4 {
+                ql[i + 2] = ql[i + 2].wrapping_add(carry);
+            }
+        }
+        ql[3] = ql[3].wrapping_add(q[0] << 60);
+
+        // r = x - q L, exactly, since it lies in [0, 2L) below 2^256.
+        let mut r = [0u64; 4];
+        let mut borrow = false;
+        for i in 0..4 {
+            let (d, b1) = x[i].overflowing_sub(ql[i]);
+            let (d, b2) = d.overflowing_sub(u64::from(borrow));
+            r[i] = d;
+            borrow = b1 | b2;
+        }
+        subtract_l_if_above(r)
+    }
+
+    /// `r - L` if `r >= L`, else `r`, by a mask.
+    #[inline(always)]
+    fn subtract_l_if_above(r: [u64; 4]) -> [u64; 4] {
+        let mut d = [0u64; 4];
+        let mut borrow = false;
+        for i in 0..4 {
+            let (v, b1) = r[i].overflowing_sub(L64[i]);
+            let (v, b2) = v.overflowing_sub(u64::from(borrow));
+            d[i] = v;
+            borrow = b1 | b2;
+        }
+        // All ones when r < L: keep r.
+        let keep = crate::fe64::mask(u64::from(borrow));
+        let mut out = [0u64; 4];
+        for i in 0..4 {
+            out[i] = d[i] ^ ((d[i] ^ r[i]) & keep);
+        }
+        out
+    }
+
+    fn limbs<const N: usize>(bytes: &[u8]) -> [u64; N] {
+        let mut out = [0u64; N];
+        for (i, limb) in out.iter_mut().enumerate() {
+            let mut w = [0u8; 8];
+            w.copy_from_slice(&bytes[8 * i..8 * i + 8]);
+            *limb = u64::from_le_bytes(w);
+        }
+        out
+    }
+
+    fn bytes(r: &[u64; 4]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for i in 0..4 {
+            out[8 * i..8 * i + 8].copy_from_slice(&r[i].to_le_bytes());
+        }
+        out
+    }
+
+    pub(super) fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
+        bytes(&reduce(&limbs::<8>(input)))
+    }
+
+    pub(super) fn mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
+        let a = limbs::<4>(a);
+        let b = limbs::<4>(b);
+        let c = limbs::<4>(c);
+        // a b + c, from c rather than adding it after: below 2^512.
+        let mut p = [c[0], c[1], c[2], c[3], 0, 0, 0, 0];
+        for i in 0..4 {
+            let mut carry = 0;
+            for j in 0..4 {
+                (p[i + j], carry) = mac(a[i], b[j], p[i + j], carry);
+            }
+            // No earlier row reached limb i + 4: it is still zero.
+            p[i + 4] = carry;
+        }
+        bytes(&reduce(&p))
+    }
 }
 
 fn to_limbs(bytes: &[u8; 32]) -> [u32; 8] {
@@ -489,11 +674,257 @@ mod tests {
                     }
                 }
             }
+            let want = reduce_wide_by_long_division(&input);
+            assert_eq!(reduce_wide(&input), want, "case {case}, input {input:?}");
             assert_eq!(
-                reduce_wide(&input),
-                reduce_wide_by_long_division(&input),
+                reduce_wide_portable(&input),
+                want,
                 "case {case}, input {input:?}"
             );
         }
+    }
+
+    /// A xorshift generator for the comparisons below; any fixed sequence
+    /// would do, this one is the folding test's.
+    fn xorshift(seed: u64) -> impl FnMut() -> u64 {
+        let mut state = seed;
+        move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        }
+    }
+
+    /// `k * L + delta` for small `k` and signed `delta`, as 64 bytes,
+    /// computed in 32-bit limbs from `L`'s bytes: the inputs that sit at the
+    /// edges of every final subtraction.
+    fn near_multiple(k: u32, delta: i64) -> [u8; 64] {
+        let mut acc = [0u64; 17];
+        for i in 0..8 {
+            let li = u64::from(u32::from_le_bytes([
+                L[4 * i],
+                L[4 * i + 1],
+                L[4 * i + 2],
+                L[4 * i + 3],
+            ]));
+            acc[i] += li * u64::from(k);
+        }
+        // delta, two's complement over 512 bits.
+        let d = delta as u64;
+        acc[0] += d & 0xffff_ffff;
+        acc[1] += d >> 32;
+        let fill = if delta < 0 { 0xffff_ffff } else { 0 };
+        for limb in acc.iter_mut().take(16).skip(2) {
+            *limb += fill;
+        }
+        let mut out = [0u8; 64];
+        let mut carry = 0u64;
+        for i in 0..16 {
+            let v = acc[i] + carry;
+            out[4 * i..4 * i + 4].copy_from_slice(&(v as u32).to_le_bytes());
+            carry = v >> 32;
+        }
+        out
+    }
+
+    /// Inputs where the 64-bit reduction can go wrong: the boundaries of `L`
+    /// and its small multiples, of `2^252` to `2^256` and of the whole range,
+    /// and values with every limb at an extreme.
+    fn edges() -> Vec<[u8; 64]> {
+        let mut out = Vec::new();
+        for k in 0..=40u32 {
+            for delta in [-2i64, -1, 0, 1, 2] {
+                if k == 0 && delta < 0 {
+                    continue;
+                }
+                out.push(near_multiple(k, delta));
+            }
+        }
+        for bit in [
+            251usize, 252, 253, 254, 255, 256, 257, 315, 316, 383, 384, 447, 448, 510, 511,
+        ] {
+            let mut p = [0u8; 64];
+            p[bit / 8] = 1 << (bit % 8);
+            out.push(p);
+            // 2^bit - 1.
+            let mut m = [0u8; 64];
+            for b in 0..bit {
+                m[b / 8] |= 1 << (b % 8);
+            }
+            out.push(m);
+        }
+        out.push([0xff; 64]);
+        for limb in 0..8 {
+            let mut v = [0u8; 64];
+            v[8 * limb..8 * limb + 8].fill(0xff);
+            out.push(v);
+            let mut w = [0xffu8; 64];
+            w[8 * limb..8 * limb + 8].fill(0);
+            out.push(w);
+        }
+        out
+    }
+
+    /// `floor(2^512 / L)` by long division, one bit at a time, against the
+    /// Barrett constant.
+    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[test]
+    fn barrett_constant_is_the_quotient() {
+        let l = w64::L64;
+        let mut r = [0u64; 5];
+        let mut q = [0u64; 9];
+        for bit in (0..=512).rev() {
+            // r = 2 r + (the dividend's bit), the dividend being 2^512.
+            let mut carry = u64::from(bit == 512);
+            for limb in r.iter_mut() {
+                let next = *limb >> 63;
+                *limb = (*limb << 1) | carry;
+                carry = next;
+            }
+            // r >= L: subtract, and set the quotient bit.
+            let mut d = [0u64; 5];
+            let mut borrow = false;
+            for i in 0..5 {
+                let li = if i < 4 { l[i] } else { 0 };
+                let (v, b1) = r[i].overflowing_sub(li);
+                let (v, b2) = v.overflowing_sub(u64::from(borrow));
+                d[i] = v;
+                borrow = b1 | b2;
+            }
+            if !borrow {
+                r = d;
+                q[bit / 64] |= 1 << (bit % 64);
+            }
+        }
+        assert_eq!(q[..5], w64::MU);
+        assert!(q[5..].iter().all(|&w| w == 0));
+        // The fraction mu drops, r / L, is below 1 - 2^-59, which is what
+        // lets one final subtraction suffice (see `w64`): r < L - L / 2^59.
+        let mut bound = [0u64; 5];
+        let mut borrow = false;
+        for i in 0..5 {
+            let li = if i < 4 { l[i] } else { 0 };
+            let shifted = if i < 4 {
+                (li >> 59) | (if i < 3 { l[i + 1] << 5 } else { 0 })
+            } else {
+                0
+            };
+            let (v, b1) = li.overflowing_sub(shifted);
+            let (v, b2) = v.overflowing_sub(u64::from(borrow));
+            bound[i] = v;
+            borrow = b1 | b2;
+        }
+        assert!(!borrow);
+        let below = (0..5)
+            .rev()
+            .find(|&i| r[i] != bound[i])
+            .is_some_and(|i| r[i] < bound[i]);
+        assert!(below, "2^512 mod L is too close to L for one subtraction");
+        // And L64 is L.
+        let mut bytes = [0u8; 32];
+        for i in 0..4 {
+            bytes[8 * i..8 * i + 8].copy_from_slice(&l[i].to_le_bytes());
+        }
+        assert_eq!(bytes, L);
+    }
+
+    /// The reduction and `mul_add` against the portable ones and long
+    /// division at every edge, then over random inputs. On x86-64 the public
+    /// functions are the 64-bit ones; elsewhere this compares the portable
+    /// ones with themselves, and the long division still checks them.
+    fn compare_with_portable(rounds: u32) {
+        let mut checked = 0u32;
+        for input in edges() {
+            let want = reduce_wide_by_long_division(&input);
+            assert_eq!(reduce_wide(&input), want, "edge {input:?}");
+            assert_eq!(reduce_wide_portable(&input), want, "edge {input:?}");
+            checked += 1;
+        }
+        // mul_add at the edges of each operand.
+        let mut operands: Vec<[u8; 32]> = Vec::new();
+        for v in [0u64, 1, 2] {
+            let mut b = [0u8; 32];
+            b[..8].copy_from_slice(&v.to_le_bytes());
+            operands.push(b);
+        }
+        let mut lm1 = L;
+        lm1[0] -= 1;
+        operands.extend([
+            L,
+            lm1,
+            [0xff; 32],
+            {
+                let mut t = [0xffu8; 32];
+                t[31] = 0x7f;
+                t
+            },
+            {
+                let mut t = [0u8; 32];
+                t[31] = 0x10;
+                t
+            },
+        ]);
+        for a in &operands {
+            for b in &operands {
+                for c in &operands {
+                    assert_eq!(
+                        mul_add(a, b, c),
+                        mul_add_portable(a, b, c),
+                        "{a:?} {b:?} {c:?}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        let mut next = xorshift(0x7c3a_91d4_0be2_5f68);
+        for case in 0..rounds {
+            let mut input = [0u8; 64];
+            for chunk in input.chunks_exact_mut(8) {
+                chunk.copy_from_slice(&next().to_le_bytes());
+            }
+            // Sometimes shorter, so that small quotients are covered too.
+            match case % 4 {
+                1 => input[32..].fill(0),
+                2 => input[40..].fill(0),
+                _ => {}
+            }
+            assert_eq!(
+                reduce_wide(&input),
+                reduce_wide_portable(&input),
+                "{input:?}"
+            );
+            let mut a = [0u8; 32];
+            let mut b = [0u8; 32];
+            let mut c = [0u8; 32];
+            a.copy_from_slice(&input[..32]);
+            b.copy_from_slice(&input[32..]);
+            for chunk in c.chunks_exact_mut(8) {
+                chunk.copy_from_slice(&next().to_le_bytes());
+            }
+            assert_eq!(
+                mul_add(&a, &b, &c),
+                mul_add_portable(&a, &b, &c),
+                "{a:?} {b:?} {c:?}"
+            );
+            checked += 1;
+        }
+        assert!(checked > rounds);
+    }
+
+    #[test]
+    fn the_64_bit_scalar_arithmetic_agrees_with_the_portable() {
+        compare_with_portable(if cfg!(debug_assertions) {
+            20_000
+        } else {
+            200_000
+        });
+    }
+
+    /// The same over four million random inputs; run in release.
+    #[test]
+    #[ignore = "slow; run with --release -- --ignored"]
+    fn the_64_bit_scalar_arithmetic_agrees_over_millions() {
+        compare_with_portable(4_000_000);
     }
 }
