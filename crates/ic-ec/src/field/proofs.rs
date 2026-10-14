@@ -1,5 +1,6 @@
 //! Bounded proofs of the portable Curve25519 field's addition, subtraction,
-//! carry propagation and canonical encoding, for Kani.
+//! multiplication's column sums, carry propagation and canonical encoding, for
+//! Kani.
 //!
 //! ```text
 //! scripts/kani.sh -p ic-ec
@@ -16,8 +17,18 @@
 //!
 //! What is proved is value preservation modulo `p`, stated as an exact integer
 //! identity with an explicit witness `k` (the multiple of `p` the reduction
-//! removed), together with bounds on the limbs produced. Multiplication is not
-//! covered: these are the reductions that follow it.
+//! removed), together with bounds on the limbs produced.
+//!
+//! Multiplication and squaring are `carry_reduce` applied to five column sums.
+//! Each half is a function contract with its own proof: the columns equal
+//! [`mul_columns_spec`] (or [`square_columns_spec`]) exactly, for limbs below
+//! `2^52`; `carry_reduce` maps any columns in its domain to a congruent,
+//! bounded element. A third proof checks that `mul` and `square` call both
+//! within their domains, over the two contracts. What the solver does not show
+//! is that the columns are the product mod `p`: the specification multiplies
+//! as the code does, `a_i (19 b_j)`, and `a_i (19 b_j) = 19 a_i b_j` is the
+//! associativity of integer multiplication, which no solver tried closed in 25
+//! minutes for 52-bit limbs.
 
 use super::*;
 
@@ -53,6 +64,22 @@ fn canon(c: [u128; N]) -> [u64; N] {
         acc >>= 51;
     }
     assert_eq!(acc, 0);
+    out
+}
+
+/// `canon` without the assertion: the digits of the value modulo
+/// `2^(51 N)`. For the contract postcondition below, which a stubbed call
+/// assumes, so an assertion inside it would be an obligation at every call.
+/// Every value it is applied to there is below `2^320`, well inside
+/// `2^(51 N) = 2^357`, so equal digits still mean equal integers.
+fn canon_mod(c: [u128; N]) -> [u64; N] {
+    let mut out = [0u64; N];
+    let mut acc: u128 = 0;
+    for j in 0..N {
+        acc += c[j];
+        out[j] = (acc & M51) as u64;
+        acc >>= 51;
+    }
     out
 }
 
@@ -160,37 +187,36 @@ fn sub_is_a_minus_b_mod_p_with_bounded_limbs() {
     }
 }
 
-/// `carry_reduce` takes five 128-bit column sums and returns a field element.
-/// For columns below `95 * 2^104` (five products of 52-bit limbs, each doubled
-/// or multiplied by 19 at most), the result is congruent to the input mod `p`,
-/// and its limbs are below `2^51` except limb 0, which is below `2^51 + 2^14`.
+/// The domain of `carry_reduce`: every column below `95 * 2^104`, five
+/// products of 52-bit limbs, each doubled or multiplied by 19 at most.
+pub(super) fn carry_reduce_pre(r: [u128; 5]) -> bool {
+    let mut ok = true;
+    for i in 0..5 {
+        ok &= r[i] < 95 << 104;
+    }
+    ok
+}
+
+/// What `carry_reduce` promises: the result is congruent to the columns mod
+/// `p`, and its limbs are below `2^51` except limb 0, which is below
+/// `2^51 + 2^14`.
 ///
 /// The parallel step splits each column into 51 bits and a carry, and folds the
 /// top carry back as `19 * c4`. The serial pass then carries once more. Taking
 /// `top = floor(y / 2^255)` for the value `y` after the parallel step, the
 /// identity is `value(r) = value(out) + (c4 + top) * p`, which is exact.
-#[kani::proof]
-fn carry_reduce_keeps_the_value_mod_p_and_bounds_the_limbs() {
-    let bound: u128 = 95 << 104;
-    let r0: u128 = kani::any();
-    let r1: u128 = kani::any();
-    let r2: u128 = kani::any();
-    let r3: u128 = kani::any();
-    let r4: u128 = kani::any();
-    for col in [r0, r1, r2, r3, r4] {
-        kani::assume(col < bound);
-    }
-    let r = [r0, r1, r2, r3, r4];
-    let out = carry_reduce(r0, r1, r2, r3, r4);
-
+pub(super) fn carry_reduce_post(r: [u128; 5], out: &Fe) -> bool {
     // The parallel step on the specification's own carries.
-    let c: [u128; 5] = core::array::from_fn(|i| r[i] >> 51);
+    let mut c = [0u128; 5];
+    for i in 0..5 {
+        c[i] = r[i] >> 51;
+    }
     let mut y = [0u128; N];
     y[0] = (r[0] & M51) + 19 * c[4];
     for i in 1..5 {
         y[i] = (r[i] & M51) + c[i - 1];
     }
-    let d = canon(y);
+    let d = canon_mod(y);
     let top = d[5] as u128 + ((d[6] as u128) << 51);
     let k = c[4] + top;
 
@@ -199,19 +225,38 @@ fn carry_reduce_keeps_the_value_mod_p_and_bounds_the_limbs() {
     // symbolic value: `19 k` is a constant multiple, and `k * 2^255` sits in
     // base-2^51 digit 5. That keeps the solver off the multiplier.
     let mut value_r = [0u128; N];
-    value_r[..5].copy_from_slice(&r);
+    for i in 0..5 {
+        value_r[i] = r[i];
+    }
     let mut nineteen_k = [0u128; N];
     nineteen_k[0] = 19 * k;
     let mut k_at_255 = [0u128; N];
     k_at_255[5] = k;
-    assert_eq!(
-        canon(plus(value_r, nineteen_k)),
-        canon(plus(value(out.0), k_at_255))
+    let (x, y) = (
+        canon_mod(plus(value_r, nineteen_k)),
+        canon_mod(plus(value(out.0), k_at_255)),
     );
-    assert!(out.0[0] < (1 << 51) + (1 << 14));
-    for limb in &out.0[1..] {
-        assert!(*limb < 1 << 51);
+    let mut same = true;
+    for j in 0..N {
+        same &= x[j] == y[j];
     }
+    same & (out.0[0] < (1 << 51) + (1 << 14))
+        & (out.0[1] < 1 << 51)
+        & (out.0[2] < 1 << 51)
+        & (out.0[3] < 1 << 51)
+        & (out.0[4] < 1 << 51)
+}
+
+/// `carry_reduce` meets its contract for every five columns in its domain.
+#[kani::proof_for_contract(carry_reduce)]
+fn carry_reduce_meets_its_contract() {
+    carry_reduce(
+        kani::any(),
+        kani::any(),
+        kani::any(),
+        kani::any(),
+        kani::any(),
+    );
 }
 
 /// `to_bytes` is the unique representative: the 32 bytes, read as an integer
@@ -237,4 +282,132 @@ fn to_bytes_is_the_canonical_representative_below_p() {
 
     let inp = canon(value(r));
     assert!((0..5u128).any(|k| canon(plus(v, times_p(k))) == inp));
+}
+
+// ---------------------------------------------------------------------------
+// The products.
+// ---------------------------------------------------------------------------
+
+impl kani::Arbitrary for Fe {
+    fn any() -> Fe {
+        Fe(kani::any())
+    }
+}
+
+/// Every limb below `2^52`: the domain of `mul` and `square`.
+pub(super) fn limbs52(a: &[u64; 5]) -> bool {
+    let mut ok = true;
+    for i in 0..5 {
+        ok &= a[i] < 1 << 52;
+    }
+    ok
+}
+
+/// Five limbs, each below `2^52`.
+fn any_limbs52() -> [u64; 5] {
+    let a: [u64; 5] = kani::any();
+    kani::assume(limbs52(&a));
+    a
+}
+
+/// `a = b`, as a conjunction of equalities rather than `==`, which on arrays
+/// is a byte-wise `memcmp`; see the P-256 proofs.
+pub(super) fn eq128(a: &[u128; 5], b: &[u128; 5]) -> bool {
+    let mut same = true;
+    for i in 0..5 {
+        same &= a[i] == b[i];
+    }
+    same
+}
+
+/// `x * y` for two limbs, as a `u128`. `wrapping_mul` only to keep the model
+/// checker off a 256-bit overflow test: a product of two 64-bit values is
+/// below `2^128` and never wraps.
+fn limb_product(x: u64, y: u64) -> u128 {
+    (x as u128).wrapping_mul(y as u128)
+}
+
+/// `c * x` for a limb `x` below `2^52` and `c` at most 38: below `2^58`, so the
+/// 64-bit product is exact. `wrapping_mul` only because a checked one is
+/// mis-encoded on the SMT path (see the P-256 proofs); it never wraps here.
+fn scaled(x: u64, c: u64) -> u64 {
+    x.wrapping_mul(c)
+}
+
+/// The column sums of `a b` folded by `2^255 = 19 mod p`: column `k` is
+/// `sum_{i+j=k} a_i b_j + sum_{i+j=k+5} a_i (19 b_j)`. A product of weight
+/// `2^(51 (i+j))` with `i + j >= 5` is `2^255 2^(51 (i+j-5))`, and `2^255 =
+/// 19 mod p`, so it moves down five limbs with a factor of 19. The 19 is
+/// carried on the limb, `a_i (19 b_j)`, which is how the code multiplies.
+pub(super) fn mul_columns_spec(a: [u64; 5], b: [u64; 5]) -> [u128; 5] {
+    let mut cols = [0u128; 5];
+    for i in 0..5 {
+        for j in 0..5 {
+            if i + j < 5 {
+                cols[i + j] += limb_product(a[i], b[j]);
+            } else {
+                cols[i + j - 5] += limb_product(a[i], scaled(b[j], 19));
+            }
+        }
+    }
+    cols
+}
+
+/// The column sums of `a^2` folded the same way, over unordered pairs: for
+/// `i <= j`, `a_i a_j` with coefficient `c_ij`, 2 when `i != j` (the pair
+/// appears twice in `a a`) times 19 when `i + j >= 5`, the coefficient carried
+/// on the lower-index limb, `(c_ij a_i) a_j`, which is how the code multiplies.
+pub(super) fn square_columns_spec(a: [u64; 5]) -> [u128; 5] {
+    let mut cols = [0u128; 5];
+    for i in 0..5 {
+        for j in i..5 {
+            let c = if i == j { 1 } else { 2 } * if i + j >= 5 { 19 } else { 1 };
+            cols[(i + j) % 5] += limb_product(scaled(a[i], c), a[j]);
+        }
+    }
+    cols
+}
+
+/// `mul_columns` computes [`mul_columns_spec`] for every pair of limb vectors
+/// below `2^52`, without overflow.
+#[kani::proof_for_contract(mul_columns)]
+#[kani::solver(bitwuzla)]
+fn mul_columns_meets_its_contract() {
+    let (a, b): ([u64; 5], [u64; 5]) = (kani::any(), kani::any());
+    mul_columns(&a, &b);
+}
+
+/// `square_columns` computes [`square_columns_spec`] for every limb vector
+/// below `2^52`, without overflow.
+#[kani::proof_for_contract(square_columns)]
+#[kani::solver(bitwuzla)]
+fn square_columns_meets_its_contract() {
+    let a: [u64; 5] = kani::any();
+    square_columns(&a);
+}
+
+/// `Fe::mul` is `carry_reduce(mul_columns(a, b))`. For limbs below `2^52` this
+/// checks both calls against the contracts proved above: `mul_columns`' domain
+/// holds, and the columns it promises, [`mul_columns_spec`], lie in
+/// `carry_reduce`'s domain, every column below `95 * 2^104`. With the two
+/// postconditions that makes `mul`'s result congruent mod `p` to the columns
+/// of [`mul_columns_spec`], with limbs below `2^51` but limb 0, below
+/// `2^51 + 2^14`. That last step is substitution, and is not a Kani run: the
+/// harness asserting it, which evaluates `carry_reduce`'s postcondition twice,
+/// ran 25 minutes without a verdict.
+#[kani::proof]
+#[kani::stub_verified(mul_columns)]
+#[kani::stub_verified(carry_reduce)]
+fn mul_calls_stay_in_their_contracts() {
+    let (a, b) = (any_limbs52(), any_limbs52());
+    Fe(a).mul(&Fe(b));
+}
+
+/// `Fe::square` is `carry_reduce(square_columns(a))`, checked the same way.
+#[kani::proof]
+#[kani::stub_verified(square_columns)]
+#[kani::stub_verified(carry_reduce)]
+fn square_calls_stay_in_their_contracts() {
+    let a = any_limbs52();
+    Fe(a).square();
 }

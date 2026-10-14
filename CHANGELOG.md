@@ -42,6 +42,37 @@ all of them.
   every read a reload. The same value; the probe needs it to fold. Under
   `ct-probes` without `std` the MULX/ADX and IFMA kernels compile, for the
   probe build to read, and nothing selects them.
+- **ic-ec:** `Fe::mul` and `Fe::square` are `carry_reduce` over two new
+  inlined functions, `mul_columns` and `square_columns`, the same arithmetic
+  split where a proof can name it. Their 19, 38 and 2 scalings, `field::m`,
+  and P-256's `mac` product are `wrapping_mul`: none can wrap for the inputs
+  they take and the instruction is the same, but a checked product reaches
+  the SMT solvers mis-encoded. In a debug build, a limb out of range now wraps
+  in the scaling instead of panicking, as a release build always did. The
+  split moves LLVM's inlining (the field's `mul` and `square` now inline into
+  the inversion chains); Ed25519 signing and verification on the portable
+  field (`--cfg ic_ec_portable`, x86-64, old and new builds alternated) are
+  at parity. P-256's `mac` change reorders the aarch64 code of `mul` and
+  `square` with the same instruction count; not measured on aarch64.
+
+### Added
+
+- **Kani proofs of P-256's Montgomery reduction and of Curve25519's
+  multiplication column sums** (docs/PROOFS.md). `ic-ec` proves `mac`,
+  `mont_step`, `montgomery_low`, `finish` and `reduce` as function contracts,
+  each over the proved contracts of what it calls: `reduce(t)` is
+  `t 2^-256 mod p`, canonical, for every `t` with upper half below `p`, and a
+  product of two residues is proved to be such a `t`. On Curve25519 the column
+  sums of `mul` and `square` are proved equal to the schoolbook as the code
+  writes it, the calls proved to stay in `carry_reduce`'s domain, and
+  `carry_reduce` is now a contract too. Not proved: P-256's schoolbook
+  products, which did not finish on the solvers tried, and the associativity
+  step from `a_i (19 b_j)` to `19 a_i b_j`. Several proofs need Bitwuzla on
+  `PATH`, and `scripts/kani.sh` now passes `-Z function-contracts -Z
+  stubbing`.
+- **CBMC 6.11 encodes a checked multiplication wrongly on its SMT path**
+  (Bitwuzla, Z3, cvc5): result and overflow flag are swapped. Found as a false
+  overflow report; recorded in docs/PROOFS.md. The SAT path is unaffected.
 
 ## 0.3.0
 
