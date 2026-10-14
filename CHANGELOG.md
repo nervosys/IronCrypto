@@ -724,6 +724,14 @@ all of them.
 
 ### Changed
 
+- **`scripts/test-old-cpus.sh` runs every test binary under QEMU on emulated
+  older x86-64 CPUs** (Nehalem through Haswell and Broadwell, and `max` with
+  AES-NI, PCLMULQDQ, SHA-NI, VAES, AVX2, BMI2 and ADX removed one at a time).
+  An ungated AVX2, BMI2, ADX, SHA-NI, AES-NI or PCLMULQDQ path raises SIGILL on
+  a model without the feature, so a run with no SIGILL shows no such path was
+  reached there. Not part of `check.sh`; documented in docs/CI.md. AVX-512 is
+  not covered, because QEMU's TCG does not implement it.
+
 - **Every multi-instruction `asm!` block in `ic-ec` starts on a 64-byte
   boundary**, through the generators for the generated kernels, as RSA's do.
   Layout hygiene, not a speed claim: ten alternating rounds in two code

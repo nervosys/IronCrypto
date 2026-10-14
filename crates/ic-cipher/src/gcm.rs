@@ -1287,7 +1287,15 @@ mod fused_tests {
                 checked += agree(&key, &nonce, &aad, &pt);
             }
         }
-        assert!(checked >= 3 * 601 * 2, "only {checked} comparisons ran");
+        // Two comparisons a case where a hardware kernel exists (portable and
+        // kernel), one where the CPU has none: a CPU without AES-NI and
+        // PCLMULQDQ is a legitimate place to run this, not a failure.
+        let has_kernel = Aes256Gcm::new(&[1u8; 32]).unwrap().kernel().is_some();
+        let per_case = if has_kernel { 2 } else { 1 };
+        assert!(
+            checked >= 3 * 601 * per_case,
+            "only {checked} comparisons ran"
+        );
     }
 
     #[test]
