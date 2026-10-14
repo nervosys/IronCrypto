@@ -35,11 +35,12 @@ pub fn cios_2048(a: &[u64; 32], b: &[u64; 32], n: &[u64; 32], n0inv: u64, out: &
 #[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
 #[allow(unsafe_code)]
 pub mod x86 {
-    use crate::uint::{finish, ifma, x86, Limbs};
+    use crate::uint::{finish, ifma, x86, Modulus, Uint};
 
-    /// The IFMA context, opaque: the probe takes one by reference, so that
-    /// nothing copies or zeroes its buffer around the product.
-    pub struct IfmaCtx(ifma::Ctx);
+    /// The IFMA context at 2048 bits, opaque: the probe takes one by
+    /// reference, so that nothing copies or zeroes its buffer around the
+    /// product.
+    pub struct IfmaCtx(ifma::Ctx<40>);
 
     /// The MULX/ADCX/ADOX product at 2048 bits, as the multiplication takes
     /// it on that backend: the kernel into a zeroed accumulator, then the
@@ -62,15 +63,45 @@ pub mod x86 {
         finish(out, &lo[32..], hi[0], n);
     }
 
-    /// One almost-Montgomery product on AVX-512 IFMA at 2048 bits: the
-    /// kernel and the carry of its columns into 52-bit limbs.
+    /// One almost-Montgomery product on AVX-512 IFMA at 2048 bits, 40 limbs
+    /// of 52 bits: the kernel and the carry of its columns into limbs.
+    pub fn ifma_amm_2048(ctx: &mut IfmaCtx, a: &[u64; 40], b: &[u64; 40], out: &mut [u64; 40]) {
+        ctx.0.mul_inline(a, b, out);
+    }
+
+    /// The whole IFMA exponentiation for a 1024-bit modulus -- each of the
+    /// two in an RSA-2048 signature -- from the modulus, base and secret
+    /// exponent to the reduced result: into the domain, the table, the
+    /// windows, and out. `m` must be 16 words wide.
     ///
     /// # Safety
     ///
     /// The CPU must support AVX-512F, IFMA and BMI2.
-    pub unsafe fn ifma_amm_2048(ctx: &mut IfmaCtx, a: &Limbs, b: &Limbs, out: &mut Limbs) {
+    pub unsafe fn ifma_pow_1024(
+        m: &Modulus,
+        base: &Uint,
+        exp: &Uint,
+        exp_bits: usize,
+        out: &mut [u64; 24],
+    ) {
         // SAFETY: as the caller guarantees.
-        unsafe { ctx.0.set_width_for_probe(32) };
-        ctx.0.amm(a, b, out);
+        unsafe { ifma::pow_fixed::<24>(m, base, exp, exp_bits, out) }
+    }
+
+    /// The same at 2048 bits, the modulus of RSA-2048 or a prime of RSA-4096.
+    /// `m` must be 32 words wide.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX-512F, IFMA and BMI2.
+    pub unsafe fn ifma_pow_2048(
+        m: &Modulus,
+        base: &Uint,
+        exp: &Uint,
+        exp_bits: usize,
+        out: &mut [u64; 40],
+    ) {
+        // SAFETY: as the caller guarantees.
+        unsafe { ifma::pow_fixed::<40>(m, base, exp, exp_bits, out) }
     }
 }

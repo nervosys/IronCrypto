@@ -388,19 +388,6 @@ impl Engine for Mont64<'_> {
     }
 }
 
-#[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
-impl Engine for ifma::Ctx {
-    fn width(&self) -> usize {
-        self.words()
-    }
-    fn mul(&mut self, a: &Limbs, b: &Limbs, out: &mut Limbs) {
-        self.amm(a, b, out);
-    }
-    fn sqr(&mut self, a: &Limbs, out: &mut Limbs) {
-        self.amm(a, a, out);
-    }
-}
-
 /// `base^exp` in the engine's domain, constant-time in `exp`, over its low
 /// `exp_bits` bits; `one` and `base` are already in the domain.
 ///
@@ -900,10 +887,8 @@ impl Modulus {
     pub fn pow(&self, base: &Uint, exp: &Uint, exp_bits: usize) -> Uint {
         #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
         if !force_portable() {
-            if let Some(mut ctx) = ifma::Ctx::new(&self.n, self.limbs, self.n0inv) {
-                return self.pow_ifma(&mut ctx, base, |ctx, one, base, acc| {
-                    pow_windowed(ctx, one, base, exp, exp_bits, acc);
-                });
+            if let Some(out) = ifma::pow(self, base, exp, exp_bits) {
+                return out;
             }
         }
 
@@ -920,64 +905,6 @@ impl Modulus {
         base_mont.zeroize();
         acc.zeroize();
         out
-    }
-
-    /// Run an exponentiation `body` in the IFMA domain, `R' = 2^(52W)`, and
-    /// bring the result back to an ordinary residue.
-    ///
-    /// `body` gets the context, `R' mod n` and `base * R' mod n` (both
-    /// almost-reduced, below `2n`), and writes the result in the domain.
-    #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
-    fn pow_ifma(
-        &self,
-        ctx: &mut ifma::Ctx,
-        base: &Uint,
-        body: impl FnOnce(&mut ifma::Ctx, &Limbs, &Limbs, &mut Limbs),
-    ) -> Uint {
-        let mut rr52 = self.ifma_rr(ctx);
-        let mut base52 = [0u64; MAX_LIMBS];
-        let mut unit = [0u64; MAX_LIMBS];
-        unit[0] = 1;
-        ctx.import(base, &mut base52);
-
-        let mut one = [0u64; MAX_LIMBS];
-        let mut base_mont = [0u64; MAX_LIMBS];
-        ctx.amm(&rr52, &unit, &mut one);
-        ctx.amm(&base52, &rr52, &mut base_mont);
-
-        let mut acc = [0u64; MAX_LIMBS];
-        body(ctx, &one, &base_mont, &mut acc);
-
-        // Multiplying by one leaves a value at most n; one masked subtraction
-        // takes n itself to zero.
-        let mut res52 = [0u64; MAX_LIMBS];
-        ctx.amm(&acc, &unit, &mut res52);
-        let mut out = Uint::ZERO;
-        ctx.export(&res52, &mut out);
-        let out = self.reduce_once(&out);
-
-        rr52.zeroize();
-        base52.zeroize();
-        base_mont.zeroize();
-        acc.zeroize();
-        res52.zeroize();
-        out
-    }
-
-    /// `R'^2 mod n` in radix `2^52`, for converting into the IFMA domain.
-    ///
-    /// `R^2 * 2^(104W - 128L)`: 32, 48 or 64 doublings of the `R^2` this
-    /// modulus already has.
-    #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
-    fn ifma_rr(&self, ctx: &ifma::Ctx) -> Limbs {
-        let mut rr = self.r2;
-        for _ in 0..(104 * ctx.words() - 128 * self.limbs) {
-            self.double_mod(&mut rr);
-        }
-        let mut rr52 = [0u64; MAX_LIMBS];
-        ctx.import(&rr, &mut rr52);
-        rr.zeroize();
-        rr52
     }
 
     /// Reduce a double-width value modulo `n`, without general division.
@@ -1139,10 +1066,8 @@ impl Modulus {
 
         #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
         if !force_portable() {
-            if let Some(mut ctx) = ifma::Ctx::new(&self.n, self.limbs, self.n0inv) {
-                return self.pow_ifma(&mut ctx, base, |ctx, _, base, acc| {
-                    pow_public_in(ctx, base, e, acc);
-                });
+            if let Some(out) = ifma::pow_public(self, base, e) {
+                return out;
             }
         }
 
@@ -1654,11 +1579,15 @@ mod tests {
                 assert_eq!(with_portable(|| m.pow(&wide, &e, 64 * limbs)), want);
                 bases.insert(1, wide);
                 for (i, base) in bases.iter().enumerate().take(8) {
-                    for bits in [1usize, 3, 4, 5, 64, 64 * limbs - 1, 64 * limbs] {
+                    for bits in [0usize, 1, 2, 3, 4, 5, 64, 64 * limbs - 1, 64 * limbs] {
                         let mut exp = g.below(&n, limbs);
                         if i == 1 {
                             // All ones: every window selects the last entry.
                             exp.0[..limbs].fill(u64::MAX);
+                        }
+                        if i == 2 {
+                            // Zero: every window selects the first.
+                            exp = Uint::ZERO;
                         }
                         let want = with_portable(|| m.pow(base, &exp, bits));
                         assert_eq!(m.pow(base, &exp, bits), want, "{limbs} limbs, {bits} bits");
@@ -1674,39 +1603,57 @@ mod tests {
 
     /// One IFMA product, checked on its own rather than through an
     /// exponentiation: two of them, by the operands and then by `R'^2`, give
-    /// `a * b mod n`; and every output is normalised and below `2^(B+1)`.
+    /// `a * b mod n`; every output is normalised, zero above `W` and below
+    /// `2^(B+1)`; a product written over its own input gives what it gives
+    /// written elsewhere; and the radix conversions invert each other.
     #[test]
     #[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
     fn one_ifma_product_is_right() {
         let mut g = Gen(4);
-        for limbs in [16usize, 24, 32] {
-            for n in moduli(&mut g, limbs) {
-                let m = Modulus::new(n).unwrap();
-                let Some(mut ctx) = ifma::Ctx::new(&n, limbs, m.n0inv) else {
-                    return; // No IFMA on this CPU; the selection test covers it.
-                };
-                let rr = m.ifma_rr(&ctx);
-                let w = ctx.words();
-                let ops = operands(&mut g, &n, limbs);
-                for a in &ops {
-                    for b in ops.iter().step_by(2) {
-                        let (mut a52, mut b52) = ([0u64; MAX_LIMBS], [0u64; MAX_LIMBS]);
-                        ctx.import(a, &mut a52);
-                        ctx.import(b, &mut b52);
-                        let (mut t, mut r) = ([0u64; MAX_LIMBS], [0u64; MAX_LIMBS]);
-                        ctx.amm(&a52, &b52, &mut t);
-                        assert!(t.iter().all(|&l| l < 1 << 52), "normalised");
-                        assert!(t[w..].iter().all(|&l| l == 0), "zero above W");
-                        let mut wide = Uint::ZERO;
-                        ctx.export(&t, &mut wide);
-                        assert!(wide.bits() <= n.bits() + 1, "below 2^(B+1)");
-                        ctx.amm(&t, &rr, &mut r);
-                        let mut got = Uint::ZERO;
-                        ctx.export(&r, &mut got);
-                        let got = m.reduce_once(&got);
-                        let want = with_portable(|| m.mul_mod(a, b));
-                        assert_eq!(got, want, "{limbs} limbs");
+        if !ifma::handles(16) {
+            return; // No IFMA on this CPU; the selection test covers it.
+        }
+        one_ifma_product_at::<24>(&mut g);
+        one_ifma_product_at::<32>(&mut g);
+        one_ifma_product_at::<40>(&mut g);
+    }
+
+    #[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
+    fn one_ifma_product_at<const N: usize>(g: &mut Gen) {
+        use ifma::Ctx;
+        let limbs = N - 8;
+        for n in moduli(g, limbs) {
+            let m = Modulus::new(n).unwrap();
+            let mut ctx = Ctx::<N>::for_test(&m).unwrap();
+            let (mut rr, mut scratch) = ([0u64; N], [0u64; N]);
+            ctx.rr(&m, &mut rr, &mut scratch);
+            let ops = operands(g, &n, limbs);
+            for a in &ops {
+                assert_eq!(
+                    Ctx::<N>::export(&Ctx::<N>::import(a)),
+                    *a,
+                    "{limbs} limbs: radix"
+                );
+                for b in ops.iter().step_by(2) {
+                    let (a52, b52) = (Ctx::<N>::import(a), Ctx::<N>::import(b));
+                    let mut t = [0u64; N];
+                    ctx.mul(&a52, &b52, &mut t);
+                    assert!(t.iter().all(|&l| l < 1 << 52), "normalised");
+                    assert!(t[Ctx::<N>::W..].iter().all(|&l| l == 0), "zero above W");
+                    assert!(Ctx::<N>::export(&t).bits() <= n.bits() + 1, "below 2^(B+1)");
+                    let mut in_place = a52;
+                    ctx.mul_assign(&mut in_place, &b52);
+                    assert_eq!(in_place, t, "{limbs} limbs: in place");
+                    if a == b {
+                        let mut sq = a52;
+                        ctx.square(&mut sq);
+                        assert_eq!(sq, t, "{limbs} limbs: square");
                     }
+                    let mut r = [0u64; N];
+                    ctx.mul(&t, &rr, &mut r);
+                    let got = m.reduce_once(&Ctx::<N>::export(&r));
+                    let want = with_portable(|| m.mul_mod(a, b));
+                    assert_eq!(got, want, "{limbs} limbs");
                 }
             }
         }
@@ -1759,43 +1706,25 @@ mod tests {
                     (mul, sq, pow, public)
                 };
                 #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
-                if !portable {
-                    if let Some(ctx) = ifma::Ctx::new(&m.n, m.limbs, m.n0inv) {
-                        let ctx = core::cell::RefCell::new(ctx);
-                        let mut x = [0u64; MAX_LIMBS];
-                        ctx.borrow().import(&a, &mut x);
-                        let amm = run(200_000, &|| {
-                            let mut o = [0u64; MAX_LIMBS];
-                            ctx.borrow_mut().amm(std::hint::black_box(&x), &x, &mut o);
-                            std::hint::black_box(&o);
-                        });
-                        // Each product feeding the next, as in an
-                        // exponentiation: latency rather than throughput.
-                        let chained = run(1_000, &|| {
-                            let mut c = ctx.borrow_mut();
-                            let mut p = x;
-                            let mut q = [0u64; MAX_LIMBS];
-                            for _ in 0..100 {
-                                c.amm(&p, &p, &mut q);
-                                c.amm(&q, &q, &mut p);
-                            }
-                            std::hint::black_box(&p);
-                        }) / 200.0;
-                        let fixed = run(2_000, &|| {
-                            std::hint::black_box(m.pow(std::hint::black_box(&a), &e, 4));
-                        });
-                        std::println!(
-                            "{limbs} limbs ifma: chained amm {chained:.1} ns, \
-                             pow with one window {:.2} us",
-                            fixed / 1000.0
-                        );
-                        let dbl = run(200_000, &|| {
-                            let mut r = std::hint::black_box(m.r2);
-                            m.double_mod(&mut r);
-                            std::hint::black_box(&r);
-                        });
-                        std::println!("{limbs} limbs ifma: amm {amm:.1} ns, double {dbl:.1} ns");
-                    }
+                if !portable && ifma::handles(limbs) {
+                    let (amm, chained) = match limbs {
+                        16 => ifma_timings::<24>(&m, &a, &run),
+                        _ => ifma_timings::<40>(&m, &a, &run),
+                    };
+                    let fixed = run(2_000, &|| {
+                        std::hint::black_box(m.pow(std::hint::black_box(&a), &e, 4));
+                    });
+                    std::println!(
+                        "{limbs} limbs ifma: chained amm {chained:.1} ns, \
+                         pow with one window {:.2} us",
+                        fixed / 1000.0
+                    );
+                    let dbl = run(200_000, &|| {
+                        let mut r = std::hint::black_box(m.r2);
+                        m.double_mod(&mut r);
+                        std::hint::black_box(&r);
+                    });
+                    std::println!("{limbs} limbs ifma: amm {amm:.1} ns, double {dbl:.1} ns");
                 }
                 let (mul, sq, pow, public) = if portable { with_portable(go) } else { go() };
                 std::println!(
@@ -1806,5 +1735,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// One IFMA product, and one in a chain of them as an exponentiation
+    /// runs them, in nanoseconds.
+    #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
+    fn ifma_timings<const N: usize>(
+        m: &Modulus,
+        a: &Uint,
+        run: &dyn Fn(u32, &dyn Fn()) -> f64,
+    ) -> (f64, f64) {
+        let ctx = core::cell::RefCell::new(ifma::Ctx::<N>::for_test(m).unwrap());
+        let x = ifma::Ctx::<N>::import(a);
+        let amm = run(200_000, &|| {
+            let mut o = [0u64; N];
+            ctx.borrow_mut().mul(std::hint::black_box(&x), &x, &mut o);
+            std::hint::black_box(&o);
+        });
+        // Each product feeding the next, as in an exponentiation: latency
+        // rather than throughput.
+        let chained = run(1_000, &|| {
+            let mut c = ctx.borrow_mut();
+            let mut p = x;
+            for _ in 0..200 {
+                c.square(&mut p);
+            }
+            std::hint::black_box(&p);
+        }) / 200.0;
+        (amm, chained)
     }
 }
