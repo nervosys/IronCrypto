@@ -233,6 +233,41 @@ computes, with the instructions as QEMU models them, and that the facade's
 vector suites pass on that path. It does not establish behaviour on a real
 core, and its timings mean nothing: performance on AArch64 is unmeasured.
 
+## Older x86-64 CPUs, under QEMU
+
+`scripts/test-old-cpus.sh` builds every test binary for baseline x86-64 (the
+musl target) and runs each one under `qemu-x86_64 -cpu <model>`, for models
+with the feature sets the runtime dispatchers branch on. A hand-written AVX2,
+BMI2, ADX, SHA-NI, AES-NI, PCLMULQDQ path reached without its runtime check
+executes an instruction the model lacks, and the process dies with SIGILL. A
+run with no SIGILL is the evidence that nothing was reached ungated on that
+model.
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+scripts/test-old-cpus.sh                         # the default models; slow, every binary is emulated
+scripts/test-old-cpus.sh Nehalem-v2 'max,-adx'   # named models only
+```
+
+It needs `qemu-x86_64` (Debian's `qemu-user`, the same package as the ARM
+section above). Its exit status is non-zero on any SIGILL, timeout, or run that
+reports no results. A test `FAIL` does not fail it, and two fail on purpose on
+the models without the instruction they test: the AES-GCM fused-path check
+(`gcm::fused_tests::every_path_matches_the_reference_at_every_length_to_600`),
+which needs AES-NI and PCLMULQDQ, and ic-ec's four-limb field check, which
+needs BMI2 and ADX (the script sets `IC_EC_NO_ADX_OK=1` so the rest of that
+suite still runs).
+
+Two limits. QEMU's TCG drops every AVX-512 feature from every CPU model, so
+the AVX-512, IFMA and VPCLMULQDQ paths cannot be run this way, and need
+hardware. And a model that
+never reaches a path proves nothing about that path. Check that a model took
+the fallback by its self-checks, not by its exit status alone: the fast-path
+tests above are the ones that fail when the fast path did not run.
+
+The script is not wired into `scripts/check.sh`; it is too slow for every
+commit or push.
+
 ## Why the workflows call a script instead of listing steps
 
 `ci.yml` used to write every step out again. Its copy of the dependency check
