@@ -9,9 +9,10 @@
 //! # Constant-time posture
 //!
 //! [`Modulus::pow`] is the private-key path and is constant-time in the
-//! exponent: a fixed four-bit window, four squarings and one multiplication
-//! per window whatever its value, the multiplier read from a table of sixteen
-//! by a masked scan of every entry. [`Modulus::pow_public`] is for the public
+//! exponent: a fixed window of four bits, or on x86-64 five from 16 words
+//! up, as many squarings and one multiplication per window whatever its
+//! value, the multiplier read from a table of sixteen or 32 by a masked scan
+//! of every entry. [`Modulus::pow_public`] is for the public
 //! exponent, which is not secret, and is allowed to branch on it.
 //!
 //! # Backends
@@ -397,12 +398,10 @@ impl Engine for Mont64<'_> {
 /// `base^exp` in the engine's domain, constant-time in `exp`, over its low
 /// `exp_bits` bits; `one` and `base` are already in the domain.
 ///
-/// A fixed four-bit window: a table of `base^0 .. base^15`, then for each
-/// window of the exponent from the top, four squarings and one multiplication
-/// by the table entry the window selects. The sequence of operations depends
-/// only on `exp_bits`; the window's value reaches only [`select`], which reads
-/// every entry and keeps one by masking. A zero window multiplies by one
-/// rather than skipping.
+/// A fixed window of four bits, or on x86-64 with `std` of five from
+/// [`WIDE_WINDOW_LIMBS`] words up, where a multiplication costs enough more
+/// than reading the larger table that the fifth bit pays; the width is
+/// public. See [`pow_window`].
 fn pow_windowed<E: Engine>(
     e: &mut E,
     one: &Limbs,
@@ -411,11 +410,43 @@ fn pow_windowed<E: Engine>(
     exp_bits: usize,
     acc: &mut Limbs,
 ) {
+    #[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
+    if e.width() >= WIDE_WINDOW_LIMBS {
+        pow_window::<E, 5, 32>(e, one, base, exp, exp_bits, acc);
+        return;
+    }
+    pow_window::<E, 4, 16>(e, one, base, exp, exp_bits, acc);
+}
+
+/// The width from which [`pow_windowed`] reads the exponent five bits at a
+/// time: the primes of RSA-2048 and wider. Only on x86-64 with `std`, where
+/// the table read has AVX2 and the stack is the operating system's: the
+/// 32-entry table is 16 KiB of it, twice the sixteen's, which a small
+/// embedded stack may not have.
+#[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
+const WIDE_WINDOW_LIMBS: usize = 16;
+
+/// [`pow_windowed`] with a window of `B` bits and a table of `N = 2^B`
+/// entries: the table `base^0 .. base^(N-1)`, then for each window of the
+/// exponent from the top, `B` squarings and one multiplication by the table
+/// entry the window selects. The sequence of operations depends only on
+/// `exp_bits`; the window's value reaches only [`select`], which reads every
+/// entry and keeps one by masking. A zero window multiplies by one rather
+/// than skipping.
+fn pow_window<E: Engine, const B: usize, const N: usize>(
+    e: &mut E,
+    one: &Limbs,
+    base: &Limbs,
+    exp: &Uint,
+    exp_bits: usize,
+    acc: &mut Limbs,
+) {
+    const { assert!(N == 1 << B) };
     let w = e.width();
-    let mut table = [[0u64; MAX_LIMBS]; 16];
+    let mut table = [[0u64; MAX_LIMBS]; N];
     table[0] = *one;
     table[1] = *base;
-    for k in 2..16 {
+    for k in 2..N {
         let (done, rest) = table.split_at_mut(k);
         if k % 2 == 0 {
             e.sqr(&done[k / 2], &mut rest[0]);
@@ -433,25 +464,26 @@ fn pow_windowed<E: Engine>(
     let mut x: &mut Limbs = acc;
     let mut y: &mut Limbs = &mut tmp;
     let mut swapped = false;
-    let windows = exp_bits.div_ceil(4);
+    let windows = exp_bits.div_ceil(B);
     for i in (0..windows).rev() {
-        let mut digit = window(exp, i);
+        let mut digit = window::<B>(exp, i);
         if i == windows - 1 {
             // The top window may run past exp_bits; those bits are not part of
             // the exponent. Which ones they are is public.
-            let used = exp_bits - 4 * i;
+            let used = exp_bits - B * i;
             digit &= (1u64 << used) - 1;
             select(&table, w, digit, x);
             continue;
         }
-        for _ in 0..4 {
+        for _ in 0..B {
             e.sqr(x, y);
             core::mem::swap(&mut x, &mut y);
         }
         select(&table, w, digit, &mut sel);
         e.mul(x, &sel, y);
         core::mem::swap(&mut x, &mut y);
-        swapped = !swapped;
+        // B + 1 swaps a window.
+        swapped ^= B.is_multiple_of(2);
     }
     if swapped {
         // `x` is `tmp` and `y` is `acc`.
@@ -614,39 +646,58 @@ fn sqr(t: &mut [u64], a: &[u64], n: &[u64], n0inv: u64, out: &mut [u64]) {
     finish(out, hi, top, n);
 }
 
-/// Bits `4w..4w + 4` of `exp`, as one window of the exponentiation.
+/// Bits `Bw..Bw + B` of `exp`, as one window of the exponentiation; `B`
+/// below 64. Which words are read depends only on `w` and `B`, which are
+/// public.
 #[inline(always)]
-fn window(exp: &Uint, w: usize) -> u64 {
-    let bit = 4 * w;
-    match exp.0.get(bit / 64) {
-        Some(word) => (word >> (bit % 64)) & 0xF,
-        None => 0,
-    }
+fn window<const B: usize>(exp: &Uint, w: usize) -> u64 {
+    let bit = B * w;
+    let (k, s) = (bit / 64, bit % 64);
+    let lo = exp.0.get(k).map_or(0, |&word| word >> s);
+    // The rest of a window that runs into the next word.
+    let hi = match exp.0.get(k + 1) {
+        Some(&word) if s + B > 64 => word << (64 - s),
+        _ => 0,
+    };
+    (lo | hi) & ((1u64 << B) - 1)
 }
 
-/// Constant-time read of entry `digit` of a 16-entry table, over the low
-/// `limbs` words of each entry.
-///
-/// Every entry is read and masked; which one survives is arithmetic on
-/// `digit`, which is secret, and the addresses are not.
-pub(crate) fn select(table: &[Limbs; 16], limbs: usize, digit: u64, out: &mut Limbs) {
+/// The masks of [`select`]: all ones for entry `digit`, zero for the rest,
+/// by arithmetic on `digit`, which is secret.
+#[inline(always)]
+pub(crate) fn select_masks<const N: usize>(digit: u64) -> [u64; N] {
     let digit = core::hint::black_box(digit);
-    let mut masks = [0u64; 16];
+    let mut masks = [0u64; N];
     for (k, mask) in masks.iter_mut().enumerate() {
         let x = (k as u64) ^ digit;
         // All ones when x == 0, zero otherwise.
         *mask = ((x | x.wrapping_neg()) >> 63).wrapping_sub(1);
     }
-    // One barrier for all sixteen, so the compiler cannot see that exactly
+    // One barrier for all of them, so the compiler cannot see that exactly
     // one mask is set and turn the scan into an indexed load.
-    let masks = core::hint::black_box(masks);
-    // The same scan, two words at a time in SSE2 registers.
+    core::hint::black_box(masks)
+}
+
+/// Constant-time read of entry `digit` of a table of `N` entries, 16 or 32,
+/// over the low `limbs` words of each entry.
+///
+/// Every entry is read and masked; which one survives is arithmetic on
+/// `digit`, which is secret, and the addresses are not.
+pub(crate) fn select<const N: usize>(
+    table: &[Limbs; N],
+    limbs: usize,
+    digit: u64,
+    out: &mut Limbs,
+) {
+    let masks = select_masks::<N>(digit);
+    // The same scan, four words at a time in AVX2 registers where the CPU
+    // has them, else two at a time in SSE2's.
     #[cfg(all(
         target_arch = "x86_64",
         any(feature = "std", feature = "ct-probes"),
         not(ic_limb32)
     ))]
-    if x86::select(table, limbs, &masks, out) {
+    if x86::select_avx2(table, limbs, &masks, out) || x86::select(table, limbs, &masks, out) {
         return;
     }
     let out = &mut out[..limbs];
@@ -886,12 +937,15 @@ impl Modulus {
     /// of `exp`. `base` may be any value of the modulus's width, below
     /// `2^(64 * limbs)`; it is reduced on the way into Montgomery form.
     ///
-    /// A fixed four-bit window (`pow_windowed`): four squarings and one
-    /// multiplication by a table entry per four bits, the entry read by a
-    /// masked scan of the whole table. This is the private-key path: the
-    /// exponent is the secret, and the sequence of operations depends only on
-    /// `exp_bits`. Against a square and a multiplication on every bit, it is a
-    /// quarter of the multiplications.
+    /// A fixed window (`pow_windowed`), on x86-64 with `std` of five bits
+    /// from 16 words up and elsewhere of four: five squarings and one
+    /// multiplication by a table entry per five bits, the entry read by a
+    /// masked scan of the whole table. This is
+    /// the private-key path: the exponent is the secret, and the sequence of
+    /// operations depends only on `exp_bits` and the width. Against a square
+    /// and a multiplication on every bit, it is a fifth of the
+    /// multiplications (a quarter, with four). The IFMA exponentiation keeps
+    /// its own four-bit window.
     ///
     /// Runs on AVX-512 IFMA where [`backend_for`] says so, and on the 64-bit
     /// Montgomery multiplication otherwise.

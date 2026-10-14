@@ -239,9 +239,9 @@ impl<const N: usize> Work<N> {
     }
 }
 
-/// `base^exp mod m`, the fixed four-bit window of [`super::pow_windowed`] in
-/// the IFMA domain at one width, into `out`: the first `L = N - 8` words, and
-/// zero above. `m` must be `L` words wide.
+/// `base^exp mod m`, a fixed four-bit window as [`super::pow_windowed`] takes
+/// below 16 words or without `std`, in the IFMA domain at one width, into `out`: the first
+/// `L = N - 8` words, and zero above. `m` must be `L` words wide.
 ///
 /// Constant-time in `exp`. The sequence of products depends only on
 /// `exp_bits`, and each window's value reaches only [`select`]. Every loop

@@ -462,8 +462,9 @@ formulas, window reads and conversions, a prepared P-384 key's window read, Ed25
 AVX-512 ChaCha20 and AVX2 Poly1305 kernels, RSA's table read and its
 MULX/ADX, AVX-512 IFMA and portable Montgomery products, RSA's whole
 AVX-512 IFMA exponentiation at 1024 and 2048 bits, the AES-NI and VAES-256
-AES-GCM loops, and RSA's MULX/ADX squaring and 1024-bit kernels: **297 gating
-probe/target checks** (114 on x86-64, 51 on AArch64, 44 on each of the three 32-bit targets). It rejects
+AES-GCM loops, RSA's MULX/ADX squaring, its 1024-bit, 1536-bit and Karatsuba
+2048-bit kernels and its AVX2 table reads: **303 gating
+probe/target checks** (120 on x86-64, 51 on AArch64, 44 on each of the three 32-bit targets). It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
 P-256 Montgomery loop stays rolled; its counter branches, and a constant-length

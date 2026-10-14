@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305 (at 1 KiB and 4 MiB, not at 64 bytes), X25519 (with AVX-512), Ed25519 (with AVX-512; without it, signing narrowly, 1.07-1.10), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512 at 2048 and 3072 bits; level at 4096-bit signing), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH, P-256 signing and P-256 verify are level (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305 (at 1 KiB and 4 MiB, not at 64 bytes), X25519 (with AVX-512), Ed25519 (with AVX-512; without it, signing narrowly, 1.07-1.10), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512: 1.12-1.14 at 2048-bit signing, 2.5 at 3072, 1.08-1.09 at 4096), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH, P-256 signing and P-256 verify are level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's portable field multiplication and squaring, end to end except for two argued steps, and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -206,8 +206,8 @@ Where it is not ahead:
   VAES and, at 1 KiB and 4 MiB, by 1.04 to 1.22 on AES-NI alone ("AES-GCM
   without AVX-512", below); the earlier reading of it as behind set
   IronCrypto without AVX-512 against Graviola's own AVX-512 path. RSA,
-  behind before the MULX/ADX backend was rewritten, now leads at 2048 and
-  3072 bits and is level at 4096-bit signing (the RSA table below).
+  behind before the MULX/ADX backend was rewritten, now leads at every
+  size, narrowly at 4096-bit signing (1.08-1.09; the RSA tables below).
   P-256 and P-384 ECDH from key bytes and P-256 signing lose the lead
   IFMA gives them (bullets above).
   Graviola needs only AVX2 and ADX, so it is the
@@ -367,7 +367,46 @@ level of Karatsuba (`bignum_ksqr_32_64`, 408 `mulx` against 528 here). At
 reduce the same way; the lead there comes from fewer instructions around
 them. At 3072 bits Graviola has no kernel specialised to 24-word primes.
 Verification at 2048 bits leads by less than signing, 1.04 at the low
-end, and is the row closest to parity after 4096-bit signing.
+end, and is the row closest to parity after 4096-bit signing. The next
+section is what changed that.
+
+#### RSA, with Karatsuba at 32 words and a five-bit window
+
+Four changes (CHANGELOG.md, Unreleased, has each): Karatsuba for the
+32-word product and square, as Graviola has; a five-bit window from 16
+words up (on x86-64 with `std`); the exponentiation's table read on AVX2, entry by entry; and
+every assembly block of the backend aligned to 64 bytes, after two builds
+of the same source ran the 1024-bit product at 138 and 343 ns.
+`RUSTFLAGS="--cfg ic_no_avx512" cargo run --release -- graviola-rsa`, the
+build before and this one alternated, three rounds, each run pinned to one
+core at high priority on the same Zen 5, with other jobs running; each
+cell is IronCrypto's rate over Graviola's within a run, the range across
+rounds:
+
+| operation | before | after |
+|---|---|---|
+| RSA-2048 sign | 1.11-1.12 | 1.12-1.14 |
+| RSA-2048 verify | 1.11 | 1.14 |
+| RSA-3072 sign | 2.38-2.41 | 2.49-2.51 |
+| RSA-3072 verify | 2.99-3.00 | 2.99-3.02 |
+| RSA-4096 sign | 1.01 | 1.08-1.09 |
+| RSA-4096 verify | 2.90-3.19 | 3.16-3.19 |
+
+The "before" column is higher at 2048 bits and narrower everywhere than
+the table above: pinning the runs took out most of the spread. RSA-4096
+signing now leads, by 8 to 9%: IronCrypto's own time went from 2118-2132
+us to 1973-1992 us. Karatsuba alone gave about 3% of that. At 32 words a
+square takes about 1600 TSC ticks, of which the reduction, unchanged and the
+same shape as Graviola's (`bignum_emontredc_8n`), takes about 1040; the
+steps here run about one `mulx` a tick, bound by their carry chains, and
+Karatsuba's additions and its three diagonals take back much of what its
+120 fewer `mulx` save. The five-bit window and the AVX2 read gave the rest.
+Graviola uses a four-bit window and reads its table with
+`bignum_copy_row_from_table`.
+
+The default build, with AVX-512 IFMA, runs RSA-4096's primes as a whole
+IFMA exponentiation and is unchanged: 1.77-1.78 in both columns, and its
+2048- and 3072-bit rows as before.
 
 Graviola's own paths are the same in both columns -- except AES-GCM's.
 Graviola 0.4.1 has an AES-GCM path on VAES and AVX-512 that it takes for
@@ -504,7 +543,7 @@ expected, not a weakness.
 
 Beyond Valgrind, which only sees the build and CPU it runs on:
 
-- `scripts/check-ct.py` disassembles the compiled code of 114 probes on
+- `scripts/check-ct.py` disassembles the compiled code of 120 probes on
   x86-64, 51 on aarch64 (the ARMv8 AES, `PMULL` GHASH, SHA-256 and SHA-512
   backends among them) and 44 on Cortex-M0, Cortex-M4 and 32-bit RISC-V, and fails the
   build on any branch or secret-indexed load in them. It has caught
@@ -519,7 +558,8 @@ check after signing that `m^e = c`, which decides only whether the
 signature is released. That run exercises the portable exponentiation.
 A second case, `ic-rsa-2048-sign-adx`, forces IronCrypto's MULX/ADX Montgomery
 product, which Valgrind executes though it hides ADX from CPUID, and reports the
-same one branch. Valgrind does not emulate AVX-512, so it cannot reach the
+same one branch, and so does a third, `ic-rsa-4096-sign-adx`, on the 32-word
+Karatsuba kernels. Valgrind does not emulate AVX-512, so it cannot reach the
 IFMA path; the compiled-code gate reads it instead: the IFMA Montgomery
 product (`ct_rsa_ifma_amm_2048`), whose one loop branch is on the row count,
 and the whole exponentiation at 1024 and 2048 bits (`ct_rsa_ifma_pow_1024`,

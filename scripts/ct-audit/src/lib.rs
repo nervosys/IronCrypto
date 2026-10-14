@@ -310,6 +310,13 @@ pub fn ct_rsa_select_2048(table: &[[u64; 64]; 16], digit: u64, out: &mut [u64; 6
     ic_rsa::ct_probes::select_2048(table, digit, out)
 }
 
+// The same read from the five-bit window's table of 32 entries: without
+// `std`, as here, the SSE2 scan of every entry at every position.
+#[no_mangle]
+pub fn ct_rsa_select32_2048(table: &[[u64; 64]; 32], digit: u64, out: &mut [u64; 64]) {
+    ic_rsa::ct_probes::select32_2048(table, digit, out)
+}
+
 // x86-64: P-256's MULX/ADX field sequences and the point formulas made of
 // them. Compiled to be read, never run: they need BMI2 and ADX.
 #[cfg(target_arch = "x86_64")]
@@ -736,6 +743,68 @@ mod x86_rsa {
         out: &mut [u64; 32],
     ) {
         unsafe { p::adx_mont_sqr_2048(a, n, n0inv, out) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_adx_mont_mul_1536(
+        a: &[u64; 24],
+        b: &[u64; 24],
+        n: &[u64; 24],
+        n0inv: u64,
+        out: &mut [u64; 24],
+    ) {
+        unsafe { p::adx_mont_mul_1536(a, b, n, n0inv, out) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_adx_mont_sqr_1536(
+        a: &[u64; 24],
+        n: &[u64; 24],
+        n0inv: u64,
+        out: &mut [u64; 24],
+    ) {
+        unsafe { p::adx_mont_sqr_1536(a, n, n0inv, out) }
+    }
+
+    // The exponentiation's table read on AVX2, from the five-bit window's 32
+    // entries at each width an RSA prime has: the masks from the secret
+    // digit, then every entry read whole into the accumulators.
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_select32_avx2_1024(
+        table: &[[u64; 64]; 32],
+        digit: u64,
+        out: &mut [u64; 64],
+    ) {
+        unsafe { p::select32_avx2_1024(table, digit, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_select32_avx2_1536(
+        table: &[[u64; 64]; 32],
+        digit: u64,
+        out: &mut [u64; 64],
+    ) {
+        unsafe { p::select32_avx2_1536(table, digit, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_select32_avx2_2048(
+        table: &[[u64; 64]; 32],
+        digit: u64,
+        out: &mut [u64; 64],
+    ) {
+        unsafe { p::select32_avx2_2048(table, digit, out) }
     }
 
     /// # Safety

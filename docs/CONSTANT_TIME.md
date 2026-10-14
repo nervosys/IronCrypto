@@ -22,8 +22,8 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-seventy more on x86-64, and seven more on aarch64: 297 gating probe/target
-checks in all, 114 on x86-64, 51 on aarch64, and 44 on each of the three other
+seventy-six more on x86-64, and seven more on aarch64: 303 gating probe/target
+checks in all, 120 on x86-64, 51 on aarch64, and 44 on each of the three other
 targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -80,14 +80,19 @@ release profile; this is not the workspace binary's overflow-checked profile.
   lanes' final multiplication and folding (`ct_poly1305_avx2_step`,
   `ct_poly1305_avx2_finish`). See "ChaCha20 and Poly1305 on x86-64" below.
 - On x86-64 only, RSA at 2048 bits: the windowed exponentiation's table
-  read (`ct_rsa_select_2048`), and the three Montgomery products -- on
-  MULX/ADCX/ADOX (`ct_rsa_adx_mont_mul_2048`, and its square
+  read (`ct_rsa_select_2048`, and from 32 entries `ct_rsa_select32_2048`),
+  and the three Montgomery products -- on MULX/ADCX/ADOX by one level of
+  Karatsuba (`ct_rsa_adx_mont_mul_2048`, and its square
   `ct_rsa_adx_mont_sqr_2048`), on AVX-512 IFMA (`ct_rsa_ifma_amm_2048`) and
-  the portable CIOS (`ct_rsa_cios_2048`); and at 1024 bits the straight-line
-  MULX/ADCX/ADOX product and square (`ct_rsa_adx_mont_mul_1024`,
-  `ct_rsa_adx_mont_sqr_1024`). The loops over the width are excused by the
-  x86-64 counter-loop rule, per probe, up to a ceiling. See "Loops on
-  x86-64" and "RSA on MULX/ADX in eight-word blocks" below.
+  the portable CIOS (`ct_rsa_cios_2048`); at 1536 bits the MULX/ADCX/ADOX
+  eight-word blocks (`ct_rsa_adx_mont_mul_1536`, `ct_rsa_adx_mont_sqr_1536`);
+  at 1024 bits the straight-line product and square
+  (`ct_rsa_adx_mont_mul_1024`, `ct_rsa_adx_mont_sqr_1024`); and the AVX2
+  table read from 32 entries at each prime width
+  (`ct_rsa_select32_avx2_1024`, `_1536`, `_2048`). The loops over the width
+  are excused by the x86-64 counter-loop rule, per probe, up to a ceiling.
+  See "Loops on x86-64", "RSA on MULX/ADX in eight-word blocks" and
+  "RSA-4096's primes by Karatsuba" below.
 - On x86-64 only, RSA's whole exponentiation on AVX-512 IFMA, from the
   modulus, base and secret exponent to the reduced result, at 1024 bits
   (`ct_rsa_ifma_pow_1024`, each of RSA-2048's two CRT exponentiations) and
@@ -1278,6 +1283,101 @@ counts are as master left them.
 
 After this merged with the AES-GCM probes above: forty-nine on x86-64
 alone, ninety-three there, 93 + 3 x 44 = 225 gating probe/target checks.
+
+## RSA-4096's primes by Karatsuba, 2026-10-14
+
+At 32 words, the primes of RSA-4096 and an RSA-2048 modulus, the
+MULX/ADCX/ADOX product and square are now one level of Karatsuba over the
+16-word kernels without their reduction (`kmul_32`, `ksqr_32` in
+`ic-rsa/src/uint/x86.rs`), then the reduction in eight-word blocks as
+before. The exponentiation reads the exponent five bits at a time from 16
+words up, a table of 32 entries, and where the CPU has AVX2 reads that table
+entry by entry into `ymm` accumulators (`select_avx2`). Every `asm!` block
+of the backend starts on a 64-byte boundary (CHANGELOG.md has why).
+
+The sign of Karatsuba's middle term, `(a1 - a0)(b1 - b0)`, is a secret.
+Each difference is computed as its absolute value: the subtraction on one
+borrow chain, `sbb rcx, rcx` for the mask, then the words XORed with the
+mask and the mask's low bit carried in from the bottom. The product of the
+two absolute values is added or subtracted by mask too: XORed with the
+complement of the two masks' XOR and the low bit carried in, so that
+subtracting is adding the two's complement, and the top word corrected by
+the mask. The square always subtracts, complementing with `not`. Nothing
+branches and no address depends on either.
+
+Probes. `ct_rsa_adx_mont_mul_2048` and `ct_rsa_adx_mont_sqr_2048` now read
+the Karatsuba kernels, which are what `mont_mul` and `mont_sqr` take at 32
+words; the eight-word blocks they replaced there are still what RSA-3072's
+primes (24 words) and the 3072- and 4096-bit moduli run, and are read at
+1536 bits by two new probes, `ct_rsa_adx_mont_mul_1536` and
+`ct_rsa_adx_mont_sqr_1536`. `ct_rsa_select32_2048` reads the SSE2 scan of a
+32-entry table, which a build without `std` takes, and
+`ct_rsa_select32_avx2_1024`, `_1536` and `_2048` the AVX2 read at each prime
+width, the masks computed from the secret digit inside each probe. Six new
+probes, all x86-64 only.
+
+### The ceilings, read on 2026-10-14, rustc 1.99.0
+
+| Probe | counter loop | unconditional jump |
+| --- | --- | --- |
+| `ct_rsa_adx_mont_mul_2048` | 6 (was 10) | 6 (was 10) |
+| `ct_rsa_adx_mont_sqr_2048` | 6 (was 11) | 6 (was 11) |
+| `ct_rsa_adx_mont_mul_1536` | 8 | 8 |
+| `ct_rsa_adx_mont_sqr_1536` | 9 | 9 |
+| `ct_rsa_select32_2048` | 1 | 1 |
+| `ct_rsa_select32_avx2_1024` | 1 | 1 |
+| `ct_rsa_select32_avx2_1536` | 1 | 1 |
+| `ct_rsa_select32_avx2_2048` | 1 | 1 |
+
+Each excused finding, read in
+`target/ct-audit/probes/x86_64-unknown-linux-gnu.s`:
+
+- The 2048-bit probes call `mont_mul_32` or `mont_sqr_32`, which call
+  `mul_16` or `sqr_16` three times; those, the absolute differences and the
+  recombination have no branch. Their six findings are the reduction's four
+  blocks, each a loop over its groups of eight steps -- `testq %rbp, %rbp;
+  je` at the top, `decq %rbp`, `jmp` back, rbp the group count, `$3` -- and
+  the final subtraction's two loops, `jrcxz`/`jmp` with rcx `$-8`.
+- The 1536-bit product: three product blocks and three reduction blocks,
+  each the same group loop, rbp `$3` for the product's and `$2` for the
+  reduction's, and the final subtraction's two loops, rcx `$-6`. The
+  square: three blocks of cross products, rbp `$2`, `$1` and zero; the
+  diagonal's `jrcxz` loop, rcx `$-6`; three reduction blocks, `$2`; the
+  final subtraction.
+- `ct_rsa_select32_2048`: the scan's loop over pairs of words, `jrcxz`/`jmp`,
+  rcx `$-16`, and inside it 32 `movdqu`/`pand`/`por` at fixed offsets from
+  the table and from r8, which is the table plus 8192.
+- The AVX2 reads: one loop over the 32 entries, `jrcxz`/`jmp`, rcx `$-32`
+  (set in the kernel) stepped by `lea`, rdi stepping 512 bytes (one entry) and rsi 8 (one
+  mask); inside it, `vpbroadcastq` of the mask and four, six or eight
+  `vpand`/`vpor` at fixed offsets from rdi.
+
+Every count starts at a constant derived from the width or the table size.
+The ceilings of the two 2048-bit probes went down, not up: the Karatsuba
+kernels loop less than the blocks did.
+
+### Mutations
+
+Applied one at a time to the library, the check run, and restored:
+
+- `test qword ptr [rsi], 1; jz 7f; nop; 7:` on a word of the middle product
+  in the square's recombination: fails
+  `ct_rsa_adx_mont_sqr_2048 -> ...x8611mont_sqr_32: je .Ltmp73`.
+- `jrcxz 7f; nop; 7:` on the absolute difference's mask: fails both
+  2048-bit probes (`mont_mul_32: jrcxz .Ltmp51`, `.Ltmp52`; `mont_sqr_32:
+  jrcxz .Ltmp75`).
+- `vptest ymm7, ymm7; jz 7f; nop; 7:` on the selected words in the AVX2
+  read: fails `ct_rsa_select32_avx2_2048 -> ...select_avx2_32w: je
+  .Ltmp87`.
+
+Restored, all pass. Running the recombination three times instead of once
+passes the gate, as it should: it adds no branch, and the tests catch it.
+
+Valgrind (docs/CTGRIND.md) runs RSA-4096 signing on these kernels with the
+backend forced (`ic-rsa-4096-sign-adx`), the AVX2 table read included.
+
+Probe count: seventy-six on x86-64 alone, where there were seventy: 120 on
+x86-64, and 120 + 3 x 44 + 51 = 303 gating probe/target checks.
 
 ## P-256 and P-384 on AVX-512 IFMA, 2026-10-13
 
