@@ -189,8 +189,10 @@ and AES-GMAC, about 12,000 cases pinned by SHA-256 (`crates/ironcrypto/tests/cov
 addition: NIST's ACVP vectors for ML-KEM, ML-DSA and SLH-DSA, and the
 published vectors of every other algorithm listed in the README. Wycheproof's
 primality cases also run, against RSA key generation's Miller-Rabin test
-through a test-only entry point: 317 cases, of which 20 composites that the
-fixed bases accept are listed by tcId as known failures rather than skipped.
+through a test-only entry point that draws its bases from a seeded RNG, as FIPS
+186-5 B.3.1 specifies: 317 cases, 14 signed values skipped and counted, and
+every other case agrees with its label. Earlier, 20 composites that fixed bases
+accepted were listed as known failures; random bases refuse them.
 
 ## For agents
 

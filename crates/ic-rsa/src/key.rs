@@ -32,8 +32,9 @@
 //! the slow path, because there is nothing to recombine.
 
 use crate::uint::{Modulus, Uint, MAX_BYTES, MAX_LIMBS};
+use ic_core::ct::Choice;
 use ic_core::traits::RandomSource;
-use ic_core::{ensure, Result, Zeroize};
+use ic_core::{ensure, Result, Zeroize, Zeroizing};
 
 /// The smallest modulus this accepts, in bits.
 ///
@@ -476,8 +477,15 @@ impl RsaPrivateKey {
 // Key generation
 // ---------------------------------------------------------------------------
 
-/// Miller-Rabin rounds key generation runs on each candidate: the first this
-/// many primes are the bases.
+/// Miller-Rabin rounds key generation runs on each candidate, each with a base
+/// drawn at random from the key generator's RNG (FIPS 186-5 B.3.1).
+///
+/// Eight rounds bound the chance that a composite passes at 4^-8 = 2^-16. That
+/// is a per-candidate bound, and it does not depend on which composite was
+/// drawn. FIPS 186-5 Table B.1 gives a minimum round count for each prime size;
+/// it was not checked against the published standard when this was written
+/// (the PDF could not be read), so 8 is kept, which is at least the current
+/// count. Lowering it needs that table, from the standard, in hand.
 const KEYGEN_ROUNDS: usize = 8;
 
 /// Primes below 256, for trial division.
@@ -514,60 +522,80 @@ fn mul_vartime(a: &Uint, b: &Uint, a_limbs: usize, b_limbs: usize) -> Uint {
     out
 }
 
-/// Miller-Rabin probable-primality test against the first `rounds` prime bases.
+/// Miller-Rabin probable-primality test with `rounds` random bases, as FIPS 186-5
+/// Appendix B.3.1 specifies.
 ///
-/// # Why fixed bases rather than random ones
+/// # Why random bases
 ///
-/// FIPS 186-5 C.3.1 draws each base at random, which matters when the candidate
-/// might have been chosen adversarially to fool a known base set. Here the
-/// candidate always comes from this library's own DRBG a few lines earlier, so
-/// there is no adversary in a position to choose it, and fixed bases make the
-/// test deterministic and therefore testable. A key arriving from outside is
-/// never run through this function — [`RsaPublicKey::from_components`] does not
-/// attempt to factor what it is given.
+/// The bases used to be the first primes, fixed. That made the test deterministic,
+/// but a composite can be built to pass a known base set: Wycheproof's
+/// `primality_test.json` contains twenty such composites (cases 22 to 25, 31, 32,
+/// 38, 87 and 105 to 116 pass the first twelve prime bases). With bases drawn
+/// from the RBG, every odd composite passes a round with probability at most 1/4
+/// (Rabin, 1980), whatever the composite, so `rounds` rounds err with probability
+/// at most 4^-rounds. The error bound is per candidate, and it holds for any
+/// candidate, not only for candidates this library generates.
 ///
-/// This argument rests entirely on the candidate being random rather than
-/// chosen. The fixed bases carry no per-round bound of their own: a composite
-/// that passes every base in use exists, and Wycheproof's `primality_test.json`
-/// contains composites that pass the first twelve prime bases (cases 109 and
-/// 112, for two). Such a composite is never a key-generation candidate unless
-/// the DRBG is adversarial, which is outside this module's threat model. The
-/// test-only entry point [`probable_prime_be`] is how those cases are checked.
-fn is_probable_prime(candidate: &Uint, limbs: usize, rounds: usize) -> bool {
+/// # Constant time
+///
+/// The candidate is secret, and so is every value derived from it. The range test
+/// on each drawn base (`b <= 1` or `b >= w - 1`) is computed with borrows, and the
+/// only branch in it is the retry decision. That branch reveals one thing: that
+/// one uniformly drawn `b` of `wlen` bits fell outside `[2, w - 2]`. The chance of
+/// that is `(2^wlen - w + 3) / 2^wlen`, which for key generation's candidates (top
+/// two bits set, so `w >= 3 * 2^(wlen - 2)`) is at most 1/4. The exponentiations
+/// are [`Modulus::pow`], the crate's constant-time exponentiation, over the secret
+/// exponent `d`.
+///
+/// The early exits are the structure this test has always had, unchanged: a
+/// round whose first value is 1 or `n - 1` continues, and a round that finds no
+/// witness returns composite at once. Those branches are on the values of the
+/// candidate's powers, so they are not constant time. They fire only for a
+/// composite, and only for a composite that was going to be discarded: for a
+/// prime, every round continues. Trial division ([`SMALL_PRIMES`]) also branches
+/// on the candidate, as it always has.
+///
+/// `b` and the intermediate values are wiped on the way out.
+fn is_probable_prime<R: RandomSource + ?Sized>(
+    candidate: &Uint,
+    limbs: usize,
+    rounds: usize,
+    rng: &mut R,
+) -> Result<bool> {
     // Zero is even. One is odd, and below would never terminate on it: n - 1 is
     // zero, and the loop that strips factors of two never ends.
     if !candidate.is_odd() || candidate.bits() < 2 {
-        return false;
+        return Ok(false);
     }
     for p in SMALL_PRIMES {
         if candidate.rem_u64(p) == 0 {
             // Divisible: prime only if the candidate *is* that small prime.
-            return candidate.cmp_vartime(&Uint::from_u64(p)) == core::cmp::Ordering::Equal;
+            return Ok(candidate.cmp_vartime(&Uint::from_u64(p)) == core::cmp::Ordering::Equal);
         }
     }
 
     let modulus = match Modulus::new(*candidate) {
         Some(m) => m,
-        None => return false,
+        None => return Ok(false),
     };
     let one = Uint::one();
-    let mut n_minus_1 = *candidate;
+    let mut n_minus_1 = Zeroizing::new(*candidate);
     n_minus_1.sub_assign(&one, limbs);
 
     // n - 1 = 2^s * d with d odd.
-    let mut d = n_minus_1;
+    let mut d = Zeroizing::new(*n_minus_1);
     let mut s = 0usize;
     while !d.is_odd() {
         d.shr1(limbs);
         s += 1;
     }
     let d_bits = d.bits();
+    let wlen = candidate.bits();
 
-    for &p in SMALL_PRIMES.iter().take(rounds) {
-        let base = Uint::from_u64(p);
-        // Trial division already established `candidate > p` for every small
-        // prime, so the base is in range.
-        let mut x = modulus.pow(&base, &d, d_bits);
+    for _ in 0..rounds {
+        // Trial division established candidate >= 257, so [2, n - 2] is not empty.
+        let base = random_base(wlen, limbs, &n_minus_1, rng)?;
+        let mut x = Zeroizing::new(modulus.pow(&base, &d, d_bits));
         if x.cmp_vartime(&one) == core::cmp::Ordering::Equal
             || x.cmp_vartime(&n_minus_1) == core::cmp::Ordering::Equal
         {
@@ -576,17 +604,65 @@ fn is_probable_prime(candidate: &Uint, limbs: usize, rounds: usize) -> bool {
 
         let mut witnessed = false;
         for _ in 1..s {
-            x = modulus.pow_public(&x, 2);
+            let next = modulus.pow_public(&x, 2);
+            *x = next;
             if x.cmp_vartime(&n_minus_1) == core::cmp::Ordering::Equal {
                 witnessed = true;
                 break;
             }
         }
         if !witnessed {
-            return false;
+            return Ok(false);
         }
     }
-    true
+    Ok(true)
+}
+
+/// Upper bound on redraws for one base. A draw is out of range with probability
+/// at most about 1/2, so reaching this bound takes a broken RNG, and a broken RNG
+/// is reported as an error rather than looped on.
+const MAX_BASE_DRAWS: usize = 1024;
+
+/// Draw a Miller-Rabin base `b` with `2 <= b <= w - 2` as FIPS 186-5 B.3.1
+/// specifies: a string of `wlen` bits from the RBG, redrawn while `b <= 1` or
+/// `b >= w - 1`. `n_minus_1` is `w - 1`, and `limbs` covers every value here.
+fn random_base<R: RandomSource + ?Sized>(
+    wlen: usize,
+    limbs: usize,
+    n_minus_1: &Uint,
+    rng: &mut R,
+) -> Result<Zeroizing<Uint>> {
+    let byte_len = wlen.div_ceil(8);
+    let excess = byte_len * 8 - wlen;
+    let two = Uint::from_u64(2);
+    let mut buf = [0u8; MAX_BYTES];
+    for _ in 0..MAX_BASE_DRAWS {
+        rng.fill(&mut buf[..byte_len])?;
+        // Keep exactly `wlen` bits: the top byte's surplus bits are cleared.
+        buf[0] &= 0xFFu8 >> excess;
+        let b = Zeroizing::new(
+            Uint::from_be_bytes(&buf[..byte_len])
+                .ok_or(ic_core::err!(Internal, "base did not fit"))?,
+        );
+        // Borrows, not comparisons: `below_two` is 1 when b < 2, and `below_top`
+        // is 1 when b < w - 1. Out of range is b < 2 or b >= w - 1.
+        let mut t = Zeroizing::new(*b);
+        let below_two = t.sub_assign(&two, limbs);
+        let mut u = Zeroizing::new(*b);
+        let below_top = u.sub_assign(n_minus_1, limbs);
+        let out_of_range =
+            Choice::from_u8(below_two as u8).or(Choice::from_u8((1 - below_top) as u8));
+        // The only branch on the draw: the retry decision.
+        if out_of_range.unwrap_u8() == 0 {
+            buf.zeroize();
+            return Ok(b);
+        }
+    }
+    buf.zeroize();
+    Err(ic_core::err!(
+        Internal,
+        "no in-range base after the draw bound"
+    ))
 }
 
 /// Test-only access to the primality decision key generation makes, for the
@@ -595,16 +671,25 @@ fn is_probable_prime(candidate: &Uint, limbs: usize, rounds: usize) -> bool {
 ///
 /// `candidate_be` is an unsigned big-endian integer; leading zero bytes are
 /// ignored. The decision is the one key generation makes: trial division by
-/// [`SMALL_PRIMES`], then [`KEYGEN_ROUNDS`] fixed-base Miller-Rabin rounds. The
-/// one difference is that 2 is reported prime, since this is a decision on
-/// integers and not on the odd candidates key generation draws.
+/// [`SMALL_PRIMES`], then [`KEYGEN_ROUNDS`] Miller-Rabin rounds with bases drawn
+/// from `rng`. The one difference is that 2 is reported prime, since this is a
+/// decision on integers and not on the odd candidates key generation draws.
+///
+/// The bases come from `rng`, so the result is deterministic exactly when the
+/// caller's RNG is. The caller seeds it with a constant, which the Wycheproof test
+/// does, so the test gives the same answer on every run. Taking the RNG as an
+/// argument rather than seeding one here keeps `ic-drbg` out of this crate's
+/// normal dependencies.
 ///
 /// Returns `Some(true)` or `Some(false)` for every value that fits in
 /// [`MAX_BYTES`] bytes, including zero and one, which are not prime. Returns
-/// `None` when the value is wider than that: the fixed-width `Uint` cannot hold
-/// it, so no decision is made.
+/// `None` when the value is wider than that (the fixed-width `Uint` cannot hold
+/// it) or when `rng` fails: no decision is made in either case.
 #[doc(hidden)]
-pub fn probable_prime_be(candidate_be: &[u8]) -> Option<bool> {
+pub fn probable_prime_be<R: RandomSource + ?Sized>(
+    candidate_be: &[u8],
+    rng: &mut R,
+) -> Option<bool> {
     let start = candidate_be
         .iter()
         .position(|&b| b != 0)
@@ -621,7 +706,7 @@ pub fn probable_prime_be(candidate_be: &[u8]) -> Option<bool> {
         return Some(true);
     }
     let limbs = candidate.bits().div_ceil(64).max(1);
-    Some(is_probable_prime(&candidate, limbs, KEYGEN_ROUNDS))
+    is_probable_prime(&candidate, limbs, KEYGEN_ROUNDS, rng).ok()
 }
 
 /// Draw a random odd candidate of exactly `bits` bits.
@@ -670,7 +755,7 @@ pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<Rs
     // Bounded so a broken RNG cannot hang the caller.
     for _ in 0..(half * 40) {
         let p = random_candidate(half, rng)?;
-        if !is_probable_prime(&p, half_limbs, rounds) {
+        if !is_probable_prime(&p, half_limbs, rounds, rng)? {
             continue;
         }
 
@@ -679,7 +764,7 @@ pub fn generate<R: RandomSource + ?Sized>(bits: usize, rng: &mut R) -> Result<Rs
             if q.cmp_vartime(&p) == core::cmp::Ordering::Equal {
                 continue;
             }
-            if !is_probable_prime(&q, half_limbs, rounds) {
+            if !is_probable_prime(&q, half_limbs, rounds, rng)? {
                 continue;
             }
 
@@ -1035,14 +1120,61 @@ mod tests {
         assert_eq!(p.0[1], (want >> 64) as u64);
     }
 
+    /// Hands out scripted byte strings, one per `fill`, so a test can dictate the
+    /// bases the Miller-Rabin test draws.
+    struct Scripted<'a> {
+        chunks: &'a [&'a [u8]],
+        next: usize,
+    }
+
+    impl RandomSource for Scripted<'_> {
+        fn fill(&mut self, out: &mut [u8]) -> Result<()> {
+            let chunk = self.chunks[self.next];
+            self.next += 1;
+            out.copy_from_slice(&chunk[..out.len()]);
+            Ok(())
+        }
+    }
+
+    /// An RNG that always fails: the test refuses to decide, rather than panicking.
+    struct Broken;
+
+    impl RandomSource for Broken {
+        fn fill(&mut self, _out: &mut [u8]) -> Result<()> {
+            Err(ic_core::err!(Internal, "broken rng"))
+        }
+    }
+
+    /// FIPS 186-5 B.3.1: a base is redrawn while it is 0, 1, or at least `w - 1`.
+    /// For w = 257 (wlen 9, so the top byte keeps one bit), the script gives 0
+    /// (redrawn), 1 (redrawn), 0xffff masked to 0x1ff = 511 (redrawn, since
+    /// 511 >= w - 1 = 256), then 0x00fe = 254 (taken). The rule fixes which draw
+    /// is taken; the script is the only input.
+    #[test]
+    fn random_base_redraws_out_of_range_values() {
+        let w_minus_1 = Uint::from_u64(256);
+        let script: [&[u8]; 4] = [&[0x00, 0x00], &[0x00, 0x01], &[0xff, 0xff], &[0x00, 0xfe]];
+        let mut rng = Scripted {
+            chunks: &script,
+            next: 0,
+        };
+        let base = random_base(9, 1, &w_minus_1, &mut rng).unwrap();
+        assert_eq!(base.0[0], 254, "first in-range draw is taken");
+        assert_eq!(rng.next, 4, "each out-of-range draw consumed one fill");
+    }
+
     #[test]
     fn primality_recognizes_known_values() {
+        let mut rng = ic_drbg::Rng::from_entropy(&[0xa1u8; 32], b"known values").unwrap();
         for p in [3u64, 5, 7, 65537, 2_147_483_647, 1_000_000_007] {
-            assert!(is_probable_prime(&Uint::from_u64(p), 1, 8), "{p} is prime");
+            assert!(
+                is_probable_prime(&Uint::from_u64(p), 1, 8, &mut rng).unwrap(),
+                "{p} is prime"
+            );
         }
         for c in [9u64, 15, 21, 65535, 2_147_483_645, 1_000_000_009 * 3] {
             assert!(
-                !is_probable_prime(&Uint::from_u64(c), 1, 8),
+                !is_probable_prime(&Uint::from_u64(c), 1, 8, &mut rng).unwrap(),
                 "{c} is composite"
             );
         }
@@ -1052,35 +1184,53 @@ mod tests {
     /// and the wide value is refused as undecidable rather than as composite.
     #[test]
     fn probable_prime_be_handles_edge_inputs() {
-        assert_eq!(probable_prime_be(&[]), Some(false), "empty is zero");
-        assert_eq!(probable_prime_be(&[0, 0]), Some(false), "zero");
-        assert_eq!(probable_prime_be(&[1]), Some(false), "one");
-        assert_eq!(probable_prime_be(&[0, 0, 2]), Some(true), "two");
-        assert_eq!(probable_prime_be(&[4]), Some(false), "four");
+        let mut rng = ic_drbg::Rng::from_entropy(&[0xa2u8; 32], b"edge inputs").unwrap();
         assert_eq!(
-            probable_prime_be(&[0, 0, 0, 13]),
+            probable_prime_be(&[], &mut rng),
+            Some(false),
+            "empty is zero"
+        );
+        assert_eq!(probable_prime_be(&[0, 0], &mut rng), Some(false), "zero");
+        assert_eq!(probable_prime_be(&[1], &mut rng), Some(false), "one");
+        assert_eq!(probable_prime_be(&[0, 0, 2], &mut rng), Some(true), "two");
+        assert_eq!(probable_prime_be(&[4], &mut rng), Some(false), "four");
+        assert_eq!(
+            probable_prime_be(&[0, 0, 0, 13], &mut rng),
             Some(true),
             "leading zeros"
         );
-        assert_eq!(probable_prime_be(&[0x3f]), Some(false), "63");
+        assert_eq!(probable_prime_be(&[0x3f], &mut rng), Some(false), "63");
         let wide = [0x01u8; MAX_BYTES + 1];
-        assert_eq!(probable_prime_be(&wide), None, "wider than the capacity");
+        assert_eq!(
+            probable_prime_be(&wide, &mut rng),
+            None,
+            "wider than the capacity"
+        );
         let mut zero_padded = [0u8; MAX_BYTES + 1];
         zero_padded[MAX_BYTES] = 7;
         assert_eq!(
-            probable_prime_be(&zero_padded),
+            probable_prime_be(&zero_padded, &mut rng),
             Some(true),
             "leading zeros do not count toward the capacity"
         );
+    }
+
+    /// A value that reaches Miller-Rabin and cannot draw a base gives no decision,
+    /// not a wrong one.
+    #[test]
+    fn probable_prime_be_refuses_when_the_rng_fails() {
+        let candidate = [0x01u8, 0x00, 0x01]; // 65537, past trial division
+        assert_eq!(probable_prime_be(&candidate, &mut Broken), None);
     }
 
     /// A Carmichael number passes a naive Fermat test but must fail
     /// Miller-Rabin, which is the whole reason for using the latter.
     #[test]
     fn primality_rejects_carmichael_numbers() {
+        let mut rng = ic_drbg::Rng::from_entropy(&[0xa3u8; 32], b"carmichael").unwrap();
         for c in [561u64, 1105, 1729, 2465, 6601, 8911, 41041, 62745] {
             assert!(
-                !is_probable_prime(&Uint::from_u64(c), 1, 8),
+                !is_probable_prime(&Uint::from_u64(c), 1, 8, &mut rng).unwrap(),
                 "{c} is a Carmichael number, not a prime"
             );
         }

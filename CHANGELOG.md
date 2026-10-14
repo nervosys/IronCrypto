@@ -37,10 +37,10 @@ every caller of a hash function uses.
 ### Added
 
 - **Wycheproof's primality cases** run against RSA key generation's
-  Miller-Rabin test, through a hidden test-only `ic_rsa::key::probable_prime_be`:
-  283 of 317 agree with their label, 14 signed values are skipped and counted,
-  and 20 composites that the fixed bases accept are listed by tcId as known
-  failures, since key generation's candidates come from the DRBG.
+  Miller-Rabin test, through a hidden test-only `ic_rsa::key::probable_prime_be`
+  that takes a seeded RNG: all 303 signed-or-unsigned cases that can be
+  checked agree with their label, and 14 signed values are skipped and
+  counted.
 - **Prepared ML-KEM keys**, for every parameter set:
   `PreparedEncapsulationKey` and `PreparedDecapsulationKey` in
   `ic_mlkem::{kem512, kem, kem1024}`, aliased at the crate root as
@@ -240,6 +240,15 @@ every caller of a hash function uses.
 
 ### Changed
 
+- **RSA key generation draws each Miller-Rabin base at random**, as FIPS
+  186-5 B.3.1 specifies, from the generator's own RNG. The bases were the
+  first eight primes, fixed. Wycheproof's primality vectors include twenty
+  composites built to pass that set; they are now refused, and the error
+  bound is 4^-8 for any composite. Key generation's candidates come from the
+  DRBG, not from an adversary, so this is not an attacker-reachable weakness
+  and is not filed under Security. Generated keys change: the RNG is consumed
+  differently. Rounds stay at 8; FIPS 186-5 Table B.1 was not checked against
+  the standard, so no lower count is taken.
 - **The constant-time gate covers P-256's field and scalar arithmetic.**
   Sixteen compiled-code probes check the operations hashing to the curve
   and the OPRF apply to password- and key-derived values; the checker now
