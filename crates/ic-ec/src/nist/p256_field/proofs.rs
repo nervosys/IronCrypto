@@ -31,11 +31,18 @@
 //!   p`, for every `t` with upper half below `p`.
 //!
 //! A proof over a stubbed contract rests on that contract's own proof; run them
-//! all. Not proved: the 16-multiplication schoolbook in `mul` and the
-//! 10-multiplication one in `square` (that the eight words they pass to
-//! `reduce` are `a b` and `a^2`). Proved instead, over an integer
-//! specification of the product, is that `a b` lies in `reduce`'s domain for
-//! `a`, `b` below `p`. See docs/PROOFS.md for what was tried.
+//! all.
+//!
+//! The products, `mul` and `square`, are proved by splitting the schoolbook
+//! into a linear and a nonlinear part (see "The products" below and
+//! docs/PROOFS.md): the carries and accumulation here, with the 64-by-64
+//! multiplications replaced by arbitrary products; the polynomial identities
+//! over the integers by Z3 and cvc5, in `crates/ic-ec/proofs/smt/`. That the
+//! abstract products may be instantiated with the true ones is argued, not
+//! run, and so is the last step, substituting the product into `reduce`'s
+//! proved contract (a harness for it gave no verdict; see the end of this
+//! file). Together: `mul` and `square` return `out < p` with `2^256 out = a b
+//! mod p`, for `a`, `b` below `p`.
 //!
 //! The solver is Bitwuzla where named. Through it, CBMC 6.11 encodes a checked
 //! multiplication wrongly (the result and the overflow flag are swapped in the
@@ -330,55 +337,244 @@ fn mac_meets_its_contract() {
     mac(kani::any(), kani::any(), kani::any(), kani::any());
 }
 
-/// `x * 2^(64 k)` for a two-word `x`, as eight words.
-fn product_at(x: u128, k: usize) -> [u64; 8] {
-    let mut r = [0u64; 8];
+// ---------------------------------------------------------------------------
+// The products: the schoolbooks, split into a linear and a nonlinear part.
+// ---------------------------------------------------------------------------
+//
+// Asked whether the schoolbook equals the integer product, no solver here gave
+// a verdict (docs/PROOFS.md lists what was tried): every formula kept sixteen
+// symbolic 64-by-64 multiplications, even with `mac` replaced by its contract,
+// whose postcondition mentions `b c`. So the claim is split.
+//
+// - Linear, here: with the one multiplication in `mac`, `wrapping_mul`,
+//   replaced by `product_abstract`, which returns an arbitrary value no
+//   larger than `(2^64 - 1)^2` and logs the operands it was given, the eight
+//   words the schoolbook returns are `sum_k p_k 2^(64 (i_k + j_k))`, exactly,
+//   for the schedule the log records. `mac`'s additions and the whole carry
+//   structure run as written; no multiplication is left in the formula.
+//   (`mac` then does not meet its contract, so these harnesses need Kani's
+//   `--no-assert-contracts`, which `scripts/kani.sh` passes.)
+// - Nonlinear, outside the code: `sum_(i,j) a_i b_j 2^(64 (i + j)) = a b` over
+//   the integers, and the squaring identity, which are statements about
+//   polynomials and are checked by Z3 and cvc5 in `crates/ic-ec/proofs/smt/`.
+// - The step between: the real `wrapping_mul` of two words is their product
+//   `b c`, a value the abstract proof covers since `b c <= (2^64 - 1)^2`. So
+//   the real schoolbook returns the sum of the true word products at their
+//   weights, which is `product_spec`. That instantiation is argued, not run:
+//   it is the step from "for every `p`" to "for `p = b c`".
+
+/// `(2^64 - 1)^2 = 2^128 - 2^65 + 1`: the largest product of two words, and
+/// the only property of a true product the abstract one is given.
+const MAX_WORD_PRODUCT: u128 = 0xffff_ffff_ffff_fffe_0000_0000_0000_0001;
+
+// The ghost log: the operands of each multiplication, and the product it was
+// given, in call order. Kani-only; each harness starts from the initial
+// values.
+static mut LOG_X: [u128; 16] = [0; 16];
+static mut LOG_Y: [u128; 16] = [0; 16];
+static mut LOG_P: [u128; 16] = [0; 16];
+static mut LOG_LEN: usize = 0;
+
+/// The one multiplication in `mac`, `(b as u128).wrapping_mul(c as u128)`,
+/// taken away: the product is any value no larger than `(2^64 - 1)^2`, chosen
+/// by the solver, and `(x, y, p)` is appended to the ghost log. Everything
+/// else in `mac` -- the two additions, checked, and the split into words --
+/// runs as written.
+fn product_abstract(x: u128, y: u128) -> u128 {
+    let p: u128 = kani::any();
+    kani::assume(p <= MAX_WORD_PRODUCT);
+    // SAFETY: Kani runs a harness on one thread.
+    unsafe {
+        let n = LOG_LEN;
+        if n < 16 {
+            LOG_X[n] = x;
+            LOG_Y[n] = y;
+            LOG_P[n] = p;
+        }
+        LOG_LEN = n + 1;
+    }
+    p
+}
+
+/// The ghost log, read once a harness has run the code.
+fn ghost_log() -> (usize, [u128; 16], [u128; 16], [u128; 16]) {
+    // SAFETY: as above; these are copies, not references.
+    unsafe { (LOG_LEN, LOG_X, LOG_Y, LOG_P) }
+}
+
+/// `x * 2^(64 k)` for a two-word `x`, as `N` words.
+fn term_at<const N: usize>(x: u128, k: usize) -> [u64; N] {
+    let mut r = [0u64; N];
     r[k] = x as u64;
     r[k + 1] = (x >> 64) as u64;
     r
 }
 
-/// `x * b` as integers, five words: the four word products, each at its
-/// weight, summed with full carries.
-fn row_spec(x: u64, b: [u64; 4]) -> [u64; 5] {
-    let mut t = [0u64; 5];
-    for j in 0..4 {
-        let p = word_product(x, b[j]);
-        let mut term = [0u64; 5];
-        term[j] = p as u64;
-        term[j + 1] = (p >> 64) as u64;
-        t = add_w(t, term);
+/// The low eight words of nine.
+fn low8(x: [u64; 9]) -> [u64; 8] {
+    let mut r = [0u64; 8];
+    for i in 0..8 {
+        r[i] = x[i];
     }
-    t
+    r
 }
 
-/// `a * b` as integers: `sum_i a_i b 2^(64 i)`, each `a_i b` the sum of its
-/// four word products (below `2^512`, so eight words hold it exactly).
-fn product_spec(a: [u64; 4], b: [u64; 4]) -> [u64; 8] {
-    let mut t = [0u64; 8];
+/// `sum_j t_j 2^(64 j)`, five words: one row of the schoolbook, from its
+/// four products, with full carries.
+fn row_from(t: [u128; 4]) -> [u64; 5] {
+    let mut r = [0u64; 5];
+    for j in 0..4 {
+        r = add_w(r, term_at(t[j], j));
+    }
+    r
+}
+
+/// `sum_(i,j) t_ij 2^(64 (i + j))`, nine words, row by row: the reference sum
+/// for the product, from sixteen products whatever they are. Nine words, so
+/// that a carry out of the eighth is kept and can be asserted zero.
+fn product_from(t: [[u128; 4]; 4]) -> [u64; 9] {
+    let mut s = [0u64; 9];
     for i in 0..4 {
-        let row = row_spec(a[i], b);
-        let mut term = [0u64; 8];
+        let row = row_from(t[i]);
+        let mut term = [0u64; 9];
         for k in 0..5 {
             term[i + k] = row[k];
         }
-        t = add_w(t, term);
+        s = add_w(s, term);
+    }
+    s
+}
+
+/// `sum_i d_i 2^(128 i) + sum_(i<j) 2 x_ij 2^(64 (i + j))`, nine words: the
+/// reference sum for the square, the doubling written as adding twice.
+fn square_from(d: [u128; 4], x: [[u128; 4]; 4]) -> [u64; 9] {
+    let mut s = [0u64; 9];
+    for i in 0..4 {
+        s = add_w(s, term_at(d[i], 2 * i));
+        for j in i + 1..4 {
+            let t = term_at(x[i][j], i + j);
+            s = add_w(add_w(s, t), t);
+        }
+    }
+    s
+}
+
+/// The sixteen word products of `a` and `b`.
+fn word_products(a: [u64; 4], b: [u64; 4]) -> [[u128; 4]; 4] {
+    let mut t = [[0u128; 4]; 4];
+    for i in 0..4 {
+        for j in 0..4 {
+            t[i][j] = word_product(a[i], b[j]);
+        }
     }
     t
 }
 
-/// `a^2` as integers: each square `a_i^2` at weight `2i`, and each cross
-/// product `a_i a_j`, `i < j`, twice at weight `i + j`.
+/// `a * b` as integers: the reference sum over the true word products. It is
+/// below `2^512`, so eight words hold it; that `sum_(i,j) a_i b_j 2^(64 (i +
+/// j))` is the product of the integers `a` and `b` is the polynomial identity
+/// in `crates/ic-ec/proofs/smt/`.
+fn product_spec(a: [u64; 4], b: [u64; 4]) -> [u64; 8] {
+    low8(product_from(word_products(a, b)))
+}
+
+/// `a^2` as integers, likewise: the squares at weight `2i` and the cross
+/// products twice at weight `i + j`.
 fn square_spec(a: [u64; 4]) -> [u64; 8] {
-    let mut t = [0u64; 8];
+    let t = word_products(a, a);
+    let mut d = [0u128; 4];
     for i in 0..4 {
-        t = add_w(t, product_at(word_product(a[i], a[i]), 2 * i));
-        for j in i + 1..4 {
-            let x = product_at(word_product(a[i], a[j]), i + j);
-            t = add_w(add_w(t, x), x);
+        d[i] = t[i][i];
+    }
+    low8(square_from(d, t))
+}
+
+/// The order `product` multiplies in: row `i`, then column `j`.
+const MUL_SCHEDULE: [(usize, usize); 16] = [
+    (0, 0),
+    (0, 1),
+    (0, 2),
+    (0, 3),
+    (1, 0),
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (2, 0),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (3, 0),
+    (3, 1),
+    (3, 2),
+    (3, 3),
+];
+
+/// The order `square_product` multiplies in: the six cross products, then the
+/// four squares.
+const SQUARE_SCHEDULE: [(usize, usize); 10] = [
+    (0, 1),
+    (0, 2),
+    (0, 3),
+    (1, 2),
+    (1, 3),
+    (2, 3),
+    (0, 0),
+    (1, 1),
+    (2, 2),
+    (3, 3),
+];
+
+/// The linear part of `mul`'s schoolbook, for every `a`, `b` and every
+/// sixteen products: with each multiply-add given an arbitrary product no
+/// larger than `(2^64 - 1)^2`, the schoolbook asks for exactly sixteen, the
+/// `k`-th of `a_i` and `b_j` for `(i, j)` the `k`-th of [`MUL_SCHEDULE`], and
+/// returns `sum_k p_k 2^(64 (i_k + j_k))`, which is below `2^512`. Nothing is
+/// assumed of `a` or `b`: the bound on the products is all the carries need.
+#[kani::proof]
+#[kani::stub(u128::wrapping_mul, product_abstract)]
+fn the_schoolbook_sums_its_products_at_their_weights() {
+    let (a, b): ([u64; 4], [u64; 4]) = (kani::any(), kani::any());
+    let t = product(a, b);
+    let (n, xs, ys, ps) = ghost_log();
+    assert!(n == 16);
+    let mut terms = [[0u128; 4]; 4];
+    for k in 0..16 {
+        let (i, j) = MUL_SCHEDULE[k];
+        assert!(xs[k] == a[i] as u128 && ys[k] == b[j] as u128);
+        terms[i][j] = ps[k];
+    }
+    let want = product_from(terms);
+    assert!(want[8] == 0);
+    assert!(eq(&t, &low8(want)));
+}
+
+/// The linear part of `square`'s schoolbook, likewise: ten products asked
+/// for, in [`SQUARE_SCHEDULE`]'s order, and the result is the cross products
+/// doubled at weight `i + j` plus the squares at weight `2i`. The doubling the
+/// code does with shifts is checked here against adding twice. Bitwuzla, with
+/// no multiplication left in the formula, takes about half CaDiCaL's time.
+#[kani::proof]
+#[kani::stub(u128::wrapping_mul, product_abstract)]
+#[kani::solver(bitwuzla)]
+fn the_square_schoolbook_sums_its_products_at_their_weights() {
+    let a: [u64; 4] = kani::any();
+    let t = square_product(a);
+    let (n, xs, ys, ps) = ghost_log();
+    assert!(n == 10);
+    let mut d = [0u128; 4];
+    let mut x = [[0u128; 4]; 4];
+    for k in 0..10 {
+        let (i, j) = SQUARE_SCHEDULE[k];
+        assert!(xs[k] == a[i] as u128 && ys[k] == a[j] as u128);
+        if i == j {
+            d[i] = ps[k];
+        } else {
+            x[i][j] = ps[k];
         }
     }
-    t
+    let want = square_from(d, x);
+    assert!(want[8] == 0);
+    assert!(eq(&t, &low8(want)));
 }
 
 /// For `a`, `b` below `p`, the upper half of `a b` is below `p`, so the
@@ -390,3 +586,11 @@ fn the_product_of_residues_is_in_reduce_s_domain() {
     assert!(reduce_pre(product_spec(a, b)));
     assert!(reduce_pre(square_spec(a)));
 }
+
+// The composition, `mul` and `square` meeting `out < p`, `2^256 out = a b mod
+// p` over `reduce`'s contract with the product replaced by "any eight words
+// equal to `product_spec(a, b)`", was written as a `proof_for_contract`
+// harness and gave no verdict in 30 minutes on Bitwuzla, as the same harness
+// over the old product contract did before. It is argued in docs/PROOFS.md:
+// substitution of the schoolbook's result into `reduce`'s proved contract,
+// with the domain lemma above discharging its precondition.

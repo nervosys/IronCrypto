@@ -14,7 +14,7 @@ Neither library is CMVP validated.
 |---|---|---|---|
 | Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512 at 2048 and 3072 bits; level at 4096-bit signing), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, Ed25519 signing falls behind, P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH and P-256 signing are level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
-| Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's Montgomery reduction, and Curve25519's multiplication column sums; P-256's products and the assembly are not proved |
+| Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's portable field multiplication and squaring end to end (two steps argued), and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
 | Test vectors | every suite Graviola runs, plus ACVP for ML-KEM, ML-DSA, SLH-DSA | | |
@@ -413,13 +413,18 @@ to the carry pass, each over its documented input domain. The reduction and
 the column sums are proved as function contracts, each piece over the proved
 contracts of the pieces it calls.
 
-Multiplication is proved in part. P-256's `reduce` is proved to be
-Montgomery reduction for every input a product of residues can give it, but
-the 16- and 10-multiplication schoolbooks that compute that product did not
-finish in 25 minutes on the solvers tried, so `mul` and `square` as a
-whole are not proved. Curve25519's columns are proved equal to the schoolbook
-as the code writes it, `a_i (19 b_j)`; that this is `a b` mod `p` rests on
-integer associativity, argued and not machine-checked. The x86-64 assembly
+Multiplication is proved in part. P-256's portable `mul` and `square` are
+proved to return `a b 2^-256 mod p`, canonical, for every `a`, `b` below `p`.
+The schoolbook is split: Kani proves the carries and accumulation with every
+64-by-64 product replaced by an arbitrary value no larger than `(2^64 - 1)^2`,
+Z3 and cvc5 prove the polynomial identities `sum a_i b_j 2^(64 (i + j)) = a b`
+and its squaring form over the integers, and `reduce` is proved as before.
+Two steps are argued, not machine-checked: that the linear proof, which holds
+for every product in the bound, holds for the true ones, and the final
+substitution of the product into `reduce`'s contract. Curve25519's columns
+are proved equal to the schoolbook as the code writes it, `a_i (19 b_j)`; that
+this is `a b` mod `p` rests on integer associativity, argued and not
+machine-checked. The x86-64 assembly, which is what P-256 runs on x86-64,
 and the RSA arithmetic are tested -- against the portable code over millions
 of random and edge values, and against published vectors -- and not proved.
 

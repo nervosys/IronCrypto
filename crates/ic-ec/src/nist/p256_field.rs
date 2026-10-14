@@ -146,70 +146,110 @@ fn finish(hi: [u64; 4], w: [u64; 4]) -> [u64; 4] {
     select_ct(need.wrapping_neg(), [d0, d1, d2, d3], [s0, s1, s2, s3])
 }
 
+/// `a * b`, all 512 bits, as eight words: the 16-multiplication schoolbook,
+/// row `i` adding `a_i * b` at word `i`.
+///
+/// A macro, expanded in [`mul`] and, for the proofs, in `product`: the same
+/// tokens, so what the proofs check is what `mul` runs. Written as a function
+/// called from `mul` instead, the compiled `mul` changed: the compiler then
+/// inlined `mul` into its callers, where it had kept one copy, and scheduled
+/// its carries differently there. Expanded in place, the assembly is the same
+/// as before on x86-64 and aarch64, byte for byte.
+macro_rules! schoolbook {
+    ($a:ident, $b:ident) => {{
+        let (a, b) = ($a, $b);
+        let (r0, c) = mac(0, a[0], b[0], 0);
+        let (r1, c) = mac(0, a[0], b[1], c);
+        let (r2, c) = mac(0, a[0], b[2], c);
+        let (r3, r4) = mac(0, a[0], b[3], c);
+
+        let (r1, c) = mac(r1, a[1], b[0], 0);
+        let (r2, c) = mac(r2, a[1], b[1], c);
+        let (r3, c) = mac(r3, a[1], b[2], c);
+        let (r4, r5) = mac(r4, a[1], b[3], c);
+
+        let (r2, c) = mac(r2, a[2], b[0], 0);
+        let (r3, c) = mac(r3, a[2], b[1], c);
+        let (r4, c) = mac(r4, a[2], b[2], c);
+        let (r5, r6) = mac(r5, a[2], b[3], c);
+
+        let (r3, c) = mac(r3, a[3], b[0], 0);
+        let (r4, c) = mac(r4, a[3], b[1], c);
+        let (r5, c) = mac(r5, a[3], b[2], c);
+        let (r6, r7) = mac(r6, a[3], b[3], c);
+
+        [r0, r1, r2, r3, r4, r5, r6, r7]
+    }};
+}
+
+/// [`schoolbook`] as a function, for the proofs only: the same tokens `mul`
+/// expands, as something a harness can call.
+#[cfg(kani)]
+fn product(a: [u64; 4], b: [u64; 4]) -> [u64; 8] {
+    schoolbook!(a, b)
+}
+
 /// `a * b * 2^-256 mod p`.
 #[inline]
 pub(crate) fn mul(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
-    let (r0, c) = mac(0, a[0], b[0], 0);
-    let (r1, c) = mac(0, a[0], b[1], c);
-    let (r2, c) = mac(0, a[0], b[2], c);
-    let (r3, r4) = mac(0, a[0], b[3], c);
+    reduce(schoolbook!(a, b))
+}
 
-    let (r1, c) = mac(r1, a[1], b[0], 0);
-    let (r2, c) = mac(r2, a[1], b[1], c);
-    let (r3, c) = mac(r3, a[1], b[2], c);
-    let (r4, r5) = mac(r4, a[1], b[3], c);
+/// `a^2`, all 512 bits, as eight words: the six cross products once, doubled
+/// by a shift, then the four squares. A macro for the reason [`schoolbook`]
+/// is.
+macro_rules! schoolbook_square {
+    ($a:ident) => {{
+        let a = $a;
+        // Cross terms a_i * a_j, i < j, at weight i + j.
+        let (r1, c) = mac(0, a[0], a[1], 0);
+        let (r2, c) = mac(0, a[0], a[2], c);
+        let (r3, r4) = mac(0, a[0], a[3], c);
 
-    let (r2, c) = mac(r2, a[2], b[0], 0);
-    let (r3, c) = mac(r3, a[2], b[1], c);
-    let (r4, c) = mac(r4, a[2], b[2], c);
-    let (r5, r6) = mac(r5, a[2], b[3], c);
+        let (r3, c) = mac(r3, a[1], a[2], 0);
+        let (r4, r5) = mac(r4, a[1], a[3], c);
 
-    let (r3, c) = mac(r3, a[3], b[0], 0);
-    let (r4, c) = mac(r4, a[3], b[1], c);
-    let (r5, c) = mac(r5, a[3], b[2], c);
-    let (r6, r7) = mac(r6, a[3], b[3], c);
+        let (r5, r6) = mac(r5, a[2], a[3], 0);
 
-    reduce([r0, r1, r2, r3, r4, r5, r6, r7])
+        // Doubled: r7 takes the bit shifted out of r6.
+        let r7 = r6 >> 63;
+        let r6 = (r6 << 1) | (r5 >> 63);
+        let r5 = (r5 << 1) | (r4 >> 63);
+        let r4 = (r4 << 1) | (r3 >> 63);
+        let r3 = (r3 << 1) | (r2 >> 63);
+        let r2 = (r2 << 1) | (r1 >> 63);
+        let r1 = r1 << 1;
+
+        // Plus the squares a_i^2 at weight 2i. The total is below 2^512, so the
+        // last carry out is zero.
+        let (s0, s1) = mac(0, a[0], a[0], 0);
+        let (s2, s3) = mac(0, a[1], a[1], 0);
+        let (s4, s5) = mac(0, a[2], a[2], 0);
+        let (s6, s7) = mac(0, a[3], a[3], 0);
+        let (r1, c) = adc(r1, s1, 0);
+        let (r2, c) = adc(r2, s2, c);
+        let (r3, c) = adc(r3, s3, c);
+        let (r4, c) = adc(r4, s4, c);
+        let (r5, c) = adc(r5, s5, c);
+        let (r6, c) = adc(r6, s6, c);
+        let (r7, _) = adc(r7, s7, c);
+
+        [s0, r1, r2, r3, r4, r5, r6, r7]
+    }};
+}
+
+/// [`schoolbook_square`] as a function, for the proofs only, as [`product`]
+/// is.
+#[cfg(kani)]
+fn square_product(a: [u64; 4]) -> [u64; 8] {
+    schoolbook_square!(a)
 }
 
 /// `a^2 * 2^-256 mod p`: the six cross products once, doubled by a shift,
 /// then the four squares.
 #[inline]
 pub(crate) fn square(a: [u64; 4]) -> [u64; 4] {
-    // Cross terms a_i * a_j, i < j, at weight i + j.
-    let (r1, c) = mac(0, a[0], a[1], 0);
-    let (r2, c) = mac(0, a[0], a[2], c);
-    let (r3, r4) = mac(0, a[0], a[3], c);
-
-    let (r3, c) = mac(r3, a[1], a[2], 0);
-    let (r4, r5) = mac(r4, a[1], a[3], c);
-
-    let (r5, r6) = mac(r5, a[2], a[3], 0);
-
-    // Doubled: r7 takes the bit shifted out of r6.
-    let r7 = r6 >> 63;
-    let r6 = (r6 << 1) | (r5 >> 63);
-    let r5 = (r5 << 1) | (r4 >> 63);
-    let r4 = (r4 << 1) | (r3 >> 63);
-    let r3 = (r3 << 1) | (r2 >> 63);
-    let r2 = (r2 << 1) | (r1 >> 63);
-    let r1 = r1 << 1;
-
-    // Plus the squares a_i^2 at weight 2i. The total is below 2^512, so the
-    // last carry out is zero.
-    let (s0, s1) = mac(0, a[0], a[0], 0);
-    let (s2, s3) = mac(0, a[1], a[1], 0);
-    let (s4, s5) = mac(0, a[2], a[2], 0);
-    let (s6, s7) = mac(0, a[3], a[3], 0);
-    let (r1, c) = adc(r1, s1, 0);
-    let (r2, c) = adc(r2, s2, c);
-    let (r3, c) = adc(r3, s3, c);
-    let (r4, c) = adc(r4, s4, c);
-    let (r5, c) = adc(r5, s5, c);
-    let (r6, c) = adc(r6, s6, c);
-    let (r7, _) = adc(r7, s7, c);
-
-    reduce([s0, r1, r2, r3, r4, r5, r6, r7])
+    reduce(schoolbook_square!(a))
 }
 
 /// `a + b mod p`.
@@ -243,8 +283,10 @@ pub(crate) fn sub(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
     [r0, r1, r2, r3]
 }
 
-// Bounded proofs for Kani; see the module.
+// Bounded proofs for Kani; see the module. The schoolbook proofs keep a ghost
+// log of the products in `static mut`s, which no ordinary build compiles.
 #[cfg(kani)]
+#[allow(unsafe_code)]
 mod proofs;
 
 /// `a^-1 = a^(p-2)`, with `0^-1 = 0`, by a fixed addition chain: 255

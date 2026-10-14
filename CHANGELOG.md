@@ -7,6 +7,29 @@ all of them.
 
 ### Added
 
+- **P-256's portable field multiplication and squaring are proved end to
+  end**, modulo two argued steps (docs/PROOFS.md, "The products"). The
+  schoolbook is split into a linear part, proved in Kani with the 64-by-64
+  multiplication inside `mac` replaced by an arbitrary product no larger than
+  `(2^64 - 1)^2` and logged in a ghost log (the schedule of products and
+  their sum at the right weights; CaDiCaL 73 s for `mul`, Bitwuzla 446 s for
+  `square`), and a nonlinear part, the polynomial identities `sum a_i b_j
+  2^(64 (i + j)) = a b` and its squaring form, proved over the integers by Z3
+  5.1.0 and cvc5 1.4.2 (`crates/ic-ec/proofs/smt/`, with `run.sh` and two
+  negative controls that must be `sat`). With `reduce`'s proved contract and
+  the domain lemma (now 87 s), `mul` and `square` return `out < p`,
+  `2^256 out = a b mod p`. Argued, not machine-checked: the step from "every
+  product in the bound" to "the true product", and the final substitution
+  into `reduce`'s contract, whose harness gave no verdict in 30 minutes on
+  Bitwuzla. Four mutations of the schoolbooks
+  (columns swapped, a carry dropped, a diagonal doubled, a cross product not
+  doubled) each make their proof fail. The schoolbooks became macros
+  (`schoolbook!`, `schoolbook_square!`) so that the proofs can reach them
+  without changing the compiled code: the release assembly of `ic-ec` is
+  byte-identical on x86-64 and aarch64 (a function would have changed
+  `mul`'s inlining). `scripts/kani.sh` now also passes
+  `--no-assert-contracts`. The x86-64 assembly is still not proved.
+
 - **`--cfg ic_no_avx512`, for testing and measuring only.** Set through
   `RUSTFLAGS`, it makes every AVX-512-family detection report false: the
   sixteen-block ChaCha20 kernel and the 512-bit AES-GCM kernel (`ic-cipher`),

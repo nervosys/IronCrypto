@@ -12,7 +12,12 @@ $ scripts/kani.sh -p ic-mldsa  # one crate
 Kani is not a dependency. The proofs are modules under `#[cfg(kani)]`, which
 no ordinary build compiles. Several `ic-ec` proofs use function contracts and
 verified stubbing, which Kani 0.68 keeps behind `-Z function-contracts` and
-`-Z stubbing`; `scripts/kani.sh` passes both. Those marked Bitwuzla below need
+`-Z stubbing`; `scripts/kani.sh` passes both, and `--no-assert-contracts`, so
+that a plain harness does not also check the contracts of what it calls (each
+contract has its own harness; P-256's schoolbook harnesses replace the
+multiplication inside `mac` and need `mac`'s contract left unchecked there).
+The polynomial identities under `crates/ic-ec/proofs/smt/` need Z3 or cvc5 and
+run with `crates/ic-ec/proofs/smt/run.sh`. Those marked Bitwuzla below need
 the [Bitwuzla](https://bitwuzla.github.io) binary on `PATH` (0.9.1 was used,
 the static Linux release, installed under `$HOME/.local`).
 
@@ -54,7 +59,11 @@ so they are an upper bound on a quiet one.
 | `p256_field::montgomery_low` | `2^256 out = lo + U p` for the textbook digits (`u_i` is word `i` of `lo + sum_{j<i} u_j p 2^(64 j)`, since `-p^-1 = 1 mod 2^64`), and `out <= p` | every `lo` | `mont_step` | Bitwuzla | 1563 s |
 | `p256_field::finish` | `out < p`, and `hi + w` is `out` or `out + p` | `hi < p`, `w <= p` | | CaDiCaL | 21 s |
 | `p256_field::reduce` | `out < p` and `2^256 out = t + U p - e 2^256 p`, `e` in `{0, 1}`: `out = t 2^-256 mod p` | every `t` with upper half below `p` | `montgomery_low`, `finish` | Bitwuzla | 1066 s |
-| (specification) | the integer `a b`, and `a^2`, has upper half below `p`: a product of residues is in `reduce`'s domain | every `a`, `b` below `p` | | Bitwuzla | 427 s |
+| (specification) | the integer `a b`, and `a^2`, has upper half below `p`: a product of residues is in `reduce`'s domain | every `a`, `b` below `p` | | Bitwuzla | 87 s |
+| `p256_field::mul`'s schoolbook (`schoolbook!`, as `product`), linear part | with each 64-by-64 product replaced by an arbitrary `p_k <= (2^64 - 1)^2`: exactly sixteen products are asked for, the `k`-th of `a_i` and `b_j` in row-major order, and the eight words returned are `sum_k p_k 2^(64 (i_k + j_k))`, which is below `2^512` | every `a`, `b`, and every sixteen `p_k` | | CaDiCaL | 73 s |
+| `p256_field::square`'s schoolbook (`schoolbook_square!`, as `square_product`), linear part | likewise: ten products asked for, `a_0 a_1`, `a_0 a_2`, `a_0 a_3`, `a_1 a_2`, `a_1 a_3`, `a_2 a_3`, then `a_i a_i`, and the eight words are `sum_{i<j} 2 p_ij 2^(64 (i + j)) + sum_i p_ii 2^(128 i)`; the code's doubling by shifts is checked against adding twice | every `a`, and every ten `p` | | Bitwuzla | 446 s (Kissat 509 s, CaDiCaL 1018 s) |
+| (polynomial identity) | `sum_{i,j<4} a_i b_j 2^(64 (i + j)) = (sum a_i 2^(64 i)) (sum b_j 2^(64 j))` | every integer `a_i`, `b_j` | | Z3, cvc5 | 0.10 s, 0.03 s |
+| (polynomial identity) | `sum_{i<j} 2 a_i a_j 2^(64 (i + j)) + sum a_i^2 2^(128 i) = (sum a_i 2^(64 i))^2` | every integer `a_i` | | Z3, cvc5 | 0.13 s, 0.03 s |
 | `field::carry_reduce` | the result is congruent to the five columns mod `p` (exact identity with witness `k`), limb 0 below `2^51 + 2^14`, the rest below `2^51` | every column below `95 * 2^104` | | CaDiCaL | 1490 s |
 | `field::mul_columns` | the columns equal `sum_{i+j=k} a_i b_j + sum_{i+j=k+5} a_i (19 b_j)`, exactly, with no overflow | every limb below `2^52` | | Bitwuzla | 481 s |
 | `field::square_columns` | the columns equal `sum_{i<=j, i+j=k mod 5} (c_ij a_i) a_j`, `c_ij` = 2 for `i != j` times 19 for `i + j >= 5`, exactly | every limb below `2^52` | | Bitwuzla | 222 s |
@@ -63,13 +72,91 @@ so they are an upper bound on a quiet one.
 
 Put together: P-256's `reduce` is proved to be Montgomery reduction, canonical,
 for every input its callers can give it, and a product of two residues is
-proved to be such an input. Curve25519's `mul` and `square` are proved to hand
-`carry_reduce` columns in its domain, equal to the schoolbook columns as the
+proved to be such an input. P-256's portable `mul` and `square` are proved to
+compute `a b 2^-256 mod p` and `a^2 2^-256 mod p`, canonical, for every `a`,
+`b` below `p`, with two steps argued rather than machine-checked: that the
+schoolbook's linear proof, which holds for every value of its sixteen (ten)
+products, holds for the true ones, and the final substitution of the product
+into `reduce`'s proved contract (next section). Curve25519's `mul` and
+`square` are proved to hand `carry_reduce` columns in its domain, equal to the schoolbook columns as the
 code writes them, and `carry_reduce` is proved to reduce any such columns
 correctly. That `mul` returns what `carry_reduce` promises for those columns
 is substitution through two proved contracts, not a separate Kani run: a
 harness asserting it, which evaluates `carry_reduce`'s postcondition twice,
 gave no verdict in 25 minutes.
+
+### The products: a linear and a nonlinear part
+
+Every earlier attempt at P-256's schoolbook asked a solver to relate sixteen
+symbolic 64-by-64 multiplications, regrouped by carry chains, to the integer
+product, and none answered (below). Even with `mac` replaced by its contract
+the multiplications stay, because the contract says `b c`. The proof now
+separates what is about carries from what is about multiplication.
+
+1. **`mac`** (proved, Bitwuzla): `lo + 2^64 hi = a + b c + carry`.
+2. **Linear part** (Kani, no multiplication in the formula). The harnesses
+   replace the one multiplication in `mac`, `u128::wrapping_mul`, with
+   `product_abstract`: it returns an arbitrary `p <= (2^64 - 1)^2`, the only
+   property every true product of two words has, and appends its operands and
+   `p` to a ghost log (`static mut` arrays, `cfg(kani)` only). Everything else
+   -- `mac`'s two additions, checked for overflow, the split into words, every
+   carry of the schoolbook, the doubling shifts of the square -- runs as
+   written. With `a` and `b` unconstrained, the harness asserts that the log
+   has exactly sixteen entries (ten for the square), that entry `k` multiplied
+   `a_i` by `b_j` for the `k`-th pair of the schedule (row-major; for the
+   square the six cross pairs, then the four diagonal), and that the eight
+   words returned equal `sum_k p_k 2^(64 (i_k + j_k))` (for the square,
+   `sum_{i<j} 2 p_ij 2^(64 (i + j)) + sum_i p_ii 2^(128 i)`, the doubling as
+   two additions), computed in nine words with plain carries by the proof's
+   own loops, with the ninth word asserted zero. The dumped SMT2 formula of
+   the square's harness contains no `bvmul` at all; the product's runs on
+   CaDiCaL.
+3. **Nonlinear part** (SMT over the integers, `crates/ic-ec/proofs/smt/`,
+   `run.sh`). `sum_{i,j} a_i b_j 2^(64 (i + j)) = a b` and
+   `sum_{i<j} 2 a_i a_j 2^(64 (i + j)) + sum_i a_i^2 2^(128 i) = a^2`, with
+   `a = sum a_i 2^(64 i)`, stated in QF_NIA with the negation asserted, for
+   every integer `a_i`, `b_j` (no word bounds needed). Z3 5.1.0 and cvc5 1.4.2
+   both answer `unsat` in under 0.2 s. These are facts about polynomials, not
+   about the code. Two negative controls, a term at the wrong weight and a
+   cross product not doubled, must answer `sat`, and do.
+4. **Composition, argued**. The step from 2 to the code as it runs is an
+   instantiation: the linear harness holds for every value the sixteen
+   products can take within the bound, and the real `wrapping_mul` of two
+   words returns their product `b c <= (2^64 - 1)^2` (which is also what
+   `mac`'s proved contract says), so the real schoolbook returns
+   `sum a_i b_j 2^(64 (i + j))` exactly: `product_spec(a, b)`, the same
+   function the proofs use for the integer product, evaluated on the true
+   word products. Kani proves one formula with free `p_k`; the substitution
+   `p_k := a_i b_j` is done by hand. By 3, `product_spec(a, b)` is the integer
+   `a b` (it is below `2^512`, so its eight words hold it exactly). By the
+   domain lemma above, it is in `reduce`'s domain for `a`, `b` below `p`, and
+   `reduce`'s proved contract then gives `out < p` and `2^256 out = a b mod
+   p`; `mul` is `reduce` applied to the schoolbook, so that is what `mul`
+   returns. The same for `square`, with `square_spec` and the squaring
+   identity. This last substitution was written as a harness --
+   `proof_for_contract(mul)` with the product replaced by "any eight words
+   equal to `product_spec(a, b)`" and `reduce` by its verified contract, and
+   the same for `square` -- and neither gave a verdict in 30 minutes on
+   Bitwuzla (each run twice), as the comparable harness over the old product
+   contract did not before. So it is argued too, and the harnesses are not
+   kept.
+
+`mul` and `square` keep their compiled code. The schoolbooks are macros,
+`schoolbook!` and `schoolbook_square!`, expanded in `mul` and `square` in an
+ordinary build and in the Kani-only functions `product` and `square_product`,
+which the harnesses call: the same tokens in both. Factoring the schoolbook
+out as an `#[inline(always)]` function instead changed the release code: the computation of `mul` itself was the same
+instructions, but the compiler then inlined `mul` into its callers (on
+aarch64, `Fp::mul` and the rest: 61 out-of-line calls became inlined copies,
+`umulh` count 1415 to 1795) and scheduled the reduction's carries differently
+there. With the macros, the release assembly of `ic-ec` is byte-identical to
+before on `x86_64-pc-windows-msvc` and `aarch64-unknown-linux-gnu`, checked
+with two exported probe functions calling `mul` and `square`, so no timing
+comparison was needed.
+
+With these harnesses and `--no-assert-contracts`, `scripts/kani.sh -p ic-ec`
+verified all 20 `ic-ec` harnesses (958 s wall clock with `--jobs 8
+--output-format=terse`).
 
 ### Solvers
 
@@ -99,7 +186,8 @@ not only noisy. Every proof run through Bitwuzla here has none:
 - the SMT2 formula of every Bitwuzla harness was dumped
   (`--cbmc-args --outfile`) and contains no checked-multiplication encoding.
   Index arithmetic such as `64 * k` is constant once loops unroll and is folded
-  before the formula is written.
+  before the formula is written. For the schoolbook harnesses: the square's
+  linear harness has no `bvmul` at all.
 
 `carry_reduce`'s postcondition multiplies `19 * k` checked, so it and the
 harnesses that assume it run on CaDiCaL.
@@ -136,8 +224,14 @@ Each ran 25 minutes without a verdict unless noted.
   rows' contract did not finish on Bitwuzla, CaDiCaL or Z3. The word
   products are the same terms in code and specification; what the solvers do
   not close is the carry chains regrouped. `square`'s ten-multiplication
-  schoolbook: Bitwuzla. Neither is proved, and the code keeps its original
-  shape.
+  schoolbook: Bitwuzla. These are what the linear/nonlinear split above
+  replaces.
+- The composition of the split with `reduce` (`mul` and `square` against
+  `out < p`, `2^256 out = a b mod p`, over "eight words equal to
+  `product_spec`" and `reduce`'s contract): Bitwuzla, 30 minutes, twice each.
+  Their dumped formulas contain only the specification's unchecked
+  `wrapping_mul`s (32 and 20 `bvmul`), so the CBMC fault above is not the
+  cause.
 - Curve25519's columns against `19 a_i b_j` rather than `a_i (19 b_j)`: the
   lemma `x (19 y) = 19 (x y)` for 52-bit `x`, `y` alone, on CaDiCaL and Kissat,
   and on Bitwuzla with the multiplications wrapping.
@@ -173,10 +267,17 @@ mutation of the function it proves, and each failed:
 | `field::Fe::add` | `+` changed to `^` | 22 s |
 | `field::Fe::sub` | one limb of `2p` changed by one | 36 s |
 | `Fe::mul` call check | domain widened to limbs below `2^53` | 73 s, in `mul_columns`' precondition at the call |
+| `p256_field` schoolbook | two products' columns swapped (`a_0 b_2` computed where `a_0 b_1` belongs, and the reverse) | 123 s, in the schedule assertion |
+| `p256_field` schoolbook | carry into `a_1 b_1`'s multiply-add dropped | 28 s |
+| `p256_field` square schoolbook | low word of the diagonal `a_1^2` doubled | 13 s (CaDiCaL: 22 s) |
+| `p256_field` square schoolbook | low word of the cross products not doubled (`r1 << 1` dropped) | 12 s (CaDiCaL: 20 s) |
+| (polynomial identity) | `a_1 b_2` at weight `2^(64 * 4)` instead of `2^(64 * 3)` | `sat`, Z3 0.13 s, cvc5 0.06 s (kept as a negative control) |
+| (polynomial identity) | `a_0 a_1` not doubled | `sat`, Z3 0.12 s, cvc5 0.04 s (kept as a negative control) |
 
 The mutations were applied to the working tree, the proof run, and the code
-restored, one at a time, each on the solver its proof uses. The
-constant check that `p` has the shape the specifications use has no
+restored, one at a time, each on the solver its proof uses (the schoolbook
+ones to a copy of the tree, so that the unmutated proofs could run beside
+them). The constant check that `p` has the shape the specifications use has no
 symbolic input and was not mutated.
 
 ## What a proof here is not
@@ -186,10 +287,13 @@ symbolic input and was not mutated.
   `scripts/check-ct.py` and `scripts/ctgrind.sh`.
 - **Not a proof of the whole algorithm.** ML-DSA's rounding is proved; its
   sampling, NTT and encoding are tested against NIST's vectors, not proved.
-- **Field multiplication is proved in part.** On P-256 the Montgomery
-  reduction is proved, and that a product of residues is in its domain; the
-  schoolbook products that compute that product, in `mul` and `square`, are
-  tested and not proved, so `mul` and `square` as a whole are not. On
+- **Field multiplication is proved in part.** On P-256 the portable `mul`
+  and `square` are proved end to end, `a b 2^-256 mod p` canonical for every
+  `a`, `b` below `p`, except for two argued steps: that the schoolbook's
+  linear proof, over arbitrary products, applies to the true ones, and the
+  substitution of the product into `reduce`'s contract ("The products"
+  above). The polynomial identities are checked by Z3 and cvc5 over the
+  integers, outside Kani. On
   Curve25519 the column sums of `mul` and `square` are proved equal to the
   schoolbook written as the code multiplies, `a_i (19 b_j)` and `(c a_i) a_j`,
   and in `carry_reduce`'s domain, and `carry_reduce` is proved for any columns
