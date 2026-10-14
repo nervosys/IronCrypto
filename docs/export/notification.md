@@ -589,6 +589,23 @@ fields, its sending time or its recipients, none of which have been supplied
 here. No release of 0.3.0 has been authorized or made; that will have its
 own entry.
 
+## 0.3.0 release authorization
+
+0.3.0 adds no package: the locations are the twenty-two already named. It
+adds cryptographic functionality 0.2.24 did not have: OPAQUE, oblivious
+pseudorandom functions, hashing to P-256, scrypt, bcrypt and yescrypt
+verification, Argon2 version 1.0, XChaCha20-Poly1305, passphrase sealing,
+BLAKE2s and BLAKE3. It corrects ChaCha20, which from 0.2.7 to 0.2.24 could
+reuse keystream on CPUs with AVX2; the CHANGELOG has that under Security.
+
+The notice covering this release is the entry "Notification submission for
+0.3.0" above: printed by this agent on 2026-10-13, and reported by the
+maintainer with "Sent". After that report, and after being told that 0.3.0
+was kept on master, the maintainer wrote "Release 0.3.0 in the meantime".
+
+This records that instruction. Publication proceeds on it and on the
+reported notice.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not

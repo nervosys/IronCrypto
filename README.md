@@ -116,36 +116,39 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.2.24"
+ironcrypto = "0.3.0"
 ```
 
-The current release is **0.2.24**, published for all twenty-two crates on
-crates.io. It adds two error kinds, `ProviderUnavailable` and
-`ProviderRefused`, for signers over keys held in a token, a TPM or a key
-service, and holds RSA-PSS signing to signatures NIST published. 0.2.23
-named the shape of the controls export, `ironcrypto-controls/1`; 0.2.22 gave
-the `ic` tool `ic rand <bytes>`, with hex or base64 output; and 0.2.21 added
-`ic_sig::SoftwareSigner`, which signs with a PKCS#8 key held in memory
-through the same `Signer` interface a key in an HSM or a key service uses.
-**0.2.20 was a security release**: from 0.2.5 to 0.2.19, Poly1305 -- and so
-ChaCha20-Poly1305 -- could stop the process or compute a wrong tag on a
-message a peer chooses. Use 0.2.20 or later if you use that cipher. See [CHANGELOG.md](CHANGELOG.md).
+The current release is **0.3.0**, published for all twenty-two crates on
+crates.io. **It is a security release:** from 0.2.7 to 0.2.24, on CPUs with
+AVX2, ChaCha20 could wrap its block counter and reuse keystream -- through
+`chacha20_xor` with a starting counter near the top, or one
+ChaCha20-Poly1305 message over 256 GiB. Use 0.3.0 if you use ChaCha20. It is
+also **breaking**: hashes, XOFs and MACs now return a `Result` and refuse
+after a failed self-test, so add `?` where their output is used. It adds
+OPAQUE, OPRFs, hashing to P-256, scrypt, bcrypt and yescrypt verification,
+XChaCha20-Poly1305, passphrase sealing, BLAKE2s and BLAKE3, a build with
+only the FIPS-approved algorithms, and faster AES-GCM, ChaCha20-Poly1305,
+X25519, Ed25519, P-256, P-384, RSA and ML-KEM on x86-64.
+**0.2.20 was a security release** too: from 0.2.5 to 0.2.19, Poly1305 -- and
+so ChaCha20-Poly1305 -- could stop the process or compute a wrong tag on a
+message a peer chooses. See [CHANGELOG.md](CHANGELOG.md).
 `ironcrypto` is the facade and re-exports the rest; depend on the primitives
 directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.2.24"   # AES, ChaCha20, the AEADs
-ic-hash = "0.2.24"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
-ic-ec = "0.2.24"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.2.24"     # HPKE, RFC 9180
-ic-sig = "0.2.24"      # verify any signature over an X.509 public key
-ic-lms = "0.2.24"      # verify HSS/LMS hash-based signatures
-ic-slhdsa = "0.2.24"   # SLH-DSA, FIPS 205
+ic-cipher = "0.3.0"   # AES, ChaCha20, the AEADs
+ic-hash = "0.3.0"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
+ic-ec = "0.3.0"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.3.0"     # HPKE, RFC 9180
+ic-sig = "0.3.0"      # verify any signature over an X.509 public key
+ic-lms = "0.3.0"      # verify HSS/LMS hash-based signatures
+ic-slhdsa = "0.3.0"   # SLH-DSA, FIPS 205
 ```
 
 ```console
-$ cargo install ic-cli --version 0.2.24   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.3.0   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -156,7 +159,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.2.24 publication.
+submission and the 0.3.0 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 

@@ -3,10 +3,11 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.3.0
 
-The next release is 0.3.0: the changes under **Breaking** change signatures
-every caller of a hash function uses.
+A breaking release: the changes under **Breaking** change signatures every
+caller of a hash function uses. **It is also a security release** for
+ChaCha20 on AVX2 CPUs; see **Security**.
 
 ### Breaking
 
