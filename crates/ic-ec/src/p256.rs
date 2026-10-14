@@ -207,6 +207,31 @@ impl Curve for P256 {
             .map(|([x, y, z], h, r)| ([Fp(x), Fp(y), Fp(z)], Fp(h), Fp(r)))
     }
 
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn mul_scalar_fast(p: &Point, scalar: &Fn) -> Option<Point> {
+        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::mul_scalar(t, p, scalar))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn comb_mul_fast(
+        windows: &[crate::nist::gentable::AffineWindow<Self, { crate::nist::gentable::ENTRIES }>;
+             crate::nist::gentable::TEETH],
+        scalar: &Fn,
+    ) -> Option<Point> {
+        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::comb_mul(t, windows, scalar))
+    }
+
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[inline(always)]
+    fn table_mul_fast<const E: usize>(
+        windows: &crate::nist::gentable::Windows<Self, E>,
+        scalar: &Fn,
+    ) -> Option<Point> {
+        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::table_mul(t, windows, scalar))
+    }
+
     fn scalar_reduce_slice(bytes: &[u8]) -> Fn {
         let mut b = [0u8; 32];
         let n = core::cmp::min(32, bytes.len());

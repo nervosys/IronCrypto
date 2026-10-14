@@ -11,14 +11,19 @@ all of them.
   `RUSTFLAGS`, it makes every AVX-512-family detection report false: the
   sixteen-block ChaCha20 kernel and the 512-bit AES-GCM kernel (`ic-cipher`),
   SHA-3's AVX-512VL permutation (`ic-hash`), the IFMA RSA exponentiation
-  (`ic-rsa`) and the IFMA Curve25519 field (`ic-ec`). The AVX2, VAES-256 and
-  MULX/ADX paths then run on a CPU that has AVX-512. Nothing else changes: it
+  (`ic-rsa`), the IFMA Curve25519 field and the IFMA P-256 and P-384 scalar
+  multiplications (`ic-ec`). The AVX2, VAES-256 and MULX/ADX paths then run
+  on a CPU that has AVX-512. Nothing else changes: it
   is not a Cargo feature, reads no environment variable, and is not a
   production setting. The four crates declare it in their check-cfg lints;
   the `ic-ec`, `ic-rsa`, `ic-cipher` and `ic-hash` test suites pass under it,
   and two tests assert that the 512-bit kernels stay off. The bench header
-  prints the X25519 and RSA-2048 backends. `docs/GRAVIOLA.md` ("Without
+  prints the X25519, P-256/P-384 and RSA-2048 backends. `docs/GRAVIOLA.md` ("Without
   AVX-512") has the measured effect on the Graviola comparison.
+- **`ic_ec::nist_backend()`**, which says which P-256 and P-384 scalar
+  multiplication is live: `NistBackend::Ifma`, `MulxAdx` or `Portable`, as
+  `curve25519_backend()` does for X25519. A published vector passes on
+  whichever path runs, so it cannot say which did.
 - **ARMv8 backends for SHA-256, SHA-512 and GHASH**, beside the existing
   ARMv8 AES one and behind the same off-by-default `aarch64-crypto` feature
   (now on `ic-hash` too; `ironcrypto`'s forwards to both). SHA-256 uses
@@ -91,6 +96,73 @@ all of them.
 
 ### Performance
 
+- **P-256 and P-384 scalar multiplication on AVX-512 IFMA**: ECDH from key
+  bytes, ECDH with a prepared key, and signing's `k * G`. Four field
+  elements to a `ymm` register (`VPMADD52LUQ`/`VPMADD52HUQ`; P-256 five
+  52-bit limbs, Montgomery with R = 2^260 and the reduction itself on IFMA;
+  P-384 eight 48-bit limbs reduced by p's shape), each point formula one
+  `asm!` block -- doubling, addition, mixed addition, a four-accumulator
+  mixed addition for the generator table, the conversions in and out --
+  generated with its schedule and register allocation by
+  `scripts/gen_nist_ifma.py`, which tracks every limb's bound, simulates
+  the emitted code against its own arithmetic before writing it, and uses
+  `ymm0`-`ymm15` only. Selected at run time (`ic_ec::nist_backend()`);
+  `--cfg ic_no_avx512` turns it off; MULX/ADX stays the path elsewhere, and
+  verification, which these do not touch, runs there too. The digit
+  recoding, the windows and the argument for which additions may be
+  incomplete are those of the `Fp` multiplications; the one complete
+  addition per multiplication is made in the `Fp` form.
+
+  Correctness: each field kernel against the word-loop and MULX field over
+  4,194,304 random P-256 and 2,097,152 P-384 pairs and 265 edge pairs; each
+  point kernel against the `Fp` formulas (50,000 and 20,000 random, the
+  four-lane one 12,500 and 5,000); the three multiplications against the
+  `Fp` ones on 1,351 and 879 scalars: 0 to 40, n - 40 to n - 1, scalars of
+  one repeated byte and powers of two, then random; and the CAVP and
+  Wycheproof ECDH and ECDSA suites, which now run on this path. The suites
+  pass in the default build, under `ic_no_avx512` and under `ic_ec_portable`. Seven mutations of
+  the generated kernels (a dropped carry, a wrong reduction constant, a
+  permuted lane, a wrong fold shift, a dropped high product, an
+  unconditional blend, a wrong conversion constant) and two of the Rust
+  around them (a packing shift, a sign mask) each failed the tests.
+
+  Measured against Graviola 0.4.1 in the same process, Ryzen 9 9900X, the
+  build before (master f3be6ed) and after alternated over three rounds of
+  `graviola` and six of `graviola-p384`, load 35 to 96 percent from other
+  work. IronCrypto's rate over Graviola's within a run, before -> after:
+  P-256 ECDH from key bytes, both parsing, 1.03-1.04 -> 1.22-1.28; against
+  Graviola's key parsed once, 0.94-1.00 -> 1.16-1.21; ECDSA P-256 sign
+  0.87-1.11 -> 1.20-1.22; P-384 ECDH from bytes 0.88-1.04 -> 1.26-1.42, and
+  against Graviola's key parsed once 0.84-0.90 -> 1.17-1.24; ECDSA P-384 sign
+  2.32-2.64 -> 2.34-3.14. Prepared keys: P-256 2.25-2.67 -> 2.50-2.57,
+  P-384 1.87-2.25 -> 2.26-2.71. IronCrypto's own times, before -> after:
+  P-256 ECDH 26.7-27.3 -> 21.8-22.2 us, P-256 signing 7.5-9.3 -> 6.4-6.6 us,
+  P-384 ECDH 88.3-93.5 -> 65.0-67.0 us, P-384 signing 36.2-46.0 -> 32.6-39.3
+  us, prepared P-384 35.0-42.8 -> 30.2-35.3 us; prepared P-256 is level
+  (9.8-11.5 -> 10.1-10.4 us), as it was in-process (the comb alone about
+  1.0x): it is mostly mixed additions from a table read in the `Fp` form,
+  each entry converted on the way in, and on P-256 that leaves the lanes
+  nothing measurable to gain. Under `--cfg ic_no_avx512` the two builds are level on
+  every P-256 and P-384 row (P-256 ECDH 27.5-28.5 against 25.1-25.9 us,
+  signing 7.5-7.8 against 7.6-7.7, P-384 ECDH 87.4-114.9 against
+  87.9-92.9), as they should be, since that path did not change.
+
+  Two cautions from these runs. Graviola's own timings moved between bench
+  binaries that differ only in IronCrypto's code: its ECDSA P-256 verify
+  took 46 to 47 us in some builds and 30 to 31 in others, and in one
+  round of runs its P-384 ECDH took 104 to 119 us against 77 to 84 in the
+  others, which an in-process check (Graviola timed before any IFMA code
+  ran, straight after, and two seconds after) did not tie to running the
+  IFMA kernels. And the layout of this library's code moves it too: making
+  `ic_no_avx512` compile the IFMA paths out took P-256 ECDH on MULX/ADX
+  from 25 to 44 us with that code's source unchanged, so the cfg was left
+  answering no at run time instead, as a CPU without IFMA does. Read the
+  ratios as ranges, and a single run of either library with suspicion.
+
+  Tried and not kept, each measured: P-256 in radix 2^48 (slower), kernels
+  that fuse several doublings or a doubling and an addition (no gain, 27 KB
+  of code), longer or merged dependency chains in the scheduler, and
+  weighting its register eviction.
 - **ECDH with a prepared peer key takes about 40 percent of the time** of
   an agreement from key bytes, on P-256, P-384 and P-521 alike. Measured
   in-process, the two interleaved over twenty rounds on a loaded machine,
@@ -117,6 +189,21 @@ all of them.
 
 ### Changed
 
+- **P-256's and P-384's IFMA kernels are in the compiled-code gate**:
+  eighteen x86-64-only probes, the fourteen kernels (`ct_p256_ifma_double`
+  .. `ct_p384_ifma_to_fp4`), the secret digit's window read on each curve
+  (`ct_p256_ifma_select`, `ct_p384_ifma_select`) and the reduction of a
+  converted coordinate below p (`ct_p256_ifma_from_limbs`,
+  `ct_p384_ifma_from_limbs`). The kernels and the reductions are
+  straight-line; each window read has one counter loop, over its sixteen
+  entries, excused with a ceiling of one. A branch on the digit fails both
+  window probes, and so does a ceiling of zero. 55 probes on x86-64 alone,
+  99 there, 231 gating probe/target checks. Valgrind cannot run AVX-512, so
+  the gate is the only tool that reads this path (docs/CONSTANT_TIME.md,
+  "P-256 and P-384 on AVX-512 IFMA"). `scripts/check-ct.py` now builds
+  under `CARGO_TARGET_DIR` when it is set, and `scripts/check.sh`'s MSRV
+  build goes beside it, rather than into the worktree; the script's own
+  build tests clear it, since they place the build under a temporary root.
 - **The ontology reports `hardware-accelerated` on AArch64** when the
   `aarch64-crypto` feature is on and the CPU has `aes` and `pmull`, because
   AES-GCM then runs on both halves in hardware; `recommend` follows it.

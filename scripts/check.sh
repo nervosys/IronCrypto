@@ -86,7 +86,7 @@ if [ -z "$msrv" ]; then
 fi
 if rustup toolchain list 2>/dev/null | grep -q "^$msrv[-.]"; then
     echo "-- $msrv"
-    CARGO_TARGET_DIR="target/msrv-$msrv" cargo "+$msrv" check --workspace --all-targets
+    CARGO_TARGET_DIR="$CARGO_TARGET_DIR/msrv-$msrv" cargo "+$msrv" check --workspace --all-targets
 else
     printf '\nrust-version %s: NOT CHECKED, toolchain not installed.\n' "$msrv"
     printf 'install with `rustup toolchain install %s --profile minimal`\n' "$msrv"

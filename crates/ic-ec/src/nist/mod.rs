@@ -76,6 +76,14 @@ pub(crate) mod p384_x86;
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_code)]
 pub(crate) mod p384_x86_point;
+// P-256's and P-384's point formulas on AVX-512 IFMA, generated, and the
+// scalar multiplications built on them, selected at run time.
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod ifma;
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod ifma_kernels;
 pub mod point;
 #[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
 pub(crate) mod safegcd;

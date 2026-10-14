@@ -378,6 +378,14 @@ class X86LoopTests(unittest.TestCase):
 
 
 class BuildTests(unittest.TestCase):
+    def setUp(self):
+        # These tests place the build under a temporary ROOT; a
+        # CARGO_TARGET_DIR from the caller's environment would move it.
+        environment = mock.patch.dict(audit.os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        audit.os.environ.pop("CARGO_TARGET_DIR", None)
+
     def test_stale_artifacts_cannot_hide_a_current_branch(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(audit, "ROOT", Path(directory)):
             stale_dir = Path(directory) / "target/ct-audit" / audit.TARGETS[0] / "release/deps"

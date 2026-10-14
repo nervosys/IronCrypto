@@ -12,10 +12,10 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation, P-256 and P-384 ECDH from key bytes | without AVX-512, AES-GCM at 1 KiB and 4 MiB, X25519, Ed25519 and RSA-2048 fall behind (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, AES-GCM at 1 KiB and 4 MiB, X25519, Ed25519 and RSA-2048 fall behind, P-384 ECDH against Graviola's key parsed once trails, and P-256 ECDH and signing are level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
-| Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
+| Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone; P-256's and P-384's IFMA kernels and window reads by the gate alone, their multiplications as a whole by neither |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
 | Test vectors | every suite Graviola runs, plus ACVP for ML-KEM, ML-DSA, SLH-DSA | | |
 | For agents | ontology, `ic recommend`, `ic lint`, MCP server with rules | | Graviola has none |
@@ -49,14 +49,15 @@ and a ratio inside that as parity.
 | X25519 | 11.7-12.2 | 13.2-13.6 | 13.7 / 21.6 |
 | Ed25519 sign | 4.6-4.8 | 5.3-6.0 | 5.2 / 6.7 |
 | Ed25519 verify | 17.3-17.6 | 22.4-24.1 | 23.6 / 31.0 |
-| P-256 ECDH | 24.8 | 25.7-26.3 | 37.9 / 32.7 |
-| ECDSA P-256 sign | 7.5 | 7.8-8.0 | 11.0 / 11.9 |
+| P-256 ECDH | 21.8-22.2, loaded (AVX-512) | 25.6-26.7, loaded | 1.16-1.21 in the same runs |
+| P-256 ECDH, both parsing the key per call | 21.8-22.2, loaded (AVX-512) | 27.1-28.0, loaded | 1.22-1.28 in the same runs |
+| ECDSA P-256 sign | 6.4-6.6, loaded (AVX-512) | 7.8-8.3, loaded | 1.20-1.22 in the same runs |
 | ECDSA P-256 verify | 26.8 | 30.0-30.6 | 44.5 / 44.9 |
-| P-384 ECDH | 117-141, loaded | 103-138, loaded | 0.94-1.25 in the same runs: parity |
-| P-384 ECDH, both parsing the key per call | 117-139, loaded | 117-179, loaded | 0.89-1.39 in the same runs: parity |
-| P-384 ECDH, key prepared | 44-68, loaded | 107-140, loaded (parsed once) | 1.74-2.78 in the same runs |
-| P-256 ECDH, key prepared | 13.3-14.9, loaded | 32.7-35.1, loaded (parsed once) | 2.20-2.64 in the same runs |
-| ECDSA P-384 sign | 46-58, loaded | 125-155, loaded | 0.30-0.42 in the same runs |
+| P-384 ECDH | 65.0-67.0, loaded (AVX-512) | 76.7-83.1, loaded | 1.17-1.24 in the same runs |
+| P-384 ECDH, both parsing the key per call | 65.0-67.0, loaded (AVX-512) | 81.7-94.5, loaded | 1.26-1.42 in the same runs |
+| P-384 ECDH, key prepared | 30.2-35.3, loaded (AVX-512) | 76.7-83.1, loaded (parsed once) | 2.26-2.71 in the same runs |
+| P-256 ECDH, key prepared | 10.1-10.4, loaded | 25.8-26.3, loaded (parsed once) | 2.50-2.57 in the same runs |
+| ECDSA P-384 sign | 32.6-39.3, loaded (AVX-512) | 83.2-109.2, loaded | 0.32-0.43 in the same runs |
 | ECDSA P-384 verify | 160-203, loaded | 228-300, loaded | 0.58-0.79 in the same runs |
 | ML-KEM-768 keygen, like for like | 6.4 | 7.5 | 8.5 / 11.0 |
 | ML-KEM-768 encapsulate, key prepared | 2.6 | 4.6 | 3.1 / 4.6 |
@@ -109,6 +110,31 @@ operations, the build before and after alternated over ten rounds, put
 every one of P-256, P-384 and P-521 ECDH, signing and verification at
 parity, medians 0.98 to 1.08, so the change did not move them.
 
+Then P-256's and P-384's scalar multiplications moved to AVX-512 IFMA
+where the CPU has it (CHANGELOG.md has the design and the tests). The
+P-256 and P-384 ECDH, prepared-key and signing rows of the first table are
+from that change's A/B: master f3be6ed and the branch alternated, three
+rounds of `graviola` and six of `graviola-p384` for each build, load 35
+to 96 percent from other work. Before -> after, IronCrypto's rate over
+Graviola's in the same run: P-256 ECDH 0.94-1.00 -> 1.16-1.21 (from bytes,
+both parsing, 1.03-1.04 -> 1.22-1.28), ECDSA P-256 sign 0.87-1.11 ->
+1.20-1.22, P-384 ECDH 0.84-0.90 -> 1.17-1.24 (from bytes 0.88-1.04 ->
+1.26-1.42), P-384 prepared 1.87-2.25 -> 2.26-2.71, P-256 prepared
+2.25-2.67 -> 2.50-2.57, ECDSA P-384 sign 2.32-2.64 -> 2.34-3.14. The
+P-256 and P-384 rows of the last-run table above predate it. Verification
+does not use these multiplications and did not move.
+
+Graviola's own times moved between bench binaries that differ only in
+IronCrypto's code. Its ECDSA P-256 verify took 46 to 47 us in some builds
+and 30 to 31 in others, in the same rounds, and once its P-384 ECDH took
+104 to 119 us in one build against 77 to 84 in the rest; timing it before
+any IFMA code had run, straight after, and two seconds after, in one
+process, did not separate them. This library is no different: a build
+that compiled the IFMA paths out under `ic_no_avx512` ran P-256 ECDH on
+MULX/ADX at 44 us instead of 25, the source of that path unchanged. So the
+figures above are ranges over alternated builds, and a single run of
+either library, either way, is not evidence.
+
 Where it is not ahead:
 
 - **ML-KEM decapsulation from key bytes** has no Graviola row. Graviola
@@ -123,31 +149,30 @@ Where it is not ahead:
   like for like. Graviola's `encaps` consumes its key, so the parsed-once row
   clones it per call; that clone is about 0.1 us, against 4.9 to 6.1 us for
   the encapsulation.
-- **P-384 ECDH from key bytes** is level: 0.89 to 1.39 of Graviola's rate
-  across nine rounds (six of `graviola-p384`, three of the full run) with
-  each library parsing the peer's key inside the timed loop; against
-  Graviola with its key parsed once and IronCrypto parsing per call, the
-  older row, 0.88 to 1.08. With the key prepared on both sides it leads:
-  1.74 to 2.78 times Graviola's rate in the same nine rounds
-  (`p384::PreparedPublicKey`, 44 to 68 us against 107 to 140). P-256 is
-  the same picture: 2.20 to 2.64 times with the key prepared, 0.90 to 1.17
-  from bytes, in the three full runs. That lead is bought differently from
-  Graviola's table, and is not like for like in memory or set-up:
+- **P-384 and P-256 ECDH from key bytes without AVX-512 IFMA** are level
+  or behind. Under `--cfg ic_no_avx512`, in the IFMA change's A/B, P-384
+  ran at 0.92 to 1.11 of Graviola's rate with both parsing the key per
+  call and 0.85 to 0.92 against Graviola's key parsed once; P-256 at 1.09
+  to 1.11 and 1.00 to 1.05. With IFMA both lead (above). With the key
+  prepared on both sides they lead either way: 1.68 to 2.20 times on P-384
+  and 2.43 to 2.56 on P-256 without IFMA. That lead is bought differently
+  from Graviola's table, and is not like for like in memory or set-up:
   Graviola's parsed key holds sixteen Jacobian multiples and costs about 4
   us to build; the prepared key here holds sixty-four affine multiples, at
   four spacings across the scalar, so that an agreement needs a quarter of
   the doublings, and costs about one agreement (100 to 121 us) to build. It
   pays from the second agreement with the same key. Where the key is used
-  once, the from-bytes row is the one to read, and there the two are level:
-  most of either's time is the same 385 doublings and 77 additions, and
-  doublings alone measured about 70 percent of this library's. An affine
-  window with mixed additions inside the unprepared agreement was tried
-  and measured: level
-  on P-256 and P-384, slower on P-521, where the inversion costs more than
-  the additions save, so it was not kept. P-384 ECDH was 1.7 times slower
+  once, the from-bytes row is the one to read, and without IFMA there the
+  two are level: most of either's time is the same 385 doublings and 77
+  additions, and doublings alone measured about 70 percent of this
+  library's. IFMA leads by running four of a doubling's multiplications at
+  once. An affine window with mixed additions inside the unprepared
+  agreement was tried and measured: level on P-256 and P-384, slower on
+  P-521, where the inversion costs more than the additions save, so it was
+  not kept. P-384 ECDH was 1.7 times slower
   while the field arithmetic here was generic in the modulus. All of these
-  rounds ran with the machine at 100 percent load from other work; read
-  the ratios, not the absolute figures.
+  rounds ran with the machine loaded by other work; read the ratios, not
+  the absolute figures.
 - **ChaCha20-Poly1305 on 64-byte messages** is level, not ahead: 1.07 to
   1.47 times Graviola's rate across five rounds on a loaded machine, a
   range that includes parity. One block of keystream and four of Poly1305
@@ -157,12 +182,8 @@ Where it is not ahead:
   (CHANGELOG.md has the A/B). Before that it was 0.8 to 1.5 times
   Graviola's rate under the same load: parity, which an earlier single run
   had read as behind.
-- **P-256 ECDH** from key bytes led by under four percent controlled and
-  trailed by sixteen in the latest run: parity, not a lead. In the three
-  full runs after the prepared keys, against Graviola's key parsed once,
-  0.85 to 0.94; with both parsing per call, 0.90 to 1.17. With
-  `p256::PreparedPublicKey` it leads, 2.20 to 2.64 times, on the same
-  terms as P-384 above.
+- **ECDSA P-256 signing without AVX-512 IFMA** is level: 1.02 to 1.07
+  of Graviola's rate under `ic_no_avx512`, against 1.20 to 1.22 with IFMA.
 - **aarch64** has ARMv8 backends here for AES, SHA-256 and SHA-512 (the
   `SHA2` and `SHA512` instructions) and GHASH (`PMULL`), all behind the
   off-by-default `aarch64-crypto` feature; every other algorithm, ChaCha20,
@@ -177,7 +198,9 @@ Where it is not ahead:
   `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
   below). Without them, AES-GCM at 1 KiB and 4 MiB, X25519 and RSA-2048 fall
   behind Graviola, Ed25519 drops to parity or behind, and ChaCha20-Poly1305
-  and ECDSA P-384 keep a lead, the ChaCha20 one smaller. Graviola needs only AVX2 and ADX, so it is the
+  and ECDSA P-384 keep a lead, the ChaCha20 one smaller. P-256 and P-384
+  ECDH from key bytes and P-256 signing lose the lead IFMA gives them
+  (bullets above). Graviola needs only AVX2 and ADX, so it is the
   fair comparison on such a CPU.
 
 ### Without AVX-512
@@ -224,7 +247,9 @@ once, which is not like for like (see the last run above for the corrected
 rows).
 
 Graviola's own paths are the same in both columns, since it does not use
-AVX-512. The AVX2 column is a Zen 5 with AVX-512 switched off, not an older
+AVX-512. The P-256 and P-384 rows predate their IFMA path, so the default
+column there is the MULX/ADX path too; the IFMA change's own figures, with
+and without `ic_no_avx512`, are above. The AVX2 column is a Zen 5 with AVX-512 switched off, not an older
 CPU; frequency and cache are the same as in the default column.
 
 ## Proved arithmetic
@@ -275,7 +300,7 @@ expected, not a weakness.
 
 Beyond Valgrind, which only sees the build and CPU it runs on:
 
-- `scripts/check-ct.py` disassembles the compiled code of 67 probes on
+- `scripts/check-ct.py` disassembles the compiled code of 99 probes on
   x86-64 and 44 on Cortex-M0, Cortex-M4 and 32-bit RISC-V, and fails the
   build on any branch or secret-indexed load in them. It has caught
   compiled code that branched on a secret where the source did not, on

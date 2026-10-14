@@ -44,9 +44,10 @@
 //! [`p384`] and [`p521`].
 #![cfg_attr(not(feature = "std"), no_std)]
 // `deny` rather than `forbid`, so that the x86-64 assembly can be allowed it
-// and nothing else: `fe64` and `f51x4` for Curve25519, and `nist::p256_x86`,
-// `nist::p384_x86`, the generated `nist::p256_x86_point`,
-// `nist::p384_x86_point` and `nist::mont_x86` for P-256 and P-384. Each is
+// and nothing else: `fe64` and `f51x4` for Curve25519, `avx512` to ask the
+// CPU, and `nist::p256_x86`, `nist::p384_x86`, the generated
+// `nist::p256_x86_point`, `nist::p384_x86_point`, `nist::mont_x86` and
+// `nist::ifma_kernels`, and `nist::ifma`, for P-256 and P-384. Each is
 // `asm!` and so `unsafe` by construction; everywhere else in this crate
 // `unsafe` is a compile error.
 #![deny(unsafe_code)]
@@ -107,6 +108,10 @@ pub(crate) mod fe64;
 pub(crate) mod f51x4;
 #[cfg(not(ic_approved_only))]
 mod field_ops;
+// Whether the CPU runs AVX-512 IFMA, for `f51x4` and `nist::ifma`.
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+pub(crate) mod avx512;
 
 #[cfg(feature = "ct-probes")]
 #[doc(hidden)]
@@ -126,6 +131,41 @@ pub use p256::{EcdhP256, EcdsaP256Sha256};
 pub use p384::{EcdhP384, EcdsaP384Sha384};
 #[cfg(not(ic_approved_only))]
 pub use x25519::X25519;
+
+/// The implementation P-256's and P-384's scalar multiplications run on here.
+///
+/// A published vector passes whichever implementation runs, so it cannot tell
+/// which one did; this can. P-521 runs the generic field everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NistBackend {
+    /// Four field elements at once on AVX-512 IFMA (x86-64): ECDH's, a
+    /// prepared key's and ECDSA signing's scalar multiplications; the rest,
+    /// verification among it, on MULX/ADX.
+    Ifma,
+    /// The field and the point formulas in MULX/ADCX/ADOX assembly (x86-64
+    /// with BMI2 and ADX).
+    MulxAdx,
+    /// Without BMI2 and ADX: on x86-64 P-256's field in baseline `MUL`/`ADC`
+    /// assembly and P-384's generic word loop; elsewhere the portable
+    /// arithmetic.
+    Portable,
+}
+
+/// Which [`NistBackend`] this CPU and build run, chosen at run time on the
+/// CPU's features alone; `--cfg ic_no_avx512` takes `Ifma` away.
+#[must_use]
+pub fn nist_backend() -> NistBackend {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if nist::ifma::Ifma::get().is_some() {
+            return NistBackend::Ifma;
+        }
+        if nist::p256_x86::has_adx() {
+            return NistBackend::MulxAdx;
+        }
+    }
+    NistBackend::Portable
+}
 
 /// The implementation of GF(2^255 - 19) that X25519 and Ed25519 run on here.
 ///

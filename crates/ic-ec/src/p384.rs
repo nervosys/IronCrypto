@@ -17,7 +17,7 @@ use ic_core::traits::{Algorithm, KeyAgreement, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result};
 
 /// The prime `p`, little-endian.
-const P: [u64; 6] = [
+pub(crate) const P: [u64; 6] = [
     0x0000_0000_ffff_ffff,
     0xffff_ffff_0000_0000,
     0xffff_ffff_ffff_fffe,
@@ -295,6 +295,31 @@ impl Curve for P384 {
     fn add_affine_fast(p: [&Fp; 3], q: [&Fp; 2]) -> Option<([Fp; 3], Fp, Fp)> {
         crate::nist::p384_x86::point_add_affine([&p[0].0, &p[1].0, &p[2].0], [&q[0].0, &q[1].0])
             .map(|([x, y, z], h, r)| ([Fp(x), Fp(y), Fp(z)], Fp(h), Fp(r)))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn mul_scalar_fast(p: &Point, scalar: &Fn) -> Option<Point> {
+        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::mul_scalar(t, p, scalar))
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn comb_mul_fast(
+        windows: &[crate::nist::gentable::AffineWindow<Self, { crate::nist::gentable::ENTRIES }>;
+             crate::nist::gentable::TEETH],
+        scalar: &Fn,
+    ) -> Option<Point> {
+        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::comb_mul(t, windows, scalar))
+    }
+
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[inline(always)]
+    fn table_mul_fast<const E: usize>(
+        windows: &crate::nist::gentable::Windows<Self, E>,
+        scalar: &Fn,
+    ) -> Option<Point> {
+        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::table_mul(t, windows, scalar))
     }
 
     fn scalar_reduce_slice(bytes: &[u8]) -> Fn {

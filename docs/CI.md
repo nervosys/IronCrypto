@@ -226,7 +226,9 @@ place and errors in the other, and nobody read either.
 
 On a CPU with AVX-512, the default build never runs the AVX2-only paths.
 `--cfg ic_no_avx512` turns the AVX-512 detection off, so this runs the AVX2,
-VAES-256 and MULX/ADX code instead:
+VAES-256 and MULX/ADX code instead -- for P-256 and P-384, the MULX/ADX
+point formulas in place of the IFMA ones (`ic_ec::nist_backend()` says
+which):
 
 ```bash
 RUSTFLAGS="--cfg ic_no_avx512" CARGO_TARGET_DIR=target-avx2 \

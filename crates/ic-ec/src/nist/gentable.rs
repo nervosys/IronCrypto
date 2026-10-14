@@ -63,7 +63,7 @@ use super::point::Point;
 pub(super) const WIDTH: usize = 5;
 
 /// Entries per window of [`Point::mul_scalar`]: the multiples `1..=16`.
-const ENTRIES: usize = 1 << (WIDTH - 1);
+pub(crate) const ENTRIES: usize = 1 << (WIDTH - 1);
 
 /// `1..=16` times some fixed point, for [`Point::mul_scalar`].
 pub(super) struct Window<C: Curve>([Point<C>; ENTRIES]);
@@ -145,13 +145,28 @@ impl<C: Curve> Comb<C> {
         }
     }
 
+    /// The windows, for the tests of `Curve::comb_mul_fast`.
+    #[cfg(test)]
+    pub(crate) fn windows(&self) -> &[AffineWindow<C, ENTRIES>; TEETH] {
+        &self.windows
+    }
+
     /// The window of `Q` itself, for the compiled-code probes.
     #[cfg(feature = "ct-probes")]
     pub(crate) fn first_window(&self) -> &AffineWindow<C, ENTRIES> {
         &self.windows[0]
     }
 
-    /// `scalar * Q`, constant time in the scalar.
+    /// `scalar * Q`, constant time in the scalar: [`Curve::comb_mul_fast`]
+    /// where the curve has it, else [`Self::mul_generic`].
+    pub(crate) fn mul(&self, scalar: &C::Scalar) -> Point<C> {
+        if let Some(p) = C::comb_mul_fast(&self.windows, scalar) {
+            return p;
+        }
+        self.mul_generic(scalar)
+    }
+
+    /// `scalar * Q`, constant time in the scalar, on the `Fp` form.
     ///
     /// # Which additions can be incomplete
     ///
@@ -181,7 +196,7 @@ impl<C: Curve> Comb<C> {
     /// finds scalars on every curve where an incomplete addition at the last
     /// position meets equal inputs, and fails if that position is made
     /// incomplete.
-    pub(crate) fn mul(&self, scalar: &C::Scalar) -> Point<C> {
+    pub(crate) fn mul_generic(&self, scalar: &C::Scalar) -> Point<C> {
         let bytes = scalar.to_bytes();
         debug_assert_eq!(bytes.as_ref().len(), C::SCALAR_BYTES);
         let digits = signed_digits_w(bytes.as_ref(), WIDTH);
@@ -335,7 +350,7 @@ pub type Windows<C, const E: usize> = [std::sync::OnceLock<AffineWindow<C, E>>];
 
 /// The window width that goes with `E` entries.
 #[cfg(feature = "std")]
-const fn width<const E: usize>() -> usize {
+pub(crate) const fn width<const E: usize>() -> usize {
     E.trailing_zeros() as usize + 1
 }
 
@@ -362,7 +377,10 @@ pub fn prepare<C: Curve, const E: usize>(windows: &Windows<C, E>, built: &std::s
 /// Window `i`, built by itself if [`prepare`] somehow had not: slower, and
 /// the same answer rather than a panic.
 #[cfg(feature = "std")]
-fn window<C: Curve, const E: usize>(windows: &Windows<C, E>, i: usize) -> &AffineWindow<C, E> {
+pub(crate) fn window<C: Curve, const E: usize>(
+    windows: &Windows<C, E>,
+    i: usize,
+) -> &AffineWindow<C, E> {
     windows[i].get_or_init(|| {
         let mut base = Point::<C>::generator();
         for _ in 0..width::<E>() * i {
@@ -394,6 +412,18 @@ pub fn mul<C: Curve, const E: usize>(
     scalar: &C::Scalar,
 ) -> Point<C> {
     prepare(windows, built);
+    if let Some(p) = C::table_mul_fast(windows, scalar) {
+        return p;
+    }
+    mul_generic(windows, scalar)
+}
+
+/// [`mul`] on the `Fp` form, after [`prepare`].
+#[cfg(feature = "std")]
+pub(crate) fn mul_generic<C: Curve, const E: usize>(
+    windows: &Windows<C, E>,
+    scalar: &C::Scalar,
+) -> Point<C> {
     let w = width::<E>();
     let bytes = scalar.to_bytes();
     let digits = signed_digits_w(bytes.as_ref(), w);
@@ -502,6 +532,16 @@ pub trait HasGeneratorTable: Curve + Sized + 'static {
 
     /// Build the table now rather than on first use. Nothing under `no_std`.
     fn prepare_generator_table();
+
+    /// `scalar * G` by the table on the `Fp` form, whatever the CPU: what
+    /// the tests compare a curve's own (`Curve::table_mul_fast`) with.
+    #[cfg(all(test, feature = "std"))]
+    fn table_mul_generic_for_tests(scalar: &Self::Scalar) -> super::point::Point<Self>;
+
+    /// Window `i`'s entry for `digit`, as a multiplication reads it: for
+    /// the tests' timing.
+    #[cfg(all(test, feature = "std"))]
+    fn table_select_for_tests(i: usize, digit: i8) -> (Self::Field, Self::Field);
 }
 
 /// Implement [`HasGeneratorTable`] for a curve, with its own storage, in
@@ -566,6 +606,28 @@ macro_rules! generator_table_for {
                     let (windows, built) = generator_table();
                     $crate::nist::gentable::prepare(windows, built);
                 }
+            }
+
+            #[cfg(all(test, feature = "std"))]
+            fn table_mul_generic_for_tests(
+                scalar: &<Self as $crate::nist::point::Curve>::Scalar,
+            ) -> $crate::nist::point::Point<Self> {
+                let (windows, built) = generator_table();
+                $crate::nist::gentable::prepare(windows, built);
+                $crate::nist::gentable::mul_generic(windows, scalar)
+            }
+
+            #[cfg(all(test, feature = "std"))]
+            fn table_select_for_tests(
+                i: usize,
+                digit: i8,
+            ) -> (
+                <Self as $crate::nist::point::Curve>::Field,
+                <Self as $crate::nist::point::Curve>::Field,
+            ) {
+                let (windows, built) = generator_table();
+                $crate::nist::gentable::prepare(windows, built);
+                $crate::nist::gentable::window(windows, i).select(digit)
             }
         }
     };
