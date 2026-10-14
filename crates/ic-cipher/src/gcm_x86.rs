@@ -167,7 +167,10 @@ pub struct Wide512(());
 impl Wide512 {
     /// The token, if the CPU has everything the 512-bit kernel uses.
     pub fn detect() -> Option<Wide512> {
-        let have = Wide::detect().is_some() && cached_detect!("avx512f", "avx512bw");
+        // `--cfg ic_no_avx512` reports this false, for measuring the AVX2 paths.
+        let have = Wide::detect().is_some()
+            && !cfg!(ic_no_avx512)
+            && cached_detect!("avx512f", "avx512bw");
         have.then_some(Wide512(()))
     }
 }

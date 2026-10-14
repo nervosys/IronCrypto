@@ -143,7 +143,8 @@ fn avx2() -> bool {
 /// detection also confirms that the OS saves the `zmm` state.
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 fn zmm_available() -> bool {
-    cached_detect!("avx512f")
+    // `--cfg ic_no_avx512` reports this false, for measuring the AVX2 paths.
+    !cfg!(ic_no_avx512) && cached_detect!("avx512f")
 }
 
 /// Which keystream kernel runs the bulk of a message.
@@ -882,6 +883,15 @@ you only one tip for the future, sunscreen would be it.";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Under `--cfg ic_no_avx512` the sixteen-block kernel must not be chosen,
+    /// or the AVX2-only measurement would be measuring AVX-512 after all.
+    #[test]
+    #[cfg(all(ic_no_avx512, target_arch = "x86_64", feature = "std"))]
+    fn no_avx512_build_never_selects_the_zmm_kernel() {
+        assert!(!zmm_available());
+        assert_ne!(best_backend(), Backend::Zmm);
+    }
 
     /// The eight-way path must produce the same keystream as the block path.
     ///

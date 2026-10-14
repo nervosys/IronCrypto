@@ -500,7 +500,9 @@ fn avx512vl() -> bool {
         1 => true,
         2 => false,
         _ => {
-            let have = crate::sha2::avx2()
+            // `--cfg ic_no_avx512` reports this false, for measuring the AVX2 paths.
+            let have = !cfg!(ic_no_avx512)
+                && crate::sha2::avx2()
                 && std::is_x86_feature_detected!("avx512f")
                 && std::is_x86_feature_detected!("avx512vl");
             CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);

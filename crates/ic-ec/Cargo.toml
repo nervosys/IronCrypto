@@ -30,7 +30,7 @@ ct-probes = []
 # `ic_ec_portable` leaves out the x86-64 MULX/ADX Curve25519 field, so that the
 # whole test suite runs on the portable one; see `src/fe64.rs`.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)", "cfg(ic_approved_only)", "cfg(ic_ec_portable)", "cfg(kani)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(ic_limb32)", "cfg(ic_approved_only)", "cfg(ic_ec_portable)", "cfg(ic_no_avx512)", "cfg(kani)"] }
 
 [[test]]
 # Its own process, without the harness: it counts allocations, and only the

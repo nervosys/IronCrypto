@@ -83,7 +83,8 @@ impl Ifma {
             1 => true,
             2 => false,
             _ => {
-                let have = detect() && crate::fe64::available();
+                // `--cfg ic_no_avx512` reports this false, for measuring the AVX2 paths.
+                let have = !cfg!(ic_no_avx512) && detect() && crate::fe64::available();
                 CACHED.store(if have { 1 } else { 2 }, Ordering::Relaxed);
                 have
             }
