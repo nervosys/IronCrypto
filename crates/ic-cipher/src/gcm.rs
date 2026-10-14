@@ -1462,6 +1462,9 @@ mod fused_tests {
                             // features were detected, AES-NI included.
                             let hk = unsafe { gcm_x86::HashKey::new(keys, kernel) };
                             assert_eq!(hk.kernel(), kernel);
+                            // SAFETY: `hk` was made by `HashKey::new` on this same `kernel` in this arm,
+                            // after `paths()` confirmed its features, and `keys` is the schedule `hk` was
+                            // built from.
                             unsafe { gcm_x86::seal_or_open(keys, &hk, &j0, &aad, &mut got, true) }
                         } else {
                             let c = keys!(crate::aes::Aes256);

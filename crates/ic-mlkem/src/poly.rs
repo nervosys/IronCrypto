@@ -534,6 +534,8 @@ mod tests {
             let mut want = *p;
             want.inv_ntt_portable();
             let mut got = *p;
+            // SAFETY: `avx2()` was checked at the top of this test, which returns early
+            // without it.
             #[allow(unsafe_code)]
             unsafe {
                 crate::avx2::inv_ntt(&mut got.c)
@@ -547,6 +549,8 @@ mod tests {
             let mut got = want;
             for _ in 0..4 {
                 want.basemul_add_portable(p, other);
+                // SAFETY: `avx2()` was checked at the top of this test, which returns early
+                // without it.
                 #[allow(unsafe_code)]
                 unsafe {
                     crate::avx2::basemul_add(&mut got.c, &p.c, &other.c)
@@ -567,6 +571,8 @@ mod tests {
             let mut want = p;
             want.reduce_portable();
             let mut got = p;
+            // SAFETY: `avx2()` was checked at the top of this test, which returns early
+            // without it.
             #[allow(unsafe_code)]
             unsafe {
                 crate::avx2::reduce(&mut got.c)
@@ -576,6 +582,8 @@ mod tests {
             let mut want = p;
             want.normalize_portable();
             let mut got = p;
+            // SAFETY: `avx2()` was checked at the top of this test, which returns early
+            // without it.
             #[allow(unsafe_code)]
             unsafe {
                 crate::avx2::normalize(&mut got.c)
@@ -585,6 +593,8 @@ mod tests {
             let mut want = p;
             want.montgomery_form_portable();
             let mut got = p;
+            // SAFETY: `avx2()` was checked at the top of this test, which returns early
+            // without it.
             #[allow(unsafe_code)]
             unsafe {
                 crate::avx2::to_mont(&mut got.c)
@@ -598,6 +608,8 @@ mod tests {
             let mut want = *p;
             want.add_assign_portable(other);
             let mut got = *p;
+            // SAFETY: `avx2()` was checked at the top of this test, which returns early
+            // without it.
             #[allow(unsafe_code)]
             unsafe {
                 crate::avx2::add_assign(&mut got.c, &other.c)

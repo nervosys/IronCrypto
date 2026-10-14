@@ -233,6 +233,7 @@ impl<const N: usize> Work<N> {
         // SAFETY: `Work` is `repr(C)` and made of `u64` arrays only, so it is
         // `words` initialised `u64`s with no padding, and `self` is borrowed
         // uniquely for the slice's life.
+        // SAFETY: `self` is `words` `u64`s, as argued above, and is borrowed uniquely here.
         let all =
             unsafe { core::slice::from_raw_parts_mut((self as *mut Self).cast::<u64>(), words) };
         all.zeroize();

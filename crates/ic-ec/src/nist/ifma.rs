@@ -154,6 +154,12 @@ impl<const L: usize> Vector for Lanes<L> {
 /// [`Vector::scan`] in AVX2: per entry, one broadcast of its mask and an AND
 /// and an OR per limb register. Masks and data only: no branch, and every
 /// address is the table's, entry by entry.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. Its only caller is `Lanes::scan`, which receives an `Ifma`
+/// token, and `Ifma::get` grants one only where AVX2 was detected. Each row is 32-byte
+/// aligned, being four words of an `align(32)` `Lanes`.
 #[target_feature(enable = "avx2")]
 unsafe fn scan_avx2<const L: usize>(
     w: &[Lanes<L>; ENTRIES],

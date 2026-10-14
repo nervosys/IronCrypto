@@ -48,6 +48,11 @@ use super::K512;
 /// `ror256::<1, 62>` compiles and silently drops a bit -- so
 /// `the_rotations_use_complementary_shifts` checks every pair used here against
 /// `u64::rotate_right`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only; called only from the AVX2
+/// kernels below, which `sha2::avx2()` gates before every call.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn ror256<const R: i32, const L: i32>(x: __m256i) -> __m256i {
@@ -55,6 +60,11 @@ unsafe fn ror256<const R: i32, const L: i32>(x: __m256i) -> __m256i {
 }
 
 /// The same, for a 128-bit pair.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only; called only from the AVX2
+/// kernels below, which `sha2::avx2()` gates before every call.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn ror128<const R: i32, const L: i32>(x: __m128i) -> __m128i {
@@ -62,6 +72,11 @@ unsafe fn ror128<const R: i32, const L: i32>(x: __m128i) -> __m128i {
 }
 
 /// `sigma0(x) = ror(x,1) ^ ror(x,8) ^ (x >> 7)`, four lanes.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only; called only from the AVX2
+/// kernels below, which `sha2::avx2()` gates before every call.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn sigma0(x: __m256i) -> __m256i {
@@ -72,6 +87,11 @@ unsafe fn sigma0(x: __m256i) -> __m256i {
 }
 
 /// `sigma1(x) = ror(x,19) ^ ror(x,61) ^ (x >> 6)`, two lanes.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only; called only from the AVX2
+/// kernels below, which `sha2::avx2()` gates before every call.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn sigma1_128(x: __m128i) -> __m128i {
@@ -82,6 +102,11 @@ unsafe fn sigma1_128(x: __m128i) -> __m128i {
 }
 
 /// Load the sixteen words of `block`, big-endian, into `w[0..16]`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, and `block` must be at least 128 bytes: the loads read
+/// `block[0..128]`. The stores go to `w[0..16]`, inside the array by type.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn load_block(w: &mut [u64; 80], block: &[u8]) {
@@ -101,6 +126,11 @@ unsafe fn load_block(w: &mut [u64; 80], block: &[u8]) {
 /// Extend the schedule by four words, producing `w[at..at+4]`.
 ///
 /// Requires `w[at-16 ..= at-1]` to be filled.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. `16 <= at <= 76`, and `w[at-16..at]` must already hold
+/// the schedule: the loads read `w[at-16..at]` and the stores write `w[at..at+4]`.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn extend4(w: &mut [u64; 80], at: usize) {

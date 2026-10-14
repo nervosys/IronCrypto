@@ -1082,6 +1082,8 @@ mod tests {
             for (o, m) in want_xor.iter_mut().zip(want.iter()) {
                 *o ^= m;
             }
+            // SAFETY: this test returns early unless `is_x86_feature_detected!("avx2")` held
+            // at the top of it, so the CPU has AVX2.
             #[allow(unsafe_code)]
             unsafe {
                 avx2::compress(&x, &y, &mut out, true)

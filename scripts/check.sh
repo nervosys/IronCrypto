@@ -56,6 +56,12 @@ step "formatting"
 cargo fmt --all --check
 cargo fmt --manifest-path scripts/ct-audit/Cargo.toml --check
 
+step "safety comments"
+# Pure Python, no build: every unsafe block carries a SAFETY comment and every
+# unsafe fn a `# Safety` doc section. It checks presence, not correctness; that
+# still takes a reader. See scripts/check-safety-comments.py.
+python "$(dirname "${BASH_SOURCE[0]}")/check-safety-comments.py"
+
 step "clippy"
 # -D warnings is the point. Without it clippy reports problems and exits zero,
 # so a warning lands on master and nobody finds out. CI omitted this for a long

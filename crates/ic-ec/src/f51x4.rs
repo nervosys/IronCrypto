@@ -107,6 +107,11 @@ const M51: i64 = (1 << 51) - 1;
 const P16_0: i64 = 16 * ((1 << 51) - 19);
 const P16_I: i64 = 16 * ((1 << 51) - 1);
 
+/// # Safety
+///
+/// The CPU must have AVX-512 IFMA and AVX-512VL, which `Ifma::get` checks: the asm
+/// is the 256-bit form. Its callers are the `Ifma` methods, which hold the token,
+/// and the `probes` functions, which document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn madd52lo(acc: __m256i, a: __m256i, b: __m256i) -> __m256i {
@@ -121,6 +126,11 @@ unsafe fn madd52lo(acc: __m256i, a: __m256i, b: __m256i) -> __m256i {
     r
 }
 
+/// # Safety
+///
+/// The CPU must have AVX-512 IFMA and AVX-512VL, which `Ifma::get` checks: the asm
+/// is the 256-bit form. Its callers are the `Ifma` methods, which hold the token,
+/// and the `probes` functions, which document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn madd52hi(acc: __m256i, a: __m256i, b: __m256i) -> __m256i {
@@ -140,6 +150,12 @@ unsafe fn madd52hi(acc: __m256i, a: __m256i, b: __m256i) -> __m256i {
 /// In assembly: as intrinsics `16 x + 2 x + x` is four instructions, and
 /// LLVM, recognising the multiplication, made it AVX2's 32-bit multiplies
 /// instead, three of them and their shifts per 64-bit lane.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn times19(x: __m256i) -> __m256i {
@@ -160,6 +176,12 @@ unsafe fn times19(x: __m256i) -> __m256i {
 /// below; limb 0 receives 19 times the carry off the top. For inputs below
 /// 2^60.4, as every caller here gives, a carry is below 2^9.4 and the
 /// results are below `2^51 + 19 * 2^9.4 < 2^52`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn reduce(z: [__m256i; 5]) -> F4 {
@@ -256,6 +278,12 @@ macro_rules! square4 {
 }
 
 /// Lane-wise `a * b`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[cfg(test)]
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -264,6 +292,12 @@ unsafe fn mul(a: &F4, b: &F4) -> F4 {
 }
 
 /// Lane-wise `a^2`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[cfg(test)]
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -276,6 +310,12 @@ unsafe fn square(a: &F4) -> F4 {
 /// `lo[k]` weighs `2^(51 k)` and `hi[k]` weighs `2^(51 k + 52)`, which is
 /// twice `2^(51 (k + 1))`. A squaring's columns are at most what a
 /// multiplication's are, so the bounds in the module note hold for both.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn finish(lo: &[__m256i; 9], hi: &[__m256i; 9]) -> F4 {
@@ -295,6 +335,12 @@ unsafe fn finish(lo: &[__m256i; 9], hi: &[__m256i; 9]) -> F4 {
 }
 
 /// Lane-wise `a + b`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn add(a: &F4, b: &F4) -> F4 {
@@ -302,6 +348,12 @@ unsafe fn add(a: &F4, b: &F4) -> F4 {
 }
 
 /// Lane-wise limb sums, unreduced.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn add_raw(a: &[__m256i; 5], b: &[__m256i; 5]) -> [__m256i; 5] {
@@ -313,6 +365,12 @@ unsafe fn add_raw(a: &[__m256i; 5], b: &[__m256i; 5]) -> [__m256i; 5] {
 }
 
 /// `16p - b`, lane-wise, unreduced: limbs below 2^56 for `b` below 2^53.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn neg16(b: &F4) -> [__m256i; 5] {
@@ -329,6 +387,12 @@ unsafe fn neg16(b: &F4) -> [__m256i; 5] {
 
 /// `b`, negated in the lanes whose bit is set in `LANES` (bit `l` for lane
 /// `l`), unreduced.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn negate_lanes<const DWORDS: i32>(b: &F4) -> [__m256i; 5] {
@@ -353,6 +417,12 @@ const fn lanes(bits: i32) -> i32 {
 }
 
 /// Every limb vector of `a` permuted by `IMM` (`_mm256_permute4x64_epi64`).
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn permute<const IMM: i32>(a: &F4) -> F4 {
@@ -364,6 +434,12 @@ unsafe fn permute<const IMM: i32>(a: &F4) -> F4 {
 }
 
 /// Lanes of `b` where `DWORDS` selects, of `a` elsewhere.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn blend<const DWORDS: i32>(a: &F4, b: &F4) -> F4 {
@@ -390,6 +466,11 @@ macro_rules! completed_to_extended {
     }};
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[target_feature(enable = "avx2")]
 unsafe fn double_impl(p: &P4) -> P4 {
     let p = &p.0;
@@ -415,6 +496,11 @@ unsafe fn double_impl(p: &P4) -> P4 {
     completed_to_extended!(&sum)
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[target_feature(enable = "avx2")]
 unsafe fn add_impl(p: &P4, n: &N4) -> P4 {
     let p = &p.0;
@@ -434,6 +520,11 @@ unsafe fn add_impl(p: &P4, n: &N4) -> P4 {
     completed_to_extended!(&c)
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[target_feature(enable = "avx2")]
 unsafe fn negate_operand_impl(n: &N4) -> N4 {
     // -(x, y) = (-x, y): Y - X and Y + X trade places, 2d T changes sign,
@@ -442,6 +533,11 @@ unsafe fn negate_operand_impl(n: &N4) -> N4 {
     N4(reduce(negate_lanes::<{ lanes(0b0100) }>(&swapped)))
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[target_feature(enable = "avx2")]
 unsafe fn select_impl(table: &[N4; 8], digit: i8) -> N4 {
     // The sign and |digit|, without a branch.
@@ -465,6 +561,12 @@ unsafe fn select_impl(table: &[N4; 8], digit: i8) -> N4 {
 }
 
 /// Lane-wise `121666 * e + d`, reduced.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn mul121666_add(e: &F4, d: &F4) -> F4 {
@@ -491,6 +593,12 @@ unsafe fn mul121666_add(e: &F4, d: &F4) -> F4 {
 /// One step of the X25519 ladder in the form `x25519::ladder_in` documents,
 /// on the state `(xm, zm, xn, zn)` in lanes, choosing the doubling's input by
 /// the secret `swap`, as a mask of all ones or zero.
+///
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[target_feature(enable = "avx2")]
 unsafe fn ladder_step_impl(state: &F4, x1: &F4, swap: __m256i) -> F4 {
     // (sm, dm, sn, dn) = (xm + zm, xm - zm, xn + zn, xn - zn).
@@ -532,6 +640,11 @@ unsafe fn ladder_step_impl(state: &F4, x1: &F4, swap: __m256i) -> F4 {
     blend::<{ lanes(0b0010) }>(&s, &m3)
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// are the `Ifma` methods, which hold the token, and the `probes` functions, which
+/// document the same requirement.
 #[target_feature(enable = "avx2")]
 unsafe fn x25519_impl(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
     let x1 = Fe64::from_bytes(u);
@@ -563,6 +676,10 @@ impl Ifma {
     }
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2, as the `Ifma` methods that call this require. It touches
+/// no memory beyond its arguments.
 #[target_feature(enable = "avx2")]
 unsafe fn identity_operand() -> N4 {
     let z = _mm256_setzero_si256();
@@ -570,6 +687,11 @@ unsafe fn identity_operand() -> N4 {
 }
 
 /// Four elements into lanes.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, as its callers require: the `Ifma` methods and the
+/// `probes` functions. It only reads its `Fe64` arguments.
 #[target_feature(enable = "avx2")]
 unsafe fn pack(e: [&Fe64; 4]) -> F4 {
     let limbs = [
@@ -591,6 +713,12 @@ unsafe fn pack(e: [&Fe64; 4]) -> F4 {
 }
 
 /// Lanes back to four elements.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, as its callers require: the `Ifma` methods and the
+/// `probes` functions. Each vector is stored into a local array of its own size,
+/// four words.
 #[target_feature(enable = "avx2")]
 unsafe fn unpack(a: &F4) -> [Fe64; 4] {
     let mut v = [[0u64; 4]; 5];
@@ -693,12 +821,20 @@ pub mod probes {
     /// Four elements as `[u64; 4]` limbs, as the probes pass them.
     pub type Lanes = [[u64; 4]; 4];
 
+    /// # Safety
+    ///
+    /// The CPU must have AVX2. It is called only by the `probes` functions below, each
+    /// of which is `unsafe` and documents the same requirement.
     #[target_feature(enable = "avx2")]
     unsafe fn load(x: &Lanes) -> F4 {
         let e = x.map(Fe64);
         pack([&e[0], &e[1], &e[2], &e[3]])
     }
 
+    /// # Safety
+    ///
+    /// The CPU must have AVX2. It is called only by the `probes` functions below, each
+    /// of which is `unsafe` and documents the same requirement.
     #[target_feature(enable = "avx2")]
     unsafe fn store(a: &F4) -> Lanes {
         unpack(a).map(|e| e.0)

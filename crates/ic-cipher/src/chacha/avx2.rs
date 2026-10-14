@@ -47,6 +47,9 @@ fn rotl(x: __m256i, n: i32) -> __m256i {
     // instruction instead of shift-shift-or. The other two are the shifts.
     // `n` is a literal at every call site, so this match disappears.
     match n {
+        // SAFETY: `rotl` is private and called only from the round macros, which expand
+        // inside `#[target_feature(enable = "avx2")]` kernels reached only after `avx2()`
+        // in chacha.rs confirmed AVX2.
         16 => unsafe {
             _mm256_shuffle_epi8(
                 x,
@@ -56,6 +59,7 @@ fn rotl(x: __m256i, n: i32) -> __m256i {
                 ),
             )
         },
+        // SAFETY: as above, `rotl` runs only in the AVX2 kernels, which need AVX2.
         8 => unsafe {
             _mm256_shuffle_epi8(
                 x,
@@ -65,7 +69,9 @@ fn rotl(x: __m256i, n: i32) -> __m256i {
                 ),
             )
         },
+        // SAFETY: as above, `rotl` runs only in the AVX2 kernels, which need AVX2.
         12 => unsafe { _mm256_or_si256(_mm256_slli_epi32(x, 12), _mm256_srli_epi32(x, 20)) },
+        // SAFETY: as above, `rotl` runs only in the AVX2 kernels, which need AVX2.
         7 => unsafe { _mm256_or_si256(_mm256_slli_epi32(x, 7), _mm256_srli_epi32(x, 25)) },
         _ => unreachable!(),
     }

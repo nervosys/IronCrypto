@@ -222,6 +222,10 @@ mod x86 {
         unsafe { zmm::group(&start, data) }
     }
 
+    /// # Safety
+    ///
+    /// The CPU must support AVX2. Its only callers, `poly1305_avx2_step` and
+    /// `poly1305_avx2_finish`, are `unsafe` and carry the same requirement.
     #[inline]
     #[target_feature(enable = "avx2")]
     unsafe fn limbs(h: &[[u64; 4]; 5]) -> poly_avx2::Limbs {

@@ -325,12 +325,15 @@ mod tests {
                 let mut a = original;
                 let mut b = original;
                 portable::encrypt_block(&sched, &mut a).unwrap();
+                // SAFETY: `keys` came from `Keys::load` under the `available()` check at the
+                // top of this test, so AES-NI is present.
                 unsafe { encrypt_block(&keys, &mut b).unwrap() };
                 assert_eq!(a, b, "encrypt mismatch, key_len {key_len}, seed {seed}");
 
                 let mut a = original;
                 let mut b = original;
                 portable::decrypt_block(&sched, &mut a).unwrap();
+                // SAFETY: as above; `keys` was loaded only after `available()` returned true.
                 unsafe { decrypt_block(&keys, &mut b).unwrap() };
                 assert_eq!(a, b, "decrypt mismatch, key_len {key_len}, seed {seed}");
             }
@@ -352,10 +355,14 @@ mod tests {
             let data: Vec<u8> = (0..blocks * BLOCK_LEN).map(|i| (i * 13) as u8).collect();
 
             let mut batched = data.clone();
+            // SAFETY: `keys` came from `Keys::load` under the `available()` check at the
+            // top of this test, so AES-NI is present.
             unsafe { encrypt_blocks(&keys, &mut batched).unwrap() };
 
             let mut one_at_a_time = data.clone();
             for block in one_at_a_time.chunks_exact_mut(BLOCK_LEN) {
+                // SAFETY: as above. `block` is one BLOCK_LEN chunk, and `encrypt_block` checks
+                // the length itself.
                 unsafe { encrypt_block(&keys, block).unwrap() };
             }
 
@@ -386,6 +393,8 @@ mod tests {
         let keys = unsafe { Keys::load(&sched) };
         let original: [u8; 16] = core::array::from_fn(|i| i as u8);
         let mut block = original;
+        // SAFETY: `keys` came from `Keys::load` under the `available()` check at the
+        // top of this test, so AES-NI is present.
         unsafe {
             encrypt_block(&keys, &mut block).unwrap();
             assert_ne!(block, original);

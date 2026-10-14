@@ -222,6 +222,8 @@ pub(crate) unsafe fn mont_mul_2048(
     // words and `t` is `KARA_T`. `t` may be uninitialised: the kernels write
     // every word of it before reading it.
     let t = t.as_mut_ptr().cast::<u64>();
+    // SAFETY: the caller guarantees BMI2 and ADX (this function's `# Safety`), and `t`
+    // is `KARA_T` words, as the comment above says.
     unsafe {
         mont_mul_32(t, a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv);
         finish(out.as_mut_ptr(), t.add(32), *t.add(64), n.as_ptr(), 32);
@@ -248,6 +250,8 @@ pub(crate) unsafe fn mont_mul_1536(
     // words, `t` is 50 = 2 * 24 + 2, and 24 is a multiple of eight. `t` may
     // be uninitialised: the kernels write every word of it before reading it.
     let t = t.as_mut_ptr().cast::<u64>();
+    // SAFETY: the caller guarantees BMI2 and ADX (this function's `# Safety`), and `t`
+    // is 50 words, as the comment above says.
     unsafe {
         mont_mul_8n(t, a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv, 24);
         finish(out.as_mut_ptr(), t.add(24), *t.add(48), n.as_ptr(), 24);
@@ -3666,29 +3670,36 @@ mod tests {
         let pieces: [(&str, f64); 7] = [
             (
                 "  abs_diff_16",
+                // SAFETY: BMI2 and ADX, from `available()` at the top of this test.
                 cycles(&mut || unsafe {
                     let _ = super::abs_diff_16(tp, ap.add(16), ap);
                 }),
             ),
+            // SAFETY: BMI2 and ADX, from `available()` at the top of this test.
             ("  sqr_16", cycles(&mut || unsafe { super::sqr_16(tp, ap) })),
             (
                 "  mul_16",
+                // SAFETY: BMI2 and ADX, from `available()` at the top of this test.
                 cycles(&mut || unsafe { super::mul_16(tp, ap, bp) }),
             ),
             (
                 "  kara_mid_sub",
+                // SAFETY: BMI2 and ADX, from `available()` at the top of this test.
                 cycles(&mut || unsafe { super::kara_mid_sub(tp, tp.add(66)) }),
             ),
             (
                 "  kara_mid",
+                // SAFETY: BMI2 and ADX, from `available()` at the top of this test.
                 cycles(&mut || unsafe { super::kara_mid(tp, tp.add(66), 0) }),
             ),
             (
                 "  redc_8n",
+                // SAFETY: BMI2 and ADX, from `available()` at the top of this test.
                 cycles(&mut || unsafe { super::redc_8n(tp, np, n0inv, L) }),
             ),
             (
                 "  finish",
+                // SAFETY: BMI2 and ADX, from `available()` at the top of this test.
                 cycles(&mut || unsafe { super::finish(op, tp.add(L), 0, np, L) }),
             ),
         ];

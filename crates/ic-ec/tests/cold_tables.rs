@@ -24,6 +24,10 @@ static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 // SAFETY: defers every call to `System` unchanged; it only counts.
 unsafe impl GlobalAlloc for Counting {
+    /// # Safety
+    ///
+    /// The caller must pass a `layout` of non-zero size, as `GlobalAlloc::alloc`
+    /// requires. The call is forwarded to `System` unchanged.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
@@ -31,10 +35,18 @@ unsafe impl GlobalAlloc for Counting {
         System.alloc(layout)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must be a live allocation from this allocator, made with `layout`, as
+    /// `GlobalAlloc::dealloc` requires. The call is forwarded to `System` unchanged.
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         System.dealloc(ptr, layout)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must be a live allocation from this allocator, made with `layout`, and
+    /// `new_size` non-zero, as `GlobalAlloc::realloc` requires. Forwarded to `System`.
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         if COUNTING.load(Ordering::Relaxed) {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);

@@ -327,6 +327,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p256_fp_mul_adx(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::fp_mul_adx(a, b) }
     }
 
@@ -334,6 +336,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p256_fp_square_adx(a: &[u64; 4]) -> [u64; 4] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::fp_square_adx(a) }
     }
 
@@ -341,6 +345,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p256_point_double_adx(buf: &mut [MaybeUninit<u64>; 60]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::point_double_adx(buf) }
     }
 
@@ -348,6 +354,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p256_point_add_adx(buf: &mut [MaybeUninit<u64>; 96]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::point_add_adx(buf) }
     }
 
@@ -355,6 +363,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p256_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 80]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::point_add_affine_adx(buf) }
     }
 
@@ -362,6 +372,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p256_point_double_in_place_adx(buf: &mut [MaybeUninit<u64>; 48]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::point_double_in_place_adx(buf) }
     }
 
@@ -369,6 +381,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p384_fp_mul_adx(buf: &mut [MaybeUninit<u64>; 24]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_fp_mul_adx(buf) }
     }
 
@@ -376,6 +390,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p384_fp_sqr_adx(buf: &mut [MaybeUninit<u64>; 18]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_fp_sqr_adx(buf) }
     }
 
@@ -402,6 +418,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p384_fn_mul_adx(a: &[u64; 6], b: &[u64; 6]) -> ([u64; 6], u64) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_fn_mul_adx(a, b) }
     }
 
@@ -409,6 +427,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p384_point_double_adx(buf: &mut [MaybeUninit<u64>; 96]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_point_double_adx(buf) }
     }
 
@@ -416,6 +436,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p384_point_add_adx(buf: &mut [MaybeUninit<u64>; 150]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_point_add_adx(buf) }
     }
 
@@ -423,6 +445,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p384_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 126]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_point_add_affine_adx(buf) }
     }
 
@@ -430,6 +454,8 @@ mod x86_p256 {
     /// Requires BMI2 and ADX.
     #[no_mangle]
     pub unsafe fn ct_p384_point_double_in_place_adx(buf: &mut [MaybeUninit<u64>; 78]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_point_double_in_place_adx(buf) }
     }
 
@@ -461,6 +487,8 @@ mod x86_p256 {
         digit: i8,
         buf: &mut [MaybeUninit<u64>; 126],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p384_ladder_add(comb, digit, buf) }
     }
 
@@ -476,6 +504,8 @@ mod x86_p256 {
         digit: i8,
         buf: &mut [MaybeUninit<u64>; 96],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p256_ladder_add(window, digit, buf) }
     }
 
@@ -491,6 +521,8 @@ mod x86_p256 {
         digit: i8,
         buf: &mut [MaybeUninit<u64>; 80],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { ic_ec::ct_probes::p256_table_add(table, digit, buf) }
     }
 }
@@ -513,6 +545,8 @@ mod x86_nist_ifma {
         o: &mut [p::P256; 3],
         t: &mut [u64; p::P256_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p256_double(a, b, m, o, t) }
     }
 
@@ -526,6 +560,8 @@ mod x86_nist_ifma {
         o: &mut [p::P256; 3],
         t: &mut [u64; p::P256_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p256_add(a, b, m, o, t) }
     }
 
@@ -539,6 +575,8 @@ mod x86_nist_ifma {
         o: &mut [p::P256; 3],
         t: &mut [u64; p::P256_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p256_madd(a, b, m, o, t) }
     }
 
@@ -552,6 +590,8 @@ mod x86_nist_ifma {
         o: &mut [p::P256; 3],
         t: &mut [u64; p::P256_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p256_madd4(a, b, m, o, t) }
     }
 
@@ -565,6 +605,8 @@ mod x86_nist_ifma {
         o: &mut [p::P256; 3],
         t: &mut [u64; p::P256_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p256_from_fp(a, b, m, o, t) }
     }
 
@@ -578,6 +620,8 @@ mod x86_nist_ifma {
         o: &mut [p::P256; 3],
         t: &mut [u64; p::P256_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p256_to_fp(a, b, m, o, t) }
     }
 
@@ -591,6 +635,8 @@ mod x86_nist_ifma {
         o: &mut [p::P256; 3],
         t: &mut [u64; p::P256_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p256_to_fp4(a, b, m, o, t) }
     }
 
@@ -598,6 +644,8 @@ mod x86_nist_ifma {
     /// Requires AVX2.
     #[no_mangle]
     pub unsafe fn ct_p256_ifma_select(w: &[p::P256; 16], digit: i8, out: &mut p::P256) -> [u64; 2] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::p256_select(w, digit, out) }
     }
 
@@ -616,6 +664,8 @@ mod x86_nist_ifma {
         o: &mut [p::P384; 3],
         t: &mut [u64; p::P384_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p384_double(a, b, m, o, t) }
     }
 
@@ -629,6 +679,8 @@ mod x86_nist_ifma {
         o: &mut [p::P384; 3],
         t: &mut [u64; p::P384_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p384_add(a, b, m, o, t) }
     }
 
@@ -642,6 +694,8 @@ mod x86_nist_ifma {
         o: &mut [p::P384; 3],
         t: &mut [u64; p::P384_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p384_madd(a, b, m, o, t) }
     }
 
@@ -655,6 +709,8 @@ mod x86_nist_ifma {
         o: &mut [p::P384; 3],
         t: &mut [u64; p::P384_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p384_madd4(a, b, m, o, t) }
     }
 
@@ -668,6 +724,8 @@ mod x86_nist_ifma {
         o: &mut [p::P384; 3],
         t: &mut [u64; p::P384_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p384_from_fp(a, b, m, o, t) }
     }
 
@@ -681,6 +739,8 @@ mod x86_nist_ifma {
         o: &mut [p::P384; 3],
         t: &mut [u64; p::P384_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p384_to_fp(a, b, m, o, t) }
     }
 
@@ -694,6 +754,8 @@ mod x86_nist_ifma {
         o: &mut [p::P384; 3],
         t: &mut [u64; p::P384_SPILL],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512 IFMA.
         unsafe { p::p384_to_fp4(a, b, m, o, t) }
     }
 
@@ -701,6 +763,8 @@ mod x86_nist_ifma {
     /// Requires AVX2.
     #[no_mangle]
     pub unsafe fn ct_p384_ifma_select(w: &[p::P384; 16], digit: i8, out: &mut p::P384) -> [u64; 2] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::p384_select(w, digit, out) }
     }
 
@@ -725,6 +789,8 @@ mod x86_chacha {
         counter: u32,
         data: &mut [u8; 1024],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F.
         unsafe { p::chacha20_zmm_group(key, nonce, counter, data) }
     }
 
@@ -736,6 +802,8 @@ mod x86_chacha {
         r4: &[u32; 5],
         blocks: &[u8; 64],
     ) -> [[u64; 4]; 5] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::poly1305_avx2_step(h, r4, blocks) }
     }
 
@@ -743,6 +811,8 @@ mod x86_chacha {
     /// Requires AVX2.
     #[no_mangle]
     pub unsafe fn ct_poly1305_avx2_finish(h: &[[u64; 4]; 5], powers: &[[u32; 5]; 4]) -> [u64; 5] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::poly1305_avx2_finish(h, powers) }
     }
 
@@ -755,6 +825,8 @@ mod x86_chacha {
         counter: u32,
         out: &mut [u8; 128],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::chacha20_avx2_pair(key, nonce, counter, out) }
     }
 
@@ -767,6 +839,8 @@ mod x86_chacha {
         counter: u32,
         out: &mut [u8; 256],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::chacha20_avx2_two_pairs(key, nonce, counter, out) }
     }
 
@@ -788,6 +862,8 @@ mod x86_hmac {
     /// Requires SHA-NI and SSE4.1.
     #[no_mangle]
     pub unsafe fn ct_hmac_sha256_pads(inner: &mut [u32; 8], outer: &mut [u32; 8], ipad: &[u8; 64]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires SHA-NI and SSE4.1.
         unsafe { h::hmac_sha256_pads(inner, outer, ipad) }
     }
 
@@ -800,6 +876,8 @@ mod x86_hmac {
         tail: &[u8; 64],
         outer: &mut [u32; 8],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires SHA-NI and SSE4.1.
         unsafe { h::hmac_sha256_tail(inner, block, tail, outer) }
     }
 }
@@ -834,6 +912,8 @@ mod x86_rsa {
         n0inv: u64,
         out: &mut [u64; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { p::adx_mont_mul_2048(a, b, n, n0inv, out) }
     }
 
@@ -861,6 +941,8 @@ mod x86_rsa {
         n0inv: u64,
         out: &mut [u64; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { p::adx_mont_sqr_2048(a, n, n0inv, out) }
     }
 
@@ -874,6 +956,8 @@ mod x86_rsa {
         n0inv: u64,
         out: &mut [u64; 24],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { p::adx_mont_mul_1536(a, b, n, n0inv, out) }
     }
 
@@ -886,6 +970,8 @@ mod x86_rsa {
         n0inv: u64,
         out: &mut [u64; 24],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { p::adx_mont_sqr_1536(a, n, n0inv, out) }
     }
 
@@ -901,6 +987,8 @@ mod x86_rsa {
         digit: u64,
         out: &mut [u64; 64],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::select32_avx2_1024(table, digit, out) }
     }
 
@@ -912,6 +1000,8 @@ mod x86_rsa {
         digit: u64,
         out: &mut [u64; 64],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::select32_avx2_1536(table, digit, out) }
     }
 
@@ -923,6 +1013,8 @@ mod x86_rsa {
         digit: u64,
         out: &mut [u64; 64],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
         unsafe { p::select32_avx2_2048(table, digit, out) }
     }
 
@@ -936,6 +1028,8 @@ mod x86_rsa {
         n0inv: u64,
         out: &mut [u64; 16],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { p::adx_mont_mul_1024(a, b, n, n0inv, out) }
     }
 
@@ -948,6 +1042,8 @@ mod x86_rsa {
         n0inv: u64,
         out: &mut [u64; 16],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
         unsafe { p::adx_mont_sqr_1024(a, n, n0inv, out) }
     }
 
@@ -961,6 +1057,8 @@ mod x86_rsa {
         exp_bits: usize,
         out: &mut [u64; 24],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F, IFMA and BMI2.
         unsafe { p::ifma_pow_1024(m, base, exp, exp_bits, out) }
     }
 
@@ -974,6 +1072,8 @@ mod x86_rsa {
         exp_bits: usize,
         out: &mut [u64; 40],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F, IFMA and BMI2.
         unsafe { p::ifma_pow_2048(m, base, exp, exp_bits, out) }
     }
 }
@@ -998,6 +1098,8 @@ mod x86_gcm {
         pk: &p::Powers,
         st: &mut [u8; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI, PCLMULQDQ and SSSE3.
         unsafe { p::gcm_clmul8_seal(data, rk, pw, pk, st) }
     }
 
@@ -1011,6 +1113,8 @@ mod x86_gcm {
         pk: &p::Powers,
         st: &mut [u8; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI, PCLMULQDQ and SSSE3.
         unsafe { p::gcm_clmul8_open(data, rk, pw, pk, st) }
     }
 
@@ -1024,6 +1128,8 @@ mod x86_gcm {
         pk: &p::Powers,
         st: &mut [u8; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI, PCLMULQDQ and SSSE3.
         unsafe { p::gcm_clmul8_group(data, rk, pw, pk, st) }
     }
 
@@ -1037,6 +1143,8 @@ mod x86_gcm {
         pk: &p::Powers,
         st: &mut [u8; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2, VAES and VPCLMULQDQ.
         unsafe { p::gcm_vaes256_seal(data, rk, pw, pk, st) }
     }
 
@@ -1050,6 +1158,8 @@ mod x86_gcm {
         pk: &p::Powers,
         st: &mut [u8; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2, VAES and VPCLMULQDQ.
         unsafe { p::gcm_vaes256_open(data, rk, pw, pk, st) }
     }
 
@@ -1063,6 +1173,8 @@ mod x86_gcm {
         pk: &p::Powers,
         st: &mut [u8; 32],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2, VAES and VPCLMULQDQ.
         unsafe { p::gcm_vaes256_group(data, rk, pw, pk, st) }
     }
 
@@ -1087,6 +1199,8 @@ mod armv8 {
     /// Requires the AES instructions.
     #[no_mangle]
     pub unsafe fn ct_aes256_armv8_encrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires the AES instructions.
         unsafe { c::aes256_armv8_encrypt(round_keys, block) }
     }
 
@@ -1094,6 +1208,8 @@ mod armv8 {
     /// Requires the AES instructions.
     #[no_mangle]
     pub unsafe fn ct_aes256_armv8_decrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires the AES instructions.
         unsafe { c::aes256_armv8_decrypt(round_keys, block) }
     }
 
@@ -1101,6 +1217,8 @@ mod armv8 {
     /// Requires the AES instructions.
     #[no_mangle]
     pub unsafe fn ct_aes256_armv8_encrypt4(round_keys: &[u8; 240], data: &mut [u8; 64]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires the AES instructions.
         unsafe { c::aes256_armv8_encrypt4(round_keys, data) }
     }
 
@@ -1108,6 +1226,8 @@ mod armv8 {
     /// Requires PMULL.
     #[no_mangle]
     pub unsafe fn ct_ghash_pmull_mul(x: &mut [u8; 16], hk: &[u8; 16]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires PMULL.
         unsafe { c::ghash_pmull_mul(x, hk) }
     }
 
@@ -1119,6 +1239,8 @@ mod armv8 {
         powers: &[[u8; 16]; 8],
         blocks: &[u8; 384],
     ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires PMULL.
         unsafe { c::ghash_pmull_absorb8(acc, powers, blocks) }
     }
 
@@ -1126,6 +1248,8 @@ mod armv8 {
     /// Requires the SHA-256 instructions.
     #[no_mangle]
     pub unsafe fn ct_sha256_armv8_compress(state: &mut [u32; 8], blocks: &[u8; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires the SHA-256 instructions.
         unsafe { h::sha256_armv8_compress(state, blocks) }
     }
 
@@ -1133,6 +1257,8 @@ mod armv8 {
     /// Requires the SHA-512 instructions.
     #[no_mangle]
     pub unsafe fn ct_sha512_armv8_compress(state: &mut [u64; 8], blocks: &[u8; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires the SHA-512 instructions.
         unsafe { h::sha512_armv8_compress(state, blocks) }
     }
 }

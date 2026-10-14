@@ -28,6 +28,10 @@ use core::arch::x86_64::*;
 
 use super::{Block, BLOCK_WORDS};
 
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only, reached only from `compress`,
+/// which `compress_into` calls after `have_avx2()` confirmed AVX2.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn blamka(x: __m256i, y: __m256i) -> __m256i {
@@ -35,12 +39,20 @@ unsafe fn blamka(x: __m256i, y: __m256i) -> __m256i {
     _mm256_add_epi64(_mm256_add_epi64(x, y), _mm256_add_epi64(z, z))
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only, reached only from `compress`,
+/// which `compress_into` calls after `have_avx2()` confirmed AVX2.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn rotr32(x: __m256i) -> __m256i {
     _mm256_shuffle_epi32::<0b10_11_00_01>(x)
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only, reached only from `compress`,
+/// which `compress_into` calls after `have_avx2()` confirmed AVX2.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn rotr24(x: __m256i) -> __m256i {
@@ -51,6 +63,10 @@ unsafe fn rotr24(x: __m256i) -> __m256i {
     _mm256_shuffle_epi8(x, m)
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only, reached only from `compress`,
+/// which `compress_into` calls after `have_avx2()` confirmed AVX2.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn rotr16(x: __m256i) -> __m256i {
@@ -61,6 +77,10 @@ unsafe fn rotr16(x: __m256i) -> __m256i {
     _mm256_shuffle_epi8(x, m)
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only, reached only from `compress`,
+/// which `compress_into` calls after `have_avx2()` confirmed AVX2.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn rotr63(x: __m256i) -> __m256i {
@@ -68,6 +88,11 @@ unsafe fn rotr63(x: __m256i) -> __m256i {
 }
 
 /// BlaMka's `G` on four columns at once.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only, reached only from `compress`,
+/// which `compress_into` calls after `have_avx2()` confirmed AVX2.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn g(a: &mut __m256i, b: &mut __m256i, c: &mut __m256i, d: &mut __m256i) {
@@ -82,6 +107,11 @@ unsafe fn g(a: &mut __m256i, b: &mut __m256i, c: &mut __m256i, d: &mut __m256i) 
 }
 
 /// The permutation `P`: columns, then diagonals.
+///
+/// # Safety
+///
+/// The CPU must have AVX2. Register arithmetic only, reached only from `compress`,
+/// which `compress_into` calls after `have_avx2()` confirmed AVX2.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn p(a: &mut __m256i, b: &mut __m256i, c: &mut __m256i, d: &mut __m256i) {

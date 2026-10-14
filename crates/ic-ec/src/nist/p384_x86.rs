@@ -112,6 +112,8 @@ pub(crate) fn scan_affine(
     // `[u64; 12]` of the same length, alignment and lifetime; the assertion
     // above holds the size to that.
     let words: &[[u64; 12]] =
+        // SAFETY: `entries` is a live slice of `AffinePoint`, whose layout the comment
+        // above covers; the pointer and element count are the slice's own.
         unsafe { core::slice::from_raw_parts(entries.as_ptr().cast(), entries.len()) };
     let w = super::p256_x86::scan(words, masks);
     AffinePoint {

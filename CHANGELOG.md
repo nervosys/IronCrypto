@@ -20,6 +20,14 @@ all of them.
   resolves an older rustls fails `scripts/check.sh`. Found by `cargo audit`
   in that script, which reports and does not gate.
 
+### Changed
+
+- **Every `unsafe` block and `unsafe fn` now states what its caller must uphold.**
+  Each has a `// SAFETY:` comment or a `# Safety` doc section naming the
+  precondition (a CPU feature, a length, a pointer's validity), and
+  `scripts/check-safety-comments.py`, run by `scripts/check.sh`, fails on any
+  that lacks one. Comments only; no code changed.
+
 ### Added
 
 - **P-256's portable field multiplication and squaring are proved end to

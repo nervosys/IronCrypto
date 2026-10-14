@@ -166,6 +166,10 @@ const INV_4: Table<8> = layer4(63, -1);
 const INV_8: Table<8> = layer8(31, -1);
 const BASEMUL: Table<16> = basemul_zetas();
 
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. `r`
+/// must be below 16, so the sixteen coefficients accessed lie inside `c`.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn load(c: &[i16; N], r: usize) -> __m256i {
@@ -173,6 +177,10 @@ unsafe fn load(c: &[i16; N], r: usize) -> __m256i {
     unsafe { _mm256_loadu_si256(c.as_ptr().add(16 * r).cast()) }
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. `r`
+/// must be below 16, so the sixteen coefficients accessed lie inside `c`.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn store(c: &mut [i16; N], r: usize, v: __m256i) {
@@ -180,6 +188,10 @@ unsafe fn store(c: &mut [i16; N], r: usize, v: __m256i) {
     unsafe { _mm256_storeu_si256(c.as_mut_ptr().add(16 * r).cast(), v) }
 }
 
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. `t`
+/// is sixteen lanes, read whole by the unaligned load.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn row(t: &[i16; 16]) -> __m256i {
@@ -188,6 +200,11 @@ unsafe fn row(t: &[i16; 16]) -> __m256i {
 }
 
 /// Montgomery multiplication by a constant `z`, given `zq = z * q^-1`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn fqmul_const(a: __m256i, z: __m256i, zq: __m256i) -> __m256i {
@@ -197,6 +214,11 @@ unsafe fn fqmul_const(a: __m256i, z: __m256i, zq: __m256i) -> __m256i {
 }
 
 /// Montgomery multiplication of two variables.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn fqmul(a: __m256i, b: __m256i) -> __m256i {
@@ -207,6 +229,11 @@ unsafe fn fqmul(a: __m256i, b: __m256i) -> __m256i {
 }
 
 /// The scalar `barrett_reduce`, sixteen at a time.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn barrett(a: __m256i) -> __m256i {
@@ -216,6 +243,11 @@ unsafe fn barrett(a: __m256i) -> __m256i {
 }
 
 /// Cooley-Tukey: `t = zeta * hi; (lo + t, lo - t)`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn ct(lo: &mut __m256i, hi: &mut __m256i, z: __m256i, zq: __m256i) {
@@ -225,6 +257,11 @@ unsafe fn ct(lo: &mut __m256i, hi: &mut __m256i, z: __m256i, zq: __m256i) {
 }
 
 /// Gentleman-Sande: `(barrett(lo + hi), zeta * (hi - lo))`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn gs(lo: &mut __m256i, hi: &mut __m256i, z: __m256i, zq: __m256i) {
@@ -234,6 +271,11 @@ unsafe fn gs(lo: &mut __m256i, hi: &mut __m256i, z: __m256i, zq: __m256i) {
 }
 
 /// Exchange 128-bit halves: `(a, b) -> ([a.lo, b.lo], [a.hi, b.hi])`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn swap128(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
@@ -244,6 +286,11 @@ unsafe fn swap128(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
 }
 
 /// Interleave 64-bit words within each half.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn swap64(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
@@ -251,6 +298,11 @@ unsafe fn swap64(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
 }
 
 /// Interleave 32-bit words: `([a0, b0, a2, b2, ..], [a1, b1, a3, b3, ..])`.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn swap32(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
@@ -360,6 +412,11 @@ pub(crate) unsafe fn inv_ntt(c: &mut [i16; N]) {
 }
 
 /// Swap the two sixteen-bit halves of every 32-bit word.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn swap_pairs(a: __m256i) -> __m256i {
@@ -427,6 +484,11 @@ pub(crate) unsafe fn compress(c: &[i16; N], d: u32, out: &mut [i16; N]) {
 }
 
 /// [`compress`] for eight coefficients in 32-bit lanes.
+///
+/// # Safety
+///
+/// The CPU must have AVX2, which `poly::avx2()` establishes before every call. These
+/// touch no memory; they are register arithmetic on their arguments.
 #[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn compress8(x: __m256i, count: __m128i, mask: __m256i) -> __m256i {
