@@ -89,7 +89,9 @@ address is a base register plus a constant. Selections between results are
 """
 
 import random
+import re
 import sys
+import textwrap
 
 M64 = (1 << 64) - 1
 M52 = (1 << 52) - 1
@@ -807,6 +809,9 @@ class GraphBackend:
                 vb[l] = (0, f.p - 1)
             else:
                 vb[l] = (0, sum(f.contract[k][1] << (f.w * k) for k in range(f.n)))
+        for k, node in enumerate(nodes):
+            missing = [l for l in range(lanes) if node.bounds[l] is None]
+            assert not missing, f"{self.g.name}: input {kind} limb {k} has no bounds in lanes {missing}"
         return Vec(nodes, vb)
 
     def constant(self, lanes):
@@ -1115,6 +1120,9 @@ class GraphBackend:
         self.out_hi = max(getattr(self, "out_hi", 0), hi)
         assert f.within(vec.data, used), f"{self.g.name}: output {name} outside the contract: {[x.bounds for x in vec.data]}"
         for k, node in enumerate(vec.data):
+            # A used lane with no bounds is one the contract checks cannot see.
+            missing = [t for t in range(NL) if used[t] and node.bounds[t] is None]
+            assert not missing, f"{self.g.name}: output {name} limb {k} has no bounds in lanes {missing}"
             self.g.output("o", 32 * (slot * f.n + k), node)
 
 
@@ -1707,6 +1715,37 @@ MNEMONIC = {
 }
 
 
+def access_extents(text):
+    """The bytes from each base register's pointer that the kernel's text
+    reads or writes: the furthest byte of any memory operand on it."""
+    ext = {}
+    for line in text:
+        for kind, base, off in re.findall(r"(ymmword|qword) ptr \[\{(\w)\}(?: \+ (\d+))?\]", line):
+            width = 32 if kind == "ymmword" else 8
+            ext[base] = max(ext.get(base, 0), int(off or 0) + width)
+    return ext
+
+
+def safety_access(ext, up, n):
+    """The `# Safety` sentence on the pointers, from `access_extents`: a field
+    vector is `n` limb vectors of four lanes, `4 * n` words."""
+    def vectors(base):
+        k = -(-ext[base] // (32 * n))
+        return f"{k} field vector{'s' if k != 1 else ''} of `4 * {up}_LIMBS` words"
+
+    parts = []
+    for base in ("a", "b"):
+        if base in ext:
+            parts.append(f"`{base}` must be readable for {vectors(base)}")
+    if "m" in ext:
+        parts.append(f"`m` must be readable for {ext['m']} bytes")
+    if "o" in ext:
+        parts.append(f"`o` must be writable for {vectors('o')}")
+    if "t" in ext:
+        parts.append(f"`t` must be writable for {ext['t'] // 8} words, within `{up}_SPILL_WORDS`")
+    return "; ".join(parts) + "."
+
+
 def to_text(prog, consts):
     out = []
     for op, dst, srcs, imm in prog:
@@ -2160,10 +2199,13 @@ def write_rust(path, fields, results):
             w("///")
             w("/// # Safety")
             w("///")
-            w(f"/// The CPU must have {FEATURES}. `a` and `b` must be readable for")
-            w(f"/// `4 * {up}_LIMBS` words where the kernel reads them, `m` for three, `o`")
-            w(f"/// writable for `4 * {up}_LIMBS` and `t` for `{up}_SPILL_WORDS`; `o` and `t`")
-            w("/// must not overlap the inputs or each other.")
+            ext = access_extents(text)
+            outs = [f"`{r}`" for r in ("o", "t") if r in ext]
+            safety = (f"The CPU must have {FEATURES}. " + safety_access(ext, up, field.n)
+                      + f" {' and '.join(outs)} must not overlap the inputs"
+                      + (" or each other." if len(outs) > 1 else "."))
+            for line in textwrap.wrap(safety, 76):
+                w(f"/// {line}")
             if name in TEST_ONLY:
                 w("#[cfg(test)]")
             w("#[inline(never)]")

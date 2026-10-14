@@ -99,11 +99,11 @@ pub(crate) mod ifma_kernels;
 mod fold_edges;
 pub mod point;
 // Verification's `u1*G + u2*Q`: variable time, for public inputs only.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+pub(crate) mod safegcd;
 #[cfg(feature = "std")]
 pub(crate) mod verify;
 // Its chain on the P-256 and P-384 formulas' assembly; also variable time.
-#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
-pub(crate) mod safegcd;
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_code)]
 pub(crate) mod verify_x86;

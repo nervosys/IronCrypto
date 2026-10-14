@@ -390,9 +390,33 @@ def cms(dst, a, b, cm, dm):
 OPS = {"mul": mul, "sqr": sqr, "add": add, "sub": sub, "mulk": mulk, "cms": cms}
 
 
-def emit(name, doc, slots, program, test_only=False):
-    """slots: list of slot names in order; program: list of (op, dst, a[, b])."""
+def check_reads(name, slots, inputs, program):
+    """Every source operand is an input slot or was written by an earlier step.
+
+    The formulas read their slots in order and nothing else zeroes them, so a
+    read of a slot nothing has written yet would silently use whatever the
+    buffer held. Refuse to generate that."""
+    written = set(inputs)
+    for x in inputs:
+        assert x in slots, f"{name}: input {x} is not a slot"
+    for op, dst, *args in program:
+        for x in args:
+            if isinstance(x, str) and x in slots and x not in written:
+                sys.exit(f"{name}: {op} into {dst} reads {x} before any step writes it")
+        written.add(dst)
+
+
+def emit(name, doc, slots, program, inputs, outputs, test_only=False):
+    """slots: list of slot names in order; program: list of (op, dst, a[, b]);
+    inputs: the slots the caller writes; outputs: the slots the Rust wrappers
+    read back, emitted as `pub const` indices."""
     idx = {n: i for i, n in enumerate(slots)}
+    check_reads(name, slots, inputs, program)
+    # The slot indices the wrappers read back, by name: `<KERNEL>_<SLOT>`.
+    # Taken before `name` is reused below.
+    base = (name[:-4] if name.endswith("_adx") else name).upper()
+    for x in outputs:
+        assert x in slots, f"{name}: output {x} is not a slot"
     out = []
     out.append(f"/// {doc}")
     out.append("///")
@@ -434,6 +458,13 @@ def emit(name, doc, slots, program, test_only=False):
     out.append("        );")
     out.append("    }")
     out.append("}")
+    for x in outputs:
+        if test_only:
+            out.append("#[cfg(test)]")
+        # Older compilers do not count a use in a `const` assertion, so a build
+        # that reads few of these would warn; the allow keeps every toolchain quiet.
+        out.append("#[allow(dead_code)]")
+        out.append(f"pub const {base}_{x.upper()}: usize = {idx[x]};")
     return "\n".join(out)
 
 
@@ -467,30 +498,32 @@ def main():
     parts.append(emit(
         "double_adx",
         "Point doubling, `dbl-2001-b` for `a = -3`, as `Point::double`.",
-        DOUBLE_SLOTS, DOUBLE))
+        DOUBLE_SLOTS, DOUBLE, ["X", "Y", "Z"], ["X3", "Y3", "Z3"]))
     parts.append(emit(
         "double_in_place_adx",
         "`double_adx` with X3, Y3 and Z3 written over X, Y and Z: the scalar "
         "multiplication's doubling, on a buffer whose first slots are its accumulator.",
-        DOUBLE_IP_SLOTS, DOUBLE_IP))
+        DOUBLE_IP_SLOTS, DOUBLE_IP, ["X", "Y", "Z"], ["X", "Y", "Z"]))
     parts.append(emit(
         "add_adx",
         "Jacobian addition, `add-2007-bl`, as `Point::add_formula`; also leaves `H` and `R`.",
-        ADD_SLOTS, ADD))
+        ADD_SLOTS, ADD, ["X1", "Y1", "Z1", "X2", "Y2", "Z2"],
+        ["X3", "Y3", "Z3", "H", "R"]))
     parts.append(emit(
         "add_affine_adx",
         "Mixed addition, `madd-2007-bl`, as `Point::add_affine_formula`; also leaves `H` and `R`.",
-        MADD_SLOTS, MADD))
+        MADD_SLOTS, MADD, ["X1", "Y1", "Z1", "x2", "y2"],
+        ["X3", "Y3", "Z3", "H", "R"]))
     for cm, dm in CMS_USED:
         parts.append(emit(
             f"cms_{cm}_{dm}_adx",
             f"`{cm} A - {dm} B`, alone, for the tests: a fused operation the doubling uses.",
-            ["A", "B", "OUT"], [("cms", "OUT", "A", "B", str(cm), str(dm))], test_only=True))
+            ["A", "B", "OUT"], [("cms", "OUT", "A", "B", str(cm), str(dm))], ["A", "B"], ["OUT"], test_only=True))
     for k in (3, 4, 8):
         parts.append(emit(
             f"times{k}_adx",
             f"`{k} * A`, alone, for the tests: the small-multiple operation the formulas use.",
-            ["A", "OUT"], [("mulk", "OUT", "A", str(k))], test_only=True))
+            ["A", "OUT"], [("mulk", "OUT", "A", str(k))], ["A"], ["OUT"], test_only=True))
     text = "\n\n".join(parts) + "\n"
     if len(sys.argv) > 1:
         with open(sys.argv[1], "w", encoding="utf-8", newline="\n") as f:

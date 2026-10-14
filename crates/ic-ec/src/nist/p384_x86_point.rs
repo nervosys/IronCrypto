@@ -337,6 +337,8 @@ pub unsafe fn fmul_adx(buf: &mut [MaybeUninit<u64>; 24]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const FMUL_OUT: usize = 2;
 
 /// `a^2 * 2^-384 mod p`, canonical.
 ///
@@ -600,6 +602,8 @@ pub unsafe fn fsqr_adx(buf: &mut [MaybeUninit<u64>; 18]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const FSQR_OUT: usize = 1;
 
 /// `a + b mod p`; alone, only for the tests.
 ///
@@ -677,6 +681,9 @@ pub unsafe fn fadd_adx(buf: &mut [MaybeUninit<u64>; 24]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const FADD_OUT: usize = 2;
 
 /// `a - b mod p`; alone, only for the tests.
 ///
@@ -744,6 +751,9 @@ pub unsafe fn fsub_adx(buf: &mut [MaybeUninit<u64>; 24]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const FSUB_OUT: usize = 2;
 
 /// `3 a - 8 b mod p`; alone, only for the tests.
 ///
@@ -854,6 +864,9 @@ pub unsafe fn fcms_3_8_adx(buf: &mut [MaybeUninit<u64>; 24]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const FCMS_3_8_OUT: usize = 2;
 
 /// `4 a - 1 b mod p`; alone, only for the tests.
 ///
@@ -957,6 +970,9 @@ pub unsafe fn fcms_4_1_adx(buf: &mut [MaybeUninit<u64>; 24]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const FCMS_4_1_OUT: usize = 2;
 
 /// `12 a - 9 b mod p`; alone, only for the tests.
 ///
@@ -1072,6 +1088,9 @@ pub unsafe fn fcms_12_9_adx(buf: &mut [MaybeUninit<u64>; 24]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const FCMS_12_9_OUT: usize = 2;
 
 /// Point doubling, `dbl-2001-b` for `a = -3`, as `Point::double`.
 ///
@@ -3497,6 +3516,12 @@ pub unsafe fn double_adx(buf: &mut [MaybeUninit<u64>; 96]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const DOUBLE_X3: usize = 3;
+#[allow(dead_code)]
+pub const DOUBLE_Y3: usize = 4;
+#[allow(dead_code)]
+pub const DOUBLE_Z3: usize = 5;
 
 /// `double_adx` with X3, Y3 and Z3 written over X, Y and Z: the scalar multiplication's doubling, on a buffer whose first slots are its accumulator.
 ///
@@ -5922,6 +5947,12 @@ pub unsafe fn double_in_place_adx(buf: &mut [MaybeUninit<u64>; 78]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const DOUBLE_IN_PLACE_X: usize = 0;
+#[allow(dead_code)]
+pub const DOUBLE_IN_PLACE_Y: usize = 1;
+#[allow(dead_code)]
+pub const DOUBLE_IN_PLACE_Z: usize = 2;
 
 /// Jacobian addition, `add-2007-bl`, as `Point::add_formula`; also leaves `H` and `R`.
 ///
@@ -10695,6 +10726,16 @@ pub unsafe fn add_adx(buf: &mut [MaybeUninit<u64>; 150]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const ADD_X3: usize = 6;
+#[allow(dead_code)]
+pub const ADD_Y3: usize = 7;
+#[allow(dead_code)]
+pub const ADD_Z3: usize = 8;
+#[allow(dead_code)]
+pub const ADD_H: usize = 9;
+#[allow(dead_code)]
+pub const ADD_R: usize = 10;
 
 /// Mixed addition, `madd-2007-bl`, as `Point::add_affine_formula`; also leaves `H` and `R`.
 ///
@@ -14137,3 +14178,13 @@ pub unsafe fn add_affine_adx(buf: &mut [MaybeUninit<u64>; 126]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const ADD_AFFINE_X3: usize = 5;
+#[allow(dead_code)]
+pub const ADD_AFFINE_Y3: usize = 6;
+#[allow(dead_code)]
+pub const ADD_AFFINE_Z3: usize = 7;
+#[allow(dead_code)]
+pub const ADD_AFFINE_H: usize = 8;
+#[allow(dead_code)]
+pub const ADD_AFFINE_R: usize = 9;

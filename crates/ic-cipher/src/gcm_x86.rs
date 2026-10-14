@@ -129,8 +129,9 @@ pub enum Kernel {
     Clmul8,
     /// `VAES` and `VPCLMULQDQ` on 256-bit registers, sixteen per iteration.
     Vaes256,
-    /// `VAES` and `VPCLMULQDQ` on 512-bit registers, sixteen per iteration,
-    /// four per instruction.
+    /// `VAES` and `VPCLMULQDQ` on 512-bit registers, thirty-two per iteration
+    /// (sixteen in the loop that takes what the first does not), four per
+    /// instruction.
     Vaes512,
 }
 

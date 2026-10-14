@@ -23,7 +23,11 @@ pub fn select32_2048(table: &[[u64; MAX_LIMBS]; 32], digit: u64, out: &mut [u64;
 /// whatever CPUID reports. Valgrind executes ADX but hides the bit from CPUID,
 /// so this is how a harness reaches that path under it. Calling it on a CPU
 /// without BMI2 and ADX makes the backend's instructions fault.
-pub fn with_forced_adx<T>(f: impl FnOnce() -> T) -> T {
+///
+/// # Safety
+///
+/// The CPU must have BMI2 and ADX.
+pub unsafe fn with_forced_adx<T>(f: impl FnOnce() -> T) -> T {
     crate::uint::FORCE_ADX.store(true, Ordering::Relaxed);
     let out = f();
     crate::uint::FORCE_ADX.store(false, Ordering::Relaxed);

@@ -53,6 +53,7 @@
 
 #[cfg(feature = "ct-probes")]
 #[doc(hidden)]
+#[allow(unsafe_code)]
 pub mod ct_probes;
 mod kat;
 pub mod key;

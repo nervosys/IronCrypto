@@ -949,7 +949,7 @@ unsafe fn mont_mul_adx(
     // address `[end + rcx*8]` with `rcx` running from `-l` to `-4`, which is
     // the `l` words below each pointer. `t` slides up one word per row, so
     // after row `i` it points at `t[l + i + 1]`; the highest word any row
-    // touches is `[t + 8]` on the last row, `t[2l + 1]`.
+    // touches is `[t + 8]` on the last row, `t[2l]`.
     //
     // SAFETY: `l` words past `a` and `n` and `l` words into `t` are in bounds
     // (or one past the end), as the caller guarantees.
@@ -3737,6 +3737,81 @@ mod tests {
     /// The SSE2 and AVX2 scans against the entry they should pick, for
     /// every digit and every width each takes, at 16 and 32 entries, and
     /// declining the shapes they do not.
+    /// The products are exact whatever the scratch held, and write only
+    /// `out[..l]` and `t[..tlen]`, over hundreds of moduli at each width
+    /// from four to sixty-four words, with operands at the edges.
+    #[test]
+    fn mont_products_ignore_garbage_scratch_and_write_only_their_outputs() {
+        if !super::available() {
+            return;
+        }
+        let mut s = 0x1234_5678_9ABC_DEF1u64;
+        let mut next = || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        for l in [4usize, 8, 12, 16, 20, 24, 28, 32, 40, 48, 56, 60, 64] {
+            for trial in 0..200 {
+                let mut n = std::vec![0u64; l];
+                for w in n.iter_mut() {
+                    *w = next();
+                }
+                n[0] |= 1;
+                if trial % 3 == 0 {
+                    n[l - 1] = u64::MAX;
+                } else {
+                    n[l - 1] |= 1 << 63;
+                }
+                let n0inv = super::super::neg_inv(n[0]);
+                let mut a = std::vec![0u64; l];
+                let mut b = std::vec![0u64; l];
+                for w in a.iter_mut() {
+                    *w = if trial % 4 == 1 { u64::MAX } else { next() };
+                }
+                for w in b.iter_mut() {
+                    *w = if trial % 4 == 1 { u64::MAX } else { next() };
+                }
+                a[l - 1] %= n[l - 1];
+                b[l - 1] %= n[l - 1];
+                if trial % 4 == 1 {
+                    a[l - 1] = n[l - 1] - 1;
+                    b[l - 1] = n[l - 1] - 1;
+                }
+                let mut tw = [0u64; 130];
+                let mut want = std::vec![0u64; l];
+                super::super::cios(&mut tw, &a, &b, &n, n0inv, &mut want);
+                let mut wsq = std::vec![0u64; l];
+                let mut tw2 = [0u64; 130];
+                super::super::cios(&mut tw2, &a, &a, &n, n0inv, &mut wsq);
+                for tlen in [2 * l + 2, super::KARA_T.max(2 * l + 2), 130] {
+                    for sq in [false, true] {
+                        let fill = next();
+                        let mut t = std::vec![fill; tlen + 8];
+                        let mut out = std::vec![0xDEADu64; l + 4];
+                        let ok = if sq {
+                            super::mont_sqr(&mut t[..tlen], &a, &n, n0inv, &mut out[..l])
+                        } else {
+                            super::mont_mul(&mut t[..tlen], &a, &b, &n, n0inv, &mut out[..l])
+                        };
+                        assert!(ok);
+                        assert_eq!(
+                            &out[..l],
+                            if sq { &wsq[..] } else { &want[..] },
+                            "l={l} tlen={tlen} sq={sq}"
+                        );
+                        assert!(out[l..].iter().all(|&w| w == 0xDEAD), "out guard l={l}");
+                        assert!(
+                            t[tlen..].iter().all(|&w| w == fill),
+                            "t guard l={l} tlen={tlen}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn the_sse2_and_avx2_table_reads_match_the_masked_scan() {
         table_reads_match::<16>();

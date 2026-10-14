@@ -1684,6 +1684,96 @@ mod tests {
         one_ifma_product_at::<40>(&mut g);
     }
 
+    /// Products of operands near the top of their range, `2^(B+1) - 1 - d`
+    /// for small `d`, against the portable product: every output is
+    /// normalised and bounded, and the reduction comes out right.
+    #[test]
+    #[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
+    fn ifma_products_are_exact_on_operands_near_the_top_of_their_range() {
+        let mut g = Gen(77);
+        if !ifma::handles(16) {
+            return; // No IFMA on this CPU; the selection test covers it.
+        }
+        extreme_products_at::<24>(&mut g);
+        extreme_products_at::<32>(&mut g);
+        extreme_products_at::<40>(&mut g);
+    }
+
+    #[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
+    fn extreme_products_at<const N: usize>(g: &mut Gen) {
+        use ifma::Ctx;
+        let limbs = N - 8;
+        let w = Ctx::<N>::W;
+        for n in moduli(g, limbs) {
+            let m = Modulus::new(n).unwrap();
+            let b = n.bits();
+            let mut ctx = Ctx::<N>::for_test(&m).unwrap();
+            let (mut rr, mut scratch) = ([0u64; N], [0u64; N]);
+            ctx.rr(&m, &mut rr, &mut scratch);
+            // radix-52 limbs of 2^(b+1) - 1 - d
+            let mk = |d: u64| -> ([u64; N], Uint) {
+                let mut v = Uint::ZERO;
+                for i in 0..(b + 1) {
+                    v.0[i / 64] |= 1u64 << (i % 64);
+                }
+                v.0[0] -= d;
+                let mut l = [0u64; N];
+                for (j, lj) in l.iter_mut().enumerate().take(w) {
+                    for t in 0..52 {
+                        let bit = 52 * j + t;
+                        if bit < 64 * MAX_LIMBS && (v.0[bit / 64] >> (bit % 64)) & 1 == 1 {
+                            *lj |= 1 << t;
+                        }
+                    }
+                }
+                let mut r = v;
+                while r.cmp_vartime(&n) != core::cmp::Ordering::Less {
+                    r.sub_assign(&n, limbs + 1);
+                }
+                (l, r)
+            };
+            for (da, db) in [(0u64, 0u64), (0, 5), (1, 0), (12345, 999)] {
+                let (a52, ar) = mk(da);
+                let (b52, br) = mk(db);
+                let mut t = [0u64; N];
+                ctx.mul(&a52, &b52, &mut t);
+                assert!(t.iter().all(|&l| l < 1 << 52));
+                assert!(t[w..].iter().all(|&l| l == 0));
+                {
+                    let mut tv = Uint::ZERO;
+                    for (j, &tj) in t.iter().enumerate().take(w) {
+                        for q in 0..52 {
+                            if (tj >> q) & 1 == 1 {
+                                let bit = 52 * j + q;
+                                tv.0[bit / 64] |= 1 << (bit % 64);
+                            }
+                        }
+                    }
+                    assert!(tv.bits() <= b + 1, "t bound");
+                }
+                let mut sq = a52;
+                ctx.square(&mut sq);
+                let mut r = [0u64; N];
+                ctx.mul(&t, &rr, &mut r);
+                let mut got = Uint::ZERO;
+                for (j, &rj) in r.iter().enumerate().take(w) {
+                    for t in 0..52 {
+                        if (rj >> t) & 1 == 1 {
+                            let bit = 52 * j + t;
+                            got.0[bit / 64] |= 1 << (bit % 64);
+                        }
+                    }
+                }
+                assert!(got.bits() <= b + 1, "r bound");
+                while got.cmp_vartime(&n) != core::cmp::Ordering::Less {
+                    got.sub_assign(&n, limbs + 1);
+                }
+                let want = with_portable(|| m.mul_mod(&ar, &br));
+                assert_eq!(got, want, "{limbs} limbs extreme");
+            }
+        }
+    }
+
     #[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
     fn one_ifma_product_at<const N: usize>(g: &mut Gen) {
         use ifma::Ctx;

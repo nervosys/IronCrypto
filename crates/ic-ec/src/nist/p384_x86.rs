@@ -22,7 +22,7 @@ pub(crate) fn mul_p(a: &[u64; 6], b: &[u64; 6]) -> Option<[u64; 6]> {
     // prime. The block writes `out`, slot 2.
     unsafe {
         super::p384_x86_point::fmul_adx(&mut buf);
-        let [r] = read(&buf, 2);
+        let [r] = read(&buf, super::p384_x86_point::FMUL_OUT);
         Some(r)
     }
 }
@@ -38,7 +38,7 @@ pub(crate) fn sqr_p(a: &[u64; 6]) -> Option<[u64; 6]> {
     // SAFETY: as for `mul_p`; the block writes `out`, slot 1.
     unsafe {
         super::p384_x86_point::fsqr_adx(&mut buf);
-        let [r] = read(&buf, 1);
+        let [r] = read(&buf, super::p384_x86_point::FSQR_OUT);
         Some(r)
     }
 }
@@ -54,7 +54,7 @@ pub(crate) fn add_p(a: &[u64; 6], b: &[u64; 6]) -> Option<[u64; 6]> {
     // SAFETY: as for `mul_p`.
     unsafe {
         super::p384_x86_point::fadd_adx(&mut buf);
-        let [r] = read(&buf, 2);
+        let [r] = read(&buf, super::p384_x86_point::FADD_OUT);
         Some(r)
     }
 }
@@ -70,13 +70,22 @@ pub(crate) fn cms_p(cm: u64, dm: u64, a: &[u64; 6], b: &[u64; 6]) -> Option<[u64
     // SAFETY: as for `mul_p`.
     unsafe {
         use super::p384_x86_point as f;
-        match (cm, dm) {
-            (3, 8) => f::fcms_3_8_adx(&mut buf),
-            (4, 1) => f::fcms_4_1_adx(&mut buf),
-            (12, 9) => f::fcms_12_9_adx(&mut buf),
+        let out = match (cm, dm) {
+            (3, 8) => {
+                f::fcms_3_8_adx(&mut buf);
+                f::FCMS_3_8_OUT
+            }
+            (4, 1) => {
+                f::fcms_4_1_adx(&mut buf);
+                f::FCMS_4_1_OUT
+            }
+            (12, 9) => {
+                f::fcms_12_9_adx(&mut buf);
+                f::FCMS_12_9_OUT
+            }
             _ => return None,
-        }
-        let [r] = read(&buf, 2);
+        };
+        let [r] = read(&buf, out);
         Some(r)
     }
 }
@@ -91,7 +100,7 @@ pub(crate) fn sub_p(a: &[u64; 6], b: &[u64; 6]) -> Option<[u64; 6]> {
     // SAFETY: as for `mul_p`.
     unsafe {
         super::p384_x86_point::fsub_adx(&mut buf);
-        let [r] = read(&buf, 2);
+        let [r] = read(&buf, super::p384_x86_point::FSUB_OUT);
         Some(r)
     }
 }
@@ -173,6 +182,20 @@ unsafe fn read<const L: usize, const K: usize>(
     out
 }
 
+// `read` takes the outputs as contiguous slots: X3, Y3, Z3, and then H and R.
+const _: () = {
+    use super::p384_x86_point as f;
+    assert!(f::DOUBLE_Y3 == f::DOUBLE_X3 + 1 && f::DOUBLE_Z3 == f::DOUBLE_X3 + 2);
+    assert!(
+        f::DOUBLE_IN_PLACE_Y == f::DOUBLE_IN_PLACE_X + 1
+            && f::DOUBLE_IN_PLACE_Z == f::DOUBLE_IN_PLACE_X + 2
+    );
+    assert!(f::ADD_Y3 == f::ADD_X3 + 1 && f::ADD_Z3 == f::ADD_X3 + 2);
+    assert!(f::ADD_H == f::ADD_X3 + 3 && f::ADD_R == f::ADD_H + 1);
+    assert!(f::ADD_AFFINE_Y3 == f::ADD_AFFINE_X3 + 1 && f::ADD_AFFINE_Z3 == f::ADD_AFFINE_X3 + 2);
+    assert!(f::ADD_AFFINE_H == f::ADD_AFFINE_X3 + 3 && f::ADD_AFFINE_R == f::ADD_AFFINE_H + 1);
+};
+
 /// Jacobian doubling as one block of assembly; `None` without BMI2 and ADX.
 #[inline(always)]
 pub(crate) fn point_double(p: [&[u64; 6]; 3]) -> Option<[[u64; 6]; 3]> {
@@ -184,7 +207,7 @@ pub(crate) fn point_double(p: [&[u64; 6]; 3]) -> Option<[[u64; 6]; 3]> {
     // 3 to 5.
     unsafe {
         super::p384_x86_point::double_adx(&mut buf);
-        Some(read(&buf, 3))
+        Some(read(&buf, super::p384_x86_point::DOUBLE_X3))
     }
 }
 
@@ -204,8 +227,8 @@ pub(crate) fn point_add(
     // slots 6 to 10.
     unsafe {
         super::p384_x86_point::add_adx(&mut buf);
-        let [h, r] = read(&buf, 9);
-        Some((read(&buf, 6), h, r))
+        let [h, r] = read(&buf, super::p384_x86_point::ADD_H);
+        Some((read(&buf, super::p384_x86_point::ADD_X3), h, r))
     }
 }
 
@@ -225,8 +248,8 @@ pub(crate) fn point_add_affine(
     // slots 5 to 9.
     unsafe {
         super::p384_x86_point::add_affine_adx(&mut buf);
-        let [h, r] = read(&buf, 8);
-        Some((read(&buf, 5), h, r))
+        let [h, r] = read(&buf, super::p384_x86_point::ADD_AFFINE_H);
+        Some((read(&buf, super::p384_x86_point::ADD_AFFINE_X3), h, r))
     }
 }
 
@@ -290,7 +313,11 @@ pub(crate) fn mul_scalar(
     let identity = Point::<P384>::identity();
     let (x, y) = window.select(digits[n - 1]);
     let top_zero = core::hint::black_box(zero_digit(digits[n - 1]));
-    put(&mut buf, 0, &select(top_zero, identity.x().0, x.0));
+    put(
+        &mut buf,
+        super::p384_x86_point::DOUBLE_IN_PLACE_X,
+        &select(top_zero, identity.x().0, x.0),
+    );
     put(&mut buf, 1, &select(top_zero, identity.y().0, y.0));
     put(&mut buf, 2, &select(top_zero, identity.z().0, Fp::ONE.0));
     let doublings = |buf: &mut [MaybeUninit<u64>; LADDER]| {
@@ -313,7 +340,7 @@ pub(crate) fn mul_scalar(
     }
     doublings(&mut buf);
     // SAFETY: slots 0 to 2 are written.
-    let [x, y, z] = unsafe { read::<LADDER, 3>(&buf, 0) };
+    let [x, y, z] = unsafe { read::<LADDER, 3>(&buf, super::p384_x86_point::DOUBLE_IN_PLACE_X) };
     let acc = Point::from_coordinates(Fp(x), Fp(y), Fp(z));
     let mut out = window.add_to(&acc, digits[0], true);
     let base_inf = core::hint::black_box(p.z().zero_mask());
@@ -601,7 +628,8 @@ mod tests {
                 unsafe { super::super::p384_x86_point::double_in_place_adx(&mut buf) };
             }
             // SAFETY: slots 0 to 2 are written.
-            let got: [[u64; 6]; 3] = unsafe { read(&buf, 0) };
+            let got: [[u64; 6]; 3] =
+                unsafe { read(&buf, crate::nist::p384_x86_point::DOUBLE_IN_PLACE_X) };
             let want = q.double_formula().double_formula();
             assert_eq!(got, [want.x().0, want.y().0, want.z().0], "{i}");
         }

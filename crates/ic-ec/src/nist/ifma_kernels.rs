@@ -316,10 +316,11 @@ static P256_CONSTS: ConstTable<262> = ConstTable([
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P256_LIMBS` words; `o` must be
+/// writable for 1 field vector of `4 * P256_LIMBS` words; `t` must be writable
+/// for 232 words, within `P256_SPILL_WORDS`. `o` and `t` must not overlap the
+/// inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p256_double(
     a: *const u64,
@@ -1260,10 +1261,12 @@ pub(crate) unsafe fn p256_double(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P256_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P256_LIMBS` words; `m` must be readable
+/// for 24 bytes; `o` must be writable for 1 field vector of `4 * P256_LIMBS`
+/// words; `t` must be writable for 596 words, within `P256_SPILL_WORDS`. `o`
+/// and `t` must not overlap the inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p256_add(
     a: *const u64,
@@ -2765,10 +2768,12 @@ pub(crate) unsafe fn p256_add(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P256_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P256_LIMBS` words; `m` must be readable
+/// for 24 bytes; `o` must be writable for 1 field vector of `4 * P256_LIMBS`
+/// words; `t` must be writable for 528 words, within `P256_SPILL_WORDS`. `o`
+/// and `t` must not overlap the inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p256_madd(
     a: *const u64,
@@ -4232,10 +4237,11 @@ pub(crate) unsafe fn p256_madd(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P256_LIMBS` words; `o` must be
+/// writable for 1 field vector of `4 * P256_LIMBS` words; `t` must be writable
+/// for 12 words, within `P256_SPILL_WORDS`. `o` and `t` must not overlap the
+/// inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p256_from_fp(
     a: *const u64,
@@ -4446,10 +4452,11 @@ pub(crate) unsafe fn p256_from_fp(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P256_LIMBS` words; `o` must be
+/// writable for 1 field vector of `4 * P256_LIMBS` words; `t` must be writable
+/// for 12 words, within `P256_SPILL_WORDS`. `o` and `t` must not overlap the
+/// inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p256_to_fp(
     a: *const u64,
@@ -4666,10 +4673,12 @@ pub(crate) unsafe fn p256_to_fp(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 3 field vectors of `4 * P256_LIMBS` words; `b` must be
+/// readable for 2 field vectors of `4 * P256_LIMBS` words; `m` must be readable
+/// for 96 bytes; `o` must be writable for 3 field vectors of `4 * P256_LIMBS`
+/// words; `t` must be writable for 356 words, within `P256_SPILL_WORDS`. `o`
+/// and `t` must not overlap the inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p256_madd4(
     a: *const u64,
@@ -7236,10 +7245,10 @@ pub(crate) unsafe fn p256_madd4(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 3 field vectors of `4 * P256_LIMBS` words; `o` must be
+/// writable for 3 field vectors of `4 * P256_LIMBS` words. `o` must not overlap
+/// the inputs.
 #[inline(never)]
 pub(crate) unsafe fn p256_to_fp4(
     a: *const u64,
@@ -7776,10 +7785,12 @@ pub(crate) unsafe fn p256_to_fp4(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P256_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P256_LIMBS` words; `o` must be writable
+/// for 1 field vector of `4 * P256_LIMBS` words; `t` must be writable for 12
+/// words, within `P256_SPILL_WORDS`. `o` and `t` must not overlap the inputs or
+/// each other.
 #[cfg(test)]
 #[inline(never)]
 pub(crate) unsafe fn p256_mul(
@@ -7993,10 +8004,11 @@ pub(crate) unsafe fn p256_mul(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P256_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P256_LIMBS` and `t` for `P256_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P256_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P256_LIMBS` words; `o` must be writable
+/// for 1 field vector of `4 * P256_LIMBS` words. `o` must not overlap the
+/// inputs.
 #[cfg(test)]
 #[inline(never)]
 pub(crate) unsafe fn p256_lin(
@@ -8395,10 +8407,11 @@ static P384_CONSTS: ConstTable<280> = ConstTable([
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P384_LIMBS` words; `o` must be
+/// writable for 1 field vector of `4 * P384_LIMBS` words; `t` must be writable
+/// for 464 words, within `P384_SPILL_WORDS`. `o` and `t` must not overlap the
+/// inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p384_double(
     a: *const u64,
@@ -10297,10 +10310,12 @@ pub(crate) unsafe fn p384_double(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P384_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P384_LIMBS` words; `m` must be readable
+/// for 24 bytes; `o` must be writable for 1 field vector of `4 * P384_LIMBS`
+/// words; `t` must be writable for 816 words, within `P384_SPILL_WORDS`. `o`
+/// and `t` must not overlap the inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p384_add(
     a: *const u64,
@@ -13070,10 +13085,12 @@ pub(crate) unsafe fn p384_add(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P384_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P384_LIMBS` words; `m` must be readable
+/// for 24 bytes; `o` must be writable for 1 field vector of `4 * P384_LIMBS`
+/// words; `t` must be writable for 848 words, within `P384_SPILL_WORDS`. `o`
+/// and `t` must not overlap the inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p384_madd(
     a: *const u64,
@@ -15861,10 +15878,11 @@ pub(crate) unsafe fn p384_madd(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P384_LIMBS` words; `o` must be
+/// writable for 1 field vector of `4 * P384_LIMBS` words; `t` must be writable
+/// for 68 words, within `P384_SPILL_WORDS`. `o` and `t` must not overlap the
+/// inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p384_from_fp(
     a: *const u64,
@@ -16282,10 +16300,11 @@ pub(crate) unsafe fn p384_from_fp(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P384_LIMBS` words; `o` must be
+/// writable for 1 field vector of `4 * P384_LIMBS` words; `t` must be writable
+/// for 68 words, within `P384_SPILL_WORDS`. `o` and `t` must not overlap the
+/// inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p384_to_fp(
     a: *const u64,
@@ -16709,10 +16728,12 @@ pub(crate) unsafe fn p384_to_fp(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 3 field vectors of `4 * P384_LIMBS` words; `b` must be
+/// readable for 2 field vectors of `4 * P384_LIMBS` words; `m` must be readable
+/// for 96 bytes; `o` must be writable for 3 field vectors of `4 * P384_LIMBS`
+/// words; `t` must be writable for 1428 words, within `P384_SPILL_WORDS`. `o`
+/// and `t` must not overlap the inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p384_madd4(
     a: *const u64,
@@ -22196,10 +22217,11 @@ pub(crate) unsafe fn p384_madd4(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 3 field vectors of `4 * P384_LIMBS` words; `o` must be
+/// writable for 3 field vectors of `4 * P384_LIMBS` words; `t` must be writable
+/// for 204 words, within `P384_SPILL_WORDS`. `o` and `t` must not overlap the
+/// inputs or each other.
 #[inline(never)]
 pub(crate) unsafe fn p384_to_fp4(
     a: *const u64,
@@ -23385,10 +23407,12 @@ pub(crate) unsafe fn p384_to_fp4(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P384_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P384_LIMBS` words; `o` must be writable
+/// for 1 field vector of `4 * P384_LIMBS` words; `t` must be writable for 68
+/// words, within `P384_SPILL_WORDS`. `o` and `t` must not overlap the inputs or
+/// each other.
 #[cfg(test)]
 #[inline(never)]
 pub(crate) unsafe fn p384_mul(
@@ -23809,10 +23833,11 @@ pub(crate) unsafe fn p384_mul(
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a` and `b` must be readable for
-/// `4 * P384_LIMBS` words where the kernel reads them, `m` for three, `o`
-/// writable for `4 * P384_LIMBS` and `t` for `P384_SPILL_WORDS`; `o` and `t`
-/// must not overlap the inputs or each other.
+/// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
+/// must be readable for 1 field vector of `4 * P384_LIMBS` words; `b` must be
+/// readable for 1 field vector of `4 * P384_LIMBS` words; `o` must be writable
+/// for 1 field vector of `4 * P384_LIMBS` words. `o` must not overlap the
+/// inputs.
 #[cfg(test)]
 #[inline(never)]
 pub(crate) unsafe fn p384_lin(
