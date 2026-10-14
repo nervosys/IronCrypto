@@ -5,6 +5,21 @@ all of them.
 
 ## Unreleased
 
+### Security
+
+- **`ic-rustls` requires rustls 0.23.46.** rustls 0.23.45, the version
+  0.3.0 required and resolved, has four advisories fixed in 0.23.46:
+  RUSTSEC-2026-0346 (`Debug` impls for client session values expose TLS
+  secrets), -0347 (buffered application data sent to the outer server after
+  an ECH rejection), -0348 (Brotli certificate decompression can allocate up
+  to 1 GiB before authentication) and -0349 (an unauthenticated ServerHello
+  can downgrade later connections to classical key exchange). 0.3.0's
+  requirement, `0.23.45`, already admits 0.23.46, so a dependent's
+  `cargo update -p rustls` fixes it without a new IronCrypto. The offline
+  floor table in `scripts/advisories.sh` now holds 0.23.46, so a build that
+  resolves an older rustls fails `scripts/check.sh`. Found by `cargo audit`
+  in that script, which reports and does not gate.
+
 ### Added
 
 - **P-256's portable field multiplication and squaring are proved end to

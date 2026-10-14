@@ -36,14 +36,14 @@ cd "$root"
 
 # Last reviewed against the RustSec advisory database on this date (local copy
 # updated 2026-10-03; no advisory for these crates since).
-reviewed="2026-10-06"
+reviewed="2026-10-14"
 
 # crate<TAB>minimum version<TAB>why that floor
 #
 # "none known" means the crate had no advisory at the review date; the floor is
 # then the version in use, so a downgrade still has to be deliberate.
 floors="once_cell	1.21.4	RUSTSEC-2019-0017 fixed in >=1.0.1; floor held at the version in use
-rustls	0.23.45	RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption level boundaries, fixed in >=0.23.45; RUSTSEC-2024-0336 and -0399 fixed earlier
+rustls	0.23.46	RUSTSEC-2026-0346 (Debug impls expose client session secrets), -0347 (buffered data sent to the outer server after ECH rejection), -0348 (Brotli certificate decompression allocates up to 1 GiB before authentication) and -0349 (unauthenticated ServerHello downgrades later connections to classical key exchange), fixed in >=0.23.46; RUSTSEC-2026-0285, -2024-0336 and -0399 fixed earlier
 rustls-pki-types	1.15.1	none known at the review date
 rustls-webpki	0.103.15	RUSTSEC-2026-0104 / CVE-2026-93599, reachable panic parsing a CRL, fixed in >=0.103.13; RUSTSEC-2023-0053, 2026-0049, -0098 and -0099 fixed earlier; floor held at the version in use
 subtle	2.6.1	none known at the review date
