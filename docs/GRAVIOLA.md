@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM, ChaCha20-Poly1305 from 1 KiB, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, P-384 ECDH, ChaCha20-Poly1305 on 64 B | |
+| Speed, x86-64 | AES-GCM (more variable under load), ChaCha20-Poly1305, X25519, Ed25519, ML-KEM with a prepared key, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly; ML-KEM encapsulation and decapsulation from key bytes |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA product by the gate alone, and its IFMA exponentiation as a whole by neither |
@@ -61,10 +61,46 @@ and a ratio inside that as parity.
 | RSA-2048 PKCS#1 v1.5 sign | 255-300 | 345 | 572 / 868 |
 | RSA-2048 PKCS#1 v1.5 verify | 7.5-8.5 | 9-10.5 | 12.8 / 22.1 |
 
+### The last run, master e9d1261
+
+Taken 2026-10-13 after everything above had merged, three rounds of each
+of `graviola`, `graviola-p384` and `graviola-chacha`, both libraries in
+every run. The machine was never idle: load read 33 to 100 percent at the
+start of the rounds, from other projects' builds. So only the ratio within
+a run is read, as IronCrypto's rate over Graviola's (above 1 is faster
+here), with the range across rounds:
+
+| operation | ratio | | operation | ratio |
+|---|---|---|---|---|
+| AES-256-GCM, 4 MiB | 1.20-1.47 in 5 of 7 runs; 0.20 and 0.82 in 2 | | X25519 | 1.14-1.17 |
+| AES-256-GCM, 1 KiB | 0.74-1.28 | | Ed25519 sign | 1.04-1.40 |
+| AES-256-GCM, 64 B | 1.43-1.46 | | Ed25519 verify | 1.12-1.33 |
+| ChaCha20-Poly1305, 4 MiB | 2.64-5.20 | | P-256 ECDH | 0.95-0.99 |
+| ChaCha20-Poly1305, 1 KiB | 2.02-2.17 | | ECDSA P-256 sign | 1.00-1.07 |
+| ChaCha20-Poly1305, 64 B | 1.19-1.57 | | ECDSA P-256 verify | 1.09-1.13 |
+| SHA-256, 4 MiB | 0.98-1.01 | | P-384 ECDH | 0.83-0.98 |
+| SHA-512, 4 MiB | 1.27-2.05 | | ECDSA P-384 sign | 2.33-2.79 |
+| SHA3-256, 4 MiB | 0.95-0.97 | | ECDSA P-384 verify | 1.41-1.56 |
+| HMAC-SHA256, 4 MiB | 0.92-0.99 | | ML-KEM-768 keygen, like for like | 0.98-1.39 |
+| HMAC-SHA256, 200 B | 0.93 | | ML-KEM-768 encapsulate / decapsulate | 0.74-0.88 / 0.75-0.91 |
+| SHA-256, 64 B | 1.01-1.03 | | the same, key prepared | 1.73-2.08 / 0.97-1.52 |
+| RSA-2048 sign / verify | 1.16-1.30 | | | |
+
+The AES-GCM outliers are drops in IronCrypto's own rate (2.9 and 13.7
+GB/s against 19 to 25 in the other runs) while Graviola's held at 15 to
+17: the 512-bit kernel appears more sensitive to a contended machine. It is
+the first measurement of each run.
+
 Where it is not ahead:
 
-- **P-384 ECDH** is level, not ahead. It was 1.7 times slower while the
-  field arithmetic here was generic in the modulus; specialised to the
+- **ML-KEM encapsulation and decapsulation from key bytes** are behind, at
+  0.74 to 0.91 of Graviola's rate. This API takes the key's bytes and
+  checks and expands it on every call; Graviola's keys are parsed once.
+  With a prepared key, which does that once, encapsulation leads by 1.7 to
+  2.1 times and decapsulation is level to ahead.
+
+- **P-384 ECDH** is level to slightly behind: 0.83 to 0.98 of Graviola's
+  rate in the last run. It was 1.7 times slower while the field arithmetic here was generic in the modulus; specialised to the
   prime, with a squaring of its own and divsteps inversion, it came out at
   0.94 to 1.25 times Graviola's time across five rounds run in the same
   binaries (P-384 rows are `cargo run --release -- graviola-p384` alone).
