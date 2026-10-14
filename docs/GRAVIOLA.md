@@ -169,9 +169,11 @@ spread between the builds is noise, and the P-384 ECDH row moves as much
 (0.69 to 1.26 in the default build) though nothing it runs changed. The
 AES-GCM 4 MiB default range is wide for the same reason. The AVX2 figures are
 tighter, and the drops that separate from the default build (AES-GCM at
-1 KiB, X25519, RSA-2048) are the clearest reading. Without AVX-512, P-256
-and P-384 ECDH, SHA-3, HMAC and ML-KEM are unchanged from the default build
-within that noise.
+1 KiB, X25519, RSA-2048) are the clearest reading. Without AVX-512, P-256 ECDH,
+SHA-3, HMAC and ML-KEM with a prepared key stay within the default build's
+spread. ML-KEM encapsulation from key bytes reads lower on AVX2 (0.69 to 0.78
+against 0.83 to 0.96) though no AVX-512 code runs in it, so that gap is
+unexplained noise or load, not an effect of the switch.
 
 Graviola's own paths are the same in both columns, since it does not use
 AVX-512. The AVX2 column is a Zen 5 with AVX-512 switched off, not an older
