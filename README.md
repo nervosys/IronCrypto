@@ -453,12 +453,13 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V, and forty-nine more on x86-64 alone for its
-Curve25519, P-256 and P-384 assembly, a prepared P-384 key's window read, Ed25519's MULX/ADX table read and X25519's doubling, its divsteps inversions, its
+Cortex-M0, Cortex-M4 and RISC-V, and sixty-seven more on x86-64 alone for its
+Curve25519, P-256 and P-384 assembly, P-256's and P-384's AVX-512 IFMA point
+formulas, window reads and conversions, a prepared P-384 key's window read, Ed25519's MULX/ADX table read and X25519's doubling, its divsteps inversions, its
 AVX-512 ChaCha20 and AVX2 Poly1305 kernels, RSA's table read and its
 MULX/ADX, AVX-512 IFMA and portable Montgomery products, RSA's whole
 AVX-512 IFMA exponentiation at 1024 and 2048 bits, the AES-NI and VAES-256
-AES-GCM loops, and RSA's MULX/ADX squaring and 1024-bit kernels: **225 gating
+AES-GCM loops, and RSA's MULX/ADX squaring and 1024-bit kernels: **243 gating
 probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
@@ -466,7 +467,7 @@ P-256 Montgomery loop stays rolled; its counter branches, and a constant-length
 `memset` on RISC-V, are excused by rules about the surrounding instructions,
 each capped at the count that was read, and Cortex-M0's runtime multiply is
 disassembled from the toolchain and checked like a probe. On x86-64 the RSA
-products' loops over the width, and the window read's loop over its sixteen
+products' loops over the width, and the window reads' loops over their sixteen
 entries, and the AES-GCM loops over their groups, are excused by a rule that finds each loop in
 the control-flow graph and accepts a branch only where it exits or closes the
 loop on a counter stepped by constants, in the probes named, up to the
@@ -812,6 +813,7 @@ twice; `Ed25519::verify` still takes bytes and builds one per call.
 | Poly1305 | AVX2, four lanes of four blocks per step; elsewhere four blocks per group, reducing once instead of four times |
 | RSA exponentiation | AVX-512 IFMA in radix 2^52 for 1024-, 1536- and 2048-bit moduli (every RSA prime here, and an RSA-2048 modulus); `MULX`/`ADCX`/`ADOX` for the other products; a fixed four-bit window everywhere |
 | X25519, Ed25519 | four-limb field on `MULX`/`ADX`; four field elements at once on AVX-512 IFMA |
+| P-256, P-384 scalar multiplication (ECDH, prepared keys, signing's `k * G`) | field on `MULX`/`ADX`; on AVX-512 IFMA, four field products at once in 256-bit lanes (radix 2^52 for P-256, 2^48 for P-384), each point formula one generated block of assembly (`scripts/gen_nist_ifma.py`) |
 
 Each is selected by runtime detection with the portable path as fallback, each
 is differentially tested against that portable path, and each reports which

@@ -698,10 +698,8 @@ pub fn gcm() {
 /// kernels have no public reporter; their choice is pinned by unit tests in
 /// `ic-cipher` instead.
 fn backends() {
-    println!(
-        "IronCrypto X25519 backend: {:?}",
-        ic_ec::curve25519_backend()
-    );
+    println!("IronCrypto X25519 backend: {:?}", ic_ec::curve25519_backend());
+    println!("IronCrypto P-256/P-384 backend: {:?}", ic_ec::nist_backend());
     println!(
         "IronCrypto RSA-2048 backend: {:?}",
         ic_rsa::uint::backend_for(32)

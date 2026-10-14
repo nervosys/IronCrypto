@@ -248,3 +248,10 @@ pub fn p256_fp_invert(a: &[u64; 4]) -> [u64; 4] {
 pub fn p256_fn_invert(a: &[u64; 4]) -> [u64; 4] {
     crate::nist::safegcd::invert::<crate::p256::FnModulus>(a)
 }
+
+/// P-256's and P-384's point formulas on AVX-512 IFMA, the secret digit's
+/// read of a window of lane vectors, and the conversion back to the `Fp`
+/// form; see `nist::ifma`. The kernels are straight-line by construction;
+/// these hold the compiled code to it.
+#[cfg(target_arch = "x86_64")]
+pub use crate::nist::ifma::probes as nist_ifma;

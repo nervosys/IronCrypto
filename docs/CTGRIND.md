@@ -23,7 +23,13 @@ The binary is static (musl): memcheck needs function redirections in the
 dynamic loader, and a distribution's stripped `ld.so` stops it at startup.
 Valgrind reports CPUID without AVX-512, so paths behind runtime detection of it
 are not run; Graviola is built with its own `VALGRIND_BUG_494162` switch,
-which lets it start without the ADX bit Valgrind does not report.
+which lets it start without the ADX bit Valgrind does not report. That
+includes P-256's and P-384's scalar multiplications on AVX-512 IFMA
+(`ic_ec::nist::ifma`): under Valgrind the P-256 and P-384 cases below take the
+MULX/ADX path, and the IFMA kernels, window read and conversion are read by
+`scripts/check-ct.py` alone (docs/CONSTANT_TIME.md, "P-256 and P-384 on
+AVX-512 IFMA"). Valgrind does not emulate AVX-512, so forcing the path, as
+`ic-rsa-2048-sign-adx` forces MULX/ADX, is not available for it.
 
 ## What it is and is not
 

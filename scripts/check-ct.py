@@ -8,6 +8,7 @@ expected symbol. See docs/CONSTANT_TIME.md for coverage and limitations.
 
 import argparse
 import collections
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -98,6 +99,16 @@ X86_ONLY = (
     "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
     "ct_gcm_vaes256_seal", "ct_gcm_vaes256_open", "ct_gcm_vaes256_group",
     "ct_gcm_twist",
+    # P-256's and P-384's point formulas on AVX-512 IFMA (nist::ifma_kernels,
+    # generated), each kernel one block of straight-line assembly; the secret
+    # digit's read of a window of lane vectors, every entry under a mask; and
+    # the conversion of a secret-derived result back to the Fp form.
+    "ct_p256_ifma_double", "ct_p256_ifma_add", "ct_p256_ifma_madd", "ct_p256_ifma_madd4",
+    "ct_p256_ifma_from_fp", "ct_p256_ifma_to_fp", "ct_p256_ifma_to_fp4",
+    "ct_p256_ifma_select", "ct_p256_ifma_from_limbs",
+    "ct_p384_ifma_double", "ct_p384_ifma_add", "ct_p384_ifma_madd", "ct_p384_ifma_madd4",
+    "ct_p384_ifma_from_fp", "ct_p384_ifma_to_fp", "ct_p384_ifma_to_fp4",
+    "ct_p384_ifma_select", "ct_p384_ifma_from_limbs",
 )
 SYMBOLS += X86_ONLY
 
@@ -185,6 +196,12 @@ X86_EXCUSE_CEILINGS = {
     "ct_gcm_clmul8_open": {"counter loop": 1},
     "ct_gcm_vaes256_seal": {"counter loop": 1},
     "ct_gcm_vaes256_open": {"counter loop": 1},
+    # The IFMA multiplication's window read (`nist::ifma::scan_avx2`): the
+    # loop over the sixteen entries, `incq %rax`/`cmpq $16, %rax`/`jne`, rax
+    # indexing the masks and rdi stepping one entry (160 or 256 bytes). The
+    # digit decides only the masks.
+    "ct_p256_ifma_select": {"counter loop": 1},
+    "ct_p384_ifma_select": {"counter loop": 1},
 }
 
 # Loads and stores, which do not set the flags a conditional branch reads, and
@@ -857,15 +874,21 @@ def over_ceiling(target, excused):
             for rule, count in sorted(excused.items()) if count > ceilings.get(rule, 0)]
 
 
+def build_root():
+    """Where the harness is built: under CARGO_TARGET_DIR, as everything
+    scripts/check.sh runs is, or the repository's own target/."""
+    return Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "ct-audit"
+
+
 def build_probe(target):
     # A fresh explicit output forces Cargo to rebuild the harness and avoids
     # selecting a stale assembly file left by a prior dependency version.
-    output_dir = ROOT / "target/ct-audit/probes"
+    output_dir = build_root() / "probes"
     output_dir.mkdir(parents=True, exist_ok=True)
     output = output_dir / f"{target}-{uuid.uuid4().hex}.s"
     subprocess.run([
         "cargo", "rustc", "--manifest-path", str(ROOT / "scripts/ct-audit/Cargo.toml"),
-        "--release", "--target", target, "--target-dir", str(ROOT / "target/ct-audit"),
+        "--release", "--target", target, "--target-dir", str(build_root()),
         "--", f"--emit=asm={output}",
     ], cwd=ROOT, check=True)
     if not output.is_file():

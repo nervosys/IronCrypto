@@ -113,6 +113,36 @@ pub trait Curve: Sized {
     ) -> Option<([Self::Field; 3], Self::Field, Self::Field)> {
         None
     }
+
+    /// The whole of [`Point::mul_scalar`], where the curve has a faster way
+    /// to the same point (not necessarily the same coordinates); `None` to
+    /// use the loop there. P-256 and P-384 on x86-64 with AVX-512 IFMA have
+    /// one (`nist::ifma`).
+    #[inline(always)]
+    fn mul_scalar_fast(_p: &Point<Self>, _scalar: &Self::Scalar) -> Option<Point<Self>> {
+        None
+    }
+
+    /// The same for a prepared key's comb, `gentable::Comb::mul`.
+    #[inline(always)]
+    fn comb_mul_fast(
+        _windows: &[super::gentable::AffineWindow<Self, { super::gentable::ENTRIES }>;
+             super::gentable::TEETH],
+        _scalar: &Self::Scalar,
+    ) -> Option<Point<Self>> {
+        None
+    }
+
+    /// The same for the generator table, `gentable::mul`, after the table
+    /// is built.
+    #[cfg(feature = "std")]
+    #[inline(always)]
+    fn table_mul_fast<const E: usize>(
+        _windows: &super::gentable::Windows<Self, E>,
+        _scalar: &Self::Scalar,
+    ) -> Option<Point<Self>> {
+        None
+    }
 }
 
 /// A point in Jacobian coordinates.
@@ -524,7 +554,18 @@ impl<C: Curve> Point<C> {
     ///
     /// The scalars at that edge, `n - 1 .. n - 40` and `1 .. 40`, are in the
     /// tests, as is a comparison with the ladder over random scalars.
+    ///
+    /// Where the curve has its own ([`Curve::mul_scalar_fast`]) that runs
+    /// instead: the same digits, window and additions in another form.
     pub fn mul_scalar(&self, scalar: &C::Scalar) -> Self {
+        if let Some(p) = C::mul_scalar_fast(self, scalar) {
+            return p;
+        }
+        self.mul_scalar_generic(scalar)
+    }
+
+    /// [`Self::mul_scalar`] on the `Fp` form.
+    pub(crate) fn mul_scalar_generic(&self, scalar: &C::Scalar) -> Self {
         use super::gentable::{digit_count, signed_digits_w, Window, WIDTH};
 
         let bytes = scalar.to_bytes();

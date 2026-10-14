@@ -45,8 +45,8 @@
 //! The crate's declared minimum Rust predates the stabilisation of the
 //! AVX-512 intrinsics and target features, so the two IFMA instructions are
 //! each a one-instruction assembly block on `ymm` registers, the rest are
-//! AVX2 intrinsics, and support is detected by CPUID and XGETBV here rather
-//! than through `is_x86_feature_detected!`.
+//! AVX2 intrinsics, and support is detected by CPUID and XGETBV
+//! (`crate::avx512`) rather than through `is_x86_feature_detected!`.
 
 // Limb loops index five arrays in step, as the algebra does.
 #![allow(clippy::needless_range_loop)]
@@ -76,85 +76,14 @@ impl Ifma {
     /// four-limb field the conversions here use.
     #[inline]
     pub fn get() -> Option<Ifma> {
-        use core::sync::atomic::{AtomicU8, Ordering};
-        // 0 not yet asked, 1 yes, 2 no.
-        static CACHED: AtomicU8 = AtomicU8::new(0);
-        let have = match CACHED.load(Ordering::Relaxed) {
-            1 => true,
-            2 => false,
-            _ => {
-                // `--cfg ic_no_avx512` reports this false, for measuring the AVX2 paths.
-                let have = !cfg!(ic_no_avx512) && detect() && crate::fe64::available();
-                CACHED.store(if have { 1 } else { 2 }, Ordering::Relaxed);
-                have
-            }
-        };
-        if have {
+        // `--cfg ic_no_avx512` reports this false, for measuring the AVX2
+        // paths; see `crate::avx512`.
+        if crate::avx512::ifma() && crate::fe64::available() {
             Some(Ifma(()))
         } else {
             None
         }
     }
-}
-
-/// `cpuid` with `eax = leaf`, `ecx = sub`: `(eax, ebx, ecx, edx)`.
-fn cpuid(leaf: u32, sub: u32) -> (u32, u32, u32, u32) {
-    let (a, b, c, d): (u32, u64, u32, u32);
-    // SAFETY: CPUID exists on every x86-64 CPU and has no effect beyond its
-    // four output registers. LLVM reserves rbx, so it is saved in another
-    // register around the instruction and swapped back.
-    unsafe {
-        asm!(
-            "mov {b}, rbx",
-            "cpuid",
-            "xchg {b}, rbx",
-            b = out(reg) b,
-            inout("eax") leaf => a,
-            inout("ecx") sub => c,
-            out("edx") d,
-            options(nostack, preserves_flags, nomem),
-        );
-    }
-    (a, b as u32, c, d)
-}
-
-fn detect() -> bool {
-    let (max, _, _, _) = cpuid(0, 0);
-    if max < 7 {
-        return false;
-    }
-    let (_, _, ecx1, _) = cpuid(1, 0);
-    // OSXSAVE (27) and AVX (28).
-    if ecx1 & (1 << 27) == 0 || ecx1 & (1 << 28) == 0 {
-        return false;
-    }
-    let xcr0: u64 = {
-        let (lo, hi): (u32, u32);
-        // SAFETY: XGETBV with ecx = 0 is available when OSXSAVE is set,
-        // which was just checked; it reads XCR0 into edx:eax and nothing
-        // else.
-        unsafe {
-            asm!(
-                "xgetbv",
-                in("ecx") 0u32,
-                out("eax") lo,
-                out("edx") hi,
-                options(nostack, preserves_flags, nomem),
-            );
-        }
-        (u64::from(hi) << 32) | u64::from(lo)
-    };
-    // SSE (1), AVX (2), and AVX-512's opmask (5), ZMM_Hi256 (6) and
-    // Hi16_ZMM (7) state: without them EVEX instructions fault.
-    let needed = 0b1110_0110;
-    if xcr0 & needed != needed {
-        return false;
-    }
-    let (_, ebx7, _, _) = cpuid(7, 0);
-    // AVX2 (5), AVX-512F (16), AVX-512DQ (17), AVX-512 IFMA (21),
-    // AVX-512VL (31).
-    let want = (1 << 5) | (1 << 16) | (1 << 17) | (1 << 21) | (1 << 31);
-    ebx7 & want == want
 }
 
 /// Five limb vectors; lane `l` of vector `i` is limb `i` of element `l`.

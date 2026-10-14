@@ -404,6 +404,221 @@ mod x86_p256 {
     }
 }
 
+// x86-64: P-256's and P-384's point formulas on AVX-512 IFMA, each one
+// generated block of assembly; the secret digit's read of a window of lane
+// vectors; and the conversion of a result back to the `Fp` form. Compiled to
+// be read, never run: the kernels need AVX-512 IFMA, the scan AVX2.
+#[cfg(target_arch = "x86_64")]
+mod x86_nist_ifma {
+    use ic_ec::ct_probes::nist_ifma as p;
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_double(
+        a: &[p::P256; 3],
+        b: &[p::P256; 2],
+        m: &[u64; 12],
+        o: &mut [p::P256; 3],
+        t: &mut [u64; p::P256_SPILL],
+    ) {
+        unsafe { p::p256_double(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_add(
+        a: &[p::P256; 3],
+        b: &[p::P256; 2],
+        m: &[u64; 12],
+        o: &mut [p::P256; 3],
+        t: &mut [u64; p::P256_SPILL],
+    ) {
+        unsafe { p::p256_add(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_madd(
+        a: &[p::P256; 3],
+        b: &[p::P256; 2],
+        m: &[u64; 12],
+        o: &mut [p::P256; 3],
+        t: &mut [u64; p::P256_SPILL],
+    ) {
+        unsafe { p::p256_madd(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_madd4(
+        a: &[p::P256; 3],
+        b: &[p::P256; 2],
+        m: &[u64; 12],
+        o: &mut [p::P256; 3],
+        t: &mut [u64; p::P256_SPILL],
+    ) {
+        unsafe { p::p256_madd4(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_from_fp(
+        a: &[p::P256; 3],
+        b: &[p::P256; 2],
+        m: &[u64; 12],
+        o: &mut [p::P256; 3],
+        t: &mut [u64; p::P256_SPILL],
+    ) {
+        unsafe { p::p256_from_fp(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_to_fp(
+        a: &[p::P256; 3],
+        b: &[p::P256; 2],
+        m: &[u64; 12],
+        o: &mut [p::P256; 3],
+        t: &mut [u64; p::P256_SPILL],
+    ) {
+        unsafe { p::p256_to_fp(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_to_fp4(
+        a: &[p::P256; 3],
+        b: &[p::P256; 2],
+        m: &[u64; 12],
+        o: &mut [p::P256; 3],
+        t: &mut [u64; p::P256_SPILL],
+    ) {
+        unsafe { p::p256_to_fp4(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ifma_select(w: &[p::P256; 16], digit: i8, out: &mut p::P256) -> [u64; 2] {
+        unsafe { p::p256_select(w, digit, out) }
+    }
+
+    #[no_mangle]
+    pub fn ct_p256_ifma_from_limbs(limbs: &[u64; 5]) -> [u64; 4] {
+        p::p256_from_limbs(limbs)
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_double(
+        a: &[p::P384; 3],
+        b: &[p::P384; 2],
+        m: &[u64; 12],
+        o: &mut [p::P384; 3],
+        t: &mut [u64; p::P384_SPILL],
+    ) {
+        unsafe { p::p384_double(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_add(
+        a: &[p::P384; 3],
+        b: &[p::P384; 2],
+        m: &[u64; 12],
+        o: &mut [p::P384; 3],
+        t: &mut [u64; p::P384_SPILL],
+    ) {
+        unsafe { p::p384_add(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_madd(
+        a: &[p::P384; 3],
+        b: &[p::P384; 2],
+        m: &[u64; 12],
+        o: &mut [p::P384; 3],
+        t: &mut [u64; p::P384_SPILL],
+    ) {
+        unsafe { p::p384_madd(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_madd4(
+        a: &[p::P384; 3],
+        b: &[p::P384; 2],
+        m: &[u64; 12],
+        o: &mut [p::P384; 3],
+        t: &mut [u64; p::P384_SPILL],
+    ) {
+        unsafe { p::p384_madd4(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_from_fp(
+        a: &[p::P384; 3],
+        b: &[p::P384; 2],
+        m: &[u64; 12],
+        o: &mut [p::P384; 3],
+        t: &mut [u64; p::P384_SPILL],
+    ) {
+        unsafe { p::p384_from_fp(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_to_fp(
+        a: &[p::P384; 3],
+        b: &[p::P384; 2],
+        m: &[u64; 12],
+        o: &mut [p::P384; 3],
+        t: &mut [u64; p::P384_SPILL],
+    ) {
+        unsafe { p::p384_to_fp(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_to_fp4(
+        a: &[p::P384; 3],
+        b: &[p::P384; 2],
+        m: &[u64; 12],
+        o: &mut [p::P384; 3],
+        t: &mut [u64; p::P384_SPILL],
+    ) {
+        unsafe { p::p384_to_fp4(a, b, m, o, t) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ifma_select(w: &[p::P384; 16], digit: i8, out: &mut p::P384) -> [u64; 2] {
+        unsafe { p::p384_select(w, digit, out) }
+    }
+
+    #[no_mangle]
+    pub fn ct_p384_ifma_from_limbs(limbs: &[u64; 8]) -> [u64; 6] {
+        p::p384_from_limbs(limbs)
+    }
+}
+
 // x86-64: the sixteen-block AVX-512 ChaCha20 keystream and the four-lane AVX2
 // Poly1305. Compiled to be read, never run: they need AVX-512F and AVX2.
 #[cfg(target_arch = "x86_64")]
