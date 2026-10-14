@@ -82,6 +82,11 @@ X86_ONLY = (
     # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
     # bits, its modulus. Its loops are excused the same way.
     "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_2048",
+    # The secret digit's read of a prepared P-384 key's window, in ECDH. Its
+    # loop over the sixteen entries is excused by the x86-64 rules below, up
+    # to X86_EXCUSE_CEILINGS. The additions after it are the point formulas
+    # above; the multiplication as a whole is not a probe (CONSTANT_TIME.md).
+    "ct_p384_comb_select",
 )
 SYMBOLS += X86_ONLY
 
@@ -151,6 +156,9 @@ X86_EXCUSE_CEILINGS = {
     # into radix 2^52 (39 limbs each), and the masked subtraction at the end
     # (32 words).
     "ct_rsa_ifma_pow_2048": {"counter loop": 12, "constant memset": 1},
+    # A prepared P-384 key's window read: the loop over its sixteen entries,
+    # `incq`/`cmpq $16`/`jne` on the entry counter.
+    "ct_p384_comb_select": {"counter loop": 1},
 }
 
 # Loads and stores, which do not set the flags a conditional branch reads, and

@@ -379,6 +379,19 @@ mod x86_p256 {
     pub unsafe fn ct_p384_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 114]) {
         unsafe { ic_ec::ct_probes::p384_point_add_affine_adx(buf) }
     }
+
+    /// The secret digit's read of a window of a prepared P-384 key, for
+    /// ECDH: every entry under a mask, and the conditional negation. Its loop
+    /// over the sixteen entries is excused by rule in check-ct.py, up to a
+    /// ceiling. The additions that follow are the formulas probed above.
+    #[no_mangle]
+    pub fn ct_p384_comb_select(
+        comb: &ic_ec::ct_probes::P384Comb,
+        digit: i8,
+        out: &mut [[u64; 6]; 2],
+    ) {
+        ic_ec::ct_probes::p384_comb_select(comb, digit, out)
+    }
 }
 
 // x86-64: the sixteen-block AVX-512 ChaCha20 keystream and the four-lane AVX2

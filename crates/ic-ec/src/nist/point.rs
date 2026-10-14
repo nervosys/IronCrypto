@@ -335,7 +335,6 @@ impl<C: Curve> Point<C> {
     /// all ones: the generator table's zero digit, whose identity has no
     /// affine form. `keep` need not be behind a barrier yet; it is put behind
     /// one together with the identity test, one barrier for both.
-    #[cfg(feature = "std")]
     pub(crate) fn add_affine_unequal_or_keep(
         &self,
         x2: &C::Field,
@@ -379,7 +378,6 @@ impl<C: Curve> Point<C> {
     /// The mixed addition formula, without case handling; `h` and `r` as in
     /// [`Point::add_formula`].
     #[inline]
-    #[cfg(feature = "std")]
     fn add_affine_formula(&self, x2: &C::Field, y2: &C::Field) -> (Self, C::Field, C::Field) {
         if let Some(([x, y, z], h, r)) = C::add_affine_fast([&self.x, &self.y, &self.z], [x2, y2]) {
             return (Point { x, y, z }, h, r);
@@ -390,7 +388,6 @@ impl<C: Curve> Point<C> {
     /// [`Self::add_affine_formula`] in field operations, which
     /// [`Curve::add_affine_fast`] must match.
     #[inline(never)]
-    #[cfg(feature = "std")]
     pub(crate) fn add_affine_formula_generic(
         &self,
         x2: &C::Field,
@@ -711,15 +708,12 @@ impl<C: Curve> Point<C> {
     }
 
     /// The Jacobian coordinates, for the generator table's normalisation.
-    #[cfg(feature = "std")]
     pub(super) fn x(&self) -> C::Field {
         self.x
     }
-    #[cfg(feature = "std")]
     pub(super) fn y(&self) -> C::Field {
         self.y
     }
-    #[cfg(feature = "std")]
     pub(super) fn z(&self) -> C::Field {
         self.z
     }

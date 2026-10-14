@@ -243,6 +243,30 @@ fn ecdh_matches_wycheproof() {
             assert_eq!(hex(&out), case["shared"], "{}: {what}", case["curve"]);
             assert_eq!(shared.len(), size);
         }
+        // The same case through a prepared peer key: refused where `agree`
+        // refuses -- at `new` for the public key, at `agree` for the private
+        // one -- and the same secret where it agrees.
+        let mut prepared_out = vec![0u8; size];
+        let prepared = match size {
+            32 => ironcrypto::ec::p256::PreparedPublicKey::new(&public)
+                .and_then(|k| k.agree(&d, &mut prepared_out)),
+            48 => ironcrypto::ec::p384::PreparedPublicKey::new(&public)
+                .and_then(|k| k.agree(&d, &mut prepared_out)),
+            _ => ironcrypto::ec::p521::PreparedPublicKey::new(&public)
+                .and_then(|k| k.agree(&d, &mut prepared_out)),
+        };
+        assert_eq!(
+            prepared.is_ok(),
+            result.is_ok(),
+            "{}: prepared: {what}",
+            case["curve"]
+        );
+        if result.is_ok() {
+            assert_eq!(prepared_out, out, "{}: prepared: {what}", case["curve"]);
+            *tally
+                .entry(format!("{} prepared matched", case["curve"]))
+                .or_insert(0) += 1;
+        }
         judge(
             &mut tally,
             &case["curve"],
@@ -255,6 +279,9 @@ fn ecdh_matches_wycheproof() {
     for (curve, valid, invalid) in [("P-256", 330, 24), ("P-384", 771, 18), ("P-521", 632, 28)] {
         assert_eq!(tally[&format!("{curve} valid accepted")], valid);
         assert_eq!(tally[&format!("{curve} invalid refused")], invalid);
+        // Every accepted case, the valid ones among them, agreed again
+        // through a prepared key.
+        assert!(tally[&format!("{curve} prepared matched")] >= valid);
     }
 }
 

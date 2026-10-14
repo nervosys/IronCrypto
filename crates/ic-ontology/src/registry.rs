@@ -2705,7 +2705,11 @@ pub static REGISTRY: &[Entry] = &[
         rust_path: "ic_ec::p384::EcdhP384",
         example: "use ic_core::traits::KeyAgreement;\nic_ec::p384::EcdhP384::agree(&my_sk, &peer_pk, &mut shared)?;",
         notes: "Roughly three times the work of P-256 for a security level few threat models \
-                actually need. Choose it when a profile mandates 192-bit strength, not by default.",
+                actually need. Choose it when a profile mandates 192-bit strength, not by default. \
+                To agree with one peer key many times, build `ic_ec::p384::PreparedPublicKey` \
+                once: it decodes and validates the key and precomputes its multiples at \
+                construction, so each agreement does only the scalar multiplication, in about \
+                40 percent of the time. It holds nothing secret and allocates nothing.",
     },
     Entry {
         id: "ecdsa-p384-sha384",
@@ -2779,7 +2783,9 @@ pub static REGISTRY: &[Entry] = &[
         example: "use ic_core::traits::KeyAgreement;\nic_ec::p256::EcdhP256::agree(&my_sk, &peer_pk, &mut shared)?;",
         notes: "Public keys are SEC1; both the 65-byte uncompressed and the 33-byte compressed \
                 form are accepted, and a peer key is checked against the curve equation before \
-                use. The shared secret is a coordinate, not a key: run it through a KDF.",
+                use. The shared secret is a coordinate, not a key: run it through a KDF. \
+                For repeated agreement with one peer key, `ic_ec::p256::PreparedPublicKey` \
+                checks and expands the key once.",
     },
     Entry {
         id: "ml-kem-768",
@@ -3414,7 +3420,9 @@ pub static REGISTRY: &[Entry] = &[
         rust_path: "ic_ec::p521::EcdhP521",
         example: "use ic_core::traits::KeyAgreement;\nic_ec::p521::EcdhP521::agree(&sk, &peer, &mut secret)?;",
         notes: "Roughly three times the cost of P-384 for a security level few threat models \
-                distinguish from it. Choose it to meet a profile, not for the margin.",
+                distinguish from it. Choose it to meet a profile, not for the margin. \
+                For repeated agreement with one peer key, `ic_ec::p521::PreparedPublicKey` \
+                checks and expands the key once.",
     },
     Entry {
         id: "ecdsa-p256-sha256",

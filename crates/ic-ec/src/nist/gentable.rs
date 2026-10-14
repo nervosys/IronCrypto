@@ -53,9 +53,7 @@
 use ic_core::ct::Choice;
 
 use super::arith::masks_for;
-#[cfg(feature = "std")]
 use super::arith::Field;
-#[cfg(feature = "std")]
 use super::point::AffinePoint;
 use super::point::Curve;
 use super::point::Point;
@@ -102,6 +100,114 @@ impl<C: Curve> Window<C> {
     }
 }
 
+/// How many windows a [`Comb`] keeps.
+pub(crate) const TEETH: usize = 4;
+
+/// Digits of [`Point::mul_scalar`]'s recoding per window of a [`Comb`]: the
+/// curve's digit count split [`TEETH`] ways, rounded up.
+pub(crate) const fn comb_span<C: Curve>() -> usize {
+    digit_count(C::SCALAR_BYTES, WIDTH).div_ceil(TEETH)
+}
+
+/// `1..=16` times each of `Q`, `2^(5m) * Q`, `2^(10m) * Q` and
+/// `2^(15m) * Q`, affine, where `m` is [`comb_span`]: what a prepared ECDH
+/// public key holds, so that a multiplication by it needs a quarter of the
+/// doublings [`Point::mul_scalar`] does.
+///
+/// The scalar is recoded exactly as for [`Point::mul_scalar`], into signed
+/// digits `d_i` of five bits, and digit `i = c*m + j` is window `c`'s digit
+/// `j`: `k * Q` is the sum over `c` of `(sum_j d_(c*m+j) * 2^(5j)) * 2^(5cm) * Q`.
+/// Horner's rule over `j`, shared by the four windows, makes that five
+/// doublings per `j` and one mixed addition per digit -- the additions of
+/// [`Point::mul_scalar`], and about a quarter of its doublings.
+///
+/// The windows are a public point's, built once; each digit's entry is read
+/// by masks over the whole window, as everywhere else.
+pub(crate) struct Comb<C: Curve> {
+    windows: [AffineWindow<C, ENTRIES>; TEETH],
+}
+
+impl<C: Curve> Comb<C> {
+    /// The windows of `q`, which must not be the identity: a point of prime
+    /// order `n`, as every other point of a NIST curve is.
+    pub(crate) fn new(q: &Point<C>) -> Self {
+        let m = comb_span::<C>();
+        let mut bases = [*q; TEETH];
+        for c in 1..TEETH {
+            let mut b = bases[c - 1];
+            for _ in 0..WIDTH * m {
+                b = b.double();
+            }
+            bases[c] = b;
+        }
+        Self {
+            windows: core::array::from_fn(|c| AffineWindow::new(&bases[c])),
+        }
+    }
+
+    /// The window of `Q` itself, for the compiled-code probes.
+    #[cfg(feature = "ct-probes")]
+    pub(crate) fn first_window(&self) -> &AffineWindow<C, ENTRIES> {
+        &self.windows[0]
+    }
+
+    /// `scalar * Q`, constant time in the scalar.
+    ///
+    /// # Which additions can be incomplete
+    ///
+    /// Before window `c`'s digit at step `j` is added, the accumulator is
+    /// `A * Q`, where `A` is the sum of `d_i * 32^(i - j)` over the digits
+    /// already added: those at a higher step, and those of the windows below
+    /// `c` at step `j`. The entry is `E * Q` with `E = d * 32^(c*m)`. Every
+    /// added digit sits at a position `i - j` other than `c*m` -- a higher
+    /// step puts it at `c'*m + (j' - j)` with `0 < j' - j < m`, and a lower
+    /// window at `c'*m` with `c' < c` -- so `A` is `H * 32^(c*m + 1) + L`,
+    /// with `H` an integer and `|L| < (16/31) * 32^(c*m)`. `A = E` would make
+    /// `32 * H - d = L / 32^(c*m)`, an integer of magnitude below one, so
+    /// `d = 32 * H`, which for `|d| <= 16` is `d = 0`: a zero digit, which
+    /// [`AffineWindow::add_to`] keeps out of the formula. So `A` and `E`
+    /// differ as integers whenever `d` is not zero.
+    ///
+    /// They are then different points if `|A| + |E| < n`. The highest
+    /// position in `A` is `N - 1 - j`, for `N` digits, so
+    /// `|A| < (16/31) * 2^(5(N - j))`, which is below `2^(ORDER_BITS - 1) / 1.9`
+    /// once `5(N - j) < ORDER_BITS`; and `|E| <= 2^(5(TEETH - 1)m + 4)`, far
+    /// below that on every curve here (the test
+    /// `comb_entries_are_small_against_the_order` holds it). `n` exceeds
+    /// `2^(ORDER_BITS - 1)`, so those steps use the incomplete mixed
+    /// addition. The steps where `5(N - j) >= ORDER_BITS` -- the last on
+    /// P-256 and P-384, the last two on P-521 -- use the complete one. They
+    /// need it: `the_comb_is_right_where_only_the_complete_addition_is`
+    /// finds scalars on every curve where an incomplete addition at the last
+    /// position meets equal inputs, and fails if that position is made
+    /// incomplete.
+    pub(crate) fn mul(&self, scalar: &C::Scalar) -> Point<C> {
+        let bytes = scalar.to_bytes();
+        debug_assert_eq!(bytes.as_ref().len(), C::SCALAR_BYTES);
+        let digits = signed_digits_w(bytes.as_ref(), WIDTH);
+        let n = digit_count(C::SCALAR_BYTES, WIDTH);
+        let m = comb_span::<C>();
+
+        let mut acc = Point::identity();
+        for j in (0..m).rev() {
+            if j + 1 < m {
+                for _ in 0..WIDTH {
+                    acc = acc.double();
+                }
+            }
+            let complete = WIDTH * (n - j) >= C::ORDER_BITS;
+            for (c, window) in self.windows.iter().enumerate() {
+                // Past the top digit: a public position, always zero.
+                let i = c * m + j;
+                if i < n {
+                    acc = window.add_to(&acc, digits[i], complete);
+                }
+            }
+        }
+        acc
+    }
+}
+
 /// `1..=E` times `base`, Jacobian: even multiples by doubling, odd ones by
 /// one incomplete addition; see [`Window::new`].
 fn multiples<C: Curve, const E: usize>(base: &Point<C>) -> [Point<C>; E] {
@@ -122,23 +228,22 @@ fn multiples<C: Curve, const E: usize>(base: &Point<C>) -> [Point<C>; E] {
 /// into a branch: the xor is zero exactly when they are equal, and zero minus
 /// one is the only value here with the top bit set.
 #[inline]
-#[cfg(feature = "std")]
 fn equal(a: u8, b: u8) -> Choice {
     Choice::from_u8((((a ^ b) as u32).wrapping_sub(1) >> 31) as u8)
 }
 
-/// `1..=E` times one power of the generator, affine, for [`mul`]: an affine
-/// entry makes the accumulator's addition three multiplications cheaper.
-#[cfg(feature = "std")]
+/// `1..=E` times one power of the generator, affine, for [`mul`], or of a
+/// prepared ECDH public key, for [`Comb`]: an affine entry makes the
+/// accumulator's addition three multiplications cheaper.
 pub struct AffineWindow<C: Curve, const E: usize>([AffinePoint<C>; E]);
 
-#[cfg(feature = "std")]
 impl<C: Curve, const E: usize> AffineWindow<C, E> {
-    /// The window for `base`, a nonzero multiple of the generator, so none of
-    /// its multiples `1..=E` is the identity. Normalised with one inversion
+    /// The window for `base`, a point of prime order `n` (any point but the
+    /// identity), so none of its multiples `1..=E` is the identity.
+    /// Normalised with one inversion
     /// for the whole window (Montgomery's trick): the product of every `Z`,
     /// inverted once, then unwound.
-    fn new(base: &Point<C>) -> Self {
+    pub(super) fn new(base: &Point<C>) -> Self {
         let points: [Point<C>; E] = multiples(base);
         let mut prefix = [C::Field::ONE; E];
         let mut acc = C::Field::ONE;
@@ -165,9 +270,9 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
     }
 
     /// `|digit| * base`'s coordinates, negated in `y` for a negative digit,
-    /// without indexing by the digit. A zero digit selects the first entry,
-    /// which the caller discards.
-    fn select(&self, digit: i8) -> (C::Field, C::Field) {
+    /// without indexing by the digit. A zero digit matches no entry and
+    /// selects `(0, 0)`, which the caller discards.
+    pub(crate) fn select(&self, digit: i8) -> (C::Field, C::Field) {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
         // A zero digit matches no entry and leaves (0, 0), which the caller
@@ -192,7 +297,7 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
 
     /// `acc + digit * base`, in constant time. With `complete` false, `acc`
     /// must not equal `digit * base`; see [`mul`].
-    fn add_to(&self, acc: &Point<C>, digit: i8, complete: bool) -> Point<C> {
+    pub(super) fn add_to(&self, acc: &Point<C>, digit: i8, complete: bool) -> Point<C> {
         let (x, y) = self.select(digit);
         // A zero digit adds the identity, which has no affine form: the
         // addition is made anyway, of zeros, and discarded. All ones for a
@@ -209,6 +314,7 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
     }
 
     /// `acc + digit * base` for a public digit, as in verification.
+    #[cfg(feature = "std")]
     fn add_to_vartime(&self, acc: &Point<C>, digit: i8) -> Point<C> {
         if digit == 0 {
             return *acc;
