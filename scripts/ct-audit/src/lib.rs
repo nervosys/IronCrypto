@@ -649,6 +649,7 @@ mod x86_nist_ifma {
     /// Requires AVX2.
     #[no_mangle]
     pub unsafe fn ct_p256_ifma_select(w: &[p::P256; 16], digit: i8, out: &mut p::P256) -> [u64; 2] {
+        // SAFETY: never executed; compiled to be read.
         unsafe { p::p256_select(w, digit, out) }
     }
 
@@ -752,6 +753,7 @@ mod x86_nist_ifma {
     /// Requires AVX2.
     #[no_mangle]
     pub unsafe fn ct_p384_ifma_select(w: &[p::P384; 16], digit: i8, out: &mut p::P384) -> [u64; 2] {
+        // SAFETY: never executed; compiled to be read.
         unsafe { p::p384_select(w, digit, out) }
     }
 
