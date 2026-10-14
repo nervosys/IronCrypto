@@ -451,6 +451,43 @@ mod x86_rsa {
     }
 
     /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_adx_mont_sqr_2048(
+        a: &[u64; 32],
+        n: &[u64; 32],
+        n0inv: u64,
+        out: &mut [u64; 32],
+    ) {
+        unsafe { p::adx_mont_sqr_2048(a, n, n0inv, out) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_adx_mont_mul_1024(
+        a: &[u64; 16],
+        b: &[u64; 16],
+        n: &[u64; 16],
+        n0inv: u64,
+        out: &mut [u64; 16],
+    ) {
+        unsafe { p::adx_mont_mul_1024(a, b, n, n0inv, out) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_adx_mont_sqr_1024(
+        a: &[u64; 16],
+        n: &[u64; 16],
+        n0inv: u64,
+        out: &mut [u64; 16],
+    ) {
+        unsafe { p::adx_mont_sqr_1024(a, n, n0inv, out) }
+    }
+
+    /// # Safety
     /// Requires AVX-512F, IFMA and BMI2.
     #[no_mangle]
     pub unsafe fn ct_rsa_ifma_amm_2048(

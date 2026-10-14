@@ -102,6 +102,10 @@ fn main() {
         graviola::chacha();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("graviola-rsa") {
+        graviola::rsa_sizes();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("graviola") {
         graviola::run();
         return;
