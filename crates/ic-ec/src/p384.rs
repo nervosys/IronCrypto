@@ -325,6 +325,19 @@ impl Curve for P384 {
         crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::table_mul(t, windows, scalar))
     }
 
+    /// Verification's joint chain on the formulas' assembly: public inputs
+    /// only, never a secret path (`nist::verify_x86`).
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn mul_double_vartime_fast(
+        g: &[crate::nist::point::AffinePoint<P384>],
+        q: &[crate::nist::point::AffinePoint<P384>],
+        g_naf: &[i8],
+        q_naf: &[i8],
+    ) -> Option<Point> {
+        crate::nist::verify_x86::p384(g, q, g_naf, q_naf)
+    }
+
     fn scalar_reduce_slice(bytes: &[u8]) -> Fn {
         let mut b = [0u8; 48];
         let n = core::cmp::min(48, bytes.len());
@@ -338,6 +351,24 @@ impl Curve for P384 {
 impl ecdsa::EcdsaCurve for P384 {
     type Digest = ic_hash::Sha384;
     type Hmac = ic_mac::HmacSha384;
+
+    /// By divsteps, as the field inverts, on 64-bit targets: 13 us by Fermat
+    /// in the generic ring against about 2 here (Zen 5, MULX/ADX). Constant
+    /// time, though verification's `s` does not need it to be.
+    #[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+    fn invert_public_scalar(s: &Fn) -> Fn {
+        const R3: [u64; 6] = Fn::mont_mul_const(Fn::R2, Fn::R2);
+        Fn(crate::nist::safegcd::invert_384::<FnModulus>(&s.0)).mul(&Fn(R3))
+    }
+}
+
+/// The order, for verification's divsteps.
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+pub(crate) struct FnModulus;
+
+#[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
+impl crate::nist::safegcd::Modulus<7> for FnModulus {
+    const INFO: crate::nist::safegcd::ModInfo<7> = crate::nist::safegcd::ModInfo::new(N);
 }
 
 /// ECDSA over P-384 with SHA-384.

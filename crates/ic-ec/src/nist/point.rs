@@ -145,6 +145,22 @@ pub trait Curve: Sized {
     ) -> Option<Point<Self>> {
         None
     }
+
+    /// The joint chain of [`super::verify::mul_double_vartime`], `a*G + b*Q`
+    /// from two tables of odd multiples and the two scalars' non-adjacent
+    /// forms, where the curve has a faster way to run it; `None` to use the
+    /// loop there. P-256 and P-384 on x86-64 with BMI2 and ADX have one
+    /// (`nist::verify_x86`). **Variable time**: for verification's public
+    /// values only.
+    #[inline(always)]
+    fn mul_double_vartime_fast(
+        _g: &[AffinePoint<Self>],
+        _q: &[AffinePoint<Self>],
+        _g_naf: &[i8],
+        _q_naf: &[i8],
+    ) -> Option<Point<Self>> {
+        None
+    }
 }
 
 /// A point in Jacobian coordinates.
@@ -662,18 +678,19 @@ impl<C: Curve> Point<C> {
 
     /// `a*G + b*P`, for signature verification.
     ///
-    /// Verification operates entirely on public values, so this makes no
-    /// constant-time claim beyond what it inherits from the primitives.
+    /// **Variable time** in `a`, `b` and `p`: verification operates entirely
+    /// on public values, and this branches and indexes on all three. Never
+    /// call it with a secret scalar or point.
     pub fn mul_double(a: &C::Scalar, p: &Self, b: &C::Scalar) -> Self
     where
         C: super::gentable::HasGeneratorTable,
     {
-        // Both halves are public here. The generator gets its table, read by
-        // index and skipping zero digits; the other point gets the
-        // non-adjacent form.
+        // Both halves are public here: one chain of doublings for both, the
+        // generator's odd multiples in a static table, `p`'s built per call;
+        // see `nist::verify`.
         #[cfg(feature = "std")]
         {
-            Self::mul_generator_vartime(a).add_vartime(&p.mul_scalar_vartime(b))
+            super::verify::mul_double_vartime(a, p, b)
         }
         // No table, so the generator costs a full chain of doublings like any
         // other point -- and the two chains can be one.
@@ -689,8 +706,9 @@ impl<C: Curve> Point<C> {
     /// separately runs two chains of doublings, and the doublings are most of
     /// the cost; here each scalar contributes an addition at the positions
     /// where its own width-5 recoding is non-zero, and they share the rest.
-    /// Under `std` the generator's table removes its doublings altogether,
-    /// which is better still, so this is not used there.
+    /// Under `std`, `nist::verify` runs the same chain with a wider static
+    /// table for the generator and affine entries for `P`; this stays as the
+    /// tests' reference there.
     #[cfg(any(not(feature = "std"), test))]
     pub(crate) fn mul_double_vartime(q: &Self, a: &C::Scalar, p: &Self, b: &C::Scalar) -> Self {
         let odd = |base: &Self| {
@@ -772,8 +790,9 @@ impl<C: Curve> Point<C> {
 /// generator table's recoding. So the room is given rather than argued for.
 const WNAF_LIMBS: usize = 10;
 
-/// Digits for the widest scalar: `8 * 66`, with room to run past the top.
-const WNAF_DIGITS: usize = 8 * 66 + 2;
+/// Digits for the widest scalar: `8 * 66`, with room for the carry out of
+/// the top, which lands up to `w <= 8` places above the last digit.
+pub(crate) const WNAF_DIGITS: usize = 8 * 66 + 8;
 
 /// Width-5 non-adjacent form, and how many digits of it are used.
 ///
@@ -783,6 +802,68 @@ const WNAF_DIGITS: usize = 8 * 66 + 2;
 /// Variable time by construction: the loop length and digit pattern depend on
 /// the scalar. See [`Point::mul_scalar_vartime`] for when that is allowed.
 fn wnaf5(bytes: &[u8]) -> ([i8; WNAF_DIGITS], usize) {
+    wnaf_vartime(bytes, 5)
+}
+
+/// Width-`w` non-adjacent form, for `w` from 2 to 8, and how many digits of
+/// it are used: each non-zero digit odd and in `[-(2^(w-1) - 1),
+/// 2^(w-1) - 1]`, with at least `w - 1` zeros after each. `bytes` is
+/// big-endian.
+///
+/// **Variable time**, for public scalars only, as [`wnaf5`]: the loop length
+/// and the digit pattern depend on the scalar.
+///
+/// The scalar is read in place with a carry rather than rewritten: where the
+/// bit at a position plus the carry is even, the digit is zero and the carry
+/// moves up one; otherwise the next `w` bits plus the carry make an odd `v`,
+/// the digit is `v`, or `v - 2^w` with a carry of one when `v` is at least
+/// `2^(w-1)`, and the `w - 1` positions above it are zero. That is the same
+/// recoding as subtracting each digit from the scalar and shifting, which
+/// the tests keep as the reference ([`wnaf_by_subtraction`]); that one took
+/// a microsecond of a P-256 verification for its two recodings.
+pub(crate) fn wnaf_vartime(bytes: &[u8], w: u32) -> ([i8; WNAF_DIGITS], usize) {
+    debug_assert!((2..=8).contains(&w));
+    let w = w as usize;
+    let mut naf = [0i8; WNAF_DIGITS];
+    let mut k = [0u64; WNAF_LIMBS];
+    for (i, byte) in bytes.iter().rev().enumerate() {
+        k[i / 8] |= (*byte as u64) << ((i % 8) * 8);
+    }
+    let bits = 8 * bytes.len();
+    let mut carry = 0u64;
+    let mut bit = 0;
+    let mut len = 0;
+    while bit < bits {
+        let (word, shift) = (bit / 64, bit % 64);
+        if (k[word] >> shift) & 1 == carry {
+            bit += 1;
+            continue;
+        }
+        // The `w` bits from `bit`, which may straddle two limbs; above the
+        // scalar they are zero.
+        let mut v = k[word] >> shift;
+        if shift + w > 64 {
+            v |= k[word + 1] << (64 - shift);
+        }
+        let v = (v & ((1 << w) - 1)) + carry;
+        carry = v >> (w - 1);
+        naf[bit] = (v as i64 - (carry << w) as i64) as i8;
+        len = bit + 1;
+        bit += w;
+    }
+    if carry != 0 {
+        naf[bit] = 1;
+        len = bit + 1;
+    }
+    (naf, len)
+}
+
+/// The recoding [`wnaf_vartime`] must match, as it was computed before it:
+/// take `d = k mods 2^w` where `k` is odd, subtract it, shift.
+#[cfg(test)]
+pub(crate) fn wnaf_by_subtraction(bytes: &[u8], w: u32) -> ([i8; WNAF_DIGITS], usize) {
+    let window = 1u64 << w;
+    let half = window >> 1;
     let mut naf = [0i8; WNAF_DIGITS];
     let mut k = [0u64; WNAF_LIMBS];
     for (i, byte) in bytes.iter().rev().enumerate() {
@@ -792,9 +873,9 @@ fn wnaf5(bytes: &[u8]) -> ([i8; WNAF_DIGITS], usize) {
     let mut i = 0;
     while k.iter().any(|&x| x != 0) {
         if k[0] & 1 == 1 {
-            let mut d = (k[0] & 0x1f) as i64;
-            if d >= 16 {
-                d -= 32;
+            let mut d = (k[0] & (window - 1)) as i64;
+            if d >= half as i64 {
+                d -= window as i64;
             }
             naf[i] = d as i8;
             if d > 0 {
@@ -810,6 +891,7 @@ fn wnaf5(bytes: &[u8]) -> ([i8; WNAF_DIGITS], usize) {
 }
 
 /// `k -= v`.
+#[cfg(test)]
 fn wnaf_sub(k: &mut [u64; WNAF_LIMBS], v: u64) {
     let (d, mut borrow) = k[0].overflowing_sub(v);
     k[0] = d;
@@ -824,6 +906,7 @@ fn wnaf_sub(k: &mut [u64; WNAF_LIMBS], v: u64) {
 }
 
 /// `k += v`.
+#[cfg(test)]
 fn wnaf_add(k: &mut [u64; WNAF_LIMBS], v: u64) {
     let (d, mut carry) = k[0].overflowing_add(v);
     k[0] = d;
@@ -838,6 +921,7 @@ fn wnaf_add(k: &mut [u64; WNAF_LIMBS], v: u64) {
 }
 
 /// `k >>= 1`.
+#[cfg(test)]
 fn wnaf_shr1(k: &mut [u64; WNAF_LIMBS]) {
     for i in 0..WNAF_LIMBS - 1 {
         k[i] = (k[i] >> 1) | (k[i + 1] << 63);

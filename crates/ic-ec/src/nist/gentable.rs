@@ -530,6 +530,12 @@ pub trait HasGeneratorTable: Curve + Sized + 'static {
     /// `scalar * G` for a public scalar: variable time.
     fn mul_generator_vartime(scalar: &Self::Scalar) -> super::point::Point<Self>;
 
+    /// `G, 3G, .., 127G`, affine, for verification's joint chain
+    /// (`nist::verify`); built on first use, or by
+    /// [`Self::prepare_generator_table`]. Public values, read by index.
+    #[cfg(feature = "std")]
+    fn odd_generator_multiples() -> &'static [super::point::AffinePoint<Self>; super::verify::G_ODD];
+
     /// Build the table now rather than on first use. Nothing under `no_std`.
     fn prepare_generator_table();
 
@@ -600,11 +606,26 @@ macro_rules! generator_table_for {
                 $crate::nist::point::Point::<Self>::generator().mul_scalar_vartime(scalar)
             }
 
+            #[cfg(feature = "std")]
+            fn odd_generator_multiples(
+            ) -> &'static [$crate::nist::point::AffinePoint<Self>; $crate::nist::verify::G_ODD]
+            {
+                static ODD: std::sync::OnceLock<
+                    [$crate::nist::point::AffinePoint<$curve>; $crate::nist::verify::G_ODD],
+                > = std::sync::OnceLock::new();
+                ODD.get_or_init(|| {
+                    $crate::nist::verify::odd_multiples_affine_vartime(
+                        &$crate::nist::point::Point::<Self>::generator(),
+                    )
+                })
+            }
+
             fn prepare_generator_table() {
                 #[cfg(feature = "std")]
                 {
                     let (windows, built) = generator_table();
                     $crate::nist::gentable::prepare(windows, built);
+                    Self::odd_generator_multiples();
                 }
             }
 

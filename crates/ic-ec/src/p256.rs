@@ -248,6 +248,19 @@ impl Curve for P256 {
         }
     }
 
+    /// Verification's joint chain on the formulas' assembly: public inputs
+    /// only, never a secret path (`nist::verify_x86`).
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    fn mul_double_vartime_fast(
+        g: &[AffinePoint],
+        q: &[AffinePoint],
+        g_naf: &[i8],
+        q_naf: &[i8],
+    ) -> Option<Point> {
+        crate::nist::verify_x86::p256(g, q, g_naf, q_naf)
+    }
+
     fn scalar_reduce_slice(bytes: &[u8]) -> Fn {
         let mut b = [0u8; 32];
         let n = core::cmp::min(32, bytes.len());
