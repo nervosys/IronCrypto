@@ -78,6 +78,11 @@ X86_ONLY = (
     # its loop tests do not fit the 32-bit counter shapes, so it is not
     # required there.
     "ct_rsa_adx_mont_mul_2048", "ct_rsa_ifma_amm_2048", "ct_rsa_cios_2048",
+    # The secret digit's read of a prepared P-384 key's window, in ECDH. Its
+    # loop over the sixteen entries is excused by the x86-64 rules below, up
+    # to X86_EXCUSE_CEILINGS. The additions after it are the point formulas
+    # above; the multiplication as a whole is not a probe (CONSTANT_TIME.md).
+    "ct_p384_comb_select",
 )
 SYMBOLS += X86_ONLY
 
@@ -133,6 +138,9 @@ X86_EXCUSE_CEILINGS = {
     # loop's back edge, and the zeroing of the 34-word accumulator.
     "ct_rsa_cios_2048": {"counter loop": 4, "unconditional jump": 2,
                          "constant memset": 1},
+    # A prepared P-384 key's window read: the loop over its sixteen entries,
+    # `incq`/`cmpq $16`/`jne` on the entry counter.
+    "ct_p384_comb_select": {"counter loop": 1},
 }
 
 # Loads and stores, which do not set the flags a conditional branch reads, and

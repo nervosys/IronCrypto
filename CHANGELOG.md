@@ -5,6 +5,75 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **Prepared ECDH peer keys for P-256, P-384 and P-521**:
+  `ic_ec::p256::PreparedPublicKey`, `p384::PreparedPublicKey` and
+  `p521::PreparedPublicKey`. `new` takes the peer's SEC1 encoding,
+  compressed or uncompressed, and runs the checks `agree` runs -- length and
+  tag, each coordinate below `p`, the curve equation -- then builds sixteen
+  affine multiples of the point at each of four spacings across the scalar,
+  `Q`, `2^(5m) Q`, `2^(10m) Q`, `2^(15m) Q`, with one inversion per window.
+  `agree(private_key, out)` then does only the scalar multiplication, which
+  shares its five doublings per position between the four windows: about a
+  quarter of the doublings of an unprepared agreement and its mixed
+  additions, over the same signed five-bit digits. Each holds 64 affine
+  points and nothing secret: about 4, 6 and 9 KiB, not allocated, `no_std`.
+  The private key is checked and the secret written exactly as `agree` does.
+  Both refuse with `ModuleErrorState` once the module has failed, a key
+  prepared before the failure included (`tests/error_state.rs`).
+
+  The additions at the last position are complete, and the rest are
+  incomplete by an argument in `nist::gentable::Comb::mul`: an entry and
+  the accumulator differ as integers whenever the digit is not zero, and
+  their magnitudes are below `n` before the last position. That position
+  needs the complete formula, and a test proves it: it searches, on every
+  curve, for scalars where the accumulator meets the entry at the last
+  position, confirmed by the recoding, and fails if that addition is made
+  incomplete. Tests compare the prepared agreement with `agree` byte for
+  byte on random keys, compressed and uncompressed, and on edge private
+  keys (`1..=40`, `n - 40..=n - 1`, every window boundary); the comb with
+  the double-and-add ladder; and Wycheproof's ECDH cases on all three
+  curves run through it too, refused where `agree` refuses and the same
+  secret where it agrees. Skipping the curve-equation check in `new`,
+  spacing the windows one doubling short, writing each entry's `y` with the
+  wrong power of `Z`, or making the last position incomplete each fails
+  them.
+
+  A probe, `ct_p384_comb_select`, holds the secret digit's read of a
+  prepared window to the compiled-code gate on x86-64: 35 probes on x86-64
+  alone, 79 there, 211 gating probe/target checks. Its one loop, over the
+  sixteen entries, is excused by the counter-loop rule with a ceiling of
+  one; a branch on the digit fails it, and so does a second pass. The
+  multiplication as a whole is not probed (docs/CONSTANT_TIME.md,
+  "Prepared ECDH public keys").
+
+### Performance
+
+- **ECDH with a prepared peer key takes about 40 percent of the time** of
+  an agreement from key bytes, on P-256, P-384 and P-521 alike. Measured
+  in-process, the two interleaved over twenty rounds on a loaded machine,
+  best of each (x86-64, Zen 5): P-256 34.9 to 13.9 us, P-384 121.8 to 48.6
+  us, P-521 731 to 309 us; preparing a key cost 33, 107 and 751 us, about
+  one agreement. Against Graviola 0.4.1 in the same runs, P-384 ECDH with
+  the key prepared on both sides runs at 1.74 to 2.78 times Graviola's rate
+  across nine rounds, and P-256 at 2.20 to 2.64 across three; from key
+  bytes, each library parsing per call, P-384 is level, 0.89 to 1.39.
+  Graviola's parsed key is sixteen Jacobian points built in about 4 us;
+  this one is sixty-four affine points built in about one agreement, so the
+  prepared row is a trade of memory and set-up for speed, not like for like
+  (docs/GRAVIOLA.md). New bench rows give both comparisons: each library
+  parsing per call, and each with its key prepared.
+
+  Unprepared operations are unchanged: an A/B of the build before and
+  after, alternated over ten rounds, put P-256, P-384 and P-521 ECDH,
+  signing and verification each at parity (medians 0.98 to 1.08). An
+  affine window with mixed additions inside the unprepared multiplication
+  was tried: level on P-256 and P-384 (best of 30 interleaved rounds, 32.4
+  against 32.2 us and 111.6 against 110.7 us), slower on P-521 (658 against
+  622 us), where the window's inversion costs more than the cheaper
+  additions save. It was not kept.
+
 ### Changed
 
 - **RSA key generation draws each Miller-Rabin base at random**, as FIPS

@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and thirty-four more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and thirty-five more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -80,6 +80,10 @@ release profile; this is not the workspace binary's overflow-checked profile.
   products loop over the width, and their loop branches are excused by the
   x86-64 counter-loop rule, per probe, up to a ceiling. See "Loops on
   x86-64" below.
+- On x86-64 only, the window read of a prepared P-384 public key in ECDH
+  (`ct_p384_comb_select`): a secret digit's masked read of sixteen affine
+  entries and the conditional negation. See "Prepared ECDH public keys"
+  below.
   `X86_ONLY` in the checker requires all of these on that target and no other.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
@@ -549,6 +553,7 @@ loop has to arrive as a change that someone then reads.
 | `ct_rsa_adx_mont_mul_2048` | 4 | 2 | 1 |
 | `ct_rsa_ifma_amm_2048` | 1 | 0 | 0 |
 | `ct_rsa_cios_2048` | 4 | 2 | 1 |
+| `ct_p384_comb_select` | 1 | 0 | 0 |
 
 Each excused finding, read in `target/ct-audit/probes/x86_64-unknown-linux-gnu.s`:
 
@@ -640,3 +645,57 @@ Restored, all 78 pass.
 Probe count: thirty-four on x86-64 alone, where there were thirty-one. All
 seventy-eight pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 78 + 3 x 44 = 210 gating probe/target checks.
+
+## Prepared ECDH public keys, 2026-10-13
+
+`p256::PreparedPublicKey`, `p384::PreparedPublicKey` and
+`p521::PreparedPublicKey` hold sixteen affine multiples of the peer's point
+at each of four spacings (`nist::gentable::Comb`), and an agreement through
+one is `Comb::mul`: the private scalar recoded into signed five-bit digits as
+for `Point::mul_scalar`, then, for each position, five doublings and one
+mixed addition per window. Every loop in it runs over a count fixed by the
+curve, and the one test on the position (`i < n`, past the top digit) is on
+the loop index. What sees the secret is each digit's read of its window and
+the addition that follows.
+
+`ct_p384_comb_select` is that read, on x86-64: `AffineWindow::select` on a
+prepared P-384 window, the digit a runtime argument. It reads all sixteen
+entries under masks made from the digit's magnitude, through the SSE2 scan
+P-384 already uses for its generator table, and negates `y` by a
+conditional move for a negative digit. One finding, excused as a counter
+loop (ceiling 1): `incq %rax; cmpq $16, %rax; jne`, the scan's loop over the
+sixteen entries, rax set to zero before it and written nowhere else in it.
+The masks are read from the stack at that counter; nothing is indexed by the
+digit.
+
+Two mutations, each restored afterwards:
+
+- `if magnitude & 1 != 0 { black_box(&masks) }` in `select`: fails
+  `ct_p384_comb_select: je .LBB54_2`.
+- A second masked pass over the entries in `select`: fails
+  `ct_p384_comb_select: 2 findings excused as counter loop, more than the 1
+  reviewed`. (A pass that only touched each entry was unrolled and added no
+  loop.)
+
+### Not covered
+
+- **The multiplication as a whole, and the addition after the read.** A
+  probe of one step -- the read and `AffineWindow::add_to`'s mixed
+  addition -- was built and read, and is not in the gate. The probe build
+  has no `std` and no BMI2/ADX target feature, so it selects P-384's generic
+  field, whose multiplication and squaring keep their six-row word loop
+  rolled; the row counter is spilled to the stack and the register reused
+  inside the loop, then reloaded before `cmpq $6`, and the rule rightly
+  cannot prove a counter it does not see stepped. Those loops are on a
+  constant count. On a CPU with BMI2 and ADX, which is where P-384 runs in
+  practice, the additions and doublings are the assembly blocks probed as
+  `ct_p384_point_add_affine_adx`, `ct_p384_point_add_adx` and
+  `ct_p384_point_double_adx`, and the complete addition at the last position
+  is made of those. The scalar's recoding (`signed_digits_w`), shared with
+  `Point::mul_scalar` and the generator table, is not probed either.
+- **P-256 and P-521's prepared keys** are the same generic code over other
+  fields, and are not probed separately.
+
+Probe count: thirty-five on x86-64 alone, where there were thirty-four. All
+seventy-nine pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 79 + 3 x 44 = 211 gating probe/target checks.

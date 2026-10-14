@@ -165,6 +165,20 @@ pub fn run() {
         std::hint::black_box(gp_sk.diffie_hellman(&gp_pk).unwrap());
     });
     verdict("p-256 ecdh", p1, p2, false);
+    // Like for like, both ways. The row above parses Graviola's public key
+    // once, outside the loop, and IronCrypto's on every call. Below, each
+    // parses it per call, and then each prepares it once.
+    let p3 = per_op("graviola p-256 ecdh, key parsed per call", 1000, 5, || {
+        let pk = graviola::key_agreement::p256::PublicKey::from_x962_uncompressed(&p_pk).unwrap();
+        std::hint::black_box(gp_sk.diffie_hellman(&pk).unwrap());
+    });
+    verdict("p-256 ecdh, from bytes", p1, p3, false);
+    let ic_prepared = ironcrypto::ec::p256::PreparedPublicKey::new(&p_pk).unwrap();
+    let p4 = per_op("ironcrypto p-256 ecdh, key prepared", 1000, 5, || {
+        ic_prepared.agree(&p_sk, &mut p_shared).unwrap();
+    });
+    assert_eq!(gp_sk.diffie_hellman(&gp_pk).unwrap().0, p_shared);
+    verdict("p-256 ecdh, key prepared", p4, p2, false);
 
     let msg = b"benchmark message";
     let mut p_sig = [0u8; 64];
@@ -355,6 +369,31 @@ pub fn p384() {
     });
     assert_eq!(gq_sk.diffie_hellman(&gq_pk).unwrap().0, q_shared);
     verdict("p-384 ecdh", q1, q2, false);
+    // Like for like, both ways: each library parsing the key per call, then
+    // each with the key prepared once. Graviola's parsed key holds sixteen
+    // Jacobian multiples; IronCrypto's prepared one holds sixty-four affine
+    // ones, at four spacings, so it is a bigger table bought with more work
+    // up front (about one agreement's).
+    let q3 = per_op("graviola p-384 ecdh, key parsed per call", 500, 5, || {
+        let pk = graviola::key_agreement::p384::PublicKey::from_x962_uncompressed(&q_pk).unwrap();
+        std::hint::black_box(gq_sk.diffie_hellman(&pk).unwrap());
+    });
+    verdict("p-384 ecdh, from bytes", q1, q3, false);
+    let ic_prepared = ironcrypto::ec::p384::PreparedPublicKey::new(&q_pk).unwrap();
+    let q4 = per_op("ironcrypto p-384 ecdh, key prepared", 500, 5, || {
+        ic_prepared.agree(&q_sk, &mut q_shared).unwrap();
+    });
+    assert_eq!(gq_sk.diffie_hellman(&gq_pk).unwrap().0, q_shared);
+    verdict("p-384 ecdh, key prepared", q4, q2, false);
+    let q5 = per_op("ironcrypto p-384 preparing a key", 500, 5, || {
+        std::hint::black_box(ironcrypto::ec::p384::PreparedPublicKey::new(&q_pk).unwrap());
+    });
+    let q6 = per_op("graviola p-384 parsing a key", 500, 5, || {
+        std::hint::black_box(
+            graviola::key_agreement::p384::PublicKey::from_x962_uncompressed(&q_pk).unwrap(),
+        );
+    });
+    verdict("p-384 key preparation", q5, q6, false);
 
     let mut q_sig = [0u8; 96];
     let f1 = per_op("ironcrypto ecdsa p-384 sign", 500, 5, || {

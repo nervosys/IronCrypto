@@ -319,6 +319,13 @@ impl SelfTest for EcdhP521 {
 pub type Point = crate::nist::point::Point<P521>;
 /// A P-521 point in affine coordinates.
 pub type AffinePoint = crate::nist::point::AffinePoint<P521>;
+/// A peer's P-521 public key for [`EcdhP521`], decoded, validated and
+/// expanded once: `new` takes its SEC1 encoding and refuses what
+/// [`EcdhP521`]'s `agree` would refuse; `agree` takes a private key and
+/// writes the 66-byte shared secret, doing only the scalar multiplication
+/// in about 40 percent of the time of an unprepared agreement. About 9 KiB, not
+/// allocated.
+pub type PreparedPublicKey = crate::nist::ecdh::PreparedPublicKey<P521>;
 
 #[cfg(test)]
 mod tests {

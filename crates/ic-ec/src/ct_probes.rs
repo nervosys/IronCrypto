@@ -196,6 +196,33 @@ pub fn p384_fp_invert(a: &[u64; 6]) -> [u64; 6] {
     crate::nist::safegcd::invert_384::<crate::p384::FpModulus>(a)
 }
 
+/// A P-384 public key prepared for ECDH, for [`p384_comb_select`].
+#[cfg(target_arch = "x86_64")]
+pub struct P384Comb(crate::nist::gentable::Comb<crate::p384::P384>);
+
+/// Prepare a P-384 public key, SEC1 uncompressed, as
+/// `p384::PreparedPublicKey::new` does; `None` if it is not a curve point.
+/// Public input, so not itself a probe.
+#[cfg(target_arch = "x86_64")]
+pub fn p384_comb_new(public_key: &[u8; 97]) -> Option<P384Comb> {
+    let q = crate::nist::point::AffinePoint::<crate::p384::P384>::from_sec1(public_key)?;
+    Some(P384Comb(crate::nist::gentable::Comb::new(
+        &crate::nist::point::Point::from_affine(&q),
+    )))
+}
+
+/// The read each digit of a prepared P-384 key's multiplication makes, the
+/// digit secret: `digit * Q` from the prepared key's first window, affine,
+/// every entry read under a mask and the `y` negated by a move for a
+/// negative digit; `(0, 0)` for a zero digit. The windows differ only in
+/// their entries. Coordinates out as words.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub fn p384_comb_select(comb: &P384Comb, digit: i8, out: &mut [[u64; 6]; 2]) {
+    let (x, y) = comb.0.first_window().select(digit);
+    *out = [x.0, y.0];
+}
+
 /// P-256's two inversions by divsteps, the same way: the field's, on ECDH's
 /// and every public key's `Z`, and the scalar ring's, on ECDSA's secret
 /// nonce.
