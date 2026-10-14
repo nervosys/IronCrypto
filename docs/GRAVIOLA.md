@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation, P-256 and P-384 ECDH from key bytes | without AVX-512, AES-GCM at 1 KiB and 4 MiB, X25519, Ed25519 and RSA-2048 fall behind (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation, P-256 and P-384 ECDH from key bytes | without AVX-512, AES-GCM at 1 KiB and 4 MiB, X25519 and Ed25519 fall behind, and RSA-4096 signing is level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -175,9 +175,11 @@ Where it is not ahead:
   GHASH run one after the other, not a fused kernel like x86-64's.
 - **CPUs without AVX-512.** Measured on the same Zen 5 machine with
   `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
-  below). Without them, AES-GCM at 1 KiB and 4 MiB, X25519 and RSA-2048 fall
-  behind Graviola, Ed25519 drops to parity or behind, and ChaCha20-Poly1305
-  and ECDSA P-384 keep a lead, the ChaCha20 one smaller. Graviola needs only AVX2 and ADX, so it is the
+  below). Without them, AES-GCM at 1 KiB and 4 MiB and X25519 fall behind
+  Graviola, Ed25519 drops to parity or behind, and ChaCha20-Poly1305 and
+  ECDSA P-384 keep a lead, the ChaCha20 one smaller. RSA, behind before the
+  MULX/ADX backend was rewritten, now leads at 2048 and 3072 bits and is
+  level at 4096-bit signing (the RSA table below). Graviola needs only AVX2 and ADX, so it is the
   fair comparison on such a CPU.
 
 ### Without AVX-512
@@ -205,8 +207,8 @@ IronCrypto faster). The machine was loaded by other jobs.
 | P-384 ECDH | 0.76-0.77 | 0.69-1.26 |
 | ECDSA P-384 sign | 2.31-2.59 | 2.26-2.32 |
 | ECDSA P-384 verify | 1.08-1.23 | 1.26-1.66 |
-| RSA-2048 PKCS#1 v1.5 sign | 0.64-0.68 | 1.16-1.36 |
-| RSA-2048 PKCS#1 v1.5 verify | 0.68-0.78 | 1.16-1.25 |
+| RSA-2048 PKCS#1 v1.5 sign | 0.64-0.68, before the rewrite below | 1.16-1.36 |
+| RSA-2048 PKCS#1 v1.5 verify | 0.68-0.78, before the rewrite below | 1.16-1.25 |
 | SHA-512, 4 MiB | 1.47-1.86 | 1.60-2.23 |
 | ML-KEM-768 encapsulate, key prepared (control) | 1.74-2.15 | 1.80-2.00 |
 | SHA-256, 4 MiB (control) | 0.92-1.20 | 0.95-0.98 |
@@ -222,6 +224,33 @@ spread. ML-KEM encapsulation from key bytes was left out of the table: these
 rounds used the earlier bench row that set it against a Graviola key parsed
 once, which is not like for like (see the last run above for the corrected
 rows).
+
+#### RSA, after the MULX/ADX rewrite
+
+`RUSTFLAGS="--cfg ic_no_avx512" cargo run --release -- graviola-rsa`, which
+runs PKCS#1 v1.5 with SHA-256 at 2048, 3072 and 4096 bits on one key loaded
+into both libraries. Master's binary and the rewritten backend's alternated,
+three rounds, on a Zen 5 that other jobs held near full load; each cell is
+IronCrypto's rate over Graviola's within a run, as the range across rounds
+(CHANGELOG.md has the design and the instruction counts):
+
+| operation | master | MULX/ADX rewritten |
+|---|---|---|
+| RSA-2048 sign | 0.56-0.69 | 1.08-1.28 |
+| RSA-2048 verify | 0.67-0.69 | 1.04-1.42 |
+| RSA-3072 sign | 1.61-1.84 | 2.45-3.03 |
+| RSA-3072 verify | 1.70-1.92 | 2.79-3.49 |
+| RSA-4096 sign | 0.65-0.71 | 1.02-1.11 |
+| RSA-4096 verify | 1.68-2.00 | 2.59-3.45 |
+
+RSA-4096 signing is level, not ahead: earlier rounds on the branch read
+0.95 to 1.07. Its primes are 32 words, where Graviola squares with one
+level of Karatsuba (`bignum_ksqr_32_64`, 408 `mulx` against 528 here). At
+16 words, RSA-2048's primes, both libraries square with 136 `mulx` and
+reduce the same way; the lead there comes from fewer instructions around
+them. At 3072 bits Graviola has no kernel specialised to 24-word primes.
+Verification at 2048 bits leads by less than signing, 1.04 at the low
+end, and is the row closest to parity after 4096-bit signing.
 
 Graviola's own paths are the same in both columns, since it does not use
 AVX-512. The AVX2 column is a Zen 5 with AVX-512 switched off, not an older

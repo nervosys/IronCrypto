@@ -115,6 +115,50 @@ all of them.
   622 us), where the window's inversion costs more than the cheaper
   additions save. It was not kept.
 
+- **RSA on x86-64 without AVX-512 IFMA: about 1.8 times faster, and now
+  ahead of Graviola at 2048 and 3072 bits.** The MULX/ADCX/ADOX backend
+  (`ic-rsa/src/uint/x86.rs`) was the interleaved kernel, two passes a row
+  through memory, with squaring done as multiplication. Now: at 16 words,
+  the primes of RSA-2048, a straight-line product and square with a zero
+  register for closing each step's carry chains; at the other multiples of
+  eight, the product or square in full and then the reduction, both from
+  blocks of eight words kept in r8-r15, each step eight `mulx` on two
+  `adcx`/`adox` chains that end inside it; a square of its own, each cross
+  product once; no clearing of the scratch, the first block writing and the
+  rest adding; the final conditional subtraction in assembly by mask, where
+  the `u128` borrows in Rust cost about 250 instructions a product; and the
+  exponentiation's table read as an SSE2 masked scan, 636 instructions a
+  window instead of 1,147. Callgrind counts 2.66 million instructions for a
+  1024-bit exponentiation on this backend, against 3.22 million after the
+  first rewrite step alone. The diagnosis that led here: each step is
+  bound by the execution resources `mulx` and the additions share, not by
+  a dependency, so what paid was fewer instructions per product; s2n-bignum
+  (Graviola) has the same step shape and the same 136 `mulx` per 1024-bit
+  square, and a 5-bit window or Karatsuba at 16 words did not pay by count.
+
+  Measured with `RUSTFLAGS="--cfg ic_no_avx512" cargo run --release --
+  graviola-rsa` (a new bench subcommand: RSA at 2048, 3072 and 4096 bits),
+  master's binary and this one alternated, three rounds, on a Zen 5 that
+  other jobs held near full load; IronCrypto's rate over Graviola's within
+  each run:
+
+  | | master | this change |
+  |---|---|---|
+  | RSA-2048 sign | 0.56-0.69 | 1.08-1.28 |
+  | RSA-2048 verify | 0.67-0.69 | 1.04-1.42 |
+  | RSA-3072 sign | 1.61-1.84 | 2.45-3.03 |
+  | RSA-3072 verify | 1.70-1.92 | 2.79-3.49 |
+  | RSA-4096 sign | 0.65-0.71 | 1.02-1.11 |
+  | RSA-4096 verify | 1.68-2.00 | 2.59-3.45 |
+
+  IronCrypto's own RSA-2048 signature went from 612-681 us to 314-397 us
+  in the same runs. Earlier rounds on the branch put RSA-4096 signing at
+  0.95 to 1.07: that row is parity, not a lead. At 32 words Graviola uses
+  one level of Karatsuba (408 `mulx` per square against 528 here), which
+  the leaner subtraction and table read here roughly offset. The default
+  build, with IFMA, is unchanged within the noise: its exponentiation does
+  not use these kernels, and its few single products do, faster.
+
 ### Changed
 
 - **The ontology reports `hardware-accelerated` on AArch64** when the
