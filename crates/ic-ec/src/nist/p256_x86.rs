@@ -359,7 +359,7 @@ pub(crate) fn point_double(x: &[u64; 4], y: &[u64; 4], z: &[u64; 4]) -> Option<[
     if !has_adx() {
         return None;
     }
-    let mut buf = slots::<56>(&[x, y, z]);
+    let mut buf = slots::<60>(&[x, y, z]);
     // SAFETY: the CPU has BMI2 and ADX; the formula writes X3, Y3, Z3, slots
     // 3 to 5.
     unsafe {
@@ -379,7 +379,7 @@ pub(crate) fn point_add(
     if !has_adx() {
         return None;
     }
-    let mut buf = slots::<84>(&[p[0], p[1], p[2], q[0], q[1], q[2]]);
+    let mut buf = slots::<96>(&[p[0], p[1], p[2], q[0], q[1], q[2]]);
     // SAFETY: the CPU has BMI2 and ADX; the formula writes X3, Y3, Z3, H, R,
     // slots 6 to 10.
     unsafe {
@@ -400,13 +400,237 @@ pub(crate) fn point_add_affine(
     if !has_adx() {
         return None;
     }
-    let mut buf = slots::<72>(&[p[0], p[1], p[2], q[0], q[1]]);
+    let mut buf = slots::<80>(&[p[0], p[1], p[2], q[0], q[1]]);
     // SAFETY: the CPU has BMI2 and ADX; the formula writes X3, Y3, Z3, H, R,
     // slots 5 to 9.
     unsafe {
         super::p256_x86_point::add_affine_adx(&mut buf);
         let [h, r] = read(&buf, 8);
         Some((read(&buf, 5), h, r))
+    }
+}
+
+/// Words of the buffer [`mul_scalar`] keeps: the addition's slots, the most
+/// of any formula it runs. The doubling in place uses a prefix of it.
+pub(crate) const LADDER: usize = 96;
+
+/// `scalar * p`, as `Point::mul_scalar_generic` computes it -- the same
+/// digits, window, doublings and additions, so the same words -- on one
+/// buffer kept for the whole multiplication; `None` without BMI2 and ADX.
+///
+/// The accumulator lives in the buffer's first three slots, where both
+/// `double_in_place_adx` and `add_adx` read it, so the five doublings of a
+/// digit run back to back on it in place, and nothing is copied in or out
+/// but each digit's entry and the addition's result. The generic loop moves
+/// every point through a fresh buffer per formula. `p384_x86::mul_scalar`
+/// is the same loop over P-384's formulas.
+///
+/// The additions are `Point::add_unequal`'s, and the argument there for why
+/// they may be incomplete holds unchanged: this is that loop. The identity
+/// cases are its selections, on the same masks, behind the same barrier.
+/// The last addition is the complete one, on `Point`.
+pub(crate) fn mul_scalar(
+    p: &crate::nist::point::Point<crate::p256::P256>,
+    scalar: &<crate::p256::P256 as crate::nist::point::Curve>::Scalar,
+) -> Option<crate::nist::point::Point<crate::p256::P256>> {
+    use super::gentable::{digit_count, signed_digits_w, Window, WIDTH};
+    use crate::nist::arith::Field;
+    use crate::nist::point::Point;
+    use crate::p256::Fp;
+    if !has_adx() {
+        return None;
+    }
+    let bytes = scalar.to_bytes();
+    let bytes = bytes.as_ref();
+    let digits = signed_digits_w(bytes, WIDTH);
+    let n = digit_count(bytes.len(), WIDTH);
+    let window = Window::new(p);
+
+    let mut buf = [const { MaybeUninit::uninit() }; LADDER];
+    let put = |buf: &mut [MaybeUninit<u64>; LADDER], slot: usize, q: &Point<crate::p256::P256>| {
+        for (k, c) in [q.x(), q.y(), q.z()].iter().enumerate() {
+            for (j, w) in c.0.iter().enumerate() {
+                buf[4 * (slot + k) + j].write(*w);
+            }
+        }
+    };
+    put(&mut buf, 0, &window.select(digits[n - 1]));
+    let doublings = |buf: &mut [MaybeUninit<u64>; LADDER]| {
+        let ip: &mut [MaybeUninit<u64>; 48] = (&mut buf[..48])
+            .try_into()
+            .expect("the doubling's slots are a prefix of the buffer");
+        for _ in 0..WIDTH {
+            // SAFETY: the CPU has BMI2 and ADX; X, Y and Z, slots 0 to 2,
+            // hold the accumulator, every coordinate below p.
+            unsafe { super::p256_x86_point::double_in_place_adx(ip) };
+        }
+    };
+    for i in (1..n - 1).rev() {
+        // The scan first: it does not depend on the accumulator.
+        let entry = window.select(digits[i]);
+        doublings(&mut buf);
+        // SAFETY: the CPU has BMI2 and ADX, and slots 0 to 2 hold the
+        // accumulator.
+        unsafe { ladder_add(&mut buf, &entry) };
+    }
+    doublings(&mut buf);
+    // SAFETY: slots 0 to 2 are written.
+    let [x, y, z] = unsafe { read::<LADDER, 3>(&buf, 0) };
+    let acc = Point::from_coordinates(Fp(x), Fp(y), Fp(z));
+    Some(acc.add(&window.select(digits[0])))
+}
+
+/// Words of the buffer [`table_mul`] keeps: the mixed addition's slots.
+// Without `std` there is no table, and only the probes read this.
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
+pub(crate) const TABLE: usize = 80;
+
+/// `scalar * G` from the generator table, as `gentable::mul_generic`
+/// computes it -- the same digits, entries and additions, so the same words
+/// -- on one buffer kept for the whole multiplication; `None` without BMI2
+/// and ADX.
+///
+/// The accumulator lives in the buffer's first three slots, where
+/// `add_affine_adx` reads it, and each digit's entry is written beside it:
+/// nothing else moves per digit. The incomplete additions are
+/// `Point::add_affine_unequal_or_keep`'s, on the same masks behind the same
+/// barrier, for the windows `gentable::mul` shows cannot meet an equal
+/// point; the complete ones that follow are its own, on `Point`.
+#[cfg(feature = "std")]
+pub(crate) fn table_mul<const E: usize>(
+    windows: &crate::nist::gentable::Windows<crate::p256::P256, E>,
+    scalar: &<crate::p256::P256 as crate::nist::point::Curve>::Scalar,
+) -> Option<crate::nist::point::Point<crate::p256::P256>> {
+    use super::gentable::{digit_count, signed_digits_w, width, window};
+    use crate::nist::arith::Field;
+    use crate::nist::point::{Curve, Point};
+    use crate::p256::{Fp, P256};
+    if !has_adx() {
+        return None;
+    }
+    let w = width::<E>();
+    let bytes = scalar.to_bytes();
+    let digits = signed_digits_w(bytes.as_ref(), w);
+    let n = digit_count(bytes.as_ref().len(), w);
+    // The first window whose addition must be complete: public, from the
+    // curve and the width.
+    let first_complete = (0..n)
+        .find(|&i| w * (i + 1) >= P256::ORDER_BITS)
+        .unwrap_or(n);
+
+    let mut buf = [const { MaybeUninit::uninit() }; TABLE];
+    let put = |buf: &mut [MaybeUninit<u64>; TABLE], slot: usize, words: &[u64; 4]| {
+        for (j, x) in words.iter().enumerate() {
+            buf[4 * slot + j].write(*x);
+        }
+    };
+    let identity = Point::<P256>::identity();
+    put(&mut buf, 0, &identity.x().0);
+    put(&mut buf, 1, &identity.y().0);
+    put(&mut buf, 2, &identity.z().0);
+    for (i, &digit) in digits.iter().enumerate().take(first_complete) {
+        let (x, y) = window(windows, i).select(digit);
+        // SAFETY: the CPU has BMI2 and ADX, and slots 0 to 2 hold the
+        // accumulator.
+        unsafe { table_add(&mut buf, &x.0, &y.0, digit) };
+    }
+    // SAFETY: slots 0 to 2 are written.
+    let [x, y, z] = unsafe { read::<TABLE, 3>(&buf, 0) };
+    let mut acc = Point::from_coordinates(Fp(x), Fp(y), Fp(z));
+    for (i, &digit) in digits.iter().enumerate().take(n).skip(first_complete) {
+        acc = window(windows, i).add_to(&acc, digit, true);
+    }
+    Some(acc)
+}
+
+/// One digit's addition in [`mul_scalar`], after its doublings: `entry`,
+/// the window's multiple for the digit, added to the accumulator in slots 0
+/// to 2 by the Jacobian addition, and the identity cases selected as
+/// `Point::add_unequal` selects them -- an entry at infinity keeps the
+/// accumulator, the accumulator at infinity takes the entry -- both tests
+/// behind one barrier. The `ct_p256_ladder_add` probe is this and the
+/// entry's read.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX, and slots 0 to 2 must hold a point,
+/// every coordinate below p.
+#[inline(always)]
+pub(crate) unsafe fn ladder_add(
+    buf: &mut [MaybeUninit<u64>; LADDER],
+    entry: &crate::nist::point::Point<crate::p256::P256>,
+) {
+    use crate::nist::arith::{select, Field};
+    use crate::p256::Fp;
+    for (k, c) in [entry.x(), entry.y(), entry.z()].iter().enumerate() {
+        for (j, w) in c.0.iter().enumerate() {
+            buf[4 * (3 + k) + j].write(*w);
+        }
+    }
+    // SAFETY: the caller guarantees the instructions and slots 0 to 2;
+    // slots 3 to 5 are written above, below p. The formula writes X3, Y3,
+    // Z3, slots 6 to 8.
+    unsafe { super::p256_x86_point::add_adx(buf) };
+    // SAFETY: slots 0 to 8 are written.
+    let [ax, ay, az, ex, ey, ez, sx, sy, sz] = unsafe { read::<LADDER, 9>(buf, 0) };
+    let [entry_inf, acc_inf] = core::hint::black_box([Fp(ez).zero_mask(), Fp(az).zero_mask()]);
+    for (k, (a, (e, s))) in [ax, ay, az]
+        .iter()
+        .zip([ex, ey, ez].iter().zip([sx, sy, sz].iter()))
+        .enumerate()
+    {
+        let r = select(acc_inf, *e, select(entry_inf, *a, *s));
+        for (j, w) in r.iter().enumerate() {
+            buf[4 * k + j].write(*w);
+        }
+    }
+}
+
+/// One digit's addition in [`table_mul`]: `(x, y)`, the window's entry for
+/// `digit`, added to the accumulator in slots 0 to 2 by the mixed addition,
+/// and the identity cases selected as `Point::add_affine_unequal_or_keep`
+/// selects them -- the accumulator at infinity takes the entry, a zero
+/// digit keeps the accumulator -- both tests behind one barrier. The
+/// `ct_p256_table_add` probe is this and the entry's read.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX, and slots 0 to 2 must hold a point,
+/// every coordinate below p.
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
+#[inline(always)]
+pub(crate) unsafe fn table_add(
+    buf: &mut [MaybeUninit<u64>; TABLE],
+    x: &[u64; 4],
+    y: &[u64; 4],
+    digit: i8,
+) {
+    use crate::nist::arith::{select, Field};
+    use crate::p256::Fp;
+    let put = |buf: &mut [MaybeUninit<u64>; TABLE], slot: usize, w: &[u64; 4]| {
+        for (j, v) in w.iter().enumerate() {
+            buf[4 * slot + j].write(*v);
+        }
+    };
+    put(buf, 3, x);
+    put(buf, 4, y);
+    // SAFETY: the caller guarantees the instructions and slots 0 to 2;
+    // slots 3 and 4 are written above, below p. The formula writes X3, Y3,
+    // Z3, slots 5 to 7.
+    unsafe { super::p256_x86_point::add_affine_adx(buf) };
+    // SAFETY: slots 0 to 7 are written.
+    let [ax, ay, az, _, _, sx, sy, sz] = unsafe { read::<TABLE, 8>(buf, 0) };
+    // All ones for a zero digit, which adds the identity: as in
+    // `AffineWindow::add_to`.
+    let keep = ((digit as u8 as u64).wrapping_sub(1) >> 63).wrapping_neg();
+    let [acc_inf, keep] = core::hint::black_box([Fp(az).zero_mask(), keep]);
+    let lifted = [*x, *y, Fp::ONE.0];
+    for (k, (a, (l, s))) in [ax, ay, az]
+        .iter()
+        .zip(lifted.iter().zip([sx, sy, sz].iter()))
+        .enumerate()
+    {
+        put(buf, k, &select(keep, *a, select(acc_inf, *l, *s)));
     }
 }
 
@@ -1176,6 +1400,191 @@ mod tests {
                 want = rust::add(want, a);
             }
             assert_eq!(times(k, a), want, "{k} * {a:x?}");
+        }
+    }
+
+    /// The doubling's fused operations, `cm * a - dm * b`, against repeated
+    /// generic additions and subtractions: on every pair of edges, on a
+    /// million random pairs, and on inputs built to take each side of the
+    /// fold (`fold_edges`), where the sum with `(t + 1)(2^256 - p)` carries
+    /// out of the top word and where it just fails to.
+    #[test]
+    fn the_fused_operations_agree_with_repeated_additions() {
+        if !has_adx() {
+            return;
+        }
+        let cms = |cm: u64, dm: u64, a: [u64; 4], b: [u64; 4]| -> [u64; 4] {
+            let mut buf = [const { MaybeUninit::uninit() }; 12];
+            for i in 0..4 {
+                buf[i].write(a[i]);
+                buf[4 + i].write(b[i]);
+            }
+            // SAFETY: the CPU has BMI2 and ADX; the formula reads slots 0
+            // and 1, written above, and writes slot 2, read below.
+            unsafe {
+                use crate::nist::p256_x86_point as f;
+                match (cm, dm) {
+                    (3, 8) => f::cms_3_8_adx(&mut buf),
+                    (4, 1) => f::cms_4_1_adx(&mut buf),
+                    _ => f::cms_12_9_adx(&mut buf),
+                }
+                read::<12, 3>(&buf, 0)[2]
+            }
+        };
+        let want = |cm: u64, dm: u64, a: [u64; 4], b: [u64; 4]| -> [u64; 4] {
+            let mut r = [0u64; 4];
+            for _ in 0..cm {
+                r = rust::add(r, a);
+            }
+            for _ in 0..dm {
+                r = rust::sub(r, b);
+            }
+            r
+        };
+        let mut checked = 0usize;
+        let mut sides = [0usize; 2];
+        for (cm, dm) in [(3u64, 8u64), (4, 1), (12, 9)] {
+            for (a, b, carries) in crate::nist::fold_edges::cases(&P, cm, dm) {
+                let (a, b) = ([a[0], a[1], a[2], a[3]], [b[0], b[1], b[2], b[3]]);
+                assert_eq!(
+                    cms(cm, dm, a, b),
+                    want(cm, dm, a, b),
+                    "{cm} {a:x?} - {dm} {b:x?}"
+                );
+                sides[usize::from(carries)] += 1;
+            }
+        }
+        assert!(sides[0] > 20 && sides[1] > 20, "{sides:?}");
+        let pm1 = [P[0] - 1, P[1], P[2], P[3]];
+        let edges = [
+            [0u64; 4],
+            [1, 0, 0, 0],
+            [2, 0, 0, 0],
+            pm1,
+            [P[0] - 2, P[1], P[2], P[3]],
+        ];
+        let mut state = 0xc35_u64;
+        let mut pairs: std::vec::Vec<([u64; 4], [u64; 4])> = std::vec::Vec::new();
+        for a in edges {
+            for b in edges {
+                pairs.push((a, b));
+            }
+        }
+        for i in 0..1 << 18 {
+            let s = i % 2 == 1;
+            pairs.push((operand(&mut state, s), operand(&mut state, s)));
+        }
+        for (a, b) in pairs {
+            for (cm, dm) in [(3u64, 8u64), (4, 1), (12, 9)] {
+                assert_eq!(
+                    cms(cm, dm, a, b),
+                    want(cm, dm, a, b),
+                    "{cm} {a:x?} - {dm} {b:x?}"
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 1 << 18);
+    }
+
+    /// The doubling in place against `Point::double_formula`, word for
+    /// word, on points with `Z` far from one and on arbitrary coordinates,
+    /// and run twice over, as the loop runs it.
+    #[test]
+    fn the_doubling_in_place_is_the_formula() {
+        use crate::nist::point::Point;
+        use crate::p256::{Fp, P256};
+        if !has_adx() {
+            return;
+        }
+        let mut state = 0x2d_u64;
+        let mut p = Point::<P256>::generator().double().double();
+        for i in 0..2000 {
+            let q = if i % 2 == 0 {
+                p = p.add(&Point::generator());
+                p
+            } else {
+                let s = i % 4 == 1;
+                let c = [
+                    operand(&mut state, s),
+                    operand(&mut state, s),
+                    operand(&mut state, s),
+                ];
+                Point::from_coordinates(Fp(c[0]), Fp(c[1]), Fp(c[2]))
+            };
+            let mut buf = [const { MaybeUninit::uninit() }; 48];
+            for (k, c) in [q.x(), q.y(), q.z()].iter().enumerate() {
+                for (j, w) in c.0.iter().enumerate() {
+                    buf[4 * k + j].write(*w);
+                }
+            }
+            for _ in 0..2 {
+                // SAFETY: the CPU has BMI2 and ADX; slots 0 to 2 hold the
+                // point, below p.
+                unsafe { crate::nist::p256_x86_point::double_in_place_adx(&mut buf) };
+            }
+            // SAFETY: slots 0 to 2 are written.
+            let got: [[u64; 4]; 3] = unsafe { read(&buf, 0) };
+            let want = q.double_formula().double_formula();
+            assert_eq!(got, [want.x().0, want.y().0, want.z().0], "{i}");
+        }
+    }
+
+    /// Scalars for the multiplications: zero, `1 .. 40` and `n - 1 .. n -
+    /// 40`, where the last, complete addition is needed and where an
+    /// incomplete one would fail if the argument for it did not hold, and
+    /// `count` random ones.
+    fn scalars(
+        count: usize,
+    ) -> std::vec::Vec<<crate::p256::P256 as crate::nist::point::Curve>::Scalar> {
+        use crate::nist::arith::Field;
+        use crate::nist::point::Curve;
+        type S = <crate::p256::P256 as Curve>::Scalar;
+        let mut out = std::vec![S::ZERO];
+        let (mut small, mut minus) = (S::ZERO, S::ZERO);
+        for _ in 0..40 {
+            small = small.add(&S::ONE);
+            minus = minus.sub(&S::ONE);
+            out.push(small);
+            out.push(minus);
+        }
+        let mut state = 0x5ca1_u64;
+        for _ in 0..count {
+            let mut bytes = S::zero_bytes();
+            for chunk in bytes.as_mut().chunks_mut(8) {
+                chunk.copy_from_slice(&next(&mut state).to_le_bytes()[..chunk.len()]);
+            }
+            out.push(S::from_bytes_reduced(&bytes));
+        }
+        out
+    }
+
+    /// The MULX/ADX scalar multiplications, called directly so that a CPU
+    /// with IFMA runs them too, against the generic ones they stand in for:
+    /// word for word, since they are the same operations on the same values.
+    /// `mul_scalar` on the generator, another point and the identity;
+    /// `table_mul` on the generator table.
+    #[test]
+    fn the_buffer_multiplications_agree_with_the_generic_ones() {
+        use crate::nist::gentable::HasGeneratorTable;
+        use crate::nist::point::Point;
+        use crate::p256::P256;
+        if !has_adx() {
+            return;
+        }
+        let words = |p: &Point<P256>| (p.x().0, p.y().0, p.z().0);
+        let g = Point::<P256>::generator();
+        let points = [g, g.mul_scalar_generic(&scalars(1)[81]), Point::identity()];
+        let ks = scalars(1000);
+        for p in &points {
+            for k in &ks {
+                let got = mul_scalar(p, k).expect("BMI2 and ADX");
+                assert_eq!(words(&got), words(&p.mul_scalar_generic(k)));
+            }
+        }
+        for k in &ks {
+            let got = crate::p256::table_mul_adx_for_tests(k).expect("BMI2 and ADX");
+            assert_eq!(words(&got), words(&P256::table_mul_generic_for_tests(k)));
         }
     }
 

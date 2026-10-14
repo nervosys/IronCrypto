@@ -33,21 +33,36 @@
 //! `update_de` needs to keep `d` and `e` in `(-2m, m)`, and what keeps every
 //! product in it inside an `i128`.
 //!
+//! # Rounds of packed steps
+//!
+//! Within a batch the steps run in rounds of at most 19, each on the low 20
+//! bits of `f` and `g` packed with their rows of the matrix into two words
+//! (see "The steps, packed", below): 19, 19, 19 and 2 for P-256's 59, 19,
+//! 19, 19 and 5 for P-384's 62. The decisions are the same, on the same bits,
+//! as stepping six words at a time; the tests hold every batch to the
+//! divsteps taken one by one on whole integers. On x86-64 the rounds are
+//! assembly (`safegcd_x86`), each decision a conditional move: with the
+//! packing, that took P-384's field inversion from 2.2 to 1.55 microseconds
+//! on the Zen 5 the benchmarks run on, where the packing alone, its
+//! decisions still masks, changed nothing -- a step's time was the chain
+//! from `g`'s parity through its mask to the next `g`, not the number of
+//! words.
+//!
 //! # Constant time
 //!
 //! The number of divsteps is fixed, and each is branch-free: its two
 //! decisions -- the sign of `zeta` or `delta`, whether `g` is odd -- become
-//! masks behind `black_box`, as do the signs that `normalize` acts on, and
-//! `update_de`'s signs are masks. The only conditions in the source are on
-//! the modulus's limbs and on limb indices, and each modulus is a type
-//! ([`Modulus`]) with its own copy of the inversion, so those are constants
-//! and fold away. Every multiplication is 64 by 64 bits into 128, which is
-//! one instruction on the 64-bit targets this is used on and is not used
-//! elsewhere: a 32-bit target would lower `i128` products to library calls,
-//! so they keep Fermat. The steps are written out and the batches are calls,
-//! so the compiled inversions have no loop and no branch at all for
-//! `scripts/check-ct.py` to find (`ct_p256_fp_invert`, `ct_p256_fn_invert`,
-//! `ct_p384_fp_invert`).
+//! conditional moves on x86-64 and masks behind `black_box` elsewhere, as
+//! do the signs that `normalize` acts on, and `update_de`'s signs are masks.
+//! The only conditions in the source are on the modulus's limbs and on limb
+//! indices, and each modulus is a type ([`Modulus`]) with its own copy of the
+//! inversion, so those are constants and fold away. Every multiplication is
+//! 64 by 64 bits into 128, which is one instruction on the 64-bit targets
+//! this is used on and is not used elsewhere: a 32-bit target would lower
+//! `i128` products to library calls, so they keep Fermat. The steps are
+//! written out and the batches are calls, so the compiled inversions have no
+//! loop and no branch at all for `scripts/check-ct.py` to find
+//! (`ct_p256_fp_invert`, `ct_p256_fn_invert`, `ct_p384_fp_invert`).
 //!
 //! # Why
 //!
@@ -145,170 +160,229 @@ struct Trans {
     r: i64,
 }
 
-/// The state of a batch of divsteps: `zeta` or `delta`, the low words of `f`
-/// and `g`, and the matrix so far.
-struct Steps {
-    delta: i64,
-    f: u64,
-    g: u64,
-    u: u64,
-    v: u64,
-    q: u64,
-    r: u64,
-}
+// # The steps, packed
+//
+// A batch's steps decide on the low bits of `f` and `g` alone, and between
+// them carry the matrix along: as written out by libsecp256k1, every step
+// updates six words. Here each of `f` and `g` is packed with its row of the
+// matrix into one word -- `f`'s low bits and its row `(a, b)` as
+// `F = f + a 2^21 + b 2^42`, `g`'s likewise as `G` -- so that a step updates
+// two words where it updated six, and its decisions are the same ones on the
+// same low bits. The packing is linear: `G + F` and `G - F` add and subtract
+// the rows with the values. A round of `s` steps starts each row at `2^s`
+// times the identity and halves `G` where the step halves `g`, so after `j`
+// steps every entry is a multiple of `2^(s - j)` and each halving is exact
+// field by field; after `s` steps the rows are the round's matrix, scaled by
+// `2^s`. Then the 64-bit words of `f` and `g` move on by that matrix, exact
+// in their low `64 - s` bits, the rounds' matrices multiply, and the next
+// round starts.
+//
+// The fields hold what they must: a round's matrix rows have `|a| + |b|` at
+// most `2^s` (each step at most doubles a row sum, scaled, as the module
+// documentation says), so with `s` at most 19 each entry fits the 21 bits
+// between its neighbours, sign included; and the low field, `(a f0 + b g0) /
+// 2^j` for `f0` and `g0` below `2^20`, stays below `2^20` in magnitude.
+// Twenty steps would not fit: a row that never changes is `2^20 I`.
 
-impl Steps {
-    /// The matrix, as the batch leaves it.
-    #[inline(always)]
-    fn trans(&self) -> Trans {
-        Trans {
-            u: self.u as i64,
-            v: self.v as i64,
-            q: self.q as i64,
-            r: self.r as i64,
-        }
-    }
-}
+/// Bits of `f` and `g` a packed round starts from, and the steps it may run.
+const LOW: u32 = 20;
+const MAX_ROUND: u32 = 19;
 
-/// One half-delta divstep, branch-free, on the low words, `s.delta` holding
-/// `zeta`: a line-for-line transcription of the loop body of libsecp256k1's
-/// `secp256k1_modinv64_divsteps_59`.
+/// The matrix of a round, from its packed rows: `(a, b)` from `F`, `(c, d)`
+/// from `G`, each a field of 21 bits, sign-extended, above the low field.
 #[inline(always)]
-fn hdstep(s: &mut Steps) {
+fn unpack(p: i64) -> (i64, i64) {
+    let low = (p << 43) >> 43;
+    let rest = (p - low) >> 21;
+    let a = (rest << 43) >> 43;
+    let b = (rest - a) >> 21;
+    (a, b)
+}
+
+/// One half-delta divstep on the packed rows, branch-free, `zeta` as in
+/// libsecp256k1's `secp256k1_modinv64_divsteps_59`: the same decisions on the
+/// same low bits, and the same sums and halvings, on two words.
+#[cfg(any(test, not(target_arch = "x86_64")))]
+#[inline(always)]
+fn hdstep(zeta: &mut i64, f: &mut i64, g: &mut i64) {
     // Masks for zeta < 0 and for g odd. Behind the barrier, as libsecp256k1
     // puts them behind `volatile`, so that the compiler cannot see they are 0
-    // or all ones and branch on them; measured, it costs under three percent
-    // of an inversion.
-    let c1 = core::hint::black_box((s.delta >> 63) as u64);
-    let mut mask1 = c1;
-    let c2 = core::hint::black_box(s.g & 1);
+    // or all ones and branch on them.
+    let mut mask1 = core::hint::black_box(*zeta >> 63);
+    let c2 = core::hint::black_box(*g & 1);
     let mask2 = c2.wrapping_neg();
-    // x, y, z: f, u, v, negated when zeta < 0.
-    let x = (s.f ^ mask1).wrapping_sub(mask1);
-    let y = (s.u ^ mask1).wrapping_sub(mask1);
-    let z = (s.v ^ mask1).wrapping_sub(mask1);
-    // Added to g, q, r when g is odd.
-    s.g = s.g.wrapping_add(x & mask2);
-    s.q = s.q.wrapping_add(y & mask2);
-    s.r = s.r.wrapping_add(z & mask2);
-    // When both, swap roles: zeta becomes -zeta - 2, otherwise zeta - 1.
+    // f, negated when zeta < 0, added to g when g is odd.
+    let x = (*f ^ mask1).wrapping_sub(mask1);
+    *g = g.wrapping_add(x & mask2);
+    // When both, swap roles: zeta becomes -zeta - 2, otherwise zeta - 1;
+    // f becomes the old g, which is the new g less (-f).
     mask1 &= mask2;
-    s.delta = (s.delta ^ mask1 as i64).wrapping_sub(1);
-    s.f = s.f.wrapping_add(s.g & mask1);
-    s.u = s.u.wrapping_add(s.q & mask1);
-    s.v = s.v.wrapping_add(s.r & mask1);
-    s.g >>= 1;
-    s.u <<= 1;
-    s.v <<= 1;
+    *zeta = (*zeta ^ mask1).wrapping_sub(1);
+    *f = f.wrapping_add(*g & mask1);
+    *g >>= 1;
 }
 
-/// One of Bernstein and Yang's divsteps, branch-free, on the low words:
-/// where `delta > 0` and `g` is odd, `(delta, f, g)` becomes
-/// `(1 - delta, g, (g - f) / 2)`; otherwise `(1 + delta, f, (g + (g mod 2) f)
-/// / 2)`. The matrix rows follow `f` and `g`: `[u, v]` doubles where `f`
-/// stays and `[q, r]` takes the same sum or difference as `g`.
+/// One of Bernstein and Yang's divsteps on the packed rows, branch-free:
+/// where `delta > 0` and `g` is odd, `(delta, f, g)` becomes `(1 - delta, g,
+/// (g - f) / 2)`; otherwise `(1 + delta, f, (g + (g mod 2) f) / 2)`.
+#[cfg(any(test, not(target_arch = "x86_64")))]
 #[inline(always)]
-fn divstep(s: &mut Steps) {
+fn divstep(delta: &mut i64, f: &mut i64, g: &mut i64) {
     // Masks for delta > 0 and for g odd, behind the barrier as in `hdstep`.
-    let c1 = core::hint::black_box((s.delta.wrapping_neg() >> 63) as u64);
-    let c2 = core::hint::black_box(s.g & 1);
+    let c1 = core::hint::black_box(delta.wrapping_neg() >> 63);
+    let c2 = core::hint::black_box(*g & 1);
     let odd = c2.wrapping_neg();
     let swap = c1 & odd;
-    // f, u, v, negated on a swap; added to g, q, r where g is odd.
-    let x = (s.f ^ swap).wrapping_sub(swap);
-    let y = (s.u ^ swap).wrapping_sub(swap);
-    let z = (s.v ^ swap).wrapping_sub(swap);
-    s.g = s.g.wrapping_add(x & odd);
-    s.q = s.q.wrapping_add(y & odd);
-    s.r = s.r.wrapping_add(z & odd);
-    // On a swap, f, u, v become the old g, q, r: they now hold g - f,
-    // q - u, r - v, so adding them gives exactly that.
-    s.f = s.f.wrapping_add(s.g & swap);
-    s.u = s.u.wrapping_add(s.q & swap);
-    s.v = s.v.wrapping_add(s.r & swap);
+    // f, negated on a swap; added to g where g is odd. On a swap f becomes
+    // the old g: g now holds g - f, so adding it gives exactly that.
+    let x = (*f ^ swap).wrapping_sub(swap);
+    *g = g.wrapping_add(x & odd);
+    *f = f.wrapping_add(*g & swap);
     // delta: 1 - delta on a swap, 1 + delta otherwise.
-    s.delta = (s.delta ^ swap as i64)
-        .wrapping_sub(swap as i64)
-        .wrapping_add(1);
-    s.g >>= 1;
-    s.u <<= 1;
-    s.v <<= 1;
+    *delta = (*delta ^ swap).wrapping_sub(swap).wrapping_add(1);
+    *g >>= 1;
 }
 
-/// The step `$f`, written out `$n` times, for `$n` a power of two up to 32.
+/// The step `$f`, written out `$n` times, for `$n` a power of two up to 16.
 /// Written out rather than looped, so that the compiled inversion has no
 /// loop for `scripts/check-ct.py` to find.
+#[cfg(any(test, not(target_arch = "x86_64")))]
 macro_rules! steps {
-    ($f:ident, $s:ident, 1) => {
-        $f(&mut $s);
+    ($f:ident, $d:ident, $x:ident, $y:ident, 1) => {
+        $f(&mut $d, &mut $x, &mut $y);
     };
-    ($f:ident, $s:ident, 2) => {
-        steps!($f, $s, 1);
-        steps!($f, $s, 1);
+    ($f:ident, $d:ident, $x:ident, $y:ident, 2) => {
+        steps!($f, $d, $x, $y, 1);
+        steps!($f, $d, $x, $y, 1);
     };
-    ($f:ident, $s:ident, 4) => {
-        steps!($f, $s, 2);
-        steps!($f, $s, 2);
+    ($f:ident, $d:ident, $x:ident, $y:ident, 4) => {
+        steps!($f, $d, $x, $y, 2);
+        steps!($f, $d, $x, $y, 2);
     };
-    ($f:ident, $s:ident, 8) => {
-        steps!($f, $s, 4);
-        steps!($f, $s, 4);
+    ($f:ident, $d:ident, $x:ident, $y:ident, 8) => {
+        steps!($f, $d, $x, $y, 4);
+        steps!($f, $d, $x, $y, 4);
     };
-    ($f:ident, $s:ident, 16) => {
-        steps!($f, $s, 8);
-        steps!($f, $s, 8);
+    ($f:ident, $d:ident, $x:ident, $y:ident, 16) => {
+        steps!($f, $d, $x, $y, 8);
+        steps!($f, $d, $x, $y, 8);
     };
-    ($f:ident, $s:ident, 32) => {
-        steps!($f, $s, 16);
-        steps!($f, $s, 16);
-    };
+}
+
+/// The rounds' steps, written out: in assembly on x86-64, where each
+/// decision is a conditional move (`safegcd_x86`), and as the Rust steps
+/// above elsewhere. The same steps either way, which the tests check.
+#[cfg(target_arch = "x86_64")]
+use super::safegcd_x86::{by_19, by_5, hd_19, hd_2};
+#[cfg(not(target_arch = "x86_64"))]
+use {rs_by_19 as by_19, rs_by_5 as by_5, rs_hd_19 as hd_19, rs_hd_2 as hd_2};
+
+#[cfg(any(test, not(target_arch = "x86_64")))]
+#[inline(always)]
+fn rs_by_19(d: &mut i64, f: &mut i64, g: &mut i64) {
+    let (mut d2, mut f2, mut g2) = (*d, *f, *g);
+    steps!(divstep, d2, f2, g2, 16);
+    steps!(divstep, d2, f2, g2, 2);
+    steps!(divstep, d2, f2, g2, 1);
+    (*d, *f, *g) = (d2, f2, g2);
+}
+
+#[cfg(any(test, not(target_arch = "x86_64")))]
+#[inline(always)]
+fn rs_by_5(d: &mut i64, f: &mut i64, g: &mut i64) {
+    let (mut d2, mut f2, mut g2) = (*d, *f, *g);
+    steps!(divstep, d2, f2, g2, 4);
+    steps!(divstep, d2, f2, g2, 1);
+    (*d, *f, *g) = (d2, f2, g2);
+}
+
+#[cfg(any(test, not(target_arch = "x86_64")))]
+#[inline(always)]
+fn rs_hd_19(d: &mut i64, f: &mut i64, g: &mut i64) {
+    let (mut d2, mut f2, mut g2) = (*d, *f, *g);
+    steps!(hdstep, d2, f2, g2, 16);
+    steps!(hdstep, d2, f2, g2, 2);
+    steps!(hdstep, d2, f2, g2, 1);
+    (*d, *f, *g) = (d2, f2, g2);
+}
+
+#[cfg(any(test, not(target_arch = "x86_64")))]
+#[inline(always)]
+fn rs_hd_2(d: &mut i64, f: &mut i64, g: &mut i64) {
+    let (mut d2, mut f2, mut g2) = (*d, *f, *g);
+    steps!(hdstep, d2, f2, g2, 2);
+    (*d, *f, *g) = (d2, f2, g2);
+}
+
+/// A round of `$n` steps, run by `$run`, from `delta` and the 64-bit words
+/// `f`, `g`, into `m`, the batch's matrix so far, scaled by `2^` the steps
+/// before.
+macro_rules! round {
+    ($run:ident, $delta:ident, $fw:ident, $gw:ident, $m:ident, $n:expr) => {{
+        const S: u32 = $n;
+        const _: () = assert!(S <= MAX_ROUND);
+        let mut pf = ($fw & ((1 << LOW) - 1)) as i64 + ((1i64 << S) << 21);
+        let mut pg = ($gw & ((1 << LOW) - 1)) as i64 + ((1i64 << S) << 42);
+        $run(&mut $delta, &mut pf, &mut pg);
+        let (a, b) = unpack(pf);
+        let (c, d) = unpack(pg);
+        // f and g move on: exact in their low 64 - S bits, which is more
+        // than the steps after this round read.
+        let (fi, gi) = ($fw as i64, $gw as i64);
+        $fw = (a.wrapping_mul(fi).wrapping_add(b.wrapping_mul(gi)) >> S) as u64;
+        $gw = (c.wrapping_mul(fi).wrapping_add(d.wrapping_mul(gi)) >> S) as u64;
+        let [u, v, q, r] = $m;
+        $m = [
+            a.wrapping_mul(u).wrapping_add(b.wrapping_mul(q)),
+            a.wrapping_mul(v).wrapping_add(b.wrapping_mul(r)),
+            c.wrapping_mul(u).wrapping_add(d.wrapping_mul(q)),
+            c.wrapping_mul(v).wrapping_add(d.wrapping_mul(r)),
+        ];
+    }};
 }
 
 /// 59 half-delta divsteps on the low words of `f` and `g`, branch-free;
-/// returns the new `zeta` and the matrix: libsecp256k1's
-/// `secp256k1_modinv64_divsteps_59`, its loop written out.
+/// returns the new `zeta` and the matrix, scaled by `2^62`: libsecp256k1's
+/// `secp256k1_modinv64_divsteps_59`, in rounds of packed steps.
 #[inline(always)]
+// The last round moves `f` and `g` on too, and nothing reads them after.
+#[allow(unused_assignments)]
 fn divsteps_59(zeta: i64, f0: u64, g0: u64) -> (i64, Trans) {
-    // The matrix starts as the identity times 8, because the caller wants it
-    // scaled by 2^62 and 59 steps scale it by 2^59.
-    let mut s = Steps {
-        delta: zeta,
-        f: f0,
-        g: g0,
-        u: 8,
-        v: 0,
-        q: 0,
-        r: 8,
-    };
-    steps!(hdstep, s, 32);
-    steps!(hdstep, s, 16);
-    steps!(hdstep, s, 8);
-    steps!(hdstep, s, 2);
-    steps!(hdstep, s, 1);
-    (s.delta, s.trans())
+    let (mut zeta, mut f, mut g) = (zeta, f0, g0);
+    let mut m = [1i64, 0, 0, 1];
+    round!(hd_19, zeta, f, g, m, 19);
+    round!(hd_19, zeta, f, g, m, 19);
+    round!(hd_19, zeta, f, g, m, 19);
+    round!(hd_2, zeta, f, g, m, 2);
+    // 59 steps scale by 2^59; the caller wants 2^62.
+    let [u, v, q, r] = m;
+    (
+        zeta,
+        Trans {
+            u: u << 3,
+            v: v << 3,
+            q: q << 3,
+            r: r << 3,
+        },
+    )
 }
 
-/// 62 divsteps on the low words of `f` and `g`, written out; returns the
-/// new `delta` and the matrix. Sixty-two bits of `f` and `g` are enough:
-/// each step consumes one, and the last needs only the parity.
+/// 62 divsteps on the low words of `f` and `g`, branch-free; returns the
+/// new `delta` and the matrix, scaled by `2^62`. Sixty-two bits of `f` and
+/// `g` are enough: each step consumes one, and the last needs only the
+/// parity.
 #[inline(always)]
+// The last round moves `f` and `g` on too, and nothing reads them after.
+#[allow(unused_assignments)]
 fn divsteps_62(delta: i64, f0: u64, g0: u64) -> (i64, Trans) {
-    // The identity, which 62 steps scale by 2^62.
-    let mut s = Steps {
-        delta,
-        f: f0,
-        g: g0,
-        u: 1,
-        v: 0,
-        q: 0,
-        r: 1,
-    };
-    steps!(divstep, s, 32);
-    steps!(divstep, s, 16);
-    steps!(divstep, s, 8);
-    steps!(divstep, s, 4);
-    steps!(divstep, s, 2);
-    (s.delta, s.trans())
+    let (mut delta, mut f, mut g) = (delta, f0, g0);
+    let mut m = [1i64, 0, 0, 1];
+    round!(by_19, delta, f, g, m, 19);
+    round!(by_19, delta, f, g, m, 19);
+    round!(by_19, delta, f, g, m, 19);
+    round!(by_5, delta, f, g, m, 5);
+    let [u, v, q, r] = m;
+    (delta, Trans { u, v, q, r })
 }
 
 /// `a * b` as `i128`.
@@ -757,6 +831,81 @@ mod tests {
             assert_eq!(t.q as i128 * f0 + t.r as i128 * g0, g << 62, "g");
             assert!(t.u.unsigned_abs() + t.v.unsigned_abs() <= 1 << 62);
             assert!(t.q.unsigned_abs() + t.r.unsigned_abs() <= 1 << 62);
+        }
+    }
+
+    /// The assembly's rounds against the Rust steps they replace on
+    /// x86-64: the same `delta` or `zeta` and the same packed words after
+    /// every round length, from random packed words and `delta` from -70 to
+    /// 70, so that the decisions go both ways.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_assembly_runs_the_same_steps() {
+        use super::super::safegcd_x86 as x;
+        let mut state = 0x86_u64;
+        let mut next = || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        type Run = fn(&mut i64, &mut i64, &mut i64);
+        let pairs: [(Run, Run); 4] = [
+            (x::by_19, rs_by_19),
+            (x::by_5, rs_by_5),
+            (x::hd_19, rs_hd_19),
+            (x::hd_2, rs_hd_2),
+        ];
+        for round in 0..50_000 {
+            let d0 = (round % 141) as i64 - 70;
+            let f0 = (next() & ((1 << LOW) - 1)) as i64 | 1;
+            let g0 = (next() & ((1 << LOW) - 1)) as i64;
+            let (f0, g0) = (f0 + ((1i64 << 19) << 21), g0 + ((1i64 << 19) << 42));
+            for (asm, rust) in pairs {
+                let (mut d1, mut f1, mut g1) = (d0, f0, g0);
+                let (mut d2, mut f2, mut g2) = (d0, f0, g0);
+                asm(&mut d1, &mut f1, &mut g1);
+                rust(&mut d2, &mut f2, &mut g2);
+                assert_eq!((d1, f1, g1), (d2, f2, g2), "{d0} {f0:x} {g0:x}");
+            }
+        }
+    }
+
+    /// The packed rows come apart into the matrix entries at every extreme
+    /// a round can leave them at: the low field anywhere in `(-2^20, 2^20)`,
+    /// each entry anywhere in `[-2^19, 2^19]`. A round's low field reaches
+    /// the far ends rarely, since `g` mostly shrinks as the steps go, so the
+    /// batches' tests above do not show a wrong sign extension of it; this
+    /// does.
+    #[test]
+    fn the_packed_fields_come_apart_at_their_extremes() {
+        let lows = [
+            -(1i64 << 20) + 1,
+            -(1 << 19) - 1,
+            -(1 << 19),
+            -1,
+            0,
+            1,
+            1 << 19,
+            (1 << 20) - 1,
+        ];
+        let entries = [
+            -(1i64 << 19),
+            -(1 << 19) + 1,
+            -1,
+            0,
+            1,
+            (1 << 19) - 1,
+            1 << 19,
+        ];
+        for x in lows {
+            for a in entries {
+                for b in entries {
+                    let p = x + (a << 21) + (b << 42);
+                    assert_eq!(unpack(p), (a, b), "{x} {a} {b}");
+                }
+            }
         }
     }
 

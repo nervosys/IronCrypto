@@ -309,6 +309,75 @@ all of them.
   (docs/CONSTANT_TIME.md, "RSA-4096's primes by Karatsuba"). Valgrind:
   a new `ic-rsa-4096-sign-adx` case reports the same one verdict as the
   RSA-2048 cases (docs/CTGRIND.md).
+- **P-256 and P-384 on x86-64 without AVX-512 IFMA: ECDH and P-256 signing
+  ahead of Graviola.** Profiled first under `--cfg ic_no_avx512` on the Zen
+  5: a P-384 ECDH was 385 doublings (about 65 percent), 77 additions (25),
+  the window, the inversion and the reads. The field operations were level
+  with s2n-bignum's instruction for instruction -- the same rows of `MULX`
+  on `ADCX`/`ADOX`, the same two-`MULX` reduction per word -- but the
+  doubling ran at 0.91 of Graviola's rate and the addition at 0.86, and a
+  multiplication's time was the core's throughput on carry-flag
+  instructions rather than a chain: two independent doublings interleaved
+  operation by operation ran no faster than one after the other. So the
+  changes cut instructions and let the core overlap the ones left:
+
+  - Every final correction in P-384's field adds `2^384 - p` into copies and
+    takes them by `cmovnz` where the sum carries out of the top word: one
+    carry chain where subtracting back through a mask took a second.
+  - The doubling's three fused `c*a - d*b` operations, now on P-256 too
+    (they replace four multiplications by 3, 4 and 8 and three
+    subtractions), fold their top word once with the quotient estimate
+    `t + 1` and correct once through a mask, in registers.
+  - The formulas' operations are reordered (same values, so the same words)
+    to put independent work between a step and the next: P-384's doubling
+    7 percent faster, the addition 5 and the mixed addition 7.
+  - The variable-base multiplications (`p256_x86::mul_scalar`,
+    `p384_x86::mul_scalar`) and P-256's generator table (`table_mul`) run on
+    one buffer, the accumulator in the first slots, five doublings in place
+    (`double_in_place_adx`) and one addition per digit, where the generic
+    loop copied every point into a fresh buffer per formula. P-384's window
+    is affine (`AffineWindow`): building it costs one inversion and about a
+    hundred multiplications more, and each of the 76 additions after it is
+    a mixed one, 3.5 percent of a multiplication less. On P-256 the same
+    sum, estimated from the measured costs, comes out even, and the window
+    stays Jacobian.
+  - The divsteps of the inversions run in rounds of up to 19 steps on the
+    low bits of `f` and `g` packed with their rows of the matrix, and on
+    x86-64 each round is assembly whose decisions are `cmov`s: P-384's field
+    inversion 2.2 to 1.55 us, P-256's about 1.0 to 0.8. The packing alone,
+    its decisions still masks, changed nothing: a step's time was the chain
+    from `g`'s parity through its mask to the next `g`.
+
+  Measured against Graviola 0.4.1 under `--cfg ic_no_avx512` on a loaded
+  Zen 5, the build before and after alternated, `graviola-p384` four rounds
+  and `graviola` three, each in two layouts of the bench binary (as built,
+  and with every function aligned to 64 bytes), IronCrypto's rate over
+  Graviola's: P-384 ECDH against Graviola's key parsed once 0.84-0.90 to
+  1.00-1.04 and 0.91-1.04 to 1.16-1.25 (`graviola-p384`), both from key
+  bytes 0.93-1.05 to 1.07-1.09 and 0.96-1.09 to 1.20-1.21; P-256 ECDH
+  0.97-1.05 to 1.05-1.22 and 0.94-0.99 to 1.20-1.23; ECDSA P-256 sign
+  0.98-1.08 to 1.11-1.13 and 0.96-1.04 to 1.10-1.15. Ahead in both layouts,
+  then, and against Graviola's parsed P-384 key by little in one of them.
+  The default IFMA build, which this does not change but for the inversion
+  and the field corrections, did not move outside its noise, nor did P-521.
+  docs/GRAVIOLA.md ("P-256 and P-384 without AVX-512, 2026-10-14") has the
+  tables, the profile and what was tried and not kept.
+
+  Correctness: the doublings in place against `Point::double_formula` word
+  for word; P-256's multiplications against the generic ones word for word
+  and P-384's as points, on the edges of the scalar range and 1,000 random
+  scalars, called directly so a CPU with IFMA runs them; the fused
+  operations on inputs built on both sides of their fold's carry
+  (`nist/fold_edges.rs`), which random inputs reach once in 2^27 on P-256
+  and never on P-384; the assembly rounds against the Rust packed steps,
+  the packed batches against the divsteps on exact integers, and the packed
+  fields at their extremes. Sixteen mutations each failed the tests
+  (docs/FIPS.md has the list); two of them, the fold's carry through the
+  top word on each curve, only the built inputs catch, and one, the field
+  extraction one bit short, only the extremes. CAVP and Wycheproof ECDH
+  and ECDSA pass in the default build, under `ic_no_avx512` and under
+  `ic_ec_portable`. Five new constant-time probes (docs/CONSTANT_TIME.md,
+  "P-256 and P-384 without IFMA, on one buffer"): 119 on x86-64, 302 in all.
 
 - **Ed25519 signing on x86-64 without AVX-512 IFMA: ahead of Graviola.**
   Two changes. (1) The basepoint multiplication on the MULX/ADX field takes

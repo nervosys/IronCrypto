@@ -8,9 +8,13 @@ whose address is in `{s}`. Every operation reads its operands from memory and
 writes its result to memory after all reads, so a destination may be a source.
 The field operations are the instruction sequences of
 crates/ic-ec/src/nist/p256_x86.rs (`mul_adx`, `square_adx`, `add`, `sub`),
-with memory operands; the formulas are those of crates/ic-ec/src/nist/point.rs,
-operation for operation, so the results agree bit for bit, which the tests
-check.
+with memory operands, and the doubling's small multiples are three fused
+operations, `cm * a - dm * b`, each one fold and one correction, as P-384's
+(scripts/gen_p384_x86_point.py). The formulas compute the values of
+crates/ic-ec/src/nist/point.rs, operation for operation, so the results agree
+bit for bit, which the tests check; the operations are ordered for the core
+to overlap them, and the doubling is also emitted in place, its results over
+its inputs, for the scalar multiplication's loop.
 """
 import sys
 
@@ -306,7 +310,84 @@ def mulk(dst, a, k):
     return out
 
 
-OPS = {"mul": mul, "sqr": sqr, "add": add, "sub": sub, "mulk": mulk}
+def cms(dst, a, b, cm, dm):
+    """`cm * a - dm * b mod p` for small constants, as one reduction:
+    `cm * a + dm * (p - b)`, a value V below `(cm + dm) * p`, four words `v`
+    and a small top word `t`.
+
+    V less `(t + 1) * p` is `v - 2^256 + (t + 1)(2^256 - p)`, in `[-p, p)`:
+    `v < 2^256`, and `(t + 1)(2^256 - p) < 32 * 2^224 < p`. So the sum
+    `v + (t + 1)(2^256 - p)` either carries out of the top word, and its four
+    words are the answer, or does not, and the answer is them plus p, modulo
+    2^256, added through a mask made from the carry. One fold and one
+    correction. `(t + 1)(2^256 - p)`, with `q = t + 1` and
+    `2^256 - p = 2^224 - 2^192 - 2^96 + 1`, is the four words
+    `q, -(q << 32), -1, (q << 32) - q - 1`."""
+    cm, dm = int(cm), int(dm)
+    assert 1 <= cm <= 16 and 1 <= dm <= 16 and cm + dm <= 31
+    n = ["{t0}", "{t1}", "{t2}", "{t3}"]
+    top = "{t4}"
+    out = [f"xor {top[:-1]}:e}}, {top[:-1]}:e}}" if dm == 1 else "",
+           "mov {t0}, -1",
+           f"sub {{t0}}, {addr(b, 0)}",
+           f"mov {{t1:e}}, {P1}",
+           f"sbb {{t1}}, {addr(b, 1)}",
+           "mov {t2:e}, 0",
+           f"sbb {{t2}}, {addr(b, 2)}",
+           f"mov {{t3}}, {P3}",
+           f"sbb {{t3}}, {addr(b, 3)}"]
+    out = [x for x in out if x]
+    if dm == 1:
+        pass
+    elif dm & (dm - 1) == 0:
+        k = dm.bit_length() - 1
+        out += [f"mov {top}, {{t3}}", f"shr {top}, {64 - k}",
+                f"shld {{t3}}, {{t2}}, {k}", f"shld {{t2}}, {{t1}}, {k}",
+                f"shld {{t1}}, {{t0}}, {k}", f"shl {{t0}}, {k}"]
+    else:
+        out += [f"mov edx, {dm}",
+                "mulx {c}, {t0}, {t0}",
+                "mulx {t5}, {t1}, {t1}",
+                "add {t1}, {c}",
+                "mulx {c}, {t2}, {t2}",
+                "adc {t2}, {t5}",
+                f"mulx {top}, {{t3}}, {{t3}}",
+                "adc {t3}, {c}",
+                f"adc {top}, 0"]
+    out += [f"mov edx, {cm}", "xor {t6:e}, {t6:e}"]
+    for i in range(3):
+        out += [f"mulx {{c}}, rax, {addr(a, i)}", f"adcx {n[i]}, rax", f"adox {n[i + 1]}, {{c}}"]
+    out += [f"mulx rdx, rax, {addr(a, 3)}", "adcx {t3}, rax", f"adox rdx, {top}", "adcx rdx, {t6}"]
+    # q = t + 1, and q (2^256 - p) as four words.
+    out += [
+        "add rdx, 1",
+        "mov rax, rdx",
+        "shl rax, 32",
+        "mov {c}, rax",
+        "neg rax",
+        "sub {c}, rdx",
+        "sub {c}, 1",
+        "add {t0}, rdx",
+        "adc {t1}, rax",
+        "adc {t2}, -1",
+        "adc {t3}, {c}",
+        # No carry: add p. All ones in rax where that is due.
+        "cmc",
+        "sbb rax, rax",
+        "mov rdx, rax",
+        "shr rdx, 32",
+        f"mov {{c}}, {P3}",
+        "and {c}, rax",
+        "add {t0}, rax",
+        "adc {t1}, rdx",
+        "adc {t2}, 0",
+        "adc {t3}, {c}",
+    ]
+    out += store(dst, n)
+    return out
+
+
+OPS = {"mul": mul, "sqr": sqr, "add": add, "sub": sub, "mulk": mulk, "cms": cms}
 
 
 def emit(name, doc, slots, program, test_only=False):
@@ -331,15 +412,19 @@ def emit(name, doc, slots, program, test_only=False):
     out.append("    // before writing it but the inputs, which the caller has written.")
     out.append("    unsafe {")
     out.append("        asm!(")
+    body = []
     for op, *args in program:
-        out.append(f"            // {args[0]} = {op}({', '.join(args[1:])})")
+        body.append(f"            // {args[0]} = {op}({', '.join(args[1:])})")
         operands = [idx[x] if x in idx else int(x) for x in args]
         for l in OPS[op](*operands):
-            out.append(f'            "{l}",')
+            body.append(f'            "{l}",')
+    out += body
     out.append("            s = in(reg) buf.as_mut_ptr(),")
-    for i in range(8):
-        out.append(f"            t{i} = out(reg) _,")
-    out.append("            c = out(reg) _,")
+    # Only the registers the block names: an unused operand is an error.
+    text = "\n".join(body)
+    for name in [f"t{i}" for i in range(8)] + ["c"]:
+        if "{" + name + "}" in text or "{" + name + ":e}" in text:
+            out.append(f"            {name} = out(reg) _,")
     out.append('            out("rax") _,')
     out.append('            out("rdx") _,')
     out.append("            options(nostack),")
@@ -358,10 +443,12 @@ HEADER = '''//! P-256 point formulas, each one `asm!` block over `mulx`/`adcx`/`
 //! instruction -- strung together over a buffer of 32-byte slots instead of
 //! called one at a time. What that removes is everything between them: the
 //! per-operation feature check, and moving each result out of registers into
-//! a Rust value and back into memory for the next. Each formula is the same
-//! sequence of field operations as its Rust counterpart in `point.rs`, in the
-//! same order, so the results are equal bit for bit; the tests hold them to
-//! that.
+//! a Rust value and back into memory for the next. Each formula computes the
+//! same field values as its Rust counterpart in `point.rs` -- the doubling's
+//! small multiples fused into three operations, the operations in an order
+//! the core can overlap -- so the results are equal bit for bit; the tests
+//! hold them to that. The doubling is also emitted in place, for the scalar
+//! multiplication's loop.
 //!
 //! Every operation reads its operands before writing its result, so a
 //! destination may also be a source. Nothing branches and nothing is indexed
@@ -379,6 +466,11 @@ def main():
         "Point doubling, `dbl-2001-b` for `a = -3`, as `Point::double`.",
         DOUBLE_SLOTS, DOUBLE))
     parts.append(emit(
+        "double_in_place_adx",
+        "`double_adx` with X3, Y3 and Z3 written over X, Y and Z: the scalar "
+        "multiplication's doubling, on a buffer whose first slots are its accumulator.",
+        DOUBLE_IP_SLOTS, DOUBLE_IP))
+    parts.append(emit(
         "add_adx",
         "Jacobian addition, `add-2007-bl`, as `Point::add_formula`; also leaves `H` and `R`.",
         ADD_SLOTS, ADD))
@@ -386,6 +478,11 @@ def main():
         "add_affine_adx",
         "Mixed addition, `madd-2007-bl`, as `Point::add_affine_formula`; also leaves `H` and `R`.",
         MADD_SLOTS, MADD))
+    for cm, dm in CMS_USED:
+        parts.append(emit(
+            f"cms_{cm}_{dm}_adx",
+            f"`{cm} A - {dm} B`, alone, for the tests: a fused operation the doubling uses.",
+            ["A", "B", "OUT"], [("cms", "OUT", "A", "B", str(cm), str(dm))], test_only=True))
     for k in (3, 4, 8):
         parts.append(emit(
             f"times{k}_adx",
@@ -399,91 +496,124 @@ def main():
         sys.stdout.write(text)
 
 
-DOUBLE_SLOTS = ["X", "Y", "Z", "X3", "Y3", "Z3", "delta", "gamma", "beta", "t", "u", "alpha", "beta8", "w"]
+# `Point::double`'s values, with its small multiples folded into three fused
+# operations, as for P-384: with `m = X^2 - Z^4`, `alpha = 3m` and
+# `beta = X Y^2`,
+#   d  = 12 beta - 9 m^2           (= 4 beta - alpha^2)
+#   X3 = 4 beta - d                (= alpha^2 - 8 beta)
+#   Y3 = 3 d m - 8 Y^4             (= alpha (4 beta - X3) - 8 gamma^2)
+#   Z3 = (Y + Z)^2 - Y^2 - Z^2
+# The same field elements, so the same canonical words; eight additive steps
+# where the formula as written takes fifteen. In an order for the core to
+# overlap: each chain's next step as soon as its inputs are there, and
+# independent work between a step and the next, which needs it.
+DOUBLE_SLOTS = ["X", "Y", "Z", "X3", "Y3", "Z3", "delta", "gamma", "beta", "m", "u", "m2", "d", "w", "g2"]
 DOUBLE = [
     ("sqr", "delta", "Z"),
     ("sqr", "gamma", "Y"),
-    ("mul", "beta", "X", "gamma"),
-    ("sub", "t", "X", "delta"),
+    ("sub", "m", "X", "delta"),
     ("add", "u", "X", "delta"),
-    ("mul", "t", "t", "u"),
-    ("mulk", "alpha", "t", "3"),
-    ("mulk", "beta8", "beta", "8"),
-    ("mulk", "beta", "beta", "4"),
-    ("sqr", "w", "alpha"),
-    ("sub", "X3", "w", "beta8"),
+    ("mul", "m", "m", "u"),
+    ("mul", "beta", "X", "gamma"),
+    ("sqr", "m2", "m"),
     ("add", "w", "Y", "Z"),
     ("sqr", "w", "w"),
+    ("cms", "d", "beta", "m2", "12", "9"),
+    ("sqr", "g2", "gamma"),
+    ("mul", "u", "d", "m"),
+    ("cms", "X3", "beta", "d", "4", "1"),
     ("sub", "w", "w", "gamma"),
     ("sub", "Z3", "w", "delta"),
-    ("sqr", "gamma", "gamma"),
-    ("mulk", "gamma", "gamma", "8"),
-    ("sub", "beta", "beta", "X3"),
-    ("mul", "beta", "alpha", "beta"),
-    ("sub", "Y3", "beta", "gamma"),
+    ("cms", "Y3", "u", "g2", "3", "8"),
 ]
 
+# Every (cm, dm) the doubling uses; each is emitted alone for the tests.
+CMS_USED = sorted({(int(op[4]), int(op[5])) for op in DOUBLE if op[0] == "cms"})
+
+
+# The same doubling in place, for the scalar multiplication's loop: X3, Y3
+# and Z3 written over X, Y and Z, each after the last operation that reads
+# it, which `in_place` checks.
+def in_place(program, rename):
+    out = []
+    written = set()
+    for op, dst, *src in program:
+        for x in src:
+            assert x not in written, (op, dst, x)
+        dst = rename.get(dst, dst)
+        if dst in rename.values():
+            written.add(dst)
+        out.append((op, dst, *src))
+    return out
+
+
+DOUBLE_IP_RENAME = {"X3": "X", "Y3": "Y", "Z3": "Z"}
+DOUBLE_IP_SLOTS = [x for x in DOUBLE_SLOTS if x not in DOUBLE_IP_RENAME]
+DOUBLE_IP = in_place(DOUBLE, DOUBLE_IP_RENAME)
+
+# The additions' operations in an order for the core to overlap, as for
+# P-384; the same operations on the same values, so the same words.
 ADD_SLOTS = ["X1", "Y1", "Z1", "X2", "Y2", "Z2", "X3", "Y3", "Z3", "H", "R",
-             "z1z1", "z2z2", "u1", "u2", "s1", "s2", "i", "j", "v", "t"]
+             "z1z1", "z2z2", "u1", "u2", "s1", "s2", "i", "j", "v", "t1", "t2", "t3", "t4"]
 ADD = [
     ("sqr", "z1z1", "Z1"),
     ("sqr", "z2z2", "Z2"),
-    ("mul", "u1", "X1", "z2z2"),
+    ("mul", "t1", "Y1", "Z2"),
     ("mul", "u2", "X2", "z1z1"),
-    ("mul", "t", "Y1", "Z2"),
-    ("mul", "s1", "t", "z2z2"),
-    ("mul", "t", "Y2", "Z1"),
-    ("mul", "s2", "t", "z1z1"),
+    ("mul", "u1", "X1", "z2z2"),
+    ("mul", "t2", "Y2", "Z1"),
     ("sub", "H", "u2", "u1"),
-    ("sub", "R", "s2", "s1"),
-    ("add", "R", "R", "R"),
     ("add", "i", "H", "H"),
     ("sqr", "i", "i"),
-    ("mul", "j", "H", "i"),
+    ("mul", "s1", "t1", "z2z2"),
     ("mul", "v", "u1", "i"),
+    ("mul", "s2", "t2", "z1z1"),
+    ("mul", "j", "H", "i"),
+    ("sub", "R", "s2", "s1"),
+    ("add", "R", "R", "R"),
     ("sqr", "X3", "R"),
-    ("sub", "X3", "X3", "j"),
-    ("add", "t", "v", "v"),
-    ("sub", "X3", "X3", "t"),
-    ("sub", "t", "v", "X3"),
-    ("mul", "Y3", "R", "t"),
-    ("mul", "t", "s1", "j"),
-    ("add", "t", "t", "t"),
-    ("sub", "Y3", "Y3", "t"),
     ("add", "Z3", "Z1", "Z2"),
     ("sqr", "Z3", "Z3"),
+    ("mul", "t3", "s1", "j"),
+    ("add", "t1", "v", "v"),
+    ("sub", "X3", "X3", "j"),
+    ("sub", "X3", "X3", "t1"),
+    ("sub", "t4", "v", "X3"),
     ("sub", "Z3", "Z3", "z1z1"),
+    ("mul", "Y3", "R", "t4"),
     ("sub", "Z3", "Z3", "z2z2"),
     ("mul", "Z3", "Z3", "H"),
+    ("add", "t3", "t3", "t3"),
+    ("sub", "Y3", "Y3", "t3"),
 ]
 
 MADD_SLOTS = ["X1", "Y1", "Z1", "x2", "y2", "X3", "Y3", "Z3", "H", "R",
-              "z1z1", "u2", "s2", "hh", "i", "j", "v", "t"]
+              "z1z1", "u2", "s2", "hh", "i", "j", "v", "t", "t2", "t3"]
 MADD = [
     ("sqr", "z1z1", "Z1"),
-    ("mul", "u2", "x2", "z1z1"),
     ("mul", "t", "y2", "Z1"),
+    ("mul", "u2", "x2", "z1z1"),
     ("mul", "s2", "t", "z1z1"),
     ("sub", "H", "u2", "X1"),
     ("sqr", "hh", "H"),
-    ("mulk", "i", "hh", "4"),
-    ("mul", "j", "H", "i"),
     ("sub", "R", "s2", "Y1"),
     ("add", "R", "R", "R"),
-    ("mul", "v", "X1", "i"),
     ("sqr", "X3", "R"),
-    ("sub", "X3", "X3", "j"),
-    ("add", "t", "v", "v"),
-    ("sub", "X3", "X3", "t"),
-    ("sub", "t", "v", "X3"),
-    ("mul", "Y3", "R", "t"),
-    ("mul", "t", "Y1", "j"),
-    ("add", "t", "t", "t"),
-    ("sub", "Y3", "Y3", "t"),
+    ("mulk", "i", "hh", "4"),
+    ("mul", "v", "X1", "i"),
+    ("mul", "j", "H", "i"),
     ("add", "Z3", "Z1", "H"),
     ("sqr", "Z3", "Z3"),
+    ("mul", "t2", "Y1", "j"),
+    ("add", "t", "v", "v"),
+    ("sub", "X3", "X3", "j"),
+    ("sub", "X3", "X3", "t"),
+    ("sub", "t3", "v", "X3"),
     ("sub", "Z3", "Z3", "z1z1"),
+    ("mul", "Y3", "R", "t3"),
     ("sub", "Z3", "Z3", "hh"),
+    ("add", "t2", "t2", "t2"),
+    ("sub", "Y3", "Y3", "t2"),
 ]
 
 main()

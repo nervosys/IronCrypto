@@ -458,14 +458,15 @@ Cortex-M0, Cortex-M4, RISC-V and AArch64 Linux), seven more on AArch64 alone for
 its ARMv8 AES, `PMULL` GHASH, SHA-256 and SHA-512 backends, and seventy-five more
 on x86-64 alone for its
 Curve25519, P-256 and P-384 assembly, P-256's and P-384's AVX-512 IFMA point
-formulas, window reads and conversions, a prepared P-384 key's window read, Ed25519's MULX/ADX table reads (and the AVX2 radix-32 read inside its additions, with its digit recoding) and X25519's doubling, its divsteps inversions, its
+formulas, window reads and conversions, a prepared P-384 key's window read, the
+MULX/ADX multiplications' doublings in place and per-digit additions, Ed25519's MULX/ADX table reads (and the AVX2 radix-32 read inside its additions, with its digit recoding) and X25519's doubling, its divsteps inversions, its
 AVX-512 ChaCha20 and AVX2 Poly1305 kernels, the short-message two-block AVX2 ChaCha20, radix-2^64 Poly1305 and SHA-NI HMAC-SHA256 kernels, RSA's table read and its
 MULX/ADX, AVX-512 IFMA and portable Montgomery products, RSA's whole
 AVX-512 IFMA exponentiation at 1024 and 2048 bits, the AES-NI and VAES-256
 AES-GCM loops, RSA's MULX/ADX squaring, its 1024-bit, 1536-bit and Karatsuba
 2048-bit kernels its AVX2 table reads, and the short-message ChaCha20, Poly1305 and
-HMAC-SHA256 kernels: **308 gating
-probe/target checks** (125 on x86-64, 51 on AArch64, 44 on each of the three 32-bit targets). It rejects
+HMAC-SHA256 kernels: **313 gating
+probe/target checks** (130 on x86-64, 51 on AArch64, 44 on each of the three 32-bit targets). It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
 P-256 Montgomery loop stays rolled; its counter branches, and a constant-length

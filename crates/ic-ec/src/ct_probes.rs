@@ -193,7 +193,7 @@ pub use crate::nist::p256_x86::{mul_adx as fp_mul_adx, square_adx as fp_square_a
 #[cfg(target_arch = "x86_64")]
 pub use crate::nist::p256_x86_point::{
     add_adx as point_add_adx, add_affine_adx as point_add_affine_adx,
-    double_adx as point_double_adx,
+    double_adx as point_double_adx, double_in_place_adx as point_double_in_place_adx,
 };
 // P-384's, likewise: the scalar ring's multiplication, the field's
 // multiplication and squaring specialised to the prime, and the point
@@ -203,7 +203,8 @@ pub use crate::nist::mont_x86::mul_p384_n as p384_fn_mul_adx;
 #[cfg(target_arch = "x86_64")]
 pub use crate::nist::p384_x86_point::{
     add_adx as p384_point_add_adx, add_affine_adx as p384_point_add_affine_adx,
-    double_adx as p384_point_double_adx, fmul_adx as p384_fp_mul_adx, fsqr_adx as p384_fp_sqr_adx,
+    double_adx as p384_point_double_adx, double_in_place_adx as p384_point_double_in_place_adx,
+    fmul_adx as p384_fp_mul_adx, fsqr_adx as p384_fp_sqr_adx,
 };
 
 /// P-384's field inversion by divsteps, on the integer below p as the field
@@ -243,6 +244,111 @@ pub fn p384_comb_select(comb: &P384Comb, digit: i8, out: &mut [[u64; 6]; 2]) {
     let (x, y) = comb.0.first_window().select(digit);
     *out = [x.0, y.0];
 }
+
+/// A P-256 point's window of multiples `1..=16`, Jacobian, as the
+/// multiplication on MULX/ADX builds it, for [`p256_ladder_add`].
+#[cfg(target_arch = "x86_64")]
+pub struct P256Window(crate::nist::gentable::Window<crate::p256::P256>);
+
+/// The window of a P-256 public key, SEC1 uncompressed; `None` if it is not
+/// a curve point. Public input, so not itself a probe.
+#[cfg(target_arch = "x86_64")]
+pub fn p256_window_new(public_key: &[u8; 65]) -> Option<P256Window> {
+    let q = crate::nist::point::AffinePoint::<crate::p256::P256>::from_sec1(public_key)?;
+    Some(P256Window(crate::nist::gentable::Window::new(
+        &crate::nist::point::Point::from_affine(&q),
+    )))
+}
+
+/// A window of the P-256 generator table's shape: thirty-two affine
+/// multiples, for [`p256_table_add`].
+#[cfg(target_arch = "x86_64")]
+pub struct P256Table(crate::nist::gentable::AffineWindow<crate::p256::P256, 32>);
+
+/// Such a window, of a P-256 public key, SEC1 uncompressed; `None` if it is
+/// not a curve point. Public input, so not itself a probe.
+#[cfg(target_arch = "x86_64")]
+pub fn p256_table_new(public_key: &[u8; 65]) -> Option<P256Table> {
+    let q = crate::nist::point::AffinePoint::<crate::p256::P256>::from_sec1(public_key)?;
+    Some(P256Table(crate::nist::gentable::AffineWindow::new(
+        &crate::nist::point::Point::from_affine(&q),
+    )))
+}
+
+/// The probes of one digit's addition in the multiplications on MULX/ADX,
+/// which call the assembly and so are `unsafe`, as `ic-rsa`'s are.
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+mod adx_steps {
+    use super::{P256Table, P256Window, P384Comb};
+
+    /// One digit's addition in P-384's multiplication on MULX/ADX, the digit
+    /// secret: the entry's read from an affine window -- here a prepared key's
+    /// first, the same kind of window as the one the multiplication builds --
+    /// the mixed addition, and the identity cases selected by masks
+    /// (`nist::p384_x86::ladder_add`). The buffer's first three slots are the
+    /// accumulator.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX, and the accumulator's slots must hold
+    /// a point.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    pub unsafe fn p384_ladder_add(
+        comb: &P384Comb,
+        digit: i8,
+        buf: &mut [core::mem::MaybeUninit<u64>; crate::nist::p384_x86::LADDER],
+    ) {
+        let (x, y) = comb.0.first_window().select(digit);
+        // SAFETY: the caller's guarantees are `ladder_add`'s.
+        unsafe { crate::nist::p384_x86::ladder_add(buf, &x.0, &y.0, digit) }
+    }
+
+    /// One digit's addition in P-256's multiplication on MULX/ADX, the digit
+    /// secret: the entry's read from the Jacobian window, every entry under a
+    /// mask and the `y` negated by a move for a negative digit, the addition,
+    /// and the identity cases selected by masks (`nist::p256_x86::ladder_add`).
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX, and the accumulator's slots must hold
+    /// a point.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    pub unsafe fn p256_ladder_add(
+        window: &P256Window,
+        digit: i8,
+        buf: &mut [core::mem::MaybeUninit<u64>; crate::nist::p256_x86::LADDER],
+    ) {
+        let entry = window.0.select(digit);
+        // SAFETY: the caller's guarantees are `ladder_add`'s.
+        unsafe { crate::nist::p256_x86::ladder_add(buf, &entry) }
+    }
+
+    /// One digit's addition in P-256's multiplication of the generator on
+    /// MULX/ADX, the digit secret, as signing makes it: the entry's read from a
+    /// window of the table, every entry under a mask, the mixed addition, and
+    /// the identity cases selected by masks (`nist::p256_x86::table_add`).
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX, and the accumulator's slots must hold
+    /// a point.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(always)]
+    pub unsafe fn p256_table_add(
+        table: &P256Table,
+        digit: i8,
+        buf: &mut [core::mem::MaybeUninit<u64>; crate::nist::p256_x86::TABLE],
+    ) {
+        let (x, y) = table.0.select(digit);
+        // SAFETY: the caller's guarantees are `table_add`'s.
+        unsafe { crate::nist::p256_x86::table_add(buf, &x.0, &y.0, digit) }
+    }
+}
+#[cfg(target_arch = "x86_64")]
+pub use adx_steps::{p256_ladder_add, p256_table_add, p384_ladder_add};
 
 /// P-256's two inversions by divsteps, the same way: the field's, on ECDH's
 /// and every public key's `Z`, and the scalar ring's, on ECDSA's secret
