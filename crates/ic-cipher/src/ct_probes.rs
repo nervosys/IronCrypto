@@ -1,5 +1,5 @@
-//! The x86-64 ChaCha20, Poly1305 and AES-GCM kernels, for `scripts/ct-audit`
-//! to inspect after LTO. Not API, not covered by semver; behind the
+//! The x86-64 ChaCha20, Poly1305 and AES-GCM kernels, and the ARMv8 AES and
+//! `PMULL` GHASH backends, for `scripts/ct-audit` to inspect after LTO. Not API, not covered by semver; behind the
 //! `ct-probes` feature.
 //!
 //! The ChaCha20 and Poly1305 ones are each one straight-line piece: a
@@ -10,6 +10,8 @@
 //! public. Never executed: they need AVX-512F, AVX2, VAES or AES-NI, and are
 //! compiled to be read.
 
+#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto"))]
+pub use armv8::*;
 #[cfg(target_arch = "x86_64")]
 pub use gcm::*;
 #[cfg(target_arch = "x86_64")]
@@ -259,5 +261,103 @@ mod x86 {
         let last = poly_avx2::Mul::lanes([&powers[0], &powers[1], &powers[2], &powers[3]]);
         // SAFETY: AVX2, as the caller guarantees.
         unsafe { poly_avx2::finish(&limbs(h), &last) }
+    }
+}
+
+/// The ARMv8 AES and `PMULL` GHASH backends (`aes::aarch64`, `pmull`), for
+/// the `aarch64-unknown-linux-gnu` target of `scripts/check-ct.py`. AES is
+/// held at AES-256, fourteen rounds, so the round count is a constant in the
+/// code read; the library's own branches on it are on the key length.
+/// Compiled to be read, never run by the audit.
+#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto"))]
+mod armv8 {
+    use crate::aes::aarch64::{self as aes, Keys};
+    use crate::aes::portable::Schedule;
+    use crate::pmull;
+
+    /// The ARM path's key setup after expansion: the round keys into
+    /// registers and the equivalent inverse cipher's keys through `AESIMC`.
+    /// Read inlined into the probes below, not on its own: returning the
+    /// keys would copy them out with a call to `memcpy`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have the AES instructions.
+    #[target_feature(enable = "neon,aes")]
+    #[inline]
+    unsafe fn aes256_armv8_load(round_keys: &[u8; 240]) -> Keys {
+        let sched = Schedule::from_aes256_round_keys(round_keys);
+        // SAFETY: as the caller guarantees.
+        unsafe { Keys::load(&sched) }
+    }
+
+    /// One block encrypted under an AES-256 key, loaded as above.
+    ///
+    /// # Safety
+    ///
+    /// As [`aes256_armv8_load`].
+    #[target_feature(enable = "neon,aes")]
+    pub unsafe fn aes256_armv8_encrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = aes256_armv8_load(round_keys);
+            // The length is the block's, so this cannot fail.
+            let _ = aes::encrypt_block(&keys, block);
+        }
+    }
+
+    /// One block decrypted under an AES-256 key, loaded as above.
+    ///
+    /// # Safety
+    ///
+    /// As [`aes256_armv8_load`].
+    #[target_feature(enable = "neon,aes")]
+    pub unsafe fn aes256_armv8_decrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = aes256_armv8_load(round_keys);
+            let _ = aes::decrypt_block(&keys, block);
+        }
+    }
+
+    /// One batch of `PARALLEL_BLOCKS` (four) blocks encrypted together, the
+    /// path counter mode takes.
+    ///
+    /// # Safety
+    ///
+    /// As [`aes256_armv8_load`].
+    #[target_feature(enable = "neon,aes")]
+    pub unsafe fn aes256_armv8_encrypt4(round_keys: &[u8; 240], data: &mut [u8; 64]) {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = aes256_armv8_load(round_keys);
+            let _ = aes::encrypt_blocks(&keys, data);
+        }
+    }
+
+    /// One GHASH multiplication, `x = x * h`, on `PMULL`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have `PMULL` (the `aes` feature).
+    #[target_feature(enable = "neon,aes")]
+    pub unsafe fn ghash_pmull_mul(x: &mut [u8; 16], h: &[u8; 16]) {
+        // SAFETY: as the caller guarantees.
+        unsafe { pmull::mul(x, h) }
+    }
+
+    /// Three groups of eight blocks absorbed against eight powers of `H`.
+    ///
+    /// # Safety
+    ///
+    /// As [`ghash_pmull_mul`].
+    #[target_feature(enable = "neon,aes")]
+    pub unsafe fn ghash_pmull_absorb8(
+        acc: &mut [u8; 16],
+        powers: &[[u8; 16]; 8],
+        blocks: &[u8; 384],
+    ) {
+        // SAFETY: as the caller guarantees.
+        unsafe { pmull::absorb8(acc, powers, blocks) }
     }
 }

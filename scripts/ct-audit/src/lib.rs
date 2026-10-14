@@ -861,3 +861,68 @@ mod x86_gcm {
         p::gcm_twist(h)
     }
 }
+
+// aarch64: the ARMv8 AES backend at AES-256 (one block each way and a batch
+// of four, each after loading the key: the decryption probe is the one that
+// derives the inverse cipher's keys), the PMULL GHASH multiply and its
+// eight-block absorb over three groups, and SHA-256 compression over four
+// blocks and SHA-512 over two. Compiled to be read, never run. Their loops' branches are excused
+// by the AArch64 counter-loop rule, per probe, up to AARCH64_EXCUSE_CEILINGS.
+#[cfg(target_arch = "aarch64")]
+mod armv8 {
+    use ic_cipher::ct_probes as c;
+    use ic_hash::ct_probes as h;
+
+    /// # Safety
+    /// Requires the AES instructions.
+    #[no_mangle]
+    pub unsafe fn ct_aes256_armv8_encrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        unsafe { c::aes256_armv8_encrypt(round_keys, block) }
+    }
+
+    /// # Safety
+    /// Requires the AES instructions.
+    #[no_mangle]
+    pub unsafe fn ct_aes256_armv8_decrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        unsafe { c::aes256_armv8_decrypt(round_keys, block) }
+    }
+
+    /// # Safety
+    /// Requires the AES instructions.
+    #[no_mangle]
+    pub unsafe fn ct_aes256_armv8_encrypt4(round_keys: &[u8; 240], data: &mut [u8; 64]) {
+        unsafe { c::aes256_armv8_encrypt4(round_keys, data) }
+    }
+
+    /// # Safety
+    /// Requires PMULL.
+    #[no_mangle]
+    pub unsafe fn ct_ghash_pmull_mul(x: &mut [u8; 16], hk: &[u8; 16]) {
+        unsafe { c::ghash_pmull_mul(x, hk) }
+    }
+
+    /// # Safety
+    /// Requires PMULL.
+    #[no_mangle]
+    pub unsafe fn ct_ghash_pmull_absorb8(
+        acc: &mut [u8; 16],
+        powers: &[[u8; 16]; 8],
+        blocks: &[u8; 384],
+    ) {
+        unsafe { c::ghash_pmull_absorb8(acc, powers, blocks) }
+    }
+
+    /// # Safety
+    /// Requires the SHA-256 instructions.
+    #[no_mangle]
+    pub unsafe fn ct_sha256_armv8_compress(state: &mut [u32; 8], blocks: &[u8; 256]) {
+        unsafe { h::sha256_armv8_compress(state, blocks) }
+    }
+
+    /// # Safety
+    /// Requires the SHA-512 instructions.
+    #[no_mangle]
+    pub unsafe fn ct_sha512_armv8_compress(state: &mut [u64; 8], blocks: &[u8; 256]) {
+        unsafe { h::sha512_armv8_compress(state, blocks) }
+    }
+}

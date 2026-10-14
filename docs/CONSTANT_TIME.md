@@ -1,8 +1,9 @@
 # Compiled-code regression checks
 
-Run `python scripts/check-ct.py` from any directory. Install the four targets
+Run `python scripts/check-ct.py` from any directory. Install the five targets
 with `rustup target add x86_64-unknown-linux-gnu thumbv6m-none-eabi
-thumbv7em-none-eabihf riscv32imac-unknown-none-elf` first. A missing target is an
+thumbv7em-none-eabihf riscv32imac-unknown-none-elf aarch64-unknown-linux-gnu`
+first. A missing target is an
 error. `--target <target>` checks one target. Python uses only its standard
 library; the isolated harness depends only on this repository's crates.
 
@@ -20,7 +21,8 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and sixty-seven more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target,
+sixty-seven more on x86-64, and seven more on aarch64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -39,11 +41,11 @@ release profile; this is not the workspace binary's overflow-checked profile.
 - P-256 field and scalar operations: reduction from bytes, addition,
   subtraction, multiplication, negation, conditional move, equality and
   parity, each from and back to bytes. Hashing to the curve, the OPRF,
-  ECDH and ECDSA are built from these. All four targets gate; on the
+  ECDH and ECDSA are built from these. All five targets gate; on the
   32-bit ones a few findings are excused by rule, as described below.
 - Ed25519 scalar arithmetic modulo L: the reduction of a 512-bit value, which
   makes the secret nonce from a hash and finishes `S`, and `a * b + c`, which
-  is `S`. Straight-line on all four targets; see "Ed25519 scalar reduction"
+  is `S`. Straight-line on all five targets; see "Ed25519 scalar reduction"
   below.
 - On x86-64 only, the Curve25519 backends that exist only there: the
   MULX/ADX field's multiplication, squaring, addition, subtraction,
@@ -110,6 +112,17 @@ release profile; this is not the workspace binary's overflow-checked profile.
   converted coordinate below p (`ct_p256_ifma_from_limbs`,
   `ct_p384_ifma_from_limbs`). See "P-256 and P-384 on AVX-512 IFMA" below.
   `X86_ONLY` in the checker requires all of these on that target and no other.
+
+- On aarch64 only, the ARMv8 backends behind `aarch64-crypto`: AES-256 one
+  block each way and a batch of four, each after the key load
+  (`ct_aes256_armv8_encrypt`, `ct_aes256_armv8_decrypt`,
+  `ct_aes256_armv8_encrypt4`), the `PMULL` GHASH multiply and its
+  eight-block absorb (`ct_ghash_pmull_mul`, `ct_ghash_pmull_absorb8`), and
+  SHA-256 and SHA-512 compression (`ct_sha256_armv8_compress`,
+  `ct_sha512_armv8_compress`). Their loops over blocks are excused by the
+  AArch64 counter-loop rule, per probe, up to a ceiling. `AARCH64_ONLY`
+  requires them on that target and no other. See "The ARMv8 backends"
+  below.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
 Branches and integer division/remainder instructions are rejected. A call or
@@ -693,44 +706,194 @@ Probe count: thirty-four on x86-64 alone, where there were thirty-one. All
 seventy-eight pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 78 + 3 x 44 = 210 gating probe/target checks.
 
-## The ARMv8 backends, 2026-10-13: not gated
+## The ARMv8 backends, 2026-10-14
 
 AES (`ic-cipher::aes::aarch64`), GHASH on `PMULL` (`ic-cipher::pmull`),
-SHA-256 and SHA-512 (`ic-hash::sha2::aarch64`) have AArch64 backends behind
-the off-by-default `aarch64-crypto` feature. None of them is a probe in this
-gate, and `aarch64` is not one of its targets.
+SHA-256 and SHA-512 (`ic-hash::sha2::aarch64`), the AArch64 backends behind
+the off-by-default `aarch64-crypto` feature, are in the gate:
+`aarch64-unknown-linux-gnu` is its fifth target. The harness is a static
+library, so the target needs no linker and no C toolchain, only
+`rustup target add aarch64-unknown-linux-gnu`; like every other target, a
+missing one is an error.
 
-Adding it is more than a target name. The checker has branch, call and
-loop rules per target family, and the loop rule exists for x86-64 only;
-AArch64 would need its own (`b.cond`, `cbz`/`cbnz`, `tbz`/`tbnz`, `bl`,
-`br`/`blr`) and a reviewed loop rule, because every one of these kernels
-loops over blocks; and the kernels would need probes in `scripts/ct-audit`,
-which they are `pub(super)` and `#[target_feature]` to avoid. That was not
-done here.
+`scripts/ct-audit` turns on `aarch64-crypto` and `ct-probes` for `ic-cipher`
+and `ic-hash`. Under `ct-probes` the backends compile without `std`, so
+without the run-time detection that selects them in the library (which
+stays under `std`); on every other target the two features select nothing.
+The wrappers are in `ic_cipher::ct_probes` and `ic_hash::ct_probes`,
+hidden, not API, and compiled only with the feature.
 
-What argues they are constant time instead:
+This gates the compiled code. It does not establish anything about the
+instructions' timing on a core, which is the next point's subject, and none
+of this has run on ARM hardware.
 
-- **The instructions.** `AESE`/`AESD`/`AESMC`/`AESIMC`, `PMULL`/`PMULL2`,
-  `SHA256H`/`SHA256H2`/`SHA256SU0`/`SHA256SU1`, `SHA512H`/`SHA512H2`/
-  `SHA512SU0`/`SHA512SU1`, `RBIT`, `REV32`/`REV64` and `EXT` are vector
-  operations with no data-dependent behaviour in the architecture; Arm lists
-  the crypto instructions among those covered by FEAT_DIT (data-independent
-  timing). This library does not set `PSTATE.DIT`.
-- **The source.** No table is indexed and no branch is taken on key, state,
-  message or field element. Every branch is on the block count or the round
-  number, and every vector index is a literal or a function of the round.
-- **One reading of the compiled code**, not a gate: `cargo rustc --release
-  --target aarch64-unknown-linux-gnu --features aarch64-crypto -- --emit asm`
-  for `ic-hash` and `ic-cipher` with rustc 1.99.0. `compress256` is 143
-  instructions with sixteen `sha256h`, its only conditional branches the
-  block loop (`b.eq`, `b.ne`); `compress512` is 236 with the block loop
-  and a round-group loop (`b.ne` twice, `b.eq` once); `pmull::mul` is
-  thirty instructions with no branch at all; `pmull::absorb8` branches only
-  on its group count. No calls in any of them.
+### What fails on AArch64
 
-That reading is a snapshot of one compiler on one day, which is exactly what
-this gate exists to replace. Until AArch64 is a gated target, a compiler
-change that introduced a secret-dependent branch here would not be caught.
+Every control transfer but a bare `ret`: `b.<cond>`, `cbz`/`cbnz`,
+`tbz`/`tbnz`, `b` to a label, `bl`, `br`, `blr`, their
+pointer-authenticated forms (`braa`, `blraa`, `retaa`, ...), `ret` to a
+named register, `svc`/`hvc`/`smc`/`eret`; and `sdiv`/`udiv`. A `b` or `bl`
+to a function whose body is in the same assembly is followed, and that
+body is held to the same rules, as on every target; a `bl` to anything
+else (`memcpy`) fails.
+
+### The rule
+
+One rule, "counter loop", in `A64Body`, the x86-64 rule's shape and no
+wider, applied only in the probes `AARCH64_EXCUSE_CEILINGS` names:
+
+- The branch is the last instruction of its basic block, targets a label
+  in the same function, and is the back edge or an exit of a natural loop,
+  found from the control-flow graph by dominators.
+- Its condition is a counter's: `cbz`/`cbnz` on a register, or a
+  `b.<cond>` whose flags come, within its own basic block, from
+  `subs`/`adds Xn, Xn, #imm`, `cmp`/`cmn Xn, #imm`, or `cmp Xn, Xm` of two
+  distinct registers. Every instruction between that one and the branch
+  must be one the checker knows does not set the flags.
+- The register is a counter of that loop: every instruction in the loop
+  that writes it is `add`, `sub`, `adds` or `subs` of an immediate to
+  itself, and at least one is. For `cmp Xn, Xm` the other register is
+  written nowhere in the loop.
+- Every instruction in the loop is one whose register writes the checker
+  can list (`A64_KNOWN`: integer and SIMD data processing, the crypto
+  instructions, loads and stores with their writeback). A call, an
+  indirect branch or any instruction not in the list voids the excuse for
+  that loop.
+
+Never excused: `tbz`/`tbnz` (a branch on one bit, data or counter),
+`ccmp`/`ccmn` chains, `tst`, `ands`, flags from carries (`adcs`, `sbcs`),
+flags from a register a load or data arithmetic wrote, `cmp` against a
+register written in the loop, a counter stepped by a load's writeback or
+selected by `csel`, and `b` to a label: there is no unconditional-jump
+rule on AArch64, because none of these probes needed one.
+
+### Probes
+
+Seven, in `AARCH64_ONLY`, required on aarch64 and nowhere else:
+
+- `ct_aes256_armv8_encrypt`, `ct_aes256_armv8_decrypt`: one block each way
+  at AES-256, after `Keys::load` from a fourteen-round schedule
+  (`Schedule::from_aes256_round_keys`, behind `ct-probes`). The round count
+  is a field the library branches on by key length; the probes fix it, so
+  the code read is AES-256's. The decryption probe reads the key load's
+  derivation of the inverse cipher's keys through `AESIMC`, which touches
+  every round key.
+- `ct_aes256_armv8_encrypt4`: one batch of four blocks through
+  `encrypt_blocks`, the path counter mode takes.
+- `ct_ghash_pmull_mul`: one GHASH multiplication on `PMULL`.
+- `ct_ghash_pmull_absorb8`: three groups of eight blocks absorbed against
+  eight powers of `H`.
+- `ct_sha256_armv8_compress`: SHA-256 compression over four blocks.
+- `ct_sha512_armv8_compress`: SHA-512 compression over two blocks.
+
+A separate probe of the key load alone was written and dropped: returning
+the loaded keys copied them out with `bl memcpy`, which fails, correctly.
+The encryption and decryption probes read the load inlined instead.
+
+aarch64 also runs the forty-four probes every target runs. All pass with
+nothing excused: the P-256 probes follow `bl` into `from_bytes_reduced` and
+`from_mont`, straight-line, and nothing else branches. The x86-64-only
+probes are not required there; `ct_rsa_cios_2048` compiles for aarch64 and
+has four loop branches there that nobody has read, so it stays out.
+
+### The ceilings, read on 2026-10-14, rustc 1.99.0
+
+`AARCH64_EXCUSE_CEILINGS`, per probe, counted following calls; every other
+probe excuses nothing.
+
+| Probe | counter loop |
+| --- | --- |
+| `ct_ghash_pmull_absorb8` | 1 |
+| `ct_sha256_armv8_compress` | 1 |
+| `ct_sha512_armv8_compress` | 2 |
+
+Each excused branch, read in `<CARGO_TARGET_DIR or target>/ct-audit/probes/aarch64-unknown-linux-gnu.s`:
+
+- `ct_ghash_pmull_absorb8`: `subs x11, x11, #128` at the top of the group
+  loop, `b.ne` at its end, x11 set to 384 by `mov w11, #384` before it.
+  Between them only loads (one post-indexed on the block pointer x10),
+  `rbit`, `pmull`/`pmull2`, `ext`, `eor` and `dup`.
+- `ct_sha256_armv8_compress`: `add x8, x8, #64; cmp x8, #256; b.ne`, x8 the
+  block offset, from `mov x8, xzr`. The sixteen four-round groups are
+  unrolled inside it.
+- `ct_sha512_armv8_compress`: the block loop, `subs x8, x8, #128` and
+  `b.ne` after `add x1, x1, #128`, x8 from `mov w8, #256`; and inside it
+  the loop over four of the five eight-round groups (the first, which has
+  no schedule update, is peeled), `subs x11, x11, #1; b.ne`, x11 set to 4
+  at the top of each block.
+
+The rest is straight-line. The AES encryption probe is fourteen `aese` and
+thirteen `aesmc`, unrolled; decryption is fourteen `aesd` and twenty-six
+`aesimc`, thirteen of them the key load's; the batch is fifty-six `aese`.
+The `PMULL` multiply is thirty instructions with no branch. Neither AES
+probe has a bounds check: the fixed round count folds them.
+
+### Mutations
+
+Each applied to the library, the gate run as `python scripts/check-ct.py
+--target aarch64-unknown-linux-gnu`, and restored:
+
+- `if state[0] & 1 != 0 { black_box(state[1]) }` at the top of
+  `compress256`: fails `ct_sha256_armv8_compress -> ...sha256_armv8_compress:
+  tbz w8, #0, .LBB63_2`.
+- `if h[0] & 1 != 0 { black_box(x[1]) }` at the top of `pmull::mul`: fails
+  `ct_ghash_pmull_mul -> ...ghash_pmull_mul: tbz w8, #0, .LBB53_2`.
+- `if block[0] == 0x80 { black_box(block[1]) }` inside the SHA-256 block
+  loop (`armv8_sha256_blocks`): fails `b.ne .LBB63_1`, whose flags are
+  `cmp w11, #128` on the loaded byte, and the two `b` the branch brought
+  with it; the loop's own exit, now `b.eq` on the counter, is still the one
+  excused.
+- The SHA-512 round-group loop written out twice in `armv8_sha512_blocks`:
+  fails `ct_sha512_armv8_compress: 3 findings excused as counter loop, more
+  than the 2 reviewed`.
+
+Two attempts to add a loop that did not: the absorb run twice in the probe
+(LLVM merged the two loops), and `compress512` called twice (one
+out-of-line copy, and a body is counted once per probe). Neither changed
+what is read; the duplicated round-group loop above is the over-ceiling
+check.
+
+`scripts/test-check-ct.py` has the rule's own cases: the shapes the
+compiler emitted pass (`subs`/`b.ne`, `add`/`cmp #imm`/`b.ne`, a `cbnz`
+countdown, `cmp` against a fixed end pointer, SHA-512's nesting), and
+nineteen that only resemble them fail (`b.eq` on a loaded value, `subs` of a
+loaded register, `tbz` on a
+data bit, `tbnz` on the counter, a counter also written from data, loaded,
+stepped by writeback or selected by `csel`, `cmp` against a register
+written in the loop, a `ccmp` chain, `tst`, flags from `adcs`, a register
+never stepped, a branch outside any loop, a call in the loop, an unknown
+instruction in the loop or between the flags and the branch, `br`, `blr`),
+as do one loop over a ceiling and the same loops in an unlisted probe.
+Making `_counter` accept every register, and the flag search skip unknown
+instructions, failed nine of those.
+
+### Not covered
+
+- **The key expansion.** `Schedule::expand` is portable code shared by
+  every backend, and is a probe on no target. The ARM-specific half of key
+  setup, the load and the `AESIMC` derivation, is read.
+- **AES-128 and AES-192.** The round count is public; their code is the
+  same loop at ten and twelve rounds, not read.
+- **The composition.** Run-time detection, the dispatch in `aes.rs`,
+  `encrypt_blocks`'s remainder path, and AES-GCM on ARM (`gcm.rs`, which
+  runs the AES backend and the `PMULL` GHASH one after the other) need
+  `std` or a message length, and are not probed. Their branches are on
+  lengths and on the CPU's features.
+- **Execution.** The probes are compiled to be read. `scripts/test-aarch64.sh`
+  runs the kernels' differential tests under QEMU; it was not run for this
+  change, which had no QEMU to hand, and none of it has run on ARM
+  hardware.
+- **The instructions' timing.** `AESE`/`AESD`/`AESMC`/`AESIMC`,
+  `PMULL`/`PMULL2`, `SHA256H`/`SHA256H2`/`SHA256SU0`/`SHA256SU1`,
+  `SHA512H`/`SHA512H2`/`SHA512SU0`/`SHA512SU1`, `RBIT`, `REV32`/`REV64` and
+  `EXT` are vector operations with no data-dependent behaviour in the
+  architecture; Arm lists the crypto instructions among those covered by
+  FEAT_DIT (data-independent timing). This library does not set
+  `PSTATE.DIT`, and the gate does not look at timing.
+
+Probe count: seven on aarch64 alone, and the forty-four shared, fifty-one
+there, all passing. With 111 on x86-64 and 44 on each 32-bit target:
+111 + 3 x 44 + 51 = 294 gating probe/target checks.
 
 ## The IFMA exponentiation, 2026-10-13
 

@@ -26,9 +26,10 @@
 //!
 //! The SHA-2 instructions are fixed-latency vector operations with no
 //! data-dependent behaviour, and nothing here indexes memory or branches on
-//! the message or the state. Every branch is on the round number. The
-//! compiled code is not checked by `scripts/check-ct.py`; see
-//! `docs/CONSTANT_TIME.md`.
+//! the message or the state. Every branch is on the block count or the round
+//! number. The compiled code is checked by `scripts/check-ct.py` on
+//! `aarch64-unknown-linux-gnu` (`ct_sha256_armv8_compress`,
+//! `ct_sha512_armv8_compress`); see `docs/CONSTANT_TIME.md`.
 
 use super::armv8_rounds::{
     armv8_sha256_blocks, armv8_sha256_quad, armv8_sha512_blocks, armv8_sha512_pair,
@@ -36,6 +37,7 @@ use super::armv8_rounds::{
 use super::{K256, K512};
 
 /// Whether this CPU has the SHA-256 instructions. Asked once.
+#[cfg(feature = "std")]
 pub(super) fn sha256_available() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
     // 0 not yet asked, 1 yes, 2 no.
@@ -56,6 +58,7 @@ pub(super) fn sha256_available() -> bool {
 ///
 /// Rust's `sha3` target feature is `FEAT_SHA512` together with `FEAT_SHA3`;
 /// there is no separate name for the SHA-512 half.
+#[cfg(feature = "std")]
 pub(super) fn sha512_available() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
     static CACHED: AtomicU8 = AtomicU8::new(0);

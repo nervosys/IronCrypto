@@ -89,6 +89,24 @@ impl Schedule {
         })
     }
 
+    /// An AES-256 schedule from its fifteen round keys, as expanded, for
+    /// `ct_probes`: the probe fixes the round count, so the compiled code
+    /// read is the one AES-256 runs. Not API.
+    #[cfg(all(
+        target_arch = "aarch64",
+        feature = "aarch64-crypto",
+        feature = "ct-probes",
+        not(ic_approved_only)
+    ))]
+    pub(crate) fn from_aes256_round_keys(round_keys: &[u8; 240]) -> Self {
+        let mut rk = [0u8; MAX_ROUND_KEYS];
+        rk[..240].copy_from_slice(round_keys);
+        Self {
+            round_keys: rk,
+            rounds: 14,
+        }
+    }
+
     /// The round key for round `round`.
     #[inline]
     pub(crate) fn round_key(&self, round: usize) -> &[u8] {

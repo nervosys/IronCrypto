@@ -13,9 +13,9 @@ Neither library is CMVP validated.
 | | ahead | level | behind |
 |---|---|---|---|
 | Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512 at 2048 and 3072 bits; level at 4096-bit signing), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, Ed25519 signing falls behind, P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH and P-256 signing are level (see "Without AVX-512") |
-| Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only; everything else is portable |
+| Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's Montgomery reduction, and Curve25519's multiplication column sums; P-256's products and the assembly are not proved |
-| Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
+| Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
 | Test vectors | every suite Graviola runs, plus ACVP for ML-KEM, ML-DSA, SLH-DSA | | |
 | For agents | ontology, `ic recommend`, `ic lint`, MCP server with rules | | Graviola has none |
@@ -192,7 +192,9 @@ Where it is not ahead:
   and `neon` features there. The ARM backends here have been executed only
   under QEMU user-mode emulation, which checks what they compute and says
   nothing about speed: there is no aarch64 hardware on hand, and nothing was
-  measured on aarch64. AES-GCM there is the AES backend and the `PMULL`
+  measured on aarch64. Their compiled code is gated: `scripts/check-ct.py`
+  reads seven aarch64 probes of them (CONSTANT_TIME.md, "The ARMv8
+  backends"). AES-GCM there is the AES backend and the `PMULL`
   GHASH run one after the other, not a fused kernel like x86-64's.
 - **CPUs without AVX-512.** Measured on the same Zen 5 machine with
   `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
@@ -447,7 +449,8 @@ expected, not a weakness.
 Beyond Valgrind, which only sees the build and CPU it runs on:
 
 - `scripts/check-ct.py` disassembles the compiled code of 111 probes on
-  x86-64 and 44 on Cortex-M0, Cortex-M4 and 32-bit RISC-V, and fails the
+  x86-64, 51 on aarch64 (the ARMv8 AES, `PMULL` GHASH, SHA-256 and SHA-512
+  backends among them) and 44 on Cortex-M0, Cortex-M4 and 32-bit RISC-V, and fails the
   build on any branch or secret-indexed load in them. It has caught
   compiled code that branched on a secret where the source did not, on
   Cortex-M0 (CONSTANT_TIME.md, "The first regression found").

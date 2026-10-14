@@ -24,9 +24,49 @@ mod x86;
 mod avx2_512;
 
 // The ARMv8 SHA-256 and SHA-512 instructions, behind the off-by-default
-// `aarch64-crypto` feature and runtime detection. See `sha2::aarch64`.
-#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+// `aarch64-crypto` feature and runtime detection. See `sha2::aarch64`. Also
+// compiled, without `std` and without the detection, for `ct-probes`, so
+// `scripts/ct-audit` can read the kernels.
+#[cfg(all(
+    target_arch = "aarch64",
+    feature = "aarch64-crypto",
+    any(feature = "std", feature = "ct-probes")
+))]
 mod aarch64;
+
+/// The ARMv8 SHA-256 and SHA-512 kernels, for `scripts/ct-audit` to inspect
+/// after LTO. Not API, not covered by semver; behind the `ct-probes` feature.
+/// Never executed by the audit: compiled to be read.
+#[cfg(all(
+    target_arch = "aarch64",
+    feature = "aarch64-crypto",
+    feature = "ct-probes"
+))]
+#[doc(hidden)]
+#[allow(missing_docs)]
+pub mod ct_probes {
+    /// SHA-256 compression over a fixed four blocks.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have the SHA-256 instructions.
+    #[target_feature(enable = "neon,sha2")]
+    pub unsafe fn sha256_armv8_compress(state: &mut [u32; 8], blocks: &[u8; 256]) {
+        // SAFETY: as the caller guarantees.
+        unsafe { super::aarch64::compress256(state, blocks) }
+    }
+
+    /// SHA-512 compression over a fixed two blocks.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have the SHA-512 instructions.
+    #[target_feature(enable = "neon,sha3")]
+    pub unsafe fn sha512_armv8_compress(state: &mut [u64; 8], blocks: &[u8; 256]) {
+        // SAFETY: as the caller guarantees.
+        unsafe { super::aarch64::compress512(state, blocks) }
+    }
+}
 
 // The block structure the ARMv8 backend and its model share, and the model,
 // which runs on every host so the structure is checked where the instructions
@@ -35,7 +75,11 @@ mod aarch64;
 mod armv8_model;
 #[cfg(any(
     test,
-    all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+    all(
+        target_arch = "aarch64",
+        feature = "aarch64-crypto",
+        any(feature = "std", feature = "ct-probes")
+    )
 ))]
 mod armv8_rounds;
 

@@ -325,6 +325,27 @@ all of them.
 
 ### Changed
 
+- **AArch64 is a gated target of the compiled-code check.**
+  `scripts/check-ct.py` builds the harness for `aarch64-unknown-linux-gnu`
+  (`rustup target add aarch64-unknown-linux-gnu`; a missing target fails, as
+  for the other four) and reads seven aarch64-only probes of the ARMv8
+  backends: AES-256 one block each way and a batch of four, each after the
+  key load and the decryption one through its `AESIMC` key derivation; the
+  `PMULL` GHASH multiply and eight-block absorb; SHA-256 and SHA-512
+  compression. aarch64 runs the forty-four shared probes too: 51 there,
+  294 gating probe/target checks. Every control transfer but `ret` fails on
+  AArch64 unless excused; one rule, the x86-64 counter-loop rule's shape,
+  excuses a `cbz`/`cbnz` or a `b.<cond>` fed by `subs`/`adds`/`cmp`/`cmn`
+  with an immediate (or `cmp` against a register the loop never writes) on a
+  counter the loop changes only by immediates, in a loop of known
+  instructions, in three probes with ceilings of one, one and two. A branch
+  on a state word fails the SHA-256 and `PMULL` probes, one on a message
+  byte inside the SHA-256 block loop fails, and a third SHA-512 loop fails
+  its ceiling (docs/CONSTANT_TIME.md, "The ARMv8 backends"). The backends
+  compile without `std` under `ic-cipher`'s and `ic-hash`'s `ct-probes`
+  feature (new on `ic-hash`), for the harness only; the library still
+  selects them only with `std` and run-time detection. Still unmeasured
+  and never run on ARM hardware.
 - **P-256's and P-384's IFMA kernels are in the compiled-code gate**:
   eighteen x86-64-only probes, the fourteen kernels (`ct_p256_ifma_double`
   .. `ct_p384_ifma_to_fp4`), the secret digit's window read on each curve

@@ -71,12 +71,20 @@ mod clmul;
 // test on every host.
 #[cfg(any(
     test,
-    all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+    all(
+        target_arch = "aarch64",
+        feature = "aarch64-crypto",
+        any(feature = "std", feature = "ct-probes")
+    )
 ))]
 mod armv8_ghash;
 #[cfg(test)]
 mod armv8_ghash_model;
-#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    feature = "aarch64-crypto",
+    any(feature = "std", feature = "ct-probes")
+))]
 #[allow(unsafe_code)]
 mod pmull;
 // The x86-64 ChaCha20 and Poly1305 kernels, for scripts/ct-audit.

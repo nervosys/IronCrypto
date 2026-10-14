@@ -21,6 +21,7 @@ TARGETS = (
     "thumbv6m-none-eabi",
     "thumbv7em-none-eabihf",
     "riscv32imac-unknown-none-elf",
+    "aarch64-unknown-linux-gnu",
 )
 SYMBOLS = (
     "ct_reduce_q", "ct_power2round", "ct_decompose_32", "ct_decompose_88",
@@ -111,13 +112,28 @@ X86_ONLY = (
     "ct_p384_ifma_select", "ct_p384_ifma_from_limbs",
 )
 SYMBOLS += X86_ONLY
+# The ARMv8 backends behind ic-cipher's and ic-hash's `aarch64-crypto`
+# feature: AES at AES-256 (each probe loads the key first, so the decryption
+# probe reads the AESIMC derivation of the inverse cipher's keys), one block
+# each way and a batch of four; the PMULL GHASH multiply and its eight-block
+# absorb over three groups; SHA-256 compression over four blocks and SHA-512
+# over two. They compile for aarch64 only, so they are required there and
+# nowhere else. aarch64 also runs every probe that is not x86-64-only.
+AARCH64_ONLY = (
+    "ct_aes256_armv8_encrypt", "ct_aes256_armv8_decrypt", "ct_aes256_armv8_encrypt4",
+    "ct_ghash_pmull_mul", "ct_ghash_pmull_absorb8",
+    "ct_sha256_armv8_compress", "ct_sha512_armv8_compress",
+)
+SYMBOLS += AARCH64_ONLY
 
 
 def symbols_for(target):
     """The probes `target` must have."""
     if target.startswith("x86_64"):
-        return SYMBOLS
-    return tuple(s for s in SYMBOLS if s not in X86_ONLY)
+        return tuple(s for s in SYMBOLS if s not in AARCH64_ONLY)
+    if target.startswith("aarch64"):
+        return tuple(s for s in SYMBOLS if s not in X86_ONLY)
+    return tuple(s for s in SYMBOLS if s not in X86_ONLY and s not in AARCH64_ONLY)
 
 # Runtime-library routines a probe may call on a target, because their bodies
 # are disassembled from that target's compiler_builtins and held to the same
@@ -204,6 +220,25 @@ X86_EXCUSE_CEILINGS = {
     "ct_p384_ifma_select": {"counter loop": 1},
 }
 
+# On aarch64 one rule (A64Body, below) excuses loops over a public count, and
+# only in the probes named here, each up to the number of findings it excused
+# when they were read one by one (docs/CONSTANT_TIME.md, "The ARMv8
+# backends"). A probe not named excuses nothing; one finding more than its
+# ceiling fails. Counted per probe, following calls.
+# Read on 2026-10-14, rustc 1.99.0.
+AARCH64_EXCUSE_CEILINGS = {
+    # The loop over the three groups of eight blocks: `subs x11, x11, #128;
+    # b.ne` on the remaining length, x11 set to 384 before it.
+    "ct_ghash_pmull_absorb8": {"counter loop": 1},
+    # The loop over the four blocks: `add x8, x8, #64; cmp x8, #256; b.ne`,
+    # x8 the block offset from zero; the sixteen round groups are unrolled.
+    "ct_sha256_armv8_compress": {"counter loop": 1},
+    # The block loop, `subs x8, x8, #128; b.ne` on the remaining length from
+    # 256, and inside it the loop over four of the five round groups,
+    # `subs x11, x11, #1; b.ne`, x11 set to 4 at the top of each block.
+    "ct_sha512_armv8_compress": {"counter loop": 2},
+}
+
 # Loads and stores, which do not set the flags a conditional branch reads, and
 # so may sit between the comparison and the branch.
 _MEMORY = re.compile(r"(?:ldr|str|ldm|stm)[a-z]*(?:\.w)?")
@@ -270,6 +305,15 @@ def forbidden(line, target):
         return (op in {"b", "bl", "blx", "bx", "cbz", "cbnz", "tbb", "tbh"}
                 or re.fullmatch(r"b(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le)", op) is not None
                 or op in {"sdiv", "udiv"})
+    if target.startswith("aarch64"):
+        # Everything that transfers control but `ret`: conditional branches
+        # (b.<cond>, cbz/cbnz, tbz/tbnz), direct and indirect jumps and calls,
+        # and their pointer-authenticated forms. And division.
+        if op == "ret" and not operands:
+            return False
+        return (mnemonic in {"b", "bl", "br", "blr", "ret", "cbz", "cbnz", "tbz", "tbnz",
+                             "sdiv", "udiv", "svc", "hvc", "smc", "eret"}
+                or re.fullmatch(r"b\.\w+|bc\.\w+|br\w+|blr\w+|ret\w+", mnemonic) is not None)
     if target.startswith("riscv32"):
         return (op.startswith(("div", "rem"))
                 or op in {"call", "tail", "jal", "jalr", "j", "jr"}
@@ -292,12 +336,13 @@ def called(line, target, defined):
     mnemonic = fields[0].lower()
     if target.startswith("riscv32") and mnemonic.startswith("c."):
         mnemonic = mnemonic[2:]
-    op = mnemonic.split(".")[0]
+    op = mnemonic if target.startswith("aarch64") else mnemonic.split(".")[0]
     operand = fields[1].strip().removesuffix("@PLT")
     calls = {
         "x86_64": {"call", "callq", "jmp", "jmpq"},
         "thumb": {"bl", "b"},
         "riscv32": {"call", "tail"},
+        "aarch64": {"bl", "b"},
     }
     family = next(prefix for prefix in calls if target.startswith(prefix))
     if op in calls[family] and operand in defined:
@@ -755,6 +800,289 @@ class X86Body:
             and re.fullmatch(r"-?\d*\(%rsp\)", dest[1][0]) and _family(dest[1][1]) == "di")
 
 
+# --- AArch64: loops over a public count -------------------------------------
+#
+# One rule, "counter loop", excuses a conditional branch in AArch64 code, and
+# only in the probes AARCH64_EXCUSE_CEILINGS names, each up to its own count.
+# It reads the GNU syntax rustc emits. It is the x86-64 rule's shape, no wider:
+#
+# The branch is the last instruction of its basic block, targets a label in
+# the same function, and is a back edge or an exit of a natural loop (found
+# from the control-flow graph by dominators). Its condition is a counter's:
+#
+# - `cbz`/`cbnz` on a register, or
+# - `b.<cond>` whose flags come, within its own basic block, from
+#   `subs`/`adds Xn, Xn, #imm`, `cmp`/`cmn Xn, #imm`, or `cmp Xn, Xm` of two
+#   distinct registers. Every instruction between that one and the branch
+#   must be one this checker knows does not set the flags.
+#
+# The register is a counter of that loop: every instruction in the loop that
+# writes it is `add`, `sub`, `adds` or `subs` of an immediate to itself, and at
+# least one is. For `cmp Xn, Xm` the other register must not be written
+# anywhere in the loop. Every instruction in the loop must be one whose
+# register writes this checker can list (A64_KNOWN); anything else -- a call,
+# an indirect branch, an instruction not in the list -- voids the excuse for
+# that loop. `tbz`/`tbnz` (a branch on one bit), `ccmp`/`ccmn` chains, `tst`,
+# `ands`, flags from carries (`adcs`, `sbcs`), flags from loads or from data
+# arithmetic, and `cmp` against memory are never excused.
+
+# Instructions that set NZCV, and write their first operand (if a general
+# register) as well.
+_A64_FLAGS_ONLY = {"cmp", "cmn", "tst", "ccmp", "ccmn", "fcmp", "fcmpe", "fccmp", "fccmpe"}
+_A64_FLAGS_AND_DEST = {"adds", "adcs", "subs", "sbcs", "ands", "bics", "negs", "ngcs"}
+# Instructions that set no flags and write at most their first operand. The
+# vector ones write no general-purpose register unless that operand is one
+# (`fmov x0, d0`, `umov w0, v0.s[1]`).
+_A64_DEST = {
+    "add", "sub", "adc", "sbc", "and", "orr", "eor", "bic", "orn", "eon", "mov", "movz",
+    "movn", "movk", "mvn", "neg", "ngc", "lsl", "lsr", "asr", "ror", "mul", "madd",
+    "msub", "mneg", "smull", "umull", "smulh", "umulh", "smaddl", "umaddl", "smsubl",
+    "umsubl", "csel", "csinc", "csinv", "csneg", "cset", "csetm", "cinc", "cinv", "cneg",
+    "ubfx", "sbfx", "ubfiz", "sbfiz", "bfi", "bfxil", "ubfm", "sbfm", "bfm", "extr",
+    "rev", "rev16", "rev32", "rev64", "rbit", "clz", "cls", "sxtb", "sxth", "sxtw",
+    "uxtb", "uxth", "adr", "adrp",
+    # SIMD and FP.
+    "fmov", "umov", "smov", "ins", "dup", "movi", "mvni", "ext", "not", "bsl", "bit",
+    "bif", "pmull", "pmull2", "aese", "aesd", "aesmc", "aesimc", "sha256h", "sha256h2",
+    "sha256su0", "sha256su1", "sha512h", "sha512h2", "sha512su0", "sha512su1", "eor3",
+    "bcax", "rax1", "xar", "zip1", "zip2", "uzp1", "uzp2", "trn1", "trn2", "shl", "ushr",
+    "sshr", "ushll", "ushll2", "sshll", "sshll2", "xtn", "xtn2", "addp", "cmeq", "cmhi",
+    "cmhs", "cmgt", "cmge", "uaddw", "uaddw2", "umlal", "umlal2", "umull2", "shrn",
+    "shrn2", "sli", "sri", "usra", "ssra",
+}
+_A64_LOADS = {
+    "ldr", "ldrb", "ldrh", "ldrsb", "ldrsh", "ldrsw", "ldur", "ldurb", "ldurh",
+    "ldursb", "ldursh", "ldursw", "ldp", "ldpsw", "ldnp", "ld1", "ld2", "ld3", "ld4",
+    "ld1r", "ldar", "ldarb", "ldarh",
+}
+_A64_STORES = {
+    "str", "strb", "strh", "stur", "sturb", "sturh", "stp", "stnp", "st1", "st2", "st3",
+    "st4", "stlr", "stlrb", "stlrh",
+}
+_A64_NOTHING = {"nop", "hint", "prfm", "prfum", "ret", "b"}
+_A64_CONDITIONAL = re.compile(r"b\.(?:eq|ne|cs|hs|cc|lo|mi|pl|vs|vc|hi|ls|ge|lt|gt|le|al|nv)")
+A64_KNOWN = (_A64_FLAGS_ONLY | _A64_FLAGS_AND_DEST | _A64_DEST | _A64_LOADS | _A64_STORES
+             | _A64_NOTHING | {"cbz", "cbnz", "tbz", "tbnz"})
+_A64_IMM = re.compile(r"#-?(?:0x[0-9a-f]+|\d+)")
+
+
+def _a64_family(operand):
+    """The general-purpose register an operand names, as `x0`..`x30` or `sp`,
+    or None for anything else: the zero register, an immediate, memory, a
+    vector register."""
+    o = operand.strip().lower()
+    m = re.fullmatch(r"[xw]([0-9]|[12][0-9]|30)", o)
+    if m:
+        return f"x{m[1]}"
+    return {"sp": "sp", "wsp": "sp", "fp": "x29", "lr": "x30"}.get(o)
+
+
+def _a64_operands(text):
+    """Operands of an AArch64 instruction, split at commas outside `[]` and
+    `{}`."""
+    parts, depth, current = [], 0, ""
+    for ch in text:
+        if ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
+def _a64(line):
+    """(mnemonic, operands) of an AArch64 line, comments removed."""
+    line = re.split(r"\s*//", line, maxsplit=1)[0].strip()
+    fields = line.split(None, 1)
+    op = fields[0].lower() if fields else ""
+    return op, (_a64_operands(fields[1]) if len(fields) == 2 else [])
+
+
+def _a64_writeback(operands):
+    """The base register a pre- or post-indexed access writes back, or None."""
+    for k, o in enumerate(operands):
+        if o.startswith("["):
+            base = _a64_family(o[1:].split(",")[0].rstrip("]!"))
+            if o.endswith("!") or k + 1 < len(operands):
+                return base
+            return None
+    return None
+
+
+def _a64_writes(op, operands):
+    """General-purpose registers an AArch64 instruction may write, as
+    families; None for an instruction not in A64_KNOWN (a call, an indirect
+    branch, anything this does not list), which voids any loop it is in."""
+    if op in _A64_NOTHING or op in _A64_FLAGS_ONLY or _A64_CONDITIONAL.fullmatch(op) \
+            or op in {"cbz", "cbnz", "tbz", "tbnz"}:
+        return set()
+    if op in _A64_DEST or op in _A64_FLAGS_AND_DEST:
+        f = _a64_family(operands[0]) if operands else None
+        return {f} if f else set()
+    if op in _A64_LOADS or op in _A64_STORES:
+        written = set()
+        if op in _A64_LOADS and operands and not operands[0].startswith("{"):
+            dests = operands[:2] if op in {"ldp", "ldpsw", "ldnp"} else operands[:1]
+            written |= {f for f in map(_a64_family, dests) if f}
+        base = _a64_writeback(operands)
+        if base:
+            written.add(base)
+        return written
+    return None
+
+
+def _a64_step(op, operands):
+    """The family a constant step writes: `add`, `sub`, `adds` or `subs` of an
+    immediate to a register, into itself. None for anything else."""
+    if (op in {"add", "sub", "adds", "subs"} and len(operands) == 3
+            and _A64_IMM.fullmatch(operands[2])):
+        f = _a64_family(operands[0])
+        if f and f != "sp" and f == _a64_family(operands[1]):
+            return f
+    return None
+
+
+class A64Body(X86Body):
+    """One AArch64 function body's control-flow graph, its natural loops, and
+    the findings in it the AArch64 rule excuses, by index into
+    `instructions_of(lines)`."""
+
+    def __init__(self, lines):
+        self.rules = {}
+        self.ins, labels = [], {}
+        for line in lines:
+            text = line.strip()
+            if text.endswith(":") and not text.startswith(("#", "@", "//")):
+                labels[text[:-1]] = len(self.ins)
+                continue
+            if not text or text.startswith((".", "#", "@", "//")):
+                continue
+            self.ins.append(_a64(line))
+        n = len(self.ins)
+        self.labels = labels
+        if not n:
+            return
+        leaders = {0} | {i for i in labels.values() if i < n}
+        for i, (op, _) in enumerate(self.ins):
+            if self._transfers(op) and i + 1 < n:
+                leaders.add(i + 1)
+        starts = sorted(leaders)
+        self.block_of = {}
+        self.blocks = []
+        for b, st in enumerate(starts):
+            e = starts[b + 1] if b + 1 < len(starts) else n
+            self.blocks.append(range(st, e))
+            for i in range(st, e):
+                self.block_of[i] = b
+        succ = []
+        for b, r in enumerate(self.blocks):
+            op, operands = self.ins[r[-1]]
+            nxt = [self.block_of[r[-1] + 1]] if r[-1] + 1 < n else []
+            target = self._target(operands[-1:])
+            if op == "b":
+                succ.append([target] if target is not None else [])
+            elif self._conditional(op):
+                succ.append(([target] if target is not None else []) + nxt)
+            elif self._transfers(op):
+                succ.append([])
+            else:
+                succ.append(nxt)
+        self.succ = succ
+        self.loops = self._natural_loops()
+        for i, (op, operands) in enumerate(self.ins):
+            if self._conditional(op) and self._excused(i, op, operands):
+                self.rules[i] = "counter loop"
+
+    @staticmethod
+    def _conditional(op):
+        return bool(_A64_CONDITIONAL.fullmatch(op)) or op in {"cbz", "cbnz", "tbz", "tbnz"}
+
+    def _transfers(self, op):
+        return (self._conditional(op) or op in {"b", "br", "ret", "eret"}
+                or op.startswith(("br", "ret", "b.")))
+
+    def _counter(self, body, family):
+        stepped = False
+        for b in body:
+            for i in self.blocks[b]:
+                op, operands = self.ins[i]
+                written = _a64_writes(op, operands)
+                if written is None:
+                    return False
+                if family in written:
+                    if _a64_step(op, operands) != family:
+                        return False
+                    stepped = True
+        return stepped
+
+    def _invariant(self, body, family):
+        for b in body:
+            for i in self.blocks[b]:
+                written = _a64_writes(*self.ins[i])
+                if written is None or family in written:
+                    return False
+        return True
+
+    def _excused(self, i, op, operands):
+        b = self.block_of[i]
+        target = self._target(operands[-1:])
+        if target is None or i != self.blocks[b][-1]:
+            return False
+        if op in {"cbz", "cbnz"}:
+            if len(operands) != 2 or not _a64_family(operands[0]):
+                return False
+            counters, fixed = [_a64_family(operands[0])], None
+        elif _A64_CONDITIONAL.fullmatch(op) and len(operands) == 1:
+            source = None
+            for j in range(i - 1, self.blocks[b][0] - 1, -1):
+                prev_op, prev = self.ins[j]
+                if prev_op in _A64_FLAGS_ONLY or prev_op in _A64_FLAGS_AND_DEST:
+                    source = (prev_op, prev)
+                    break
+                if _a64_writes(prev_op, prev) is None:
+                    return False
+            if source is None:
+                return False
+            sop, sargs = source
+            if sop in {"subs", "adds"}:
+                step = _a64_step(sop, sargs)
+                if not step:
+                    return False
+                counters, fixed = [step], None
+            elif sop in {"cmp", "cmn"} and len(sargs) == 2:
+                r0, r1 = _a64_family(sargs[0]), _a64_family(sargs[1])
+                if r0 and r0 != "sp" and _A64_IMM.fullmatch(sargs[1]):
+                    counters, fixed = [r0], None
+                elif sop == "cmp" and r0 and r1 and r0 != r1 and "sp" not in (r0, r1):
+                    counters, fixed = None, (r0, r1)
+                else:
+                    return False
+            else:
+                return False
+        else:
+            return False
+        for header, body in self.loops.items():
+            if b not in body:
+                continue
+            exits = [s for s in self.succ[b] if s not in body]
+            if not (target == header or exits):
+                continue
+            if counters is None:
+                r0, r1 = fixed
+                if ((self._counter(body, r0) and self._invariant(body, r1))
+                        or (self._counter(body, r1) and self._invariant(body, r0))):
+                    return True
+            elif all(self._counter(body, c) for c in counters):
+                return True
+        return False
+
+
 _external_cache = {}
 
 
@@ -808,13 +1136,17 @@ def inspect(assembly, target, excused=None):
     externals = VERIFIED_EXTERNAL.get(target, ())
     excusable = target in EXCUSE_CEILINGS
     x86 = target.startswith("x86_64")
+    a64 = target.startswith("aarch64")
     if excused is None:
         excused = collections.Counter()
 
     def walk(probe, name, lines, seen):
         ins = instructions_of(lines)
         pools = pool_jumps(lines) if target.startswith("thumb") else set()
-        loops = X86Body(lines).rules if x86 and probe in X86_EXCUSE_CEILINGS else {}
+        loops = (X86Body(lines).rules if x86 and probe in X86_EXCUSE_CEILINGS
+                 else A64Body(lines).rules if a64 and probe in AARCH64_EXCUSE_CEILINGS
+                 else {})
+        ceilings = (X86_EXCUSE_CEILINGS if x86 else AARCH64_EXCUSE_CEILINGS).get(probe, {})
         for i, line in enumerate(ins):
             callee = called(line, target, functions)
             if callee is not None:
@@ -832,8 +1164,9 @@ def inspect(assembly, target, excused=None):
                 continue
             if not forbidden(line, target):
                 continue
-            # x86-64: counted per probe, and only in the probes listed.
-            if loops.get(i) in X86_EXCUSE_CEILINGS.get(probe, {}):
+            # x86-64 and aarch64: counted per probe, and only in the probes
+            # listed.
+            if loops.get(i) in ceilings:
                 excused[(probe, loops[i])] += 1
                 continue
             rule = excuse(target, ins, i) if excusable and probe in P256 else None
@@ -857,16 +1190,17 @@ def inspect(assembly, target, excused=None):
 
 def over_ceiling(target, excused):
     """A failure for each rule that excused more than it was reviewed for: per
-    rule on the 32-bit targets, per probe and rule on x86-64."""
-    if target.startswith("x86_64"):
+    rule on the 32-bit targets, per probe and rule on x86-64 and aarch64."""
+    if target.startswith(("x86_64", "aarch64")):
+        table, name = ((X86_EXCUSE_CEILINGS, "X86_EXCUSE_CEILINGS") if target.startswith("x86_64")
+                       else (AARCH64_EXCUSE_CEILINGS, "AARCH64_EXCUSE_CEILINGS"))
         failures = []
         for (probe, rule), count in sorted(excused.items()):
-            ceiling = X86_EXCUSE_CEILINGS.get(probe, {}).get(rule, 0)
+            ceiling = table.get(probe, {}).get(rule, 0)
             if count > ceiling:
                 failures.append(
                     f"{probe}: {count} findings excused as {rule}, more than the {ceiling} "
-                    "reviewed; read them and update X86_EXCUSE_CEILINGS and "
-                    "docs/CONSTANT_TIME.md")
+                    f"reviewed; read them and update {name} and docs/CONSTANT_TIME.md")
         return failures
     ceilings = EXCUSE_CEILINGS.get(target, {})
     return [f"{count} findings excused as {rule}, more than the {ceilings.get(rule, 0)} "

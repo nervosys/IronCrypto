@@ -20,6 +20,9 @@ std = ["ic-core/std"]
 # emulation (scripts/test-aarch64.sh) and not yet on ARM hardware. Needs `std`
 # for runtime detection; without it the feature selects nothing.
 aarch64-crypto = []
+# Exposes `ct_probes`: the ARMv8 SHA-256 and SHA-512 kernels, wrapped for
+# scripts/ct-audit to compile and read. Not for use; see docs/CONSTANT_TIME.md.
+ct-probes = []
 
 # `ic_approved_only` leaves out every algorithm FIPS approved mode does not
 # permit; see docs/FIPS.md.

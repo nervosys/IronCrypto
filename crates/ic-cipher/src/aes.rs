@@ -33,7 +33,11 @@ pub mod portable;
 // ungated module would sit there as an unused-macro warning.
 #[cfg(any(
     test,
-    all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std")
+    all(
+        target_arch = "aarch64",
+        feature = "aarch64-crypto",
+        any(feature = "std", feature = "ct-probes")
+    )
 ))]
 mod armv8_rounds;
 
@@ -52,7 +56,13 @@ pub mod x86;
 ))]
 pub mod x86;
 
-#[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto", feature = "std"))]
+// Also compiled, without `std` and without the detection that selects it,
+// for `ct-probes`, so `scripts/ct-audit` can read it.
+#[cfg(all(
+    target_arch = "aarch64",
+    feature = "aarch64-crypto",
+    any(feature = "std", feature = "ct-probes")
+))]
 pub mod aarch64;
 
 use ic_core::traits::{Algorithm, BlockCipher, SelfTest};

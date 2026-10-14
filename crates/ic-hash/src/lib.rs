@@ -55,6 +55,14 @@ pub use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256, XofRe
 // to change in any release.
 #[doc(hidden)]
 pub use sha3::{KeccakX4, Rate136};
+// The ARMv8 SHA-2 kernels, for scripts/ct-audit. Not API.
+#[cfg(all(
+    target_arch = "aarch64",
+    feature = "aarch64-crypto",
+    feature = "ct-probes"
+))]
+#[doc(hidden)]
+pub use sha2::ct_probes;
 pub use sp800_185::{CShake128, CShake256};
 pub use sp800_185::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256};
 

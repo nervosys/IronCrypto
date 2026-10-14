@@ -16,7 +16,10 @@ ic-mldsa = { path = "../../crates/ic-mldsa", default-features = false }
 ic-mlkem = { path = "../../crates/ic-mlkem", default-features = false }
 ic-ec = { path = "../../crates/ic-ec", default-features = false, features = ["ct-probes"] }
 ic-rsa = { path = "../../crates/ic-rsa", default-features = false, features = ["ct-probes"] }
-ic-cipher = { path = "../../crates/ic-cipher", default-features = false, features = ["ct-probes"] }
+# `aarch64-crypto` compiles the ARMv8 backends, read on aarch64 only; on every
+# other target it selects nothing.
+ic-cipher = { path = "../../crates/ic-cipher", default-features = false, features = ["ct-probes", "aarch64-crypto"] }
+ic-hash = { path = "../../crates/ic-hash", default-features = false, features = ["ct-probes", "aarch64-crypto"] }
 
 [profile.release]
 opt-level = 3

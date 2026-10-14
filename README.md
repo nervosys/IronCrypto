@@ -410,7 +410,8 @@ The ontology registers algorithms this library does **not** provide, marked
   is what caught the AES decryption key schedule being wrong.
   `scripts/test-aarch64.sh` executes them under QEMU user-mode emulation,
   against the portable code and the vector suites; that is execution, not
-  hardware, and says nothing about speed. CI defines a native ARM64 job that
+  hardware, and says nothing about speed. Their compiled code is in the
+  constant-time gate on `aarch64-unknown-linux-gnu`. CI defines a native ARM64 job that
   runs the same tests, blocked with the rest of CI.
 - **X.509 certificate parsing** — out of scope. Names, validity, extensions, and
   path validation are a far larger surface than key encoding, and a partial
@@ -453,13 +454,15 @@ measurements remain outstanding.
 ### Compiled-code checks
 
 `python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4 and RISC-V, and sixty-seven more on x86-64 alone for its
+Cortex-M0, Cortex-M4, RISC-V and AArch64 Linux, seven more on AArch64 alone for
+its ARMv8 AES, `PMULL` GHASH, SHA-256 and SHA-512 backends, and sixty-seven more
+on x86-64 alone for its
 Curve25519, P-256 and P-384 assembly, P-256's and P-384's AVX-512 IFMA point
 formulas, window reads and conversions, a prepared P-384 key's window read, Ed25519's MULX/ADX table read and X25519's doubling, its divsteps inversions, its
 AVX-512 ChaCha20 and AVX2 Poly1305 kernels, RSA's table read and its
 MULX/ADX, AVX-512 IFMA and portable Montgomery products, RSA's whole
 AVX-512 IFMA exponentiation at 1024 and 2048 bits, the AES-NI and VAES-256
-AES-GCM loops, and RSA's MULX/ADX squaring and 1024-bit kernels: **243 gating
+AES-GCM loops, and RSA's MULX/ADX squaring and 1024-bit kernels: **294 gating
 probe/target checks**. It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
@@ -471,7 +474,8 @@ products' loops over the width, and the window reads' loops over their sixteen
 entries, and the AES-GCM loops over their groups, are excused by a rule that finds each loop in
 the control-flow graph and accepts a branch only where it exits or closes the
 loop on a counter stepped by constants, in the probes named, up to the
-count read in each.
+count read in each; on AArch64 a rule of the same shape excuses the GHASH
+and SHA-2 loops over blocks.
 The full local gate and CI run the checker. These checks cover the compiled
 probes, not whole algorithms, memory-access timing or every caller context;
 [CONSTANT_TIME.md](docs/CONSTANT_TIME.md) gives the rules and limits.
@@ -888,7 +892,7 @@ The full gate also checks formatting, dependencies, advisory floors and
 cross-target builds. Install its targets first:
 
 ```console
-$ rustup target add x86_64-unknown-linux-gnu thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf wasm32-unknown-unknown aarch64-apple-darwin
+$ rustup target add x86_64-unknown-linux-gnu thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf wasm32-unknown-unknown aarch64-apple-darwin aarch64-unknown-linux-gnu
 ```
 
 The compiled-code checker requires Python 3. `bash scripts/check.sh --quick`

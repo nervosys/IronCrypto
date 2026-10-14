@@ -99,6 +99,8 @@ step "approved-only build"
 
 step "compiled-code constant-time probes"
 # Fail if a required target is absent: a skipped probe is not verification.
+# Its five: rustup target add x86_64-unknown-linux-gnu thumbv6m-none-eabi
+# thumbv7em-none-eabihf riscv32imac-unknown-none-elf aarch64-unknown-linux-gnu
 # The isolated harness uses LTO over the real library implementations.
 python scripts/test-check-ct.py
 python scripts/check-ct.py

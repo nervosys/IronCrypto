@@ -47,6 +47,7 @@ class InspectionTests(unittest.TestCase):
             "x86_64-unknown-linux-gnu": ("jne .L1", "je .L1", "loop .L1", "idivq %rcx", "divl %ecx", "callq helper", "jmp helper"),
             "thumbv6m-none-eabi": ("bgt .L1", "blo .L1", "beq.w .L1", "cbnz r0, .L1", "bl __aeabi_uidiv", "blx r3", "bx r3", "udiv r0, r1, r2", "tbb [pc, r0]"),
             "riscv32imac-unknown-none-elf": ("bne a0, a1, .L1", "bleu a0, a1, .L1", "beqz a0, .L1", "c.bnez a0, .L1", "c.j .L1", "divu a0, a1, a2", "rem a0, a1, a2", "call __udivsi3", "tail helper", "jalr a0"),
+            "aarch64-unknown-linux-gnu": ("b.ne .L1", "b.eq .L1", "b.hs .L1", "cbz x0, .L1", "cbnz w3, .L1", "tbz x0, #3, .L1", "tbnz w1, #0, .L1", "b .L1", "bl memcpy", "blr x8", "br x16", "braaz x1", "retaa", "ret x1", "udiv x0, x1, x2", "sdiv w0, w1, w2"),
         }
         for target, instructions in cases.items():
             for instruction in instructions:
@@ -59,6 +60,7 @@ class InspectionTests(unittest.TestCase):
             "x86_64-unknown-linux-gnu": ("retq", "cmovneq %rax, %rcx", ".long 40318", "# idivq %rax"),
             "thumbv7em-none-eabihf": ("bx lr", "pop {r7, pc}", "asrs r0, r0, #31", "it ne", "@ bl helper"),
             "riscv32imac-unknown-none-elf": ("ret", "srai a0, a0, 31", "# call helper"),
+            "aarch64-unknown-linux-gnu": ("ret", "csel x0, x1, x2, ne", "bic x0, x1, x2", "bfi x0, x1, #3, #4", "aese v0.16b, v1.16b", "// bl helper"),
         }
         for target, instructions in cases.items():
             for instruction in instructions:
@@ -86,6 +88,10 @@ class CallTests(unittest.TestCase):
 
     def test_tail_calls_and_other_targets_are_followed(self):
         self.assertTrue(audit.inspect(self.with_helper("jne .L1", "jmp\thelper"), self.X86))
+        a64 = "aarch64-unknown-linux-gnu"
+        self.assertTrue(audit.inspect(self.with_helper("b.ne .L1", "b\thelper"), a64))
+        self.assertTrue(audit.inspect(self.with_helper("cbz x0, .L1", "bl\thelper"), a64))
+        self.assertEqual(audit.inspect(self.with_helper("ret", "b\thelper"), a64), [])
         self.assertTrue(audit.inspect(
             self.with_helper("bne .L1", "bl\thelper"), "thumbv7em-none-eabihf"))
         self.assertTrue(audit.inspect(
@@ -115,6 +121,23 @@ class TargetSymbolTests(unittest.TestCase):
         self.assertEqual(audit.inspect(asm, "thumbv7em-none-eabihf"), [])
         self.assertTrue(set(audit.X86_ONLY) <= set(audit.symbols_for("x86_64-unknown-linux-gnu")))
         self.assertFalse(set(audit.X86_ONLY) & set(audit.symbols_for("riscv32imac-unknown-none-elf")))
+
+
+class Aarch64SymbolTests(unittest.TestCase):
+    """The aarch64-only probes are required there and nowhere else, and
+    aarch64 runs every probe that is not x86-64-only."""
+
+    def test_required_on_aarch64_only(self):
+        a64 = "aarch64-unknown-linux-gnu"
+        asm = assembly().replace(f"{audit.AARCH64_ONLY[0]}:", "unrelated:")
+        with self.assertRaisesRegex(ValueError, "missing probe"):
+            audit.inspect(asm, a64)
+        self.assertEqual(audit.inspect(asm, "x86_64-unknown-linux-gnu"), [])
+        self.assertEqual(audit.inspect(asm, "riscv32imac-unknown-none-elf"), [])
+        common = set(audit.symbols_for("thumbv7em-none-eabihf"))
+        self.assertEqual(set(audit.symbols_for(a64)), common | set(audit.AARCH64_ONLY))
+        self.assertFalse(set(audit.AARCH64_ONLY) & set(audit.symbols_for("x86_64-unknown-linux-gnu")))
+        self.assertIn(a64, audit.TARGETS)
 
 
 class LiteralPoolTests(unittest.TestCase):
@@ -379,6 +402,148 @@ class X86LoopTests(unittest.TestCase):
             ".LBB0_2:", "cmpq $32, %rcx", "jne .LBB0_1", "retq"])
         self.assertEqual(failures, [f"{self.ADX}: jne .LBB0_2"])
         self.assertEqual(excused[(self.ADX, "counter loop")], 1)
+
+
+class Aarch64LoopTests(unittest.TestCase):
+    """On aarch64 a loop over a counter is excused, in the probes listed in
+    AARCH64_EXCUSE_CEILINGS and up to their ceilings, and nothing that only
+    looks like one is."""
+
+    A64 = "aarch64-unknown-linux-gnu"
+    ONE = "ct_ghash_pmull_absorb8"    # ceiling: one counter loop
+    TWO = "ct_sha512_armv8_compress"  # ceiling: two
+
+    def run_on(self, lines, probe=None, extra=""):
+        probe = probe or self.TWO
+        body = "".join(line + "\n" if line.endswith(":") else f"\t{line}\n" for line in lines)
+        asm = assembly("ret").replace(f"{probe}:\n\tret\n", f"{probe}:\n{body}")
+        self.assertIn(body, asm)
+        asm += extra
+        excused = collections.Counter()
+        failures = audit.inspect(asm, self.A64, excused)
+        return failures + audit.over_ceiling(self.A64, excused), excused
+
+    # As the compiler emitted them for the probes (docs/CONSTANT_TIME.md).
+    SUBS = ["mov w11, #384", ".LBB0_1:", "ldp q8, q11, [x10, #-64]", "subs x11, x11, #128",
+            "rbit v15.16b, v8.16b", "ldp q9, q1, [x10], #128", "pmull2 v1.1q, v10.2d, v16.2d",
+            "eor v31.16b, v0.16b, v1.16b", "b.ne .LBB0_1", "ret"]
+    CMP = ["mov x8, xzr", ".LBB0_1:", "add x9, x1, x8", "ldp q0, q1, [x9]",
+           "add x8, x8, #64", "rev32 v0.16b, v0.16b", "cmp x8, #256",
+           "sha256h q2, q3, v0.4s", "b.ne .LBB0_1", "ret"]
+    CBNZ = ["mov x9, #8", ".LBB0_1:", "ldr q0, [x1], #16", "aese v0.16b, v1.16b",
+            "str q0, [x2], #16", "sub x9, x9, #1", "cbnz x9, .LBB0_1", "ret"]
+
+    def test_the_counter_shapes_are_excused(self):
+        cases = {
+            "subs/b.ne": self.SUBS,
+            "cmp counter, imm": self.CMP,
+            "cbnz countdown": self.CBNZ,
+            "cmp counter, fixed register": [
+                "add x12, x1, #256", ".LBB0_1:", "ldr q0, [x1]", "add x1, x1, #16",
+                "cmp x1, x12", "b.ne .LBB0_1", "ret"],
+            "nested, as SHA-512's": [
+                "mov w8, #256", ".LBB0_1:", "mov w11, #4", ".LBB0_2:", "subs x11, x11, #1",
+                "sha512h q0, q1, v2.2d", "b.ne .LBB0_2", "subs x8, x8, #128",
+                "add x1, x1, #128", "b.ne .LBB0_1", "ret"],
+        }
+        for name, lines in cases.items():
+            with self.subTest(name):
+                failures, excused = self.run_on(lines)
+                self.assertEqual(failures, [])
+                self.assertEqual(sum(excused.values()), 2 if name.startswith("nested") else 1)
+
+    def test_a_branch_on_anything_but_a_counter_is_not(self):
+        cases = {
+            "b.eq on a loaded value": [
+                ".LBB0_1:", "ldr x0, [x1], #8", "subs x9, x9, #1", "cmp x0, #0",
+                "b.eq .LBB0_1", "ret"],
+            "flags from a load-fed subs": [
+                ".LBB0_1:", "ldr x0, [x1]", "subs x0, x0, x2", "b.ne .LBB0_1", "ret"],
+            "tbz on a data bit": [
+                ".LBB0_1:", "ldr x0, [x1], #8", "sub x9, x9, #1", "tbz x0, #0, .LBB0_1", "ret"],
+            "tbnz on the counter": [
+                ".LBB0_1:", "sub x9, x9, #1", "tbnz x9, #3, .LBB0_1", "ret"],
+            "counter also written from data": [
+                ".LBB0_1:", "ldr x0, [x1]", "add x9, x9, x0", "subs x9, x9, #1",
+                "b.ne .LBB0_1", "ret"],
+            "counter loaded in the loop": [
+                ".LBB0_1:", "ldr x9, [x1]", "sub x9, x9, #1", "cbnz x9, .LBB0_1", "ret"],
+            "counter as a writeback base": [
+                ".LBB0_1:", "ldr q0, [x9], #16", "subs x9, x9, #1", "b.ne .LBB0_1", "ret"],
+            "counter selected by csel": [
+                ".LBB0_1:", "subs x9, x9, #1", "csel x9, x9, x0, ne", "cmp x9, #0",
+                "b.ne .LBB0_1", "ret"],
+            "cmp against a register written in the loop": [
+                ".LBB0_1:", "add x9, x9, #1", "ldr x12, [x1]", "cmp x9, x12",
+                "b.ne .LBB0_1", "ret"],
+            "a ccmp chain on data": [
+                ".LBB0_1:", "subs x9, x9, #1", "ccmp x0, #0, #4, ne", "b.ne .LBB0_1", "ret"],
+            "tst": [".LBB0_1:", "sub x9, x9, #1", "tst x9, #7", "b.ne .LBB0_1", "ret"],
+            "flags from a carry": [
+                ".LBB0_1:", "sub x9, x9, #1", "adcs x0, x0, x2", "b.ne .LBB0_1", "ret"],
+            "a never-stepped register": [
+                ".LBB0_1:", "ldr q0, [x1]", "cmp x9, #0", "b.ne .LBB0_1", "ret"],
+            "outside any loop": ["subs x9, x9, #1", "b.ne .LBB0_1", "add x0, x0, x0",
+                                 ".LBB0_1:", "ret"],
+            "a call in the loop": [
+                ".LBB0_1:", "bl helper", "subs x9, x9, #1", "b.ne .LBB0_1", "ret"],
+            "an unknown instruction in the loop": [
+                ".LBB0_1:", "msr nzcv, x0", "subs x9, x9, #1", "b.ne .LBB0_1", "ret"],
+            "an unknown instruction between the flags and the branch": [
+                ".LBB0_1:", "subs x9, x9, #1", "frobnicate x0", "b.ne .LBB0_1", "ret"],
+            "br indirect": ["adr x16, .LBB0_1", "br x16", ".LBB0_1:", "ret"],
+            "blr indirect": ["blr x8", "ret"],
+        }
+        helper = "\t.type helper,@function\nhelper:\n\tret\n\t.size helper, .-helper\n"
+        for name, lines in cases.items():
+            with self.subTest(name):
+                failures, excused = self.run_on(lines, extra="\n" + helper)
+                self.assertTrue(failures, name)
+                self.assertFalse(excused.get((self.TWO, "counter loop")), (name, excused))
+
+    def test_one_more_than_the_ceiling_fails(self):
+        two = self.SUBS[:-1] + [line.replace("LBB0_1", "LBB0_2") for line in self.SUBS]
+        failures, excused = self.run_on(two, self.ONE)
+        self.assertEqual(excused[(self.ONE, "counter loop")], 2)
+        self.assertEqual(len(failures), 1, failures)
+        self.assertIn("more than the 1 reviewed", failures[0])
+        self.assertIn("AARCH64_EXCUSE_CEILINGS", failures[0])
+        self.assertEqual(self.run_on(self.SUBS, self.ONE)[0], [])
+        for probe, rules in audit.AARCH64_EXCUSE_CEILINGS.items():
+            for rule, ceiling in rules.items():
+                with self.subTest(probe=probe, rule=rule):
+                    self.assertEqual(audit.over_ceiling(
+                        self.A64, collections.Counter({(probe, rule): ceiling})), [])
+                    self.assertEqual(len(audit.over_ceiling(
+                        self.A64, collections.Counter({(probe, rule): ceiling + 1}))), 1)
+
+    def test_a_probe_not_listed_excuses_nothing(self):
+        for probe in ("ct_ghash_pmull_mul", "ct_reduce_q", "ct_aes256_armv8_encrypt"):
+            for lines in (self.SUBS, self.CMP, self.CBNZ):
+                with self.subTest(probe=probe, shape=lines[0]):
+                    failures, excused = self.run_on(lines, probe)
+                    self.assertTrue(failures)
+                    self.assertFalse(excused)
+            self.assertNotIn(probe, audit.AARCH64_EXCUSE_CEILINGS)
+        self.assertTrue(set(audit.AARCH64_EXCUSE_CEILINGS) <= set(audit.AARCH64_ONLY))
+
+    def test_x86_ceilings_do_not_apply_on_aarch64(self):
+        # A probe with an x86-64 ceiling and no aarch64 one excuses nothing
+        # here, and the reverse.
+        failures, excused = self.run_on(self.SUBS, "ct_reduce_q")
+        self.assertTrue(failures)
+        self.assertFalse(set(audit.AARCH64_EXCUSE_CEILINGS) & set(audit.X86_EXCUSE_CEILINGS))
+
+    def test_a_counter_branch_inside_the_loop_is_not(self):
+        failures, excused = self.run_on([
+            ".LBB0_1:", "add x9, x9, #1", "cmp x9, #7", "b.ne .LBB0_2", "ldr q0, [x1]",
+            ".LBB0_2:", "cmp x9, #32", "b.ne .LBB0_1", "ret"])
+        self.assertEqual(failures, [f"{self.TWO}: b.ne .LBB0_2"])
+        self.assertEqual(excused[(self.TWO, "counter loop")], 1)
+
+    def test_an_unconditional_jump_is_not_excused(self):
+        failures, _ = self.run_on(["b .LBB0_1", ".LBB0_1:", "ret"])
+        self.assertEqual(failures, [f"{self.TWO}: b .LBB0_1"])
 
 
 class BuildTests(unittest.TestCase):
