@@ -278,15 +278,27 @@ pub(crate) mod narrow {
 
 // MULX/ADCX/ADOX, where the CPU has them. Only under `std`, because the
 // detection needs it, and not under `ic_limb32`, whose point is to put every
-// multiplication through the 32-bit word operations above.
-#[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
+// multiplication through the 32-bit word operations above. Under `ct-probes`
+// without `std` the kernels are compiled for `scripts/ct-audit` to read, and
+// the detection says no, so nothing selects them.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(feature = "std", feature = "ct-probes"),
+    not(ic_limb32)
+))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[allow(unsafe_code)]
-mod x86;
+pub(crate) mod x86;
 
 // AVX-512 IFMA, for exponentiation. Same conditions as `x86`.
-#[cfg(all(target_arch = "x86_64", feature = "std", not(ic_limb32)))]
+#[cfg(all(
+    target_arch = "x86_64",
+    any(feature = "std", feature = "ct-probes"),
+    not(ic_limb32)
+))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[allow(unsafe_code)]
-mod ifma;
+pub(crate) mod ifma;
 
 /// Under `ct-probes`, set by `ct_probes::with_forced_adx`: the MULX/ADX backend
 /// is taken whatever CPUID reports, and IFMA is declined. Valgrind executes ADX
@@ -345,7 +357,7 @@ pub fn backend_for(limbs: usize) -> Backend {
 }
 
 /// A value's words, at full capacity, as the exponentiation passes them.
-type Limbs = [u64; MAX_LIMBS];
+pub(crate) type Limbs = [u64; MAX_LIMBS];
 
 /// One Montgomery domain's multiplication, as [`pow_windowed`] needs it.
 trait Engine {
@@ -509,7 +521,7 @@ impl Drop for Scratch {
 /// The one conditional subtraction that ends every Montgomery product, on a
 /// mask rather than a branch.
 #[inline(always)]
-fn finish(out: &mut [u64], t: &[u64], top: u64, n: &[u64]) {
+pub(crate) fn finish(out: &mut [u64], t: &[u64], top: u64, n: &[u64]) {
     let mut borrow = 0u64;
     for ((o, &w), &m) in out.iter_mut().zip(t).zip(n) {
         (*o, borrow) = sbb(w, m, borrow);
@@ -527,7 +539,7 @@ fn finish(out: &mut [u64], t: &[u64], top: u64, n: &[u64]) {
 /// gets a copy per common width with the loop bounds constant.
 #[inline(always)]
 #[allow(clippy::needless_range_loop)]
-fn cios(t: &mut [u64], a: &[u64], b: &[u64], n: &[u64], n0inv: u64, out: &mut [u64]) {
+pub(crate) fn cios(t: &mut [u64], a: &[u64], b: &[u64], n: &[u64], n0inv: u64, out: &mut [u64]) {
     let limbs = n.len();
     let (a, b, out) = (&a[..limbs], &b[..limbs], &mut out[..limbs]);
     let t = &mut t[..limbs + 2];

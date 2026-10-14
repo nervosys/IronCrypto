@@ -20,7 +20,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 ## What it checks
 
-Forty-four exported probes call the actual implementations on every target, and thirty-one more on x86-64. Their public sizes
+Forty-four exported probes call the actual implementations on every target, and thirty-four more on x86-64. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -73,6 +73,13 @@ release profile; this is not the workspace binary's overflow-checked profile.
   (`ct_chacha20_zmm_group`), and Poly1305's four-lane AVX2 step and the
   lanes' final multiplication and folding (`ct_poly1305_avx2_step`,
   `ct_poly1305_avx2_finish`). See "ChaCha20 and Poly1305 on x86-64" below.
+- On x86-64 only, RSA at 2048 bits: the windowed exponentiation's table
+  read (`ct_rsa_select_2048`), and the three Montgomery products -- on
+  MULX/ADCX/ADOX (`ct_rsa_adx_mont_mul_2048`), on AVX-512 IFMA
+  (`ct_rsa_ifma_amm_2048`) and the portable CIOS (`ct_rsa_cios_2048`). The
+  products loop over the width, and their loop branches are excused by the
+  x86-64 counter-loop rule, per probe, up to a ceiling. See "Loops on
+  x86-64" below.
   `X86_ONLY` in the checker requires all of these on that target and no other.
 
 Every expected symbol must have a complete, nonempty ELF assembly body.
@@ -97,8 +104,9 @@ Encoding probes do not automatically detect a return to lookup tables.
 The four-byte helper probes do not cover all buffer lengths or loop forms.
 
 Decoding, KWP authentication, coefficient sampling, signing rejection loops,
-curve arithmetic and other functions are outside this gate, and so are RSA's
-Montgomery products and exponentiation (see the end of this file). Some of their
+curve arithmetic and other functions are outside this gate, and so is RSA's
+exponentiation as a whole; its products and its table read are probed (see
+"Loops on x86-64"). Some of their
 branches are permitted because the inputs are public or because the standard
 allows the rejection to be observable. Extending coverage needs explicit rules
 for each such case rather than a blanket branch-count allowance.
@@ -421,8 +429,9 @@ seventy-two pass on x86-64, and the forty-four on each 32-bit target are
 unchanged.
 
 Three RSA probes were tried and dropped from the gate. Each contains loops
-over the public width, which the gate rejects on every target, and the rule
-for this gate is not to reshape library code to pass it:
+over the public width, which the gate rejected on every target, and the rule
+for this gate is not to reshape library code to pass it. They are back on
+x86-64, under the counter-loop rule; see "Loops on x86-64" below.
 
 - `ct_rsa_adx_mont_mul_2048`: the MULX/ADCX/ADOX product. Its row and pass
   loops end on `jrcxz`, `jmp` and `jne` on the width.
@@ -431,9 +440,9 @@ for this gate is not to reshape library code to pass it:
 - `ct_rsa_cios_2048`: the portable CIOS product. Its i and j loops end on
   `b`, `bne` and `beq` on every target.
 
-The MULX/ADX path is covered by `ic-rsa-2048-sign-adx` in ctgrind instead,
-which forces that backend under Valgrind (docs/CTGRIND.md). The IFMA path is
-covered by neither tool.
+The MULX/ADX path is also covered by `ic-rsa-2048-sign-adx` in ctgrind,
+which forces that backend under Valgrind (docs/CTGRIND.md). The IFMA product
+is now covered by this gate alone; Valgrind cannot run AVX-512.
 
 ## ChaCha20 and Poly1305 on x86-64, 2026-10-13
 
@@ -466,3 +475,168 @@ loop is not unrolled in the source.
 Probe count: thirty-one on x86-64 alone, with the RSA probe above, where
 there were twenty-seven. All seventy-five pass on x86-64, and the forty-four on each 32-bit target are
 unchanged.
+
+## Loops on x86-64, 2026-10-13
+
+RSA's three Montgomery products were dropped from the gate (above) because
+each loops over the public width, and on x86-64 the gate excused nothing. A
+rule now excuses loop control on x86-64, in the probes it names and no
+others, each up to a ceiling; it brought the three back. Valgrind cannot run
+AVX-512, so for the IFMA product this gate is the only tool that reads it.
+
+### The rule
+
+`X86Body` in `check-ct.py` builds each function body's control-flow graph,
+finds its natural loops by dominators (a back edge `u -> h` where `h`
+dominates `u`; the loop is `h` and every block that reaches `u` without
+passing through `h`, so every instruction executed between two visits to
+the header is in it), and excuses three shapes:
+
+- **counter loop**: a conditional branch that is a back edge to a loop's
+  header or an exit from the loop, and whose condition is that loop's
+  counter. Either `jrcxz`/`jecxz`, on rcx; or a `jcc` whose flags come from
+  an instruction in the branch's own basic block, reached backwards over
+  only instructions that write no flags (moves, `lea`, `mulx`, `setcc`,
+  `cmov`, vector operations other than comparisons), that is one of: `inc`,
+  `dec`, `add $imm` or `sub $imm` of a register; `cmp $imm` or `test $imm`
+  of a register; `test r, r`; or `cmp r1, r2`. The register is a counter of
+  the loop if every instruction in the loop that writes it, under any of its
+  names (`%ecx` is `%rcx`), is `inc`, `dec`, `add $imm`, `sub $imm` or
+  `lea imm(r), r` on it, and at least one does. For `cmp r1, r2` one must
+  be a counter and the other written nowhere in the loop. A loop that
+  contains a call, a string instruction, or an instruction without operands
+  that the checker does not know, excuses nothing: it cannot list what those
+  write.
+- **unconditional jump**: `jmp` to a label in the same function. It has no
+  condition; the branches that decide whether it is reached are checked.
+- **constant memset**: a call to `memset` whose length was loaded into rdx
+  as an immediate, whose value is rsi zeroed by `xor`, and whose destination
+  is rdi set by `lea imm(%rsp)`, all in the call's basic block: the zeroing
+  of a fixed-size buffer on the stack. Its timing depends on the length and
+  the address, both fixed.
+
+It refuses, and the tests in `test-check-ct.py` hold it to refusing: a
+branch whose flags come from a load, from `adc` or `sbb`, or from anything
+else between the counter and the branch; a counter also written from data
+in the loop (an `add` of a loaded value, a `cmov`, the high half of a
+`mul`); `cmp` against a register written in the loop or against memory; a
+register the loop never steps; a counter branch inside the loop that is
+neither an exit nor the back edge; a counter branch outside any loop;
+`jrcxz` with rcx loaded in the loop; an indirect jump; a `memset` of a
+computed length or to a pointer that is not the stack; a loop in a probe not
+listed; any loop at all in a body that switches to Intel syntax; and one
+excused finding more than a probe's ceiling, or any finding under a rule
+the probe was not reviewed for. Breaking the checker nine ways -- accepting
+any write to the counter, dropping the step requirement, ignoring the fixed
+operand of `cmp`, excusing any branch in a loop, reading flags past an `adc`,
+allowing calls in a loop, excusing unlisted probes, dropping the ceiling,
+accepting any `memset` length -- fails the tests each time.
+
+What it does not establish: where a counter starts. The rule proves the
+branch is decided by the number of iterations, given the counter's value on
+entry; that the value on entry is public -- the width, a constant -- is what
+the reading below established for each probe, and why each probe is named
+with a ceiling rather than the rule applying everywhere. A counter loaded
+from a secret before the loop would pass the rule. The ceiling means such a
+loop has to arrive as a change that someone then reads.
+
+### The ceilings, read on 2026-10-13, rustc 1.99.0
+
+`X86_EXCUSE_CEILINGS`, per probe, counted following calls:
+
+| Probe | counter loop | unconditional jump | constant memset |
+| --- | --- | --- | --- |
+| `ct_rsa_adx_mont_mul_2048` | 4 | 2 | 1 |
+| `ct_rsa_ifma_amm_2048` | 1 | 0 | 0 |
+| `ct_rsa_cios_2048` | 4 | 2 | 1 |
+
+Each excused finding, read in `target/ct-audit/probes/x86_64-unknown-linux-gnu.s`:
+
+- `ct_rsa_adx_mont_mul_2048` (`ic-rsa/src/uint/x86.rs`, `mont_mul_adx` at
+  `L = 32`, then `finish`): in the kernel, `jrcxz` ending each of the two
+  passes over the 32 words, rcx running from -32 to 0 by `lea 4(%rcx)`,
+  each pass closed by a `jmp` back to its top; `decq %r14; jne` ending the
+  row loop, r14 set to 32 before the kernel and written nowhere else; in
+  `finish`, `addq $2, %rcx; cmpq $32, %rcx; jne` over the words of the
+  masked subtraction; and `memset` of 528 bytes at `8(%rsp)`, the zeroed
+  66-word accumulator.
+- `ct_rsa_ifma_amm_2048` (`ic-rsa/src/uint/ifma.rs`, `Ctx::amm` at 2048
+  bits, `amm5`): `decq %r9; jne` ending the row loop, r9 set to 40, the
+  number of 52-bit words. Everything else in the product, the carry of the
+  columns into limbs included, is straight-line.
+- `ct_rsa_cios_2048` (`ic-rsa/src/uint.rs`, `cios` at 32 words): the outer
+  loop's exit, `incq %rbp; cmpq $32, %rbp; je`; the multiply pass,
+  `addq $2, %rsi; cmpq $33, %rsi; jne`; the reduction pass's exit,
+  `cmpq $32, %r8; je`, r8 stepped by `addq $2`, and its back edge `jmp`;
+  the `jmp` into the outer loop from the prologue; `finish`'s word loop,
+  `addq $2, %rcx; cmpq $33, %rcx; jne`; and `memset` of 272 bytes at
+  `16(%rsp)`, the 34-word accumulator.
+
+None of the three has a bounds check, an indirect call or a branch on a
+value. The IFMA probe sets the context's geometry to 2048 bits before the
+product (`Ctx::set_width_for_probe`), so the kernel is selected at compile
+time; `Ctx::amm` now reads the width once, before the kernel, which is
+handed a pointer into the context and so forced every later read of the
+field to be a reload, and with it a bounds check on `out[words..]` that
+could not be folded. That change is a refactor: the same value, read
+earlier. The ADX and IFMA kernels and their probe hooks compile without
+`std` under `ct-probes`, where nothing selects them, for the probe build to
+read.
+
+### Mutations
+
+Each was applied to the library, the gate run as `check.sh` runs it
+(`python scripts/check-ct.py --target x86_64-unknown-linux-gnu`), and
+restored:
+
+- `if a[0] & 1 != 0 { black_box(a[1]) }` in `Ctx::amm`: fails
+  `ct_rsa_ifma_amm_2048: jne .LBB69_2` and
+  `ct_rsa_ifma_amm_2048: jmp .LBB69_3` (a jump this probe was not reviewed
+  for).
+- `test {x3}, 1; jz 7f; nop; 7:` inside the IFMA kernel's row loop, on a
+  column sum: fails `ct_rsa_ifma_amm_2048 -> ...ifma4amm5: je .Ltmp1`.
+- `if b[i] & 1 != 0 { black_box(a[0]) }` at the top of CIOS's row: fails
+  `ct_rsa_cios_2048: je .LBB68_3`.
+- `test rax, 1; jz 7f; nop; 7:` inside pass A of the MULX/ADX kernel: fails
+  `ct_rsa_adx_mont_mul_2048 -> ...x8612mont_mul_adx: je .Ltmp3`.
+- A second loop over the output words in `Ctx::amm`: fails
+  `ct_rsa_ifma_amm_2048: 2 findings excused as counter loop, more than the 1
+  reviewed`.
+- The reduction pass run twice in each CIOS row: fails
+  `ct_rsa_cios_2048: 5 findings excused as counter loop, more than the 4
+  reviewed`. (A second pass over the fixed 34-word accumulator did not:
+  LLVM unrolled it, so it added no loop.)
+
+Restored, all 78 pass.
+
+### Not covered
+
+- **The IFMA exponentiation as a whole.** A probe running `pow_windowed`
+  on the IFMA context at 1024 bits, RSA-2048 signing's two exponentiations,
+  was built and read, and is not in the gate. Every product in it re-reads
+  the context's register count and width from memory after the previous
+  kernel call, and dispatches on them: `cmpq $3, %rax; je` to `amm3`,
+  `cmpq $4, %rax; jne` to `amm5`; bounds checks on the width,
+  `cmpq $84, %rsi; ja` and `cmpq $64, %r12; ja` to `slice_index_fail`;
+  and `memset`/`memcpy` of computed lengths and through a register. Each is
+  on the modulus's width, which is public, but none is a loop counter, and
+  the rule does not excuse them. Covering it means hoisting the kernel
+  choice out of `amm` (one copy of the exponentiation per width), which
+  changes code size, and was not done here. Its pieces are covered: the
+  product (`ct_rsa_ifma_amm_2048`) and the table read
+  (`ct_rsa_select_2048`).
+- **The MULX/ADX product's entry checks** (`x86::mont_mul`: the CPU
+  feature, the slice lengths) are not in the probe, which calls the kernel
+  at a fixed width. They are on public lengths, and Valgrind runs that path
+  (`ic-rsa-2048-sign-adx`, docs/CTGRIND.md).
+- **CIOS on the 32-bit targets.** It clears its accumulator through
+  `__aeabi_memclr8` on Cortex-M, a runtime routine the gate does not read,
+  and its loop tests (`cmp r1, #32` after an `adc`, `cmp.w r2, #256`) do not
+  fit the 32-bit counter shapes, which apply to the P-256 probes only. It
+  is required on x86-64 only (`X86_ONLY`), and no 32-bit rule was widened.
+- **The squaring** (`uint::sqr`), the other product the 64-bit
+  exponentiation uses, is not probed.
+
+Probe count: thirty-four on x86-64 alone, where there were thirty-one. All
+seventy-eight pass on x86-64, and the forty-four on each 32-bit target are
+unchanged: 78 + 3 x 44 = 210 gating probe/target checks.

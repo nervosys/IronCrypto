@@ -417,3 +417,48 @@ mod x86_chacha {
         unsafe { p::poly1305_avx2_finish(h, powers) }
     }
 }
+
+// RSA's Montgomery products at 2048 bits: the portable CIOS product on every
+// target, and on x86-64 the MULX/ADCX/ADOX product and the AVX-512 IFMA
+// almost-Montgomery product. Their loops run over the public width; on x86-64
+// check-ct.py excuses those loops' branches by rule, per probe, up to a ceiling.
+#[no_mangle]
+pub fn ct_rsa_cios_2048(
+    a: &[u64; 32],
+    b: &[u64; 32],
+    n: &[u64; 32],
+    n0inv: u64,
+    out: &mut [u64; 32],
+) {
+    ic_rsa::ct_probes::cios_2048(a, b, n, n0inv, out)
+}
+
+#[cfg(target_arch = "x86_64")]
+mod x86_rsa {
+    use ic_rsa::ct_probes::x86 as p;
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_adx_mont_mul_2048(
+        a: &[u64; 32],
+        b: &[u64; 32],
+        n: &[u64; 32],
+        n0inv: u64,
+        out: &mut [u64; 32],
+    ) {
+        unsafe { p::adx_mont_mul_2048(a, b, n, n0inv, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512F, IFMA and BMI2.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_ifma_amm_2048(
+        ctx: &mut p::IfmaCtx,
+        a: &[u64; 64],
+        b: &[u64; 64],
+        out: &mut [u64; 64],
+    ) {
+        unsafe { p::ifma_amm_2048(ctx, a, b, out) }
+    }
+}
