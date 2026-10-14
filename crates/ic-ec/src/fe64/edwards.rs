@@ -749,6 +749,8 @@ macro_rules! block_scan {
                 out("ymm12") _,
                 out("ymm13") _,
                 out("ymm14") _,
+                // Unused by the text, but `vzeroupper` clears its upper half.
+                out("ymm15") _,
                 options(nostack),
             );
         }

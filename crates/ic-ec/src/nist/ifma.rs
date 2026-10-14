@@ -632,7 +632,17 @@ pub(crate) fn table_mul<C: LaneCurve, const E: usize>(
         let (a, o) = acc.step();
         // SAFETY: three lane vectors of each set, two of operands, and the
         // twelve words of masks the kernel reads.
-        unsafe { run::<C>(t, C::MADD4, a, q[0].ptr(), masks.as_flattened(), o, &mut s) };
+        unsafe {
+            run::<C>(
+                t,
+                C::MADD4,
+                a,
+                q.as_ptr().cast(),
+                masks.as_flattened(),
+                o,
+                &mut s,
+            )
+        };
     }
     // The four accumulators to the `Fp` form, and summed.
     let mut f = [C::V::zero(); 3];
@@ -641,10 +651,10 @@ pub(crate) fn table_mul<C: LaneCurve, const E: usize>(
         run::<C>(
             t,
             C::TO_FP4,
-            acc.cur()[0].ptr(),
+            acc.cur().as_ptr().cast(),
             core::ptr::null(),
             &NONE,
-            f[0].mut_ptr(),
+            f.as_mut_ptr().cast(),
             &mut s,
         )
     };

@@ -540,10 +540,10 @@ fn madd4_kernel<C: TestCurve>(iters: usize, seed: u64) -> usize {
             run::<C>(
                 t,
                 C::MADD4,
-                a[0].ptr(),
-                q[0].ptr(),
+                a.as_ptr().cast(),
+                q.as_ptr().cast(),
                 masks.as_flattened(),
-                o[0].mut_ptr(),
+                o.as_mut_ptr().cast(),
                 &mut s,
             )
         };
@@ -553,10 +553,10 @@ fn madd4_kernel<C: TestCurve>(iters: usize, seed: u64) -> usize {
             run::<C>(
                 t,
                 C::TO_FP4,
-                o[0].ptr(),
+                o.as_ptr().cast(),
                 core::ptr::null(),
                 &NONE,
-                f[0].mut_ptr(),
+                f.as_mut_ptr().cast(),
                 &mut s,
             )
         };
@@ -811,10 +811,10 @@ fn time<C: TestCurve>(name: &str) {
                         run::<C>(
                             t,
                             C::MADD4,
-                            black_box(&a)[0].ptr(),
-                            q[0].ptr(),
+                            black_box(&a).as_ptr().cast(),
+                            q.as_ptr().cast(),
                             masks.as_flattened(),
-                            o[0].mut_ptr(),
+                            o.as_mut_ptr().cast(),
                             &mut s,
                         )
                     };

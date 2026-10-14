@@ -612,8 +612,20 @@ unsafe fn select_avx2_16w(table: *const u64, masks: *const u64, out: *mut u64, c
             out("ymm1") _,
             out("ymm2") _,
             out("ymm3") _,
+            out("ymm4") _,
+            out("ymm5") _,
+            out("ymm6") _,
+            out("ymm7") _,
             out("ymm8") _,
             out("ymm9") _,
+            // `vzeroupper` clears the upper half of every ymm register, so
+            // all sixteen are clobbered, not only those the loop uses.
+            out("ymm10") _,
+            out("ymm11") _,
+            out("ymm12") _,
+            out("ymm13") _,
+            out("ymm14") _,
+            out("ymm15") _,
             options(nostack),
         );
     }
@@ -661,8 +673,18 @@ unsafe fn select_avx2_24w(table: *const u64, masks: *const u64, out: *mut u64, c
             out("ymm3") _,
             out("ymm4") _,
             out("ymm5") _,
+            out("ymm6") _,
+            out("ymm7") _,
             out("ymm8") _,
             out("ymm9") _,
+            // `vzeroupper` clears the upper half of every ymm register, so
+            // all sixteen are clobbered, not only those the loop uses.
+            out("ymm10") _,
+            out("ymm11") _,
+            out("ymm12") _,
+            out("ymm13") _,
+            out("ymm14") _,
+            out("ymm15") _,
             options(nostack),
         );
     }
@@ -720,6 +742,14 @@ unsafe fn select_avx2_32w(table: *const u64, masks: *const u64, out: *mut u64, c
             out("ymm7") _,
             out("ymm8") _,
             out("ymm9") _,
+            // `vzeroupper` clears the upper half of every ymm register, so
+            // all sixteen are clobbered, not only those the loop uses.
+            out("ymm10") _,
+            out("ymm11") _,
+            out("ymm12") _,
+            out("ymm13") _,
+            out("ymm14") _,
+            out("ymm15") _,
             options(nostack),
         );
     }
