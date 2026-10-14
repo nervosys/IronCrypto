@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512 at 2048 and 3072 bits; level at 4096-bit signing), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, Ed25519 signing falls behind, P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH and P-256 signing are level (see "Without AVX-512") |
+| Speed, x86-64 | AES-GCM (at every size, also without AVX-512, narrowly at 4 MiB on AES-NI alone), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, P-256 and P-384 ECDH with a prepared key, P-256 and P-384 ECDH from key bytes (with AVX-512), ECDSA P-256 sign (with AVX-512), RSA (also without AVX-512 at 2048 and 3072 bits; level at 4096-bit signing), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ML-KEM key generation | without AVX-512, Ed25519 signing leads narrowly (1.07-1.10), P-384 ECDH against Graviola's key parsed once trails, and X25519, P-256 ECDH and P-256 signing are level (see "Without AVX-512") |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's portable field multiplication and squaring end to end (two steps argued), and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -199,8 +199,9 @@ Where it is not ahead:
 - **CPUs without AVX-512.** Measured on the same Zen 5 machine with
   `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
   below). Without them, X25519 is level with Graviola, Ed25519 signs at
-  about 0.85 to 0.93 of Graviola's rate and verifies ahead with the key
-  held, and ChaCha20-Poly1305 and ECDSA P-384 keep a lead, the ChaCha20 one
+  1.07 to 1.10 times Graviola's rate since the radix-32 table and 64-bit
+  scalar arithmetic ("Ed25519 signing without AVX-512, 2026-10-14", below;
+  0.84 to 0.93 before) and verifies ahead with the key held, and ChaCha20-Poly1305 and ECDSA P-384 keep a lead, the ChaCha20 one
   smaller. AES-GCM leads at every size, by 1.9 to 2.3 times on a CPU with
   VAES and, at 1 KiB and 4 MiB, by 1.04 to 1.22 on AES-NI alone ("AES-GCM
   without AVX-512", below); the earlier reading of it as behind set
@@ -290,6 +291,56 @@ spread. ML-KEM encapsulation from key bytes was left out of the table: these
 rounds used the earlier bench row that set it against a Graviola key parsed
 once, which is not like for like (see the last run above for the corrected
 rows).
+
+#### Ed25519 signing without AVX-512, 2026-10-14
+
+Profiled first with `--cfg ic_no_avx512` (`where_signing_spends_its_time`
+in `ic-ec/src/ed25519/fast.rs`, loaded Zen 5): a signature was 4.6 us, of
+which the basepoint multiplication 3.2 (64 additions 2.4, the 64
+eight-entry table reads 0.53, the four doublings and final addition about
+0.27), the compression's inversion 0.7, two SHA-512 hashes with their
+reductions 0.54 (the reductions 0.08 each), and `S = k a + r` 0.10.
+Graviola's `edwards25519_scalarmulbase` takes 63 additions and no doublings
+against a 48 KiB table, at about the same cost per addition and read as
+here; the gap was the doublings and the scalar arithmetic, and the read and
+the addition summing exactly when timed apart: the read of the next window
+was outside the out-of-order window, behind a 1400-instruction addition.
+
+Two changes (CHANGELOG.md, Unreleased). The read of the next window moved
+inside the addition's assembly block, in `ymm` registers on AVX2, which hid
+most of it; that made sixteen-entry windows affordable, so the digits are
+now signed radix 32: 26 steps of two additions instead of 32, against 39 KiB
+of tables. A variant with separate windows for the odd digits (no
+doublings, twice the reads, 48 KiB at radix 16) measured 1-2% faster than
+radix 16 with doublings, and radix 32 1.20 times faster, so radix 32 with
+five doublings was kept. And the scalar arithmetic modulo L runs on 64-bit
+limbs by Barrett's method on x86-64: 80 to 13 ns per reduction, 100 to 21
+ns for `S`.
+
+`graviola-25519`, base (master) and new binaries alternated, three rounds (five for the default build's Ed25519 rows),
+on a machine other jobs held at full load; IronCrypto's rate over
+Graviola's within each run, range across rounds:
+
+| operation | AVX2 only, before | AVX2 only, after | default, before | default, after |
+|---|---|---|---|---|
+| Ed25519 sign | 0.90-0.91 | 1.07-1.10 | 1.22-1.33 | 1.31-1.41 |
+| X25519 | 0.99-1.05 | 0.95-1.04 | 1.46-1.48 | 1.47-1.50 |
+| Ed25519 verify, one-shot | 1.03-1.05 | 1.01-1.06 | 1.38-1.42 | 1.40-1.43 |
+| Ed25519 verify, key held | 1.15-1.18 | 1.15-1.19 | 1.57-1.68 | 1.44-1.69 |
+
+Ahead without AVX-512 now, by less than a tenth: "clearly" applies only in
+that every round of the new build was ahead and every round of the old one
+behind. The default build signs on IFMA, unchanged, and gains the scalar
+arithmetic. X25519 and verification did not change; their spread is the
+load (the key-held verification's 1.44 is one round, its others 1.60-1.69).
+The full `graviola` run, two rounds per build and configuration, was too
+noisy to add to this (its controls moved by more than these effects: P-256
+ECDH with a prepared key read 2.3 and 12.2 in consecutive rounds); its
+Ed25519 signing rows read 0.88-0.89 before and 0.96-1.04 after with the
+cfg, and 1.15-1.29 before and 1.18-1.31 after without.
+
+What remains in a signature without AVX-512 is the 51 additions (2.3 us),
+the inversion (0.7), the two hashes (0.35) and the five doublings (0.25).
 
 #### RSA, after the MULX/ADX rewrite
 
@@ -453,7 +504,7 @@ expected, not a weakness.
 
 Beyond Valgrind, which only sees the build and CPU it runs on:
 
-- `scripts/check-ct.py` disassembles the compiled code of 111 probes on
+- `scripts/check-ct.py` disassembles the compiled code of 114 probes on
   x86-64, 51 on aarch64 (the ARMv8 AES, `PMULL` GHASH, SHA-256 and SHA-512
   backends among them) and 44 on Cortex-M0, Cortex-M4 and 32-bit RISC-V, and fails the
   build on any branch or secret-indexed load in them. It has caught
