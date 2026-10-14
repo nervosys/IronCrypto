@@ -71,6 +71,7 @@ macro_rules! block2 {
         // SAFETY: as in `block!`, over 1024 bytes.
         unsafe {
             asm!(
+                ".p2align 6",
                 $($text),+,
                 in("rdi") ws.0.as_mut_ptr(),
                 out("rax") _,
@@ -146,6 +147,7 @@ macro_rules! block {
         // `available()`.
         unsafe {
             asm!(
+                ".p2align 6",
                 $($text),+,
                 in("rdi") ws.0.as_mut_ptr(),
                 out("rax") _,
@@ -376,6 +378,7 @@ pub fn select(dst: &mut [u64; 16], table: &[[u64; 12]; 8], digit: i8) {
     // present on every x86-64 CPU.
     unsafe {
         asm!(
+            ".p2align 6",
             // rdx = all ones when the digit is negative; rcx = |digit|.
             "mov rdx, rcx",
             "sar rdx, 63",
@@ -715,6 +718,7 @@ macro_rules! block_scan {
         // caller's dispatch's, as for every block here.
         unsafe {
             asm!(
+                ".p2align 6",
                 $($text),+,
                 "vzeroupper",
                 in("rdi") ws.cast::<u64>(),

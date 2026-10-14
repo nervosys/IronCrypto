@@ -675,6 +675,7 @@ pub unsafe fn mul_adx(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     // end, so they are declared clobbered.
     unsafe {
         asm!(
+            ".p2align 6",
             // Row 0: (t0..t4) = a * b0.
             "mov rdx, qword ptr [{b}]",
             "mulx {t1}, {t0}, qword ptr [{a}]",
@@ -846,6 +847,7 @@ pub unsafe fn square_adx(a: &[u64; 4]) -> [u64; 4] {
     // `mul_plain`.
     unsafe {
         asm!(
+            ".p2align 6",
             // Cross products a_i * a_j, i < j, into t1..t6.
             "mov rdx, qword ptr [{a}]",
             "mulx {t2}, {t1}, qword ptr [{a} + 8]",
@@ -927,6 +929,7 @@ pub(crate) fn mul_plain(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     // apart from the two input pointers.
     unsafe {
         asm!(
+            ".p2align 6",
             // The 512-bit product, a row of `a * b_i` at a time into t0..t7.
             // Each row's high words absorb the carry from the word below; no
             // word can overflow, since `t + a_j * b_i + carry < 2^128`.
@@ -1063,6 +1066,7 @@ pub(crate) fn square_plain(a: &[u64; 4]) -> [u64; 4] {
     // declared registers, touches neither the stack nor memory.
     unsafe {
         asm!(
+            ".p2align 6",
             // Cross products a_i * a_j, i < j, into t1..t6.
             "mov rax, qword ptr [{a} + 8]",
             "mul qword ptr [{a}]",
@@ -1156,6 +1160,7 @@ pub(crate) fn add(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     // SAFETY: as for `mul`.
     unsafe {
         asm!(
+            ".p2align 6",
             "mov {t0}, qword ptr [{a}]",
             "mov {t1}, qword ptr [{a} + 8]",
             "mov {t2}, qword ptr [{a} + 16]",
@@ -1209,6 +1214,7 @@ pub(crate) fn sub(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     // SAFETY: as for `mul`.
     unsafe {
         asm!(
+            ".p2align 6",
             "mov {t0}, qword ptr [{a}]",
             "mov {t1}, qword ptr [{a} + 8]",
             "mov {t2}, qword ptr [{a} + 16]",

@@ -88,6 +88,7 @@ def emit(name, static, doc):
     o.append("    // declares and touches neither the stack nor memory.")
     o.append("    unsafe {")
     o.append("        asm!(")
+    o.append('            ".p2align 6",')
     for l in lines:
         if l.startswith("//"):
             o.append(f"            {l}")

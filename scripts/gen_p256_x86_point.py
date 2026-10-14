@@ -412,6 +412,9 @@ def emit(name, doc, slots, program, test_only=False):
     out.append("    // before writing it but the inputs, which the caller has written.")
     out.append("    unsafe {")
     out.append("        asm!(")
+    # Aligned, so the block's speed does not depend on where it lands; see
+    # `ic-rsa`'s x86 module. The padding is a few NOPs, run once per call.
+    out.append('            ".p2align 6",')
     body = []
     for op, *args in program:
         body.append(f"            // {args[0]} = {op}({', '.join(args[1:])})")

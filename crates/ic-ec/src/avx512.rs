@@ -42,6 +42,7 @@ fn cpuid(leaf: u32, sub: u32) -> (u32, u32, u32, u32) {
     // register around the instruction and swapped back.
     unsafe {
         asm!(
+            ".p2align 6",
             "mov {b}, rbx",
             "cpuid",
             "xchg {b}, rbx",

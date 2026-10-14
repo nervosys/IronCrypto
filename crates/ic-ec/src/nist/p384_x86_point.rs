@@ -33,6 +33,7 @@ pub unsafe fn fmul_adx(buf: &mut [MaybeUninit<u64>; 24]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // out = mul(a, b)
             "xor {w0:e}, {w0:e}",
             "xor {w1:e}, {w1:e}",
@@ -354,6 +355,7 @@ pub unsafe fn fsqr_adx(buf: &mut [MaybeUninit<u64>; 18]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // out = sqr(a)
             "mov rdx, qword ptr [{s}]",
             "mulx {w2}, {w1}, qword ptr [{s} + 8]",
@@ -617,6 +619,7 @@ pub unsafe fn fadd_adx(buf: &mut [MaybeUninit<u64>; 24]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // out = add(a, b)
             "xor {w6:e}, {w6:e}",
             "mov {w0}, qword ptr [{s}]",
@@ -693,6 +696,7 @@ pub unsafe fn fsub_adx(buf: &mut [MaybeUninit<u64>; 24]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // out = sub(a, b)
             "mov {w0}, qword ptr [{s}]",
             "mov {w1}, qword ptr [{s} + 8]",
@@ -759,6 +763,7 @@ pub unsafe fn fcms_3_8_adx(buf: &mut [MaybeUninit<u64>; 24]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // out = 3 * a - 8 * b
             "mov {w0:e}, 0xffffffff",
             "sub {w0}, qword ptr [{s} + 48]",
@@ -868,6 +873,7 @@ pub unsafe fn fcms_4_1_adx(buf: &mut [MaybeUninit<u64>; 24]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // out = 4 * a - 1 * b
             "mov {w0:e}, 0xffffffff",
             "sub {w0}, qword ptr [{s} + 48]",
@@ -970,6 +976,7 @@ pub unsafe fn fcms_12_9_adx(buf: &mut [MaybeUninit<u64>; 24]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // out = 12 * a - 9 * b
             "mov {w0:e}, 0xffffffff",
             "sub {w0}, qword ptr [{s} + 48]",
@@ -1083,6 +1090,7 @@ pub unsafe fn double_adx(buf: &mut [MaybeUninit<u64>; 96]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // delta = sqr(Z)
             "mov rdx, qword ptr [{s} + 96]",
             "mulx {w2}, {w1}, qword ptr [{s} + 104]",
@@ -3507,6 +3515,7 @@ pub unsafe fn double_in_place_adx(buf: &mut [MaybeUninit<u64>; 78]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // delta = sqr(Z)
             "mov rdx, qword ptr [{s} + 96]",
             "mulx {w2}, {w1}, qword ptr [{s} + 104]",
@@ -5931,6 +5940,7 @@ pub unsafe fn add_adx(buf: &mut [MaybeUninit<u64>; 150]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // z1z1 = sqr(Z1)
             "mov rdx, qword ptr [{s} + 96]",
             "mulx {w2}, {w1}, qword ptr [{s} + 104]",
@@ -10703,6 +10713,7 @@ pub unsafe fn add_affine_adx(buf: &mut [MaybeUninit<u64>; 126]) {
     // before writing it but the inputs, which the caller has written.
     unsafe {
         asm!(
+            ".p2align 6",
             // z1z1 = sqr(Z1)
             "mov rdx, qword ptr [{s} + 96]",
             "mulx {w2}, {w1}, qword ptr [{s} + 104]",

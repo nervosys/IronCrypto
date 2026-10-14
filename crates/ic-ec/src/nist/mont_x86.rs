@@ -54,6 +54,7 @@ pub unsafe fn mul_p384_n(a: &[u64; 6], b: &[u64; 6]) -> ([u64; 6], u64) {
     // declares and touches neither the stack nor memory.
     unsafe {
         asm!(
+            ".p2align 6",
             "xor {w0:e}, {w0:e}",
             "xor {w1:e}, {w1:e}",
             "xor {w2:e}, {w2:e}",

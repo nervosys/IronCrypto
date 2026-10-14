@@ -112,6 +112,7 @@ macro_rules! runner {
             // beyond the x86-64 baseline (`cmov`).
             unsafe {
                 asm!(
+                    ".p2align 6",
                     $($body)*,
                     d = inout(reg) *d,
                     f = inout(reg) *f,
