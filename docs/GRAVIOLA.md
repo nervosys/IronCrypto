@@ -15,7 +15,7 @@ Neither library is CMVP validated.
 | Speed, x86-64 | AES-GCM, ChaCha20-Poly1305 from 1 KiB, X25519, Ed25519, ML-KEM, RSA, ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, P-384 ECDH, ChaCha20-Poly1305 on 64 B | |
 | Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
-| Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind; its IFMA path by neither tool |
+| Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA product by the gate alone, and its IFMA exponentiation as a whole by neither |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
 | Test vectors | every suite Graviola runs, plus ACVP for ML-KEM, ML-DSA, SLH-DSA | | |
 | For agents | ontology, `ic recommend`, `ic lint`, MCP server with rules | | Graviola has none |
@@ -159,8 +159,11 @@ check after signing that `m^e = c`, which decides only whether the
 signature is released. That run exercises the portable exponentiation.
 A second case, `ic-rsa-2048-sign-adx`, forces IronCrypto's MULX/ADX Montgomery
 product, which Valgrind executes though it hides ADX from CPUID, and reports the
-same one branch. The AVX-512 IFMA path is covered by neither tool: Valgrind
-does not emulate AVX-512, and CPUID selects that path. Graviola's RSA is not in the harness,
+same one branch. Valgrind does not emulate AVX-512, so it cannot reach the
+IFMA path; the compiled-code gate reads the IFMA Montgomery product
+(`ct_rsa_ifma_amm_2048`), whose one loop branch is on the row count, and the
+table read, but not the exponentiation as a whole, which dispatches on the
+width for every product (docs/CONSTANT_TIME.md, "Loops on x86-64"). Graviola's RSA is not in the harness,
 and its README states that its RSA key generation is not side-channel
 safe.
 

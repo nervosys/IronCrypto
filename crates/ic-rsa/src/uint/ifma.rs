@@ -83,23 +83,30 @@ const LANES: usize = MAX_WORDS + 4;
 
 /// Whether this CPU has AVX-512F, IFMA and BMI2, asked once.
 pub(crate) fn available() -> bool {
-    use core::sync::atomic::{AtomicU8, Ordering};
     if super::adx_forced() {
         return false;
     }
-    // 0 not yet asked, 1 yes, 2 no.
-    static CACHED: AtomicU8 = AtomicU8::new(0);
-    match CACHED.load(Ordering::Relaxed) {
-        1 => true,
-        2 => false,
-        _ => {
-            let have = std::is_x86_feature_detected!("avx512f")
-                && std::is_x86_feature_detected!("avx512ifma")
-                && std::is_x86_feature_detected!("bmi2");
-            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
-            have
+    #[cfg(feature = "std")]
+    {
+        use core::sync::atomic::{AtomicU8, Ordering};
+        // 0 not yet asked, 1 yes, 2 no.
+        static CACHED: AtomicU8 = AtomicU8::new(0);
+        match CACHED.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let have = std::is_x86_feature_detected!("avx512f")
+                    && std::is_x86_feature_detected!("avx512ifma")
+                    && std::is_x86_feature_detected!("bmi2");
+                CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+                have
+            }
         }
     }
+    // Without `std` there is no detection; this module is compiled only for
+    // `scripts/ct-audit` to read, and nothing selects it.
+    #[cfg(not(feature = "std"))]
+    false
 }
 
 /// `(W, K)`: 52-bit limbs and eight-lane registers for a modulus of `limbs`
@@ -164,6 +171,21 @@ impl Ctx {
         })
     }
 
+    /// Set the context's geometry to that of a modulus of `limbs` words, for
+    /// `scripts/ct-audit` to read the products at a fixed width. The buffer
+    /// is left as it is.
+    ///
+    /// # Safety
+    ///
+    /// Asks nothing of the CPU: [`Ctx::amm`] after it needs AVX-512F, IFMA
+    /// and BMI2.
+    #[cfg(feature = "ct-probes")]
+    pub(crate) unsafe fn set_width_for_probe(&mut self, limbs: usize) {
+        if let Some((words, regs)) = geometry(limbs) {
+            (self.words, self.regs, self.limbs) = (words, regs, limbs);
+        }
+    }
+
     /// 52-bit limbs per value.
     pub(crate) fn words(&self) -> usize {
         self.words
@@ -185,6 +207,9 @@ impl Ctx {
     /// both inputs are. Inputs must be normalised, every limb below `2^52`,
     /// and zero above `W`. The output is too.
     pub(crate) fn amm(&mut self, a: &Limbs, b: &Limbs, out: &mut Limbs) {
+        // Read before the kernel runs: it is handed a pointer into `self`, so
+        // a field read after it is a reload the compiler cannot fold.
+        let words = self.words;
         let top = 8 * self.regs;
         for (slot, &limb) in self.k[top + 1..top + 4].iter_mut().zip(a) {
             *slot = limb << 12;
@@ -198,9 +223,9 @@ impl Ctx {
         // words of `k` from `LANES`, which `k` has room for.
         let s = unsafe {
             match self.regs {
-                3 => amm3(a, b, k, self.words),
-                4 => amm4(a, b, k, self.words),
-                _ => amm5(a, b, k, self.words),
+                3 => amm3(a, b, k, words),
+                4 => amm4(a, b, k, words),
+                _ => amm5(a, b, k, words),
             }
         };
         // Column 0 is the scalar's; the rest are the vector's. Carry them into
@@ -208,12 +233,12 @@ impl Ctx {
         // so nothing carries out of the top.
         self.k[LANES] = s;
         let mut carry = 0u64;
-        for (o, &v) in out.iter_mut().zip(&self.k[LANES..]).take(self.words) {
+        for (o, &v) in out.iter_mut().zip(&self.k[LANES..]).take(words) {
             let v = v + carry;
             *o = v & MASK;
             carry = v >> 52;
         }
-        out[self.words..].fill(0);
+        out[words..].fill(0);
     }
 }
 

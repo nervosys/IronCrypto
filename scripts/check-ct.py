@@ -70,6 +70,14 @@ X86_ONLY = (
     # ChaCha20's sixteen-block AVX-512 keystream group, and Poly1305's
     # four-lane AVX2 step and final lane folding, under the key's r and s.
     "ct_chacha20_zmm_group", "ct_poly1305_avx2_step", "ct_poly1305_avx2_finish",
+    # RSA's Montgomery products at 2048 bits: the MULX/ADCX/ADOX product, the
+    # AVX-512 IFMA almost-Montgomery product, and the portable CIOS product.
+    # Each loops over the public width, and their loop branches are excused by
+    # the x86-64 rules below, up to X86_EXCUSE_CEILINGS. On the 32-bit targets
+    # the CIOS product clears its accumulator with a runtime-library call and
+    # its loop tests do not fit the 32-bit counter shapes, so it is not
+    # required there.
+    "ct_rsa_adx_mont_mul_2048", "ct_rsa_ifma_amm_2048", "ct_rsa_cios_2048",
 )
 SYMBOLS += X86_ONLY
 
@@ -103,6 +111,28 @@ EXCUSE_CEILINGS = {
                            "literal-pool jump": 12},
     "thumbv7em-none-eabihf": {"counter loop": 32},
     "riscv32imac-unknown-none-elf": {"stack-bound loop": 16, "constant memset": 16},
+}
+
+# On x86-64 three rules (X86Body, below) excuse loops over a public count, and
+# only in the probes named here, each rule up to the number of findings it
+# excused when they were read one by one (docs/CONSTANT_TIME.md, "Loops on
+# x86-64"). A probe not named excuses nothing; one finding more than its
+# ceiling fails. Counted per probe, following calls. Read on 2026-10-13,
+# rustc 1.99.0.
+X86_EXCUSE_CEILINGS = {
+    # The kernel's two inner passes (`jrcxz` on rcx, stepped by `lea 4(rcx)`,
+    # each closed by a `jmp`), its row loop (`dec`/`jne` on the row count),
+    # the masked subtraction's word loop (`cmp $32`), and the zeroing of the
+    # 66-word accumulator on the stack.
+    "ct_rsa_adx_mont_mul_2048": {"counter loop": 4, "unconditional jump": 2,
+                                 "constant memset": 1},
+    # The kernel's row loop: `dec`/`jne` on the 40 rows.
+    "ct_rsa_ifma_amm_2048": {"counter loop": 1},
+    # The two inner j loops and the outer i loop of CIOS, the masked
+    # subtraction's word loop, the jump into the outer loop and the inner
+    # loop's back edge, and the zeroing of the 34-word accumulator.
+    "ct_rsa_cios_2048": {"counter loop": 4, "unconditional jump": 2,
+                         "constant memset": 1},
 }
 
 # Loads and stores, which do not set the flags a conditional branch reads, and
@@ -318,6 +348,344 @@ def excuse(target, ins, i):
     return None
 
 
+# --- x86-64: loops over a public count -------------------------------------
+#
+# The rules below excuse three shapes in x86-64 code, and only in the probes
+# X86_EXCUSE_CEILINGS names, each up to its own count. They read AT&T syntax,
+# which is what rustc emits, inline assembly included; a body that switches to
+# Intel syntax gets no excuse at all.
+#
+# "counter loop": a conditional branch that is a back edge or an exit of a
+# natural loop (found from the control-flow graph by dominators, so every
+# block on a path between two visits to the loop's header is in it), whose
+# condition is a loop counter's: `jrcxz`/`jecxz` on rcx, or a `jcc` whose flags
+# come, within its own basic block, from `inc`/`dec`/`add $imm`/`sub $imm` of a
+# register, `cmp $imm` or `test` of a register, or `cmp` of two registers. The
+# register must be a counter of that loop: every instruction in the loop that
+# writes it is `inc`, `dec`, `add $imm`, `sub $imm` or `lea imm(r), r` on it, and
+# at least one does. For `cmp` of two registers the other must not be written
+# anywhere in the loop. A loop with a call in it excuses nothing.
+#
+# "unconditional jump": `jmp` to a label in the same function. It has no
+# condition; which path reaches it is decided by the branches that are checked.
+#
+# "constant memset": a call to `memset` whose length was loaded as a constant
+# into rdx, value zeroed in rsi, and destination computed as rsp plus a
+# constant in rdi, all in the call's own basic block.
+
+_X86_FAMILIES = {}
+for _fam, _names in {
+    "a": ("rax", "eax", "ax", "al", "ah"), "b": ("rbx", "ebx", "bx", "bl", "bh"),
+    "c": ("rcx", "ecx", "cx", "cl", "ch"), "d": ("rdx", "edx", "dx", "dl", "dh"),
+    "si": ("rsi", "esi", "si", "sil"), "di": ("rdi", "edi", "di", "dil"),
+    "bp": ("rbp", "ebp", "bp", "bpl"), "sp": ("rsp", "esp", "sp", "spl"),
+}.items():
+    for _n in _names:
+        _X86_FAMILIES[_n] = _fam
+for _k in range(8, 16):
+    for _suffix in ("", "d", "w", "b"):
+        _X86_FAMILIES[f"r{_k}{_suffix}"] = f"r{_k}"
+
+
+def _family(operand):
+    """The general-purpose register an operand names, as its 64-bit family, or
+    None for anything else: an immediate, memory, a vector register."""
+    if not operand.startswith("%"):
+        return None
+    return _X86_FAMILIES.get(operand[1:].lower())
+
+
+def _att_operands(text):
+    """Operands of an AT&T instruction, split at commas outside parentheses."""
+    parts, depth, current = [], 0, ""
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
+def _att(line):
+    """(mnemonic, operands) of an AT&T line, comments removed."""
+    line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+    fields = line.split(None, 1)
+    op = fields[0].lower() if fields else ""
+    return op, (_att_operands(fields[1]) if len(fields) == 2 else [])
+
+
+_IMM = re.compile(r"\$-?(?:0x[0-9a-f]+|\d+)")
+_JCC = re.compile(r"j(?:n?[abceglopsz]|n?[abgl]e|p[eo])")
+# Mnemonics that read every operand and write none.
+_READ_ONLY = re.compile(r"(?:cmp|test|bt|u?comis|vu?comis|v?ptest|vtestp|push|prefetch|nop)\w*")
+# Instructions that write no flags, which may sit between the instruction that
+# sets the flags and the branch that reads them. Anything not listed ends the
+# search, and so excuses nothing.
+_NO_FLAGS = re.compile(
+    r"mov\w*|cmov\w+|lea[wlq]?|mulx[lq]?|(?:shl|shr|sar|ror)x[lq]?|set\w+|nop\w*"
+    r"|bswap[lq]?|xchg[bwlq]?|push[wq]?|pop[wq]?|prefetch\w*"
+    r"|p(?:and|andn|or|xor|shufd|unpck\w+|add[bwdq]|sub[bwdq]|s[lr]l[wdq]|sra[wd])"
+    r"|v(?!u?comis|ptest|testp)\w+")
+_IMPLICIT = {
+    "cqto": {"d"}, "cqo": {"d"}, "cltd": {"d"}, "cdq": {"d"}, "cwtd": {"d"},
+    "cltq": {"a"}, "cdqe": {"a"}, "cwtl": {"a"}, "cbtw": {"a"},
+    "cpuid": {"a", "b", "c", "d"}, "rdtsc": {"a", "d"}, "rdtscp": {"a", "c", "d"},
+    "xgetbv": {"a", "d"}, "syscall": {"a", "c", "r11"}, "lahf": {"a"}, "xlatb": {"a"},
+    "rdmsr": {"a", "d"}, "rdpmc": {"a", "d"}, "rdpkru": {"a", "d"},
+    "leave": {"bp"}, "leaveq": {"bp"}, "enter": {"bp"}, "enterq": {"bp"},
+}
+# Instructions without operands that write no general-purpose register. Any
+# other instruction without operands is assumed to write anything.
+_NULLARY = {"nop", "ud2", "int3", "hlt", "pause", "lfence", "mfence", "sfence", "clc",
+            "stc", "cmc", "cld", "std", "sahf", "vzeroupper", "vzeroall", "endbr64"}
+
+
+def _writes(op, operands):
+    """Register families an AT&T instruction may write; None if it may write
+    registers this cannot list (a call, a string instruction, an interrupt)."""
+    if (op.startswith(("call", "rep", "int", "loop"))
+            or re.fullmatch(r"(?:movs|stos|lods|scas|cmps)[bwlq]?", op) and not operands):
+        return None
+    if op.startswith(("j", "ret")):
+        return set()
+    if not operands and op not in _IMPLICIT and op not in _NULLARY:
+        return None
+    written = set(_IMPLICIT.get(op, ()))
+    if op.startswith(("push", "pop", "leave", "enter")):
+        written.add("sp")
+    if re.fullmatch(r"cmpxchg\w*", op):
+        return written | {"a", "d"} | {f for f in map(_family, operands[-1:]) if f}
+    if _READ_ONLY.fullmatch(op) and not re.fullmatch(r"bt[src][wlq]?", op):
+        return written
+    if re.fullmatch(r"i?(?:mul|div)[bwlq]?", op) and len(operands) == 1:
+        return written | {"a", "d"}
+    targets = operands[-1:]
+    if re.fullmatch(r"mulx[lq]?", op):
+        targets = operands[-2:]
+    elif re.fullmatch(r"(?:xchg|xadd)[bwlq]?", op):
+        targets = operands
+    return written | {f for f in map(_family, targets) if f}
+
+
+def _step(op, operands):
+    """The family a constant step writes: `inc r`, `dec r`, `add $imm, r`,
+    `sub $imm, r`, `lea imm(r), r`. None for anything else."""
+    if re.fullmatch(r"(?:inc|dec)[lq]", op) and len(operands) == 1:
+        return _family(operands[0])
+    if re.fullmatch(r"(?:add|sub)[lq]", op) and len(operands) == 2 and _IMM.fullmatch(operands[0]):
+        return _family(operands[1])
+    if re.fullmatch(r"lea[lq]", op) and len(operands) == 2:
+        m = re.fullmatch(r"-?(?:0x[0-9a-f]+|\d+)\((%\w+)\)", operands[0])
+        if m and _family(m[1]) and _family(m[1]) == _family(operands[1]):
+            return _family(operands[1])
+    return None
+
+
+class X86Body:
+    """One function body's control-flow graph, its natural loops, and the
+    findings in it that the x86-64 rules excuse, by index into
+    `instructions_of(lines)`."""
+
+    def __init__(self, lines):
+        self.rules = {}
+        self.ins, labels = [], {}
+        for line in lines:
+            text = line.strip()
+            if text.startswith(".intel_syntax"):
+                return
+            if text.endswith(":") and not text.startswith(("#", "@", "//")):
+                labels[text[:-1]] = len(self.ins)
+                continue
+            if not text or text.startswith((".", "#", "@", "//")):
+                continue
+            self.ins.append(_att(line))
+        n = len(self.ins)
+        self.labels = labels
+        if not n:
+            return
+        # Basic blocks: leaders are the entry, every label, and whatever
+        # follows a jump or a return.
+        leaders = {0} | {i for i in labels.values() if i < n}
+        for i, (op, _) in enumerate(self.ins):
+            if (op.startswith("j") or op.startswith("ret") or op == "ud2") and i + 1 < n:
+                leaders.add(i + 1)
+        starts = sorted(leaders)
+        self.block_of = {}
+        self.blocks = []
+        for b, s in enumerate(starts):
+            e = starts[b + 1] if b + 1 < len(starts) else n
+            self.blocks.append(range(s, e))
+            for i in range(s, e):
+                self.block_of[i] = b
+        succ = []
+        for b, r in enumerate(self.blocks):
+            op, operands = self.ins[r[-1]]
+            nxt = [self.block_of[r[-1] + 1]] if r[-1] + 1 < n else []
+            target = self._target(operands)
+            if op in {"jmp", "jmpq"}:
+                succ.append([target] if target is not None else [])
+            elif _JCC.fullmatch(op) or op in {"jrcxz", "jecxz"}:
+                succ.append(([target] if target is not None else []) + nxt)
+            elif op.startswith("ret") or op == "ud2":
+                succ.append([])
+            else:
+                succ.append(nxt)
+        self.succ = succ
+        self.loops = self._natural_loops()
+        for i, (op, operands) in enumerate(self.ins):
+            rule = self._excuse(i, op, operands)
+            if rule:
+                self.rules[i] = rule
+
+    def _target(self, operands):
+        if len(operands) == 1 and operands[0] in self.labels and self.labels[operands[0]] < len(self.ins):
+            return self.block_of[self.labels[operands[0]]]
+        return None
+
+    def _natural_loops(self):
+        """{header: body}, the union of the natural loops of every back edge
+        into that header."""
+        reach, stack = {0}, [0]
+        while stack:
+            for s in self.succ[stack.pop()]:
+                if s not in reach:
+                    reach.add(s)
+                    stack.append(s)
+        preds = {b: [p for p in reach if b in self.succ[p]] for b in reach}
+        dom = {b: set(reach) for b in reach}
+        dom[0] = {0}
+        changed = True
+        while changed:
+            changed = False
+            for b in sorted(reach - {0}):
+                new = set(reach)
+                for p in preds[b]:
+                    new &= dom[p]
+                new = (new if preds[b] else set()) | {b}
+                if new != dom[b]:
+                    dom[b], changed = new, True
+        loops = {}
+        for u in reach:
+            for h in self.succ[u]:
+                if h in dom[u]:
+                    # Everything that reaches u without passing through h.
+                    body, stack = {h, u}, ([u] if u != h else [])
+                    while stack:
+                        for p in preds[stack.pop()]:
+                            if p not in body:
+                                body.add(p)
+                                stack.append(p)
+                    loops.setdefault(h, set()).update(body)
+        return loops
+
+    def _counter(self, body, family):
+        """Whether `family` is a counter of the loop `body`: written there only
+        by constant steps, and stepped at least once. None of the loop may be
+        a call or otherwise write registers this cannot see."""
+        stepped = False
+        for b in body:
+            for i in self.blocks[b]:
+                op, operands = self.ins[i]
+                written = _writes(op, operands)
+                if written is None:
+                    return False
+                if family in written:
+                    if _step(op, operands) != family:
+                        return False
+                    stepped = True
+        return stepped
+
+    def _invariant(self, body, family):
+        for b in body:
+            for i in self.blocks[b]:
+                written = _writes(*self.ins[i])
+                if written is None or family in written:
+                    return False
+        return True
+
+    def _excuse(self, i, op, operands):
+        if op in {"jmp", "jmpq"}:
+            return "unconditional jump" if self._target(operands) is not None else None
+        if op.startswith("call") and operands and operands[0].lstrip("*").split("@")[0] == "memset":
+            return "constant memset" if self._constant_memset(i) else None
+        if not (_JCC.fullmatch(op) or op in {"jrcxz", "jecxz"}):
+            return None
+        b = self.block_of[i]
+        target = self._target(operands)
+        if target is None or i != self.blocks[b][-1]:
+            return None
+        # The counters the branch's condition reads, and the registers that
+        # must stay fixed in the loop.
+        if op in {"jrcxz", "jecxz"}:
+            counters, fixed = ["c"], []
+        else:
+            source = None
+            for j in range(i - 1, self.blocks[b][0] - 1, -1):
+                prev_op, prev = self.ins[j]
+                if not _NO_FLAGS.fullmatch(prev_op):
+                    source = (prev_op, prev)
+                    break
+            if source is None:
+                return None
+            sop, sargs = source
+            regs = [_family(a) for a in sargs]
+            if _step(sop, sargs) and not sop.startswith("lea"):
+                counters, fixed = [_step(sop, sargs)], []
+            elif re.fullmatch(r"(?:cmp|test)[bwlq]", sop) and len(sargs) == 2:
+                if _IMM.fullmatch(sargs[0]) and regs[1]:
+                    counters, fixed = [regs[1]], []
+                elif regs[0] and regs[1] and sop.startswith("test") and regs[0] == regs[1]:
+                    counters, fixed = [regs[0]], []
+                elif regs[0] and regs[1] and sop.startswith("cmp") and regs[0] != regs[1]:
+                    # Either may be the counter; the other must be fixed.
+                    counters, fixed = None, regs
+                else:
+                    return None
+            else:
+                return None
+        for header, body in self.loops.items():
+            if b not in body:
+                continue
+            successors = self.succ[b]
+            exits = [s for s in successors if s not in body]
+            if not (target == header or exits):
+                continue
+            if counters is None:
+                r1, r2 = fixed
+                if ((self._counter(body, r1) and self._invariant(body, r2))
+                        or (self._counter(body, r2) and self._invariant(body, r1))):
+                    return "counter loop"
+            elif all(self._counter(body, c) for c in counters):
+                return "counter loop"
+        return None
+
+    def _constant_memset(self, i):
+        b = self.block_of[i]
+        last = {}
+        for j in range(self.blocks[b][0], i):
+            op, operands = self.ins[j]
+            written = _writes(op, operands)
+            if written is None:
+                return False
+            for family in written & {"d", "si", "di"}:
+                last[family] = (op, operands)
+        length, value, dest = last.get("d"), last.get("si"), last.get("di")
+        return bool(
+            length and re.fullmatch(r"mov[lq]", length[0]) and _IMM.fullmatch(length[1][0])
+            and _family(length[1][1]) == "d"
+            and value and re.fullmatch(r"xor[lq]", value[0])
+            and _family(value[1][0]) == "si" and _family(value[1][1]) == "si"
+            and dest and re.fullmatch(r"leaq", dest[0])
+            and re.fullmatch(r"-?\d*\(%rsp\)", dest[1][0]) and _family(dest[1][1]) == "di")
+
+
 _external_cache = {}
 
 
@@ -370,12 +738,14 @@ def inspect(assembly, target, excused=None):
     functions = bodies(assembly, symbols_for(target))
     externals = VERIFIED_EXTERNAL.get(target, ())
     excusable = target in EXCUSE_CEILINGS
+    x86 = target.startswith("x86_64")
     if excused is None:
         excused = collections.Counter()
 
     def walk(probe, name, lines, seen):
         ins = instructions_of(lines)
         pools = pool_jumps(lines) if target.startswith("thumb") else set()
+        loops = X86Body(lines).rules if x86 and probe in X86_EXCUSE_CEILINGS else {}
         for i, line in enumerate(ins):
             callee = called(line, target, functions)
             if callee is not None:
@@ -392,6 +762,10 @@ def inspect(assembly, target, excused=None):
                     walk(probe, external, external_body(target, external), seen)
                 continue
             if not forbidden(line, target):
+                continue
+            # x86-64: counted per probe, and only in the probes listed.
+            if loops.get(i) in X86_EXCUSE_CEILINGS.get(probe, {}):
+                excused[(probe, loops[i])] += 1
                 continue
             rule = excuse(target, ins, i) if excusable and probe in P256 else None
             # The Ed25519 scalar probes are straight-line by construction;
@@ -413,7 +787,18 @@ def inspect(assembly, target, excused=None):
 
 
 def over_ceiling(target, excused):
-    """A failure for each rule that excused more than it was reviewed for."""
+    """A failure for each rule that excused more than it was reviewed for: per
+    rule on the 32-bit targets, per probe and rule on x86-64."""
+    if target.startswith("x86_64"):
+        failures = []
+        for (probe, rule), count in sorted(excused.items()):
+            ceiling = X86_EXCUSE_CEILINGS.get(probe, {}).get(rule, 0)
+            if count > ceiling:
+                failures.append(
+                    f"{probe}: {count} findings excused as {rule}, more than the {ceiling} "
+                    "reviewed; read them and update X86_EXCUSE_CEILINGS and "
+                    "docs/CONSTANT_TIME.md")
+        return failures
     ceilings = EXCUSE_CEILINGS.get(target, {})
     return [f"{count} findings excused as {rule}, more than the {ceilings.get(rule, 0)} "
             "reviewed; read them and update EXCUSE_CEILINGS and docs/CONSTANT_TIME.md"
@@ -450,7 +835,8 @@ def main():
         failures.extend(f"{target}: {finding}" for finding in found)
         print(f"{target}: {len(symbols_for(target))} probes, {len(found)} failures"
               + ("; excused by rule: " + ", ".join(
-                  f"{rule} {count}" for rule, count in sorted(excused.items()))
+                  f"{' '.join(rule) if isinstance(rule, tuple) else rule} {count}"
+                  for rule, count in sorted(excused.items()))
                  if excused else ""), flush=True)
     if failures:
         print("\n".join(failures), file=sys.stderr)

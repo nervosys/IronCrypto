@@ -230,6 +230,153 @@ class ExcuseTests(unittest.TestCase):
         self.assertEqual(len(self.run_on(call, self.M4)[0]), 1)
 
 
+class X86LoopTests(unittest.TestCase):
+    """On x86-64 a loop over a counter is excused, in the probes listed in
+    X86_EXCUSE_CEILINGS and up to their ceilings, and nothing that only looks
+    like one is."""
+
+    X86 = "x86_64-unknown-linux-gnu"
+    IFMA = "ct_rsa_ifma_amm_2048"   # ceiling: one counter loop, nothing else
+    ADX = "ct_rsa_adx_mont_mul_2048"
+
+    def run_on(self, lines, probe=None):
+        probe = probe or self.ADX
+        body = "".join(line + "\n" if line.endswith(":") else f"\t{line}\n" for line in lines)
+        asm = assembly("retq").replace(f"{probe}:\n\tretq\n", f"{probe}:\n{body}")
+        self.assertIn(body, asm)
+        excused = collections.Counter()
+        failures = audit.inspect(asm, self.X86, excused)
+        return failures + audit.over_ceiling(self.X86, excused), excused
+
+    DEC = ["movl $32, %r9d", ".LBB0_1:", "movq (%rsi), %rax", "addq %rax, %rdx",
+           "leaq 8(%rsi), %rsi", "decq %r9", "jne .LBB0_1", "retq"]
+    CMP = ["xorl %ecx, %ecx", ".LBB0_1:", "addq (%rsi,%rcx,8), %rax", "adcq $0, %rdx",
+           "addq $2, %rcx", "cmpq $32, %rcx", "jne .LBB0_1", "retq"]
+    JRCXZ = ["movq $-32, %rcx", ".Ltmp0:", "mulxq (%rsi,%rcx,8), %rax, %r15",
+             "adcxq (%rdi,%rcx,8), %rax", "adoxq %rbp, %rax", "movq %rax, (%rdi,%rcx,8)",
+             "leaq 4(%rcx), %rcx", "jrcxz .Ltmp1", "jmp .Ltmp0", ".Ltmp1:", "retq"]
+
+    def test_the_counter_shapes_are_excused(self):
+        cases = {
+            "dec/jne": (self.DEC, {"counter loop": 1}),
+            "cmp counter, imm": (self.CMP, {"counter loop": 1}),
+            "jrcxz": (self.JRCXZ, {"counter loop": 1, "unconditional jump": 1}),
+            "cmp counter, fixed register": (
+                ["movq %rdi, %r8", ".LBB0_1:", "addq (%rsi), %rax", "addq $8, %rsi",
+                 "cmpq %rsi, %r8", "jne .LBB0_1", "retq"], {"counter loop": 1}),
+            "exit from the middle": (
+                ["xorl %ebp, %ebp", "jmp .LBB0_1", ".LBB0_2:", "incq %rbp",
+                 "cmpq $32, %rbp", "je .LBB0_3", ".LBB0_1:", "addq (%rsi,%rbp,8), %rax",
+                 "jmp .LBB0_2", ".LBB0_3:", "retq"], {"counter loop": 1, "unconditional jump": 2}),
+            "constant memset": (
+                ["leaq 8(%rsp), %rdi", "movl $528, %edx", "xorl %esi, %esi",
+                 "callq *memset@GOTPCREL(%rip)", "retq"], {"constant memset": 1}),
+        }
+        for name, (lines, rules) in cases.items():
+            with self.subTest(name):
+                failures, excused = self.run_on(lines)
+                self.assertEqual(failures, [])
+                self.assertEqual(excused, collections.Counter(
+                    {(self.ADX, rule): count for rule, count in rules.items()}))
+
+    def test_a_branch_on_anything_but_a_counter_is_not(self):
+        cases = {
+            "on a loaded value": [
+                ".LBB0_1:", "movq (%rsi,%rcx,8), %rax", "incq %rcx", "testq %rax, %rax",
+                "jne .LBB0_1", "retq"],
+            "on a carry": [
+                "movl $32, %r9d", ".LBB0_1:", "decq %r9", "adcq (%rsi), %rax", "jb .LBB0_1",
+                "retq"],
+            "on a borrow out of sbb": [
+                ".LBB0_1:", "subq $1, %r9", "sbbq %rdx, %rax", "jne .LBB0_1", "retq"],
+            "counter also written from data": [
+                ".LBB0_1:", "movq (%rsi), %rax", "addq %rax, %r9", "decq %r9", "jne .LBB0_1",
+                "retq"],
+            "counter moved into from data": [
+                ".LBB0_1:", "decq %r9", "cmovneq (%rsi), %r9", "testq %r9, %r9",
+                "jne .LBB0_1", "retq"],
+            "counter written by mul": [
+                ".LBB0_1:", "mulq (%rsi)", "decq %rdx", "jne .LBB0_1", "retq"],
+            "cmp against a register written in the loop": [
+                ".LBB0_1:", "addq $1, %rcx", "movq (%rsi), %rdx", "cmpq %rdx, %rcx",
+                "jne .LBB0_1", "retq"],
+            "cmp against memory": [
+                ".LBB0_1:", "addq $1, %rcx", "cmpq (%rsi), %rcx", "jne .LBB0_1", "retq"],
+            "a never-stepped register": [
+                ".LBB0_1:", "addq (%rsi), %rax", "cmpq $0, %r9", "jne .LBB0_1", "retq"],
+            "outside any loop": ["decq %r9", "jne .LBB0_1", "addq %rax, %rax", ".LBB0_1:", "retq"],
+            "a call in the loop": [
+                ".LBB0_1:", "callq helper", "decq %r9", "jne .LBB0_1", "retq"],
+            "jrcxz with rcx loaded in the loop": [
+                ".Ltmp0:", "movq (%rsi), %rcx", "leaq 4(%rcx), %rcx", "jrcxz .Ltmp1",
+                "jmp .Ltmp0", ".Ltmp1:", "retq"],
+            "a jump to a register": ["jmpq *%rax", "retq"],
+            "memset of a computed length": [
+                "leaq 8(%rsp), %rdi", "movq %r8, %rdx", "xorl %esi, %esi",
+                "callq *memset@GOTPCREL(%rip)", "retq"],
+            "memset of a pointer argument": [
+                "movq %r8, %rdi", "movl $528, %edx", "xorl %esi, %esi",
+                "callq *memset@GOTPCREL(%rip)", "retq"],
+        }
+        helper = "\t.type helper,@function\nhelper:\n\tretq\n\t.size helper, .-helper\n"
+        for name, lines in cases.items():
+            with self.subTest(name):
+                probe = self.ADX
+                body = "".join(line + "\n" if line.endswith(":") else f"\t{line}\n"
+                               for line in lines)
+                asm = assembly("retq").replace(f"{probe}:\n\tretq\n", f"{probe}:\n{body}")
+                asm += "\n" + helper
+                excused = collections.Counter()
+                failures = audit.inspect(asm, self.X86, excused)
+                failures += audit.over_ceiling(self.X86, excused)
+                self.assertTrue(failures, name)
+                self.assertFalse(excused.get((probe, "counter loop")), (name, excused))
+
+    def test_intel_syntax_gets_no_excuse(self):
+        failures, _ = self.run_on([".intel_syntax noprefix", "mov r9d, 32", ".LBB0_1:",
+                                   "dec r9", "jne .LBB0_1", ".att_syntax", "retq"])
+        self.assertEqual(len(failures), 1, failures)
+
+    def test_one_more_than_the_ceiling_fails(self):
+        # Two counter loops in the IFMA probe, whose ceiling is one.
+        two = self.DEC[:-1] + [line.replace("LBB0_1", "LBB0_2") for line in self.DEC]
+        failures, excused = self.run_on(two, self.IFMA)
+        self.assertEqual(excused[(self.IFMA, "counter loop")], 2)
+        self.assertEqual(len(failures), 1, failures)
+        self.assertIn("more than the 1 reviewed", failures[0])
+        self.assertEqual(self.run_on(self.DEC, self.IFMA)[0], [])
+        # And a rule the probe was not reviewed for at all.
+        failures, _ = self.run_on(self.JRCXZ, self.IFMA)
+        self.assertEqual(failures, [f"{self.IFMA}: jmp .Ltmp0"])
+        for probe, rules in audit.X86_EXCUSE_CEILINGS.items():
+            for rule, ceiling in rules.items():
+                with self.subTest(probe=probe, rule=rule):
+                    self.assertEqual(audit.over_ceiling(
+                        self.X86, collections.Counter({(probe, rule): ceiling})), [])
+                    self.assertEqual(len(audit.over_ceiling(
+                        self.X86, collections.Counter({(probe, rule): ceiling + 1}))), 1)
+
+    def test_a_probe_not_listed_excuses_nothing(self):
+        for lines in (self.DEC, self.CMP, self.JRCXZ):
+            with self.subTest(lines[0]):
+                failures, excused = self.run_on(lines, "ct_reduce_q")
+                self.assertTrue(failures)
+                self.assertFalse(excused)
+        self.assertNotIn("ct_reduce_q", audit.X86_EXCUSE_CEILINGS)
+        self.assertTrue(set(audit.X86_EXCUSE_CEILINGS) <= set(audit.X86_ONLY))
+        self.assertEqual(len(audit.over_ceiling(
+            self.X86, collections.Counter({("ct_reduce_q", "counter loop"): 1}))), 1)
+
+    def test_a_counter_branch_inside_the_loop_is_not(self):
+        # Neither an exit nor the back edge: it picks a path within the
+        # iteration. The back edge is excused; this one is not.
+        failures, excused = self.run_on([
+            ".LBB0_1:", "incq %rcx", "cmpq $7, %rcx", "jne .LBB0_2", "addq (%rsi), %rax",
+            ".LBB0_2:", "cmpq $32, %rcx", "jne .LBB0_1", "retq"])
+        self.assertEqual(failures, [f"{self.ADX}: jne .LBB0_2"])
+        self.assertEqual(excused[(self.ADX, "counter loop")], 1)
+
+
 class BuildTests(unittest.TestCase):
     def test_stale_artifacts_cannot_hide_a_current_branch(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(audit, "ROOT", Path(directory)):

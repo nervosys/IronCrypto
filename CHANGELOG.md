@@ -240,6 +240,30 @@ every caller of a hash function uses.
 
 ### Changed
 
+- **The compiled-code gate reads loops on x86-64, and RSA's products are
+  back in it.** `scripts/check-ct.py` gains an x86-64 rule that builds each
+  body's control-flow graph, finds its natural loops by dominators, and
+  excuses a conditional branch only where it exits or closes a loop and its
+  condition is a counter that the loop changes only by constants: `jrcxz`,
+  or flags from `inc`/`dec`/`add $imm`/`sub $imm`, `cmp $imm`, `test`, or
+  `cmp` against a register the loop never writes. With it, a `jmp` to a
+  local label and a `memset` of a constant length on the stack. The rule
+  applies only in the probes `X86_EXCUSE_CEILINGS` names, each with a
+  ceiling per rule, the count read finding by finding. Three probes come
+  back under it: `ct_rsa_adx_mont_mul_2048`, `ct_rsa_ifma_amm_2048` and
+  `ct_rsa_cios_2048`. The IFMA product had no tool covering it; Valgrind
+  cannot run AVX-512. 34 probes on x86-64 alone, 78 there, 210 gating
+  probe/target checks. A branch on a limb inserted into the IFMA product,
+  in Rust or in its assembly, into CIOS, or into the MULX/ADX kernel's
+  assembly, fails the gate; so does one loop more than a ceiling. Not
+  covered: the IFMA exponentiation as a whole, which dispatches on the
+  width for every product (docs/CONSTANT_TIME.md, "Loops on x86-64").
+- **ic-rsa:** `Ctx::amm` reads the width once, before the IFMA kernel,
+  instead of after it, where the kernel's pointer into the context made
+  every read a reload. The same value; the probe needs it to fold. Under
+  `ct-probes` without `std` the MULX/ADX and IFMA kernels compile, for the
+  probe build to read, and nothing selects them.
+
 - **The constant-time gate covers P-256's field and scalar arithmetic.**
   Sixteen compiled-code probes check the operations hashing to the curve
   and the OPRF apply to password- and key-derived values; the checker now

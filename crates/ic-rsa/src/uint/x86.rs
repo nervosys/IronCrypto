@@ -57,22 +57,29 @@ use core::arch::asm;
 
 /// Whether this CPU has `MULX` (BMI2) and `ADCX`/`ADOX` (ADX), asked once.
 pub(crate) fn available() -> bool {
-    use core::sync::atomic::{AtomicU8, Ordering};
     if super::adx_forced() {
         return true;
     }
-    // 0 not yet asked, 1 yes, 2 no.
-    static CACHED: AtomicU8 = AtomicU8::new(0);
-    match CACHED.load(Ordering::Relaxed) {
-        1 => true,
-        2 => false,
-        _ => {
-            let have =
-                std::is_x86_feature_detected!("bmi2") && std::is_x86_feature_detected!("adx");
-            CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
-            have
+    #[cfg(feature = "std")]
+    {
+        use core::sync::atomic::{AtomicU8, Ordering};
+        // 0 not yet asked, 1 yes, 2 no.
+        static CACHED: AtomicU8 = AtomicU8::new(0);
+        match CACHED.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let have =
+                    std::is_x86_feature_detected!("bmi2") && std::is_x86_feature_detected!("adx");
+                CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+                have
+            }
         }
     }
+    // Without `std` there is no detection; this module is compiled only for
+    // `scripts/ct-audit` to read, and nothing selects it.
+    #[cfg(not(feature = "std"))]
+    false
 }
 
 /// Whether [`mont_mul`] will take a modulus of `limbs` words on this CPU.
@@ -97,6 +104,35 @@ pub(crate) fn mont_mul(t: &mut [u64], a: &[u64], b: &[u64], n: &[u64], n0inv: u6
     // words, `t` at least `2l + 2`, and `l` a non-zero multiple of four.
     unsafe { mont_mul_adx(t.as_mut_ptr(), a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv, l) };
     true
+}
+
+/// The product [`mont_mul`] makes at 2048 bits, after its checks, for
+/// `scripts/ct-audit` to read: `t` zeroed, then the kernel at `L = 32`.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX.
+#[cfg(feature = "ct-probes")]
+pub(crate) unsafe fn mont_mul_2048(
+    t: &mut [u64; 66],
+    a: &[u64; 32],
+    b: &[u64; 32],
+    n: &[u64; 32],
+    n0inv: u64,
+) {
+    t.fill(0);
+    // SAFETY: the caller guarantees the features; `a`, `b` and `n` are 32
+    // words, `t` is 66 = 2 * 32 + 2, zeroed, and 32 is a multiple of four.
+    unsafe {
+        mont_mul_adx(
+            t.as_mut_ptr(),
+            a.as_ptr(),
+            b.as_ptr(),
+            n.as_ptr(),
+            n0inv,
+            32,
+        )
+    };
 }
 
 /// See the module docs.
