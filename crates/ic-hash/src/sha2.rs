@@ -26,6 +26,13 @@ mod x86;
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 mod avx2_512;
 
+// The guard the SHA-NI short paths hold their padded tails and pads in, so
+// that the wipe is their `Drop` and cannot be skipped by a return.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+mod scratch;
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+use scratch::Scratch;
+
 // The ARMv8 SHA-256 and SHA-512 instructions, behind the off-by-default
 // `aarch64-crypto` feature and runtime detection. See `sha2::aarch64`. Also
 // compiled, without `std` and without the detection, for `ct-probes`, so
@@ -470,11 +477,10 @@ fn pad256(rest: &[u8], total: u64, out: &mut [u8; 128]) -> usize {
 #[cfg(all(target_arch = "x86_64", feature = "std"))]
 fn one_shot_sha_ni(h: &mut [u32; 8], data: &[u8]) {
     let whole = data.len() - data.len() % 64;
-    let mut tail = [0u8; 128];
+    let mut tail = Scratch::new([0u8; 128]);
     let end = pad256(&data[whole..], data.len() as u64, &mut tail);
     // SAFETY: the callers checked `sha_ni()`; both lengths are whole blocks.
     unsafe { x86::compress_parts(h, &data[..whole], &tail[..end]) };
-    tail[..end].zeroize();
 }
 
 /// SHA-256's starting value, FIPS 180-4 section 5.3.3.
@@ -500,30 +506,27 @@ const IV256: [u32; 8] = [
 pub fn hmac_sha256_one_shot(key: &[u8], data: &[u8]) -> Option<[u8; 32]> {
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
     if key.len() <= 64 && sha_ni() {
-        let mut ipad = [0x36u8; 64];
+        let mut ipad = Scratch::new([0x36u8; 64]);
         for (p, k) in ipad.iter_mut().zip(key) {
             *p ^= k;
         }
-        let mut inner = IV256;
-        let mut outer = IV256;
+        let mut inner = Scratch::new(IV256);
+        let mut outer = Scratch::new(IV256);
         // SAFETY: `sha_ni()` is the feature test these require.
         unsafe { x86::compress_pads(&mut inner, &mut outer, &ipad) };
-        ipad.zeroize();
 
         let whole = data.len() - data.len() % 64;
-        let mut tail = [0u8; 128];
+        let mut tail = Scratch::new([0u8; 128]);
         // The inner hash's message is the 64-byte pad, then `data`.
         let end = pad256(&data[whole..], 64 + data.len() as u64, &mut tail);
         // SAFETY: as above; both lengths are whole blocks.
         unsafe { x86::hmac_tail(&inner, &data[..whole], &tail[..end], &mut outer) };
-        tail[..end].zeroize();
-        inner.zeroize();
 
         let mut tag = [0u8; 32];
-        for (t, w) in tag.chunks_exact_mut(4).zip(outer) {
+        for (t, w) in tag.chunks_exact_mut(4).zip(*outer) {
             t.copy_from_slice(&w.to_be_bytes());
         }
-        outer.zeroize();
+        // `ipad`, `tail`, `inner` and `outer` are wiped as they drop here.
         return Some(tag);
     }
     let _ = (key, data);
@@ -547,18 +550,17 @@ pub fn hmac_sha256_finish(inner: &Sha256, outer: &Sha256) -> Option<[u8; 32]> {
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
     if outer.0.buffered == 0 && outer.0.len == 64 && sha_ni() {
         let core = &inner.0;
-        let mut tail = [0u8; 128];
+        let mut tail = Scratch::new([0u8; 128]);
         let end = pad256(&core.buf[..core.buffered], core.len, &mut tail);
-        let mut h = outer.0.h;
+        let mut h = Scratch::new(outer.0.h);
         // SAFETY: `sha_ni()` is the feature test this requires; there are no
         // whole blocks, and the tail is one or two.
         unsafe { x86::hmac_tail(&core.h, &[], &tail[..end], &mut h) };
-        tail[..end].zeroize();
         let mut tag = [0u8; 32];
-        for (t, w) in tag.chunks_exact_mut(4).zip(h) {
+        for (t, w) in tag.chunks_exact_mut(4).zip(*h) {
             t.copy_from_slice(&w.to_be_bytes());
         }
-        h.zeroize();
+        // `tail` and `h` are wiped as they drop here.
         return Some(tag);
     }
     let _ = (inner, outer);
@@ -1274,6 +1276,41 @@ mod tests {
         let mut outer = Sha256::default();
         outer.update(&source[..128]);
         assert_eq!(hmac_sha256_finish(&Sha256::default(), &outer), None);
+    }
+
+    /// The SHA-NI short paths wipe their padded tails and pads when they
+    /// return. Each guard is observed at its drop: if the wipe is removed from
+    /// `Scratch`'s `Drop`, the padding's `0x80` or the key pad is still in the
+    /// array and `dirty` is non-zero, so this fails. Checked: with the wipe
+    /// deleted, the one-shot digest's assertion fails with `(1, 1)`.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_sha_ni_short_paths_wipe_their_scratch() {
+        use scratch::probe;
+        if !sha_ni() {
+            println!("no SHA-NI; the short paths were not exercised");
+            return;
+        }
+        let msg = pattern(100, 9);
+
+        probe::reset();
+        let mut h = IV256;
+        one_shot_sha_ni(&mut h, &msg);
+        assert_eq!(probe::snapshot(), (1, 0), "one-shot digest: padded tail");
+
+        probe::reset();
+        assert!(hmac_sha256_one_shot(b"key", &msg).is_some());
+        // ipad, the padded tail, the inner state and the outer state.
+        assert_eq!(probe::snapshot(), (4, 0), "one-pass HMAC");
+
+        probe::reset();
+        let mut inner = Sha256::default();
+        inner.update(&msg[..70]);
+        let mut outer = Sha256::default();
+        outer.update(&[0x5c; 64]);
+        assert!(hmac_sha256_finish(&inner, &outer).is_some());
+        // The padded tail and a copy of the outer state.
+        assert_eq!(probe::snapshot(), (2, 0), "HMAC finish");
     }
 
     /// The ARMv8 SHA-256 backend against the portable compression.

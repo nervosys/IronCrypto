@@ -219,8 +219,14 @@ all of them.
   and were restored: the Poly1305 key from block 1, a padding boundary of
   55, the refused output not wiped, the fold by four, the outer block's
   length 512 bits, the outer pad constant, the tail's counter step, the
-  second pair's counter. A deleted wipe of the one-shot digest's padded
-  tail passes every test: no test reads the stack. Five new constant-time
+  second pair's counter. The deleted wipe of the one-shot digest's padded
+  tail used to pass every test, because no test reads the stack. It is now
+  caught: the padded tail, the HMAC pads and states, and the ChaCha20-Poly1305
+  keystream and Poly1305 key are each held in a `Scratch` guard whose `Drop`
+  is the wipe, and the test build records each guard's drop. Deleting the
+  wipe from `Drop` fails `sha2::tests::the_sha_ni_short_paths_wipe_their_scratch`,
+  `chacha::tests::the_short_path_wipes_its_keystream_and_key` and
+  `hmac::tests::the_generic_one_pass_hmac_wipes_its_pad`. Five new constant-time
   probes (docs/CONSTANT_TIME.md, "Short messages on x86-64"): 119 on
   x86-64, 302 gating probe/target checks.
 - **RSA-4096 signing on x86-64 without AVX-512 IFMA: 1.08-1.09 times

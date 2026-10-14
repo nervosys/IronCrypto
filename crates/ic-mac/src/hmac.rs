@@ -7,6 +7,8 @@ use ic_core::traits::internal::Mac;
 use ic_core::traits::{Algorithm, SelfTest};
 use ic_core::{ensure, Result, Zeroize};
 
+use crate::scratch::Scratch;
+
 /// The largest block size among supported digests.
 ///
 /// SHA-512 uses 128 bytes; SHA3-224 has the widest rate at 144, so the padded
@@ -154,7 +156,8 @@ fn tag_out_of_line<D: Digest>(mac: Hmac<D>) -> D::Output {
 /// hashing. The pad is wiped as soon as the outer state has absorbed it.
 #[inline(always)]
 fn one_shot<D: Digest>(key: &[u8], data: &[u8]) -> D::Output {
-    let mut pad = [0x36u8; MAX_BLOCK_LEN];
+    // Wiped as it drops, on this return and any other.
+    let mut pad = Scratch::new([0x36u8; MAX_BLOCK_LEN]);
     let block = &mut pad[..D::BLOCK_LEN];
     if key.len() > D::BLOCK_LEN {
         xor_hashed_key::<D>(key, block);
@@ -175,7 +178,6 @@ fn one_shot<D: Digest>(key: &[u8], data: &[u8]) -> D::Output {
     }
     let mut outer = D::new();
     outer.update(block);
-    block.zeroize();
 
     inner.update(data);
     let inner_digest = inner.finalize();
@@ -371,6 +373,17 @@ hmac_alias!(
 mod tests {
     use super::*;
     use ic_core::codec::hex;
+
+    /// The generic one-pass HMAC wipes its pad when it returns. The pad is
+    /// observed at its drop by `scratch`'s probe: with the wipe deleted from
+    /// `Scratch`'s `Drop`, the key pad is still in it and `dirty` is 1.
+    #[test]
+    fn the_generic_one_pass_hmac_wipes_its_pad() {
+        use crate::scratch::probe;
+        probe::reset();
+        let _ = one_shot::<ic_hash::Sha256>(b"key", b"message");
+        assert_eq!(probe::snapshot(), (1, 0), "one-pass HMAC: pad");
+    }
 
     #[test]
     fn rfc4231_case_1() {

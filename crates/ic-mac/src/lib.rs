@@ -24,6 +24,7 @@
 mod cmac;
 mod hmac;
 mod kmac;
+mod scratch;
 
 pub use cmac::{CmacAes128, CmacAes192, CmacAes256};
 pub use hmac::{

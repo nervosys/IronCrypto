@@ -118,6 +118,12 @@ pub(crate) mod poly_avx2;
 #[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
 #[cfg_attr(not(feature = "std"), allow(dead_code))]
 pub(crate) mod zmm;
+// The guard the short path holds its keystream and Poly1305 key in, so that
+// the wipe is their `Drop` and cannot be skipped by a return.
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+mod scratch;
+#[cfg(all(target_arch = "x86_64", feature = "std"))]
+use scratch::Scratch;
 
 /// Ask once per process whether every feature named is present, and cache
 /// the answer; see the SHA-256 dispatch for why.
@@ -745,16 +751,16 @@ impl ChaCha20Poly1305 {
         seal: bool,
     ) -> Result<()> {
         debug_assert!(in_out.len() <= SHORT_MAX);
-        let (pairs, used) = if in_out.len() <= 64 {
-            (avx2::Pairs::One, 128)
+        let pairs = if in_out.len() <= 64 {
+            avx2::Pairs::One
         } else {
-            (avx2::Pairs::Two, 256)
+            avx2::Pairs::Two
         };
-        let mut ks = [0u8; 256];
+        let mut ks = Scratch::new([0u8; 256]);
         // SAFETY: AVX2, as the caller guarantees.
         unsafe { avx2::short_blocks(&self.key, nonce, 0, pairs, &mut ks) };
         let (head, stream) = ks.split_at(64);
-        let mut poly_key = [0u8; 32];
+        let mut poly_key = Scratch::new([0u8; 32]);
         poly_key.copy_from_slice(&head[..32]);
         let result = if seal {
             for (d, k) in in_out.iter_mut().zip(stream) {
@@ -776,8 +782,8 @@ impl ChaCha20Poly1305 {
                 Err(e) => Err(e),
             }
         };
-        poly_key.zeroize();
-        ks[..used].zeroize();
+        // `ks` and `poly_key` are wiped as they drop here, on this return and
+        // on any other.
         result
     }
 }
@@ -1056,6 +1062,30 @@ you only one tip for the future, sunscreen would be it.";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The short path wipes its keystream and its Poly1305 key when it
+    /// returns, whichever way it returns. Each guard is observed at its drop:
+    /// with the wipe deleted from `Scratch`'s `Drop`, the keystream is still in
+    /// the array and `dirty` is non-zero, so this fails.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_short_path_wipes_its_keystream_and_key() {
+        use scratch::probe;
+        if !avx2() {
+            println!("no AVX2; the short path was not exercised");
+            return;
+        }
+        let c = ChaCha20Poly1305::new(&[7u8; 32]).unwrap();
+        let nonce = [3u8; 12];
+        let mut buf = [5u8; 40];
+        let mut tag = [0u8; 16];
+        probe::reset();
+        c.seal_detached(&nonce, b"aad", &mut buf, &mut tag).unwrap();
+        assert_eq!(probe::snapshot(), (2, 0), "seal: keystream and poly key");
+        probe::reset();
+        c.open_detached(&nonce, b"aad", &mut buf, &tag).unwrap();
+        assert_eq!(probe::snapshot(), (2, 0), "open: keystream and poly key");
+    }
 
     /// Under `--cfg ic_no_avx512` the sixteen-block kernel must not be chosen,
     /// or the AVX2-only measurement would be measuring AVX-512 after all.

@@ -642,9 +642,14 @@ reported through the call into the kernel's body.
 Not covered: the dispatch around them (`seal_detached`'s choice of the short
 path, `xor_keystream`'s loop over the tail, `hmac_sha256_one_shot`'s XOR of
 the key into the pad, over the key's public length) branches on lengths and
-is not probed, and the wipes of the keystream buffer and the padded tail
-are not checked by any test: a wipe deleted from the SHA-256 one-shot digest
-passes the whole suite.
+is not probed. The wipes are not part of these probes either; they are
+checked by the tests instead. Each short path's scratch (the SHA-256
+one-shot's padded tail, the one-pass HMAC's pads and states, the finish's
+tail and outer copy, and the ChaCha20-Poly1305 keystream and Poly1305 key)
+is a `Scratch` guard whose `Drop` is the wipe, and a test observes each guard
+at its drop. Deleting that wipe makes the test fail; it used to pass the
+whole suite. The gate above is unchanged: the touched probes pass with no new
+excuses.
 
 Probe count: seventy-five on x86-64 alone, where there were seventy: 119 on
 x86-64, and 302 gating probe/target checks with the other four targets
