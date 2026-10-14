@@ -7,7 +7,8 @@ Four things gate this project, and they run the same script on purpose.
 | `.githooks/pre-commit` | `scripts/check.sh --quick` | every commit |
 | `.githooks/pre-push` | `scripts/check.sh` (adds cross-compilation) | every push |
 | `.github/workflows/self-hosted.yml` | `scripts/check.sh` | every push, on a runner you provide |
-| `.github/workflows/ci.yml` | the same gates, across three OSes and four targets | every push, on GitHub-hosted runners |
+| `.github/workflows/ci.yml` | the same gates, across three OSes, four no_std targets and five
+compiled-code targets | every push, on GitHub-hosted runners |
 
 Enable the hooks once per clone:
 
@@ -36,7 +37,7 @@ somewhere that does not consume GitHub minutes.
 A self-hosted runner does the latter. It is free on a private repository and
 works whatever the billing state, so `self-hosted.yml` keeps working if billing
 lapses again. Once billing is restored, `ci.yml` resumes and gives what a single
-runner cannot: the three-OS matrix, the release-mode test run, and the four
+runner cannot: the three-OS matrix, the release-mode test run, and the
 cross-compilation targets built on a clean machine.
 
 ## Registering a runner
@@ -138,7 +139,7 @@ toolchain step prints which `bash` it ended up with. This only bites once the
 runner is a service — run interactively it inherits a user PATH that usually has
 Git Bash on it, so the failure appears exactly when the setup is made permanent.
 
-The workflow installs the four
+The workflow installs the
 cross-compilation targets itself and prints the toolchain version before it
 starts, so a machine that has drifted shows up in the log rather than quietly
 producing a different answer from everyone else's.

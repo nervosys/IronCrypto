@@ -38,7 +38,7 @@ of this build. That is strictly more than the source shows -- the first real
 finding below is in source that is branch-free -- and less than a timing
 proof: variable-latency instructions are invisible to it, and so is anything
 the run did not reach. It complements `scripts/check-ct.py`, which gates fixed
-probes on four targets, and `ic timing`, which measures.
+probes on five targets, and `ic timing`, which measures.
 
 ## Results, 2026-10-13
 

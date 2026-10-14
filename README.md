@@ -453,8 +453,8 @@ measurements remain outstanding.
 
 ### Compiled-code checks
 
-`python scripts/check-ct.py` checks forty-four fixed-size probes on x86-64 Linux,
-Cortex-M0, Cortex-M4, RISC-V and AArch64 Linux, seven more on AArch64 alone for
+`python scripts/check-ct.py` checks forty-four fixed-size probes on each of its five targets (x86-64 Linux,
+Cortex-M0, Cortex-M4, RISC-V and AArch64 Linux), seven more on AArch64 alone for
 its ARMv8 AES, `PMULL` GHASH, SHA-256 and SHA-512 backends, and seventy more
 on x86-64 alone for its
 Curve25519, P-256 and P-384 assembly, P-256's and P-384's AVX-512 IFMA point
@@ -463,7 +463,7 @@ AVX-512 ChaCha20 and AVX2 Poly1305 kernels, RSA's table read and its
 MULX/ADX, AVX-512 IFMA and portable Montgomery products, RSA's whole
 AVX-512 IFMA exponentiation at 1024 and 2048 bits, the AES-NI and VAES-256
 AES-GCM loops, and RSA's MULX/ADX squaring and 1024-bit kernels: **297 gating
-probe/target checks**. It rejects
+probe/target checks** (114 on x86-64, 51 on AArch64, 44 on each of the three 32-bit targets). It rejects
 branches, integer division and calls it cannot follow in the selected core,
 ML-DSA, ML-KEM, Ed25519 scalar, Curve25519 and P-256 field and scalar operations. On the 32-bit targets the
 P-256 Montgomery loop stays rolled; its counter branches, and a constant-length

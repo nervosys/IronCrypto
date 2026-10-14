@@ -405,7 +405,7 @@ all of them.
   key load and the decryption one through its `AESIMC` key derivation; the
   `PMULL` GHASH multiply and eight-block absorb; SHA-256 and SHA-512
   compression. aarch64 runs the forty-four shared probes too: 51 there,
-  294 gating probe/target checks. Every control transfer but `ret` fails on
+  294 gating probe/target checks when this landed (297 now; docs/CONSTANT_TIME.md). Every control transfer but `ret` fails on
   AArch64 unless excused; one rule, the x86-64 counter-loop rule's shape,
   excuses a `cbz`/`cbnz` or a `b.<cond>` fed by `subs`/`adds`/`cmp`/`cmn`
   with an immediate (or `cmp` against a register the loop never writes) on a
@@ -440,10 +440,6 @@ all of them.
   before. `ic-core` gains `cpu::has_armv8_aes` and `cpu::has_ghash_pmull`,
   and an `aarch64-crypto` feature that `ic-cipher`'s turns on, so the
   ontology and the cipher dispatch on the same predicates.
-- **AArch64 is not a target of the compiled-code gate.** The ARM kernels are
-  argued constant time from the instructions and the source, with one
-  reading of their compiled code recorded in docs/CONSTANT_TIME.md; that is
-  not a gate.
 - **RSA's whole AVX-512 IFMA exponentiation is in the compiled-code gate**,
   at 1024 bits (`ct_rsa_ifma_pow_1024`, each of RSA-2048's CRT
   exponentiations) and 2048 bits (`ct_rsa_ifma_pow_2048`), with no rule
@@ -528,8 +524,9 @@ all of them.
   product of two residues is proved to be such a `t`. On Curve25519 the column
   sums of `mul` and `square` are proved equal to the schoolbook as the code
   writes it, the calls proved to stay in `carry_reduce`'s domain, and
-  `carry_reduce` is now a contract too. Not proved: P-256's schoolbook
-  products, which did not finish on the solvers tried, and the associativity
+  `carry_reduce` is now a contract too. Not proved at the time of this entry: P-256's schoolbook
+  products, which did not finish on the solvers tried (since proved, see the
+  P-256 entry above), and the associativity
   step from `a_i (19 b_j)` to `19 a_i b_j`. Several proofs need Bitwuzla on
   `PATH`, and `scripts/kani.sh` now passes `-Z function-contracts -Z
   stubbing`.

@@ -22,7 +22,9 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-seventy more on x86-64, and seven more on aarch64. Their public sizes
+seventy more on x86-64, and seven more on aarch64: 297 gating probe/target
+checks in all, 114 on x86-64, 51 on aarch64, and 44 on each of the three other
+targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -148,8 +150,9 @@ The four-byte helper probes do not cover all buffer lengths or loop forms.
 
 Decoding, KWP authentication, coefficient sampling, signing rejection loops,
 curve arithmetic and other functions are outside this gate, and so is RSA's
-exponentiation as a whole; its products and its table read are probed (see
-"Loops on x86-64"). Some of their
+exponentiation as a whole on the portable and MULX/ADX paths; their products and
+table read are probed (see "Loops on x86-64"). On AVX-512 IFMA the whole
+exponentiation is probed, at 1024 and 2048 bits ("The IFMA exponentiation"). Some of their
 branches are permitted because the inputs are public or because the standard
 allows the rejection to be observable. Extending coverage needs explicit rules
 for each such case rather than a blanket branch-count allowance.
