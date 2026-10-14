@@ -16,6 +16,10 @@ publish.workspace = true
 default = ["std"]
 std = []
 alloc = []
+# Not for direct use: turned on by ic-cipher's `aarch64-crypto`, so that
+# `cpu::has_armv8_aes` and `cpu::has_ghash_pmull` -- which the ontology reports
+# from and ic-cipher dispatches on -- answer for the backends that build has.
+aarch64-crypto = []
 
 # `ic_approved_only` leaves out every algorithm FIPS approved mode does not
 # permit; see docs/FIPS.md.

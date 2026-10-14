@@ -1,8 +1,8 @@
 //! A software model of the ARMv8 AES instructions, so the round structure can
 //! be checked on a machine that cannot run them.
 //!
-//! [`super::aarch64`] was written and cross-compiled on x86-64 and has never
-//! been executed by its author. That leaves two distinct risks, and they are
+//! [`super::aarch64`] was written and cross-compiled on x86-64, and committed
+//! before it had been executed. That left two distinct risks, and they are
 //! worth separating because only one of them can be addressed here:
 //!
 //! 1. **The round structure is wrong.** ARM composes a round differently from
@@ -16,9 +16,11 @@
 //! the real backend uses, and requires the result to equal the portable
 //! backend — which is itself validated against the FIPS 197 vectors.
 //!
-//! The second risk remains open until CI runs on an arm64 host. Saying which
-//! risk is closed and which is not is the point; "verified" without that
-//! distinction would be a claim this cannot support.
+//! The second risk is addressed by executing the backend: under QEMU
+//! user-mode emulation (`scripts/test-aarch64.sh`), where it passes, and on
+//! an arm64 host when CI runs there. QEMU's model of the instructions is not a
+//! real core. Saying which risk is closed, and by what, is the point;
+//! "verified" without that distinction would be a claim this cannot support.
 //!
 //! # Independence
 //!

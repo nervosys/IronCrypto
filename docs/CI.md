@@ -171,6 +171,37 @@ working directory between jobs, which is why the workflow points
 `CARGO_TARGET_DIR` at the runner's temp directory rather than sharing a target
 directory with whatever else is on the machine.
 
+## The ARM backends, under QEMU
+
+The AES, `PMULL` GHASH, SHA-256 and SHA-512 backends behind the
+`aarch64-crypto` feature need an AArch64 CPU to execute. `ci.yml`'s arm64 job
+would run them on `macos-latest`, and is blocked with the rest. Without ARM
+hardware, `scripts/test-aarch64.sh` runs their tests on an x86-64 Linux host
+under QEMU user-mode emulation (`qemu-aarch64 -cpu max`, which implements
+FEAT_AES, FEAT_PMULL, FEAT_SHA256 and FEAT_SHA512):
+
+```bash
+# Once. None of it needs root.
+rustup target add aarch64-unknown-linux-musl
+apt-get download qemu-user && dpkg -x qemu-user_*.deb ~/qemu   # Debian; a static qemu-aarch64
+export QEMU_AARCH64=~/qemu/usr/bin/qemu-aarch64                 # or put it on PATH
+
+scripts/test-aarch64.sh           # ic-core, ic-hash, ic-cipher, ic-ontology; then ironcrypto in release
+scripts/test-aarch64.sh --quick   # the backends' crates only
+```
+
+The musl target links statically with `rust-lld` from the toolchain, so there
+is no cross compiler and no sysroot to install. On Windows, run it inside WSL.
+The script fails if a backend test reports that it skipped, or if the backend
+report does not name the ARM paths: a pass that never reached the kernels is
+not a pass. `scripts/check.sh` runs the `--quick` form when it finds
+`qemu-aarch64` and the musl target on Linux, and says it did not otherwise.
+
+What it establishes is that the kernels compute what the portable code
+computes, with the instructions as QEMU models them, and that the facade's
+vector suites pass on that path. It does not establish behaviour on a real
+core, and its timings mean nothing: performance on AArch64 is unmeasured.
+
 ## Why the workflows call a script instead of listing steps
 
 `ci.yml` used to write every step out again. Its copy of the dependency check

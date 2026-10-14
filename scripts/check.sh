@@ -132,20 +132,29 @@ if [ -n "$skipped" ]; then
 fi
 
 step "aarch64 crypto extensions"
-# The ARM AES backend is off by default and had never been compiled anywhere.
-# A library crate produces an rlib, so this needs no linker and no Apple SDK --
-# any machine with the target installed can check that the intrinsics at least
+# The ARM AES, PMULL GHASH and SHA-2 backends are off by default. A library
+# crate produces an rlib, so this needs no linker and no Apple SDK -- any
+# machine with the target installed can check that the intrinsics at least
 # build.
 #
-# Compiling is not running. What argues these are correct is the software model
-# in crates/ic-cipher/src/aes/armv8_model.rs, which is what caught the
-# decryption key schedule being wrong. CI runs the tests for real on
-# macos-latest, which is arm64.
+# Compiling is not running. The software models (aes/armv8_model.rs,
+# armv8_ghash_model.rs, sha2/armv8_model.rs) check the structure on every host;
+# the first caught the AES decryption key schedule being wrong. What executes
+# the instructions is scripts/test-aarch64.sh under QEMU, run below where it
+# can be, and CI's arm64 job on macos-latest.
 if rustup target list --installed 2>/dev/null | grep -qx aarch64-apple-darwin; then
-    cargo build -p ic-cipher --target aarch64-apple-darwin --features aarch64-crypto
+    cargo build -p ic-cipher -p ic-hash --target aarch64-apple-darwin \
+        --features ic-cipher/aarch64-crypto,ic-hash/aarch64-crypto
 else
-    echo "aarch64-apple-darwin not installed; the ARM backend was NOT compiled"
+    echo "aarch64-apple-darwin not installed; the ARM backends were NOT compiled"
     echo "install with: rustup target add aarch64-apple-darwin"
+fi
+if [ "$(uname -s)" = "Linux" ] && command -v "${QEMU_AARCH64:-qemu-aarch64}" >/dev/null 2>&1 \
+    && rustup target list --installed 2>/dev/null | grep -qx aarch64-unknown-linux-musl; then
+    "$(dirname "${BASH_SOURCE[0]}")/test-aarch64.sh" --quick
+else
+    echo "qemu-aarch64 or aarch64-unknown-linux-musl absent; the ARM backends were NOT run here"
+    echo "see scripts/test-aarch64.sh"
 fi
 
 step "docs"

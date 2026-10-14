@@ -640,3 +640,42 @@ Restored, all 78 pass.
 Probe count: thirty-four on x86-64 alone, where there were thirty-one. All
 seventy-eight pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 78 + 3 x 44 = 210 gating probe/target checks.
+
+## The ARMv8 backends, 2026-10-13: not gated
+
+AES (`ic-cipher::aes::aarch64`), GHASH on `PMULL` (`ic-cipher::pmull`),
+SHA-256 and SHA-512 (`ic-hash::sha2::aarch64`) have AArch64 backends behind
+the off-by-default `aarch64-crypto` feature. None of them is a probe in this
+gate, and `aarch64` is not one of its targets.
+
+Adding it is more than a target name. The checker has branch, call and
+loop rules per target family, and the loop rule exists for x86-64 only;
+AArch64 would need its own (`b.cond`, `cbz`/`cbnz`, `tbz`/`tbnz`, `bl`,
+`br`/`blr`) and a reviewed loop rule, because every one of these kernels
+loops over blocks; and the kernels would need probes in `scripts/ct-audit`,
+which they are `pub(super)` and `#[target_feature]` to avoid. That was not
+done here.
+
+What argues they are constant time instead:
+
+- **The instructions.** `AESE`/`AESD`/`AESMC`/`AESIMC`, `PMULL`/`PMULL2`,
+  `SHA256H`/`SHA256H2`/`SHA256SU0`/`SHA256SU1`, `SHA512H`/`SHA512H2`/
+  `SHA512SU0`/`SHA512SU1`, `RBIT`, `REV32`/`REV64` and `EXT` are vector
+  operations with no data-dependent behaviour in the architecture; Arm lists
+  the crypto instructions among those covered by FEAT_DIT (data-independent
+  timing). This library does not set `PSTATE.DIT`.
+- **The source.** No table is indexed and no branch is taken on key, state,
+  message or field element. Every branch is on the block count or the round
+  number, and every vector index is a literal or a function of the round.
+- **One reading of the compiled code**, not a gate: `cargo rustc --release
+  --target aarch64-unknown-linux-gnu --features aarch64-crypto -- --emit asm`
+  for `ic-hash` and `ic-cipher` with rustc 1.99.0. `compress256` is 143
+  instructions with sixteen `sha256h`, its only conditional branches the
+  block loop (`b.eq`, `b.ne`); `compress512` is 236 with the block loop
+  and a round-group loop (`b.ne` twice, `b.eq` once); `pmull::mul` is
+  thirty instructions with no branch at all; `pmull::absorb8` branches only
+  on its group count. No calls in any of them.
+
+That reading is a snapshot of one compiler on one day, which is exactly what
+this gate exists to replace. Until AArch64 is a gated target, a compiler
+change that introduced a secret-dependent branch here would not be caught.

@@ -357,7 +357,7 @@ leaving the stronger claim to stand for all of them.
 | Password authentication | OPAQUE-3DH (RFC 9807) over P-256: the server never sees the password; Argon2id or scrypt for stretching |
 | Public-key encryption | HPKE (RFC 9180) base mode with DHKEM(X25519, HKDF-SHA256) or DHKEM(P-384, HKDF-SHA384) -- MLS suites 1 and 7 -- and AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305, with the exporter |
 | RSA | RSASSA-PSS and PKCS#1 v1.5 over SHA-256/384/512; 2048/3072/4096-bit key generation; CRT private operations |
-| Backends | portable, written constant-time; on x86-64 AES-NI, `PCLMULQDQ`, SHA-NI and AVX2, each behind runtime detection. On 32-bit RISC-V the curve and RSA arithmetic runs on 32-bit words, because the 64-bit form compiled to branches on secrets there; [SECURITY.md](SECURITY.md) has what was checked on which target |
+| Backends | portable, written constant-time; on x86-64 AES-NI, `PCLMULQDQ`, SHA-NI and AVX2, each behind runtime detection; on AArch64 the ARMv8 AES, `PMULL`, SHA-256 and SHA-512 instructions behind runtime detection and the off-by-default `aarch64-crypto` feature, run so far under QEMU only and not measured. On 32-bit RISC-V the curve and RSA arithmetic runs on 32-bit words, because the 64-bit form compiled to branches on secrets there; [SECURITY.md](SECURITY.md) has what was checked on which target |
 | Encodings | DER and PEM for SubjectPublicKeyInfo, PKCS#8, SEC1, and ECDSA signatures |
 | TLS and QUIC | a rustls `CryptoProvider`: TLS 1.2, TLS 1.3 and QUIC; AES-GCM and ChaCha20-Poly1305; ECDSA, Ed25519 and RSA, verified and produced; ECDH and X25519; HKDF and the TLS 1.2 PRF |
 
@@ -403,12 +403,15 @@ The ontology registers algorithms this library does **not** provide, marked
 - **RSA encryption** — not offered at all. RSAES-PKCS1-v1_5 is a Bleichenbacher
   oracle waiting to happen, and key transport is better served by ECDH. RSA
   *signatures* are implemented, because certificate chains are made of them.
-- **ARMv8 crypto extensions** — implemented, behind the off-by-default
-  `aarch64-crypto` feature. Local checks cross-compile it for
-  `aarch64-apple-darwin` and its round structure is checked against a software
-  model of the instructions — which is what caught the decryption key schedule
-  being wrong. CI defines a native ARM64 job that runs the cipher and facade
-  tests with this feature; a cross-build alone does not establish execution.
+- **ARMv8 crypto extensions** — AES, `PMULL` GHASH, SHA-256 and SHA-512,
+  implemented behind the off-by-default `aarch64-crypto` feature. Local checks
+  cross-compile them for `aarch64-apple-darwin`, and each kernel's structure is
+  checked against a software model of the instructions on every host — which
+  is what caught the AES decryption key schedule being wrong.
+  `scripts/test-aarch64.sh` executes them under QEMU user-mode emulation,
+  against the portable code and the vector suites; that is execution, not
+  hardware, and says nothing about speed. CI defines a native ARM64 job that
+  runs the same tests, blocked with the rest of CI.
 - **X.509 certificate parsing** — out of scope. Names, validity, extensions, and
   path validation are a far larger surface than key encoding, and a partial
   implementation is worse than none. Keys and signatures do parse: hand the
@@ -631,8 +634,9 @@ lists what goes. It is still not a validated module.
 
 **Throughput depends on the CPU, and the library tells you which case you are
 in.** On x86-64 with AES-NI and `PCLMULQDQ` the accelerated backend is selected
-automatically. Everywhere else — ARM, RISC-V, WebAssembly, any bare-metal target
-— AES falls back to the portable path, which computes its S-box algebraically
+automatically; on AArch64 the ARMv8 AES and `PMULL` backends are, when the
+`aarch64-crypto` feature is on. Everywhere else — ARM without that feature,
+RISC-V, WebAssembly, any bare-metal target — AES falls back to the portable path, which computes its S-box algebraically
 and multiplies GHASH bit by bit so that neither indexes memory with a secret.
 That closes the cache-timing channel table-driven AES leaves open, and it is
 slow:
@@ -798,8 +802,9 @@ twice; `Ed25519::verify` still takes bytes and builds one per call.
 | primitive | how it is accelerated |
 |---|---|
 | AES | AES-NI, and ARMv8 crypto extensions behind a feature |
-| GHASH | `PCLMULQDQ`, eight blocks per group, summed unreduced and reduced once |
-| SHA-256 | SHA-NI |
+| GHASH | `PCLMULQDQ`, eight blocks per group, summed unreduced and reduced once; `PMULL` the same way, behind the ARM feature |
+| SHA-256 | SHA-NI; ARMv8 `SHA256H`/`SHA256H2` behind the ARM feature |
+| SHA-512 | ARMv8 `SHA512H`/`SHA512H2` behind the ARM feature; on x86-64, AVX2 for the message schedule |
 | ChaCha20 | AVX-512F, sixteen blocks at a time; AVX2, eight |
 | Poly1305 | AVX2, four lanes of four blocks per step; elsewhere four blocks per group, reducing once instead of four times |
 | RSA exponentiation | AVX-512 IFMA in radix 2^52 for 1024-, 1536- and 2048-bit moduli (every RSA prime here, and an RSA-2048 modulus); `MULX`/`ADCX`/`ADOX` for the other products; a fixed four-bit window everywhere |

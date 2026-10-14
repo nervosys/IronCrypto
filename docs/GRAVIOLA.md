@@ -13,7 +13,7 @@ Neither library is CMVP validated.
 | | ahead | level | behind |
 |---|---|---|---|
 | Speed, x86-64 | AES-GCM (more variable under load; with AVX-512), ChaCha20-Poly1305, X25519 (with AVX-512), Ed25519 (with AVX-512), ML-KEM encapsulation from key bytes and with the key parsed once, ML-KEM decapsulation with the key parsed once, RSA (with AVX-512), ECDSA P-256 verify, ECDSA P-384, SHA-512 | SHA-256, SHA3-256, HMAC-SHA256, ECDSA P-256 sign, P-256 ECDH, ML-KEM key generation | P-384 ECDH, slightly; without AVX-512, AES-GCM at 1 KiB and 4 MiB, X25519, Ed25519 and RSA-2048 fall behind (see "Without AVX-512") |
-| Speed, aarch64 | | | everything but AES: not accelerated here, not measured |
+| Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, and the portable field additions, carries and reductions of P-256 and Curve25519; no multiplication |
 | Side-channel evidence | compiled-code gate on four targets; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA product by the gate alone, and its IFMA exponentiation as a whole by neither |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
@@ -134,10 +134,16 @@ Where it is not ahead:
   had read as behind.
 - **P-256 ECDH** led by under four percent controlled and trailed by sixteen
   in the latest run: parity, not a lead.
-- **aarch64** has an AES backend here and nothing else; every other
-  algorithm runs the portable code. Graviola carries aarch64 assembly and
-  requires the `aes`, `sha2`, `pmull` and `neon` features there. Nothing was
-  measured on aarch64.
+- **aarch64** has ARMv8 backends here for AES, SHA-256 and SHA-512 (the
+  `SHA2` and `SHA512` instructions) and GHASH (`PMULL`), all behind the
+  off-by-default `aarch64-crypto` feature; every other algorithm, ChaCha20,
+  Poly1305 and the curves among them, runs the portable code. Graviola
+  carries aarch64 assembly throughout and requires the `aes`, `sha2`, `pmull`
+  and `neon` features there. The ARM backends here have been executed only
+  under QEMU user-mode emulation, which checks what they compute and says
+  nothing about speed: there is no aarch64 hardware on hand, and nothing was
+  measured on aarch64. AES-GCM there is the AES backend and the `PMULL`
+  GHASH run one after the other, not a fused kernel like x86-64's.
 - **CPUs without AVX-512.** Measured on the same Zen 5 machine with
   `--cfg ic_no_avx512`, which turns the AVX-512 and IFMA paths off (table
   below). Without them, AES-GCM at 1 KiB and 4 MiB, X25519 and RSA-2048 fall
