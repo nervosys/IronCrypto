@@ -300,7 +300,10 @@ impl Curve for P384 {
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     fn mul_scalar_fast(p: &Point, scalar: &Fn) -> Option<Point> {
-        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::mul_scalar(t, p, scalar))
+        match crate::nist::ifma::Ifma::get() {
+            Some(t) => Some(crate::nist::ifma::mul_scalar(t, p, scalar)),
+            None => crate::nist::p384_x86::mul_scalar(p, scalar),
+        }
     }
 
     #[cfg(target_arch = "x86_64")]

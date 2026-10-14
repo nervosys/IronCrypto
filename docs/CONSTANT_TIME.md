@@ -22,8 +22,8 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-seventy more on x86-64, and seven more on aarch64: 297 gating probe/target
-checks in all, 114 on x86-64, 51 on aarch64, and 44 on each of the three other
+seventy-five more on x86-64, and seven more on aarch64: 302 gating probe/target
+checks in all, 119 on x86-64, 51 on aarch64, and 44 on each of the three other
 targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -97,6 +97,14 @@ release profile; this is not the workspace binary's overflow-checked profile.
 - On x86-64 only, the window read of a prepared P-384 public key in ECDH
   (`ct_p384_comb_select`): a secret digit's masked read of sixteen affine
   entries and the conditional negation. See "Prepared ECDH public keys"
+  below.
+
+- On x86-64 only, the multiplications on MULX/ADX without IFMA: the
+  doublings in place (`ct_p256_point_double_in_place_adx`,
+  `ct_p384_point_double_in_place_adx`) and one digit's addition in each --
+  the entry's read, the formula and the masks after it
+  (`ct_p384_ladder_add`, `ct_p256_ladder_add`, and the generator table's
+  `ct_p256_table_add`). See "P-256 and P-384 without IFMA, on one buffer"
   below.
 
 - On x86-64 only, AES-GCM's eight-block (AES-NI, `PCLMULQDQ`) and
@@ -1343,3 +1351,72 @@ Two mutations, each restored afterwards:
 Probe count: fifty-five on x86-64 alone, where there were thirty-seven. All
 ninety-nine pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 99 + 3 x 44 = 231 gating probe/target checks.
+
+## P-256 and P-384 without IFMA, on one buffer, 2026-10-14
+
+On a CPU with BMI2 and ADX but without AVX-512 IFMA, P-256's and P-384's
+variable-base multiplications (`p256_x86::mul_scalar`,
+`p384_x86::mul_scalar`) and P-256's generator-table multiplication
+(`p256_x86::table_mul`) now run on one buffer per multiplication, the
+accumulator in its first three slots: five doublings in place
+(`double_in_place_adx`, generated beside `double_adx`) and then one addition
+per digit, whose identity cases are selected by masks as
+`Point::add_unequal` and `Point::add_affine_unequal_or_keep` select them.
+P-384's window is `AffineWindow`'s and its additions mixed. The field
+corrections in both generators are now one carry chain and a `cmov` per
+word, taking the sum where it carried out of the top word; the fused
+`c*a - d*b` operations fold once and correct once, through a mask. The
+divsteps of both inversions run in rounds of packed steps, in assembly on
+x86-64 (`nist::safegcd_x86`), each decision a `cmov` on the flags of a
+`test`. None of it branches by construction; five new probes read the
+compiled code, all x86-64 only:
+
+- `ct_p256_point_double_in_place_adx` and
+  `ct_p384_point_double_in_place_adx`: the doublings in place.
+  Straight-line, no finding.
+- `ct_p384_ladder_add`, `ct_p256_ladder_add` and `ct_p256_table_add`: one
+  digit's addition in each multiplication -- the entry's read for a secret
+  digit, the formula, and the masked selections after it (`ladder_add`,
+  `table_add`, the functions the multiplications call). One finding each,
+  excused as a counter loop (ceiling 1), the read's loop over the window:
+  P-384's `AffineWindow::select`, out of line, `incq %rax; cmpq $16, %rax;
+  jne`, the entry pointer stepped by `addq $96`; P-256's Jacobian window
+  the same, 96 bytes an entry; the generator table's window
+  `addq $8, %rax; cmpq $256, %rax; jne`, thirty-two entries of 64 bytes,
+  rax indexing the masks. rax is zeroed before each loop and written
+  nowhere else in it; the digit decides only the masks. The table read is
+  the SSE2 one: the probes are built without `std`, and its AVX2 form is
+  chosen only by the run-time detection `std` provides.
+
+The three inversion probes read the assembly rounds: still no finding.
+The `cmov`s choose between values already in registers, never between
+addresses.
+
+| Probe | counter loop | unconditional jump | constant memset |
+| --- | --- | --- | --- |
+| `ct_p384_ladder_add` | 1 | 0 | 0 |
+| `ct_p256_ladder_add` | 1 | 0 | 0 |
+| `ct_p256_table_add` | 1 | 0 | 0 |
+
+Mutations, each restored afterwards:
+
+- `if digit == 0 { return; }` at the top of P-384's `ladder_add`: fails
+  `ct_p384_ladder_add`, `je` on the new branch.
+- A `jnz` around a `mov` in place of one `cmovz` in the assembly divstep:
+  fails `ct_p384_fp_invert` 62 times, once for each of a batch's 62 steps.
+- `ct_p256_table_add`'s ceiling lowered to zero: "1 findings excused as
+  counter loop, more than the 0 reviewed", and a failure.
+
+### Not covered
+
+- **The multiplications as a whole**, as for IFMA: the loops over digits
+  and doublings have counts fixed by the curve, the recoding is shared with
+  the `Fp` multiplications, the window is built from a public point, and
+  the last, complete addition is the `Fp` form's.
+- **Valgrind.** Its CPUID reports no ADX, so `scripts/ctgrind.sh` runs these
+  curves on the baseline field and the generic loop; this path is read by
+  the compiled-code gate alone.
+
+Probe count: seventy-five on x86-64 alone, where there were seventy: 119 on
+x86-64, and 302 gating probe/target checks with the other four targets
+unchanged.

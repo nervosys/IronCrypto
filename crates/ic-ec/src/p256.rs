@@ -116,6 +116,16 @@ pub struct P256;
 // emits the table under `std` and the windowed multiplication without it.
 crate::nist::gentable::generator_table_for!(P256, 32);
 
+/// `scalar * G` by `nist::p256_x86::table_mul` on the generator table,
+/// whatever else the CPU has: for the tests, so that a CPU with IFMA runs
+/// the MULX/ADX path too.
+#[cfg(all(test, feature = "std", target_arch = "x86_64"))]
+pub(crate) fn table_mul_adx_for_tests(scalar: &Fn) -> Option<Point> {
+    let (windows, built) = generator_table();
+    crate::nist::gentable::prepare(windows, built);
+    crate::nist::p256_x86::table_mul(windows, scalar)
+}
+
 impl Curve for P256 {
     type Field = Fp;
     type Scalar = Fn;
@@ -210,7 +220,10 @@ impl Curve for P256 {
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     fn mul_scalar_fast(p: &Point, scalar: &Fn) -> Option<Point> {
-        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::mul_scalar(t, p, scalar))
+        match crate::nist::ifma::Ifma::get() {
+            Some(t) => Some(crate::nist::ifma::mul_scalar(t, p, scalar)),
+            None => crate::nist::p256_x86::mul_scalar(p, scalar),
+        }
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -229,7 +242,10 @@ impl Curve for P256 {
         windows: &crate::nist::gentable::Windows<Self, E>,
         scalar: &Fn,
     ) -> Option<Point> {
-        crate::nist::ifma::Ifma::get().map(|t| crate::nist::ifma::table_mul(t, windows, scalar))
+        match crate::nist::ifma::Ifma::get() {
+            Some(t) => Some(crate::nist::ifma::table_mul(t, windows, scalar)),
+            None => crate::nist::p256_x86::table_mul(windows, scalar),
+        }
     }
 
     fn scalar_reduce_slice(bytes: &[u8]) -> Fn {

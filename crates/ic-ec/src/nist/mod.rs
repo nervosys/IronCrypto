@@ -50,6 +50,15 @@
 //! the point formulas are generated into `p384_x86_point` and dispatched from
 //! `p384_x86`; the scalar ring's multiplication stays generic in the modulus
 //! (`mont_x86`).
+//!
+//! # Without AVX-512 IFMA
+//!
+//! Where the CPU has BMI2 and ADX but not IFMA, `p256_x86::mul_scalar` and
+//! `p384_x86::mul_scalar` run [`point::Point::mul_scalar`]'s loop on one
+//! buffer, the accumulator's slots shared by the in-place doubling and the
+//! addition, so a digit's five doublings run back to back with nothing
+//! copied; P-384's window is affine, its additions mixed. P-256's generator
+//! table runs the same way (`p256_x86::table_mul`).
 
 pub mod arith;
 pub mod ecdh;
@@ -84,6 +93,14 @@ pub(crate) mod ifma;
 #[cfg(target_arch = "x86_64")]
 #[allow(unsafe_code)]
 pub(crate) mod ifma_kernels;
+// Inputs on both sides of the fused operations' fold, for the tests of the
+// x86-64 assembly above.
+#[cfg(all(test, target_arch = "x86_64"))]
+mod fold_edges;
 pub mod point;
 #[cfg(all(target_pointer_width = "64", not(ic_limb32)))]
 pub(crate) mod safegcd;
+// Its divsteps in assembly, each decision a conditional move.
+#[cfg(all(target_arch = "x86_64", not(ic_limb32)))]
+#[allow(unsafe_code)]
+pub(crate) mod safegcd_x86;

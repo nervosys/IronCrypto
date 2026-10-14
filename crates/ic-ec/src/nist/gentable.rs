@@ -66,19 +66,19 @@ pub(super) const WIDTH: usize = 5;
 pub(crate) const ENTRIES: usize = 1 << (WIDTH - 1);
 
 /// `1..=16` times some fixed point, for [`Point::mul_scalar`].
-pub(super) struct Window<C: Curve>([Point<C>; ENTRIES]);
+pub(crate) struct Window<C: Curve>([Point<C>; ENTRIES]);
 
 impl<C: Curve> Window<C> {
     /// Even multiples by doubling, odd ones by adding `base` to the even one
     /// below: `2k * base` and `base` are never the same point when `base` has
     /// prime order above 8, so [`Point::add_unequal`] is enough, and it also
     /// handles a `base` at infinity.
-    pub(super) fn new(base: &Point<C>) -> Self {
+    pub(crate) fn new(base: &Point<C>) -> Self {
         Self(multiples(base))
     }
 
     /// `digit * base` for `digit` in `[-16, 16]`, without indexing by it.
-    pub(super) fn select(&self, digit: i8) -> Point<C> {
+    pub(crate) fn select(&self, digit: i8) -> Point<C> {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u8;
 
@@ -258,7 +258,7 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
     /// Normalised with one inversion
     /// for the whole window (Montgomery's trick): the product of every `Z`,
     /// inverted once, then unwound.
-    pub(super) fn new(base: &Point<C>) -> Self {
+    pub(crate) fn new(base: &Point<C>) -> Self {
         let points: [Point<C>; E] = multiples(base);
         let mut prefix = [C::Field::ONE; E];
         let mut acc = C::Field::ONE;

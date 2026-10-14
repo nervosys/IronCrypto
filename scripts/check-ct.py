@@ -69,6 +69,13 @@ X86_ONLY = (
     "ct_p384_fp_mul_adx", "ct_p384_fp_sqr_adx", "ct_p384_fn_mul_adx",
     "ct_p384_point_double_adx", "ct_p384_point_add_adx",
     "ct_p384_point_add_affine_adx", "ct_p384_fp_invert",
+    # The doublings in place that the multiplications without IFMA run five
+    # to a digit, and one digit's addition in each: the entry's read, the
+    # formula, and the masks that select its identity cases. P-384's reads
+    # an affine window, P-256's a Jacobian one; P-256's generator table, as
+    # signing reads it, has its own.
+    "ct_p256_point_double_in_place_adx", "ct_p384_point_double_in_place_adx",
+    "ct_p384_ladder_add", "ct_p256_ladder_add", "ct_p256_table_add",
     # RSA's windowed-exponentiation table read at 2048 bits. Its masked scan is
     # unrolled on x86-64. On the 32-bit targets and RISC-V LLVM keeps the entry
     # loop rolled, a loop over a public count, so the probe is x86-64 only.
@@ -208,6 +215,17 @@ X86_EXCUSE_CEILINGS = {
     # A prepared P-384 key's window read: the loop over its sixteen entries,
     # `incq`/`cmpq $16`/`jne` on the entry counter.
     "ct_p384_comb_select": {"counter loop": 1},
+    # One digit's addition in the multiplications on MULX/ADX: each reads
+    # its window in one loop, rax counting the entries to a constant and
+    # indexing the masks, the entry pointer stepping by a constant -- P-384's
+    # affine window (`incq`/`cmpq $16`/`jne`, 96 bytes an entry, in
+    # `AffineWindow::select` out of line), P-256's Jacobian one (the same, 96
+    # bytes) and the generator table's (`addq $8`/`cmpq $256`/`jne`, 32
+    # entries of 64 bytes). The digit decides only the masks. Read on
+    # 2026-10-14.
+    "ct_p384_ladder_add": {"counter loop": 1},
+    "ct_p256_ladder_add": {"counter loop": 1},
+    "ct_p256_table_add": {"counter loop": 1},
     # AES-GCM: each loop's `decq; jne` back edge, the counter the fixed group
     # count (2 sealing, the first group being encrypted before the loop; 3
     # opening), written nowhere else in the loop.

@@ -700,7 +700,16 @@ fn the_report_names_the_path_that_runs() {
         }
         None => {
             assert_ne!(backend, crate::NistBackend::Ifma);
-            assert!(fast.is_none());
+            // Without IFMA the hook is the MULX/ADX loop where the CPU has
+            // BMI2 and ADX (`p256_x86::mul_scalar`), and absent otherwise.
+            if backend == crate::NistBackend::MulxAdx {
+                assert!(fast.is_some_and(|p| bool::from(p.ct_eq(&g))));
+                let h = Point::<P384>::generator();
+                let fast = <P384 as Curve>::mul_scalar_fast(&h, &<P384 as Curve>::Scalar::ONE);
+                assert!(fast.is_some_and(|p| bool::from(p.ct_eq(&h))));
+            } else {
+                assert!(fast.is_none());
+            }
         }
     }
 }

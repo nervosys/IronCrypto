@@ -333,22 +333,29 @@ mod x86_p256 {
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub unsafe fn ct_p256_point_double_adx(buf: &mut [MaybeUninit<u64>; 56]) {
+    pub unsafe fn ct_p256_point_double_adx(buf: &mut [MaybeUninit<u64>; 60]) {
         unsafe { ic_ec::ct_probes::point_double_adx(buf) }
     }
 
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub unsafe fn ct_p256_point_add_adx(buf: &mut [MaybeUninit<u64>; 84]) {
+    pub unsafe fn ct_p256_point_add_adx(buf: &mut [MaybeUninit<u64>; 96]) {
         unsafe { ic_ec::ct_probes::point_add_adx(buf) }
     }
 
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub unsafe fn ct_p256_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 72]) {
+    pub unsafe fn ct_p256_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 80]) {
         unsafe { ic_ec::ct_probes::point_add_affine_adx(buf) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p256_point_double_in_place_adx(buf: &mut [MaybeUninit<u64>; 48]) {
+        unsafe { ic_ec::ct_probes::point_double_in_place_adx(buf) }
     }
 
     /// # Safety
@@ -394,22 +401,29 @@ mod x86_p256 {
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub unsafe fn ct_p384_point_double_adx(buf: &mut [MaybeUninit<u64>; 90]) {
+    pub unsafe fn ct_p384_point_double_adx(buf: &mut [MaybeUninit<u64>; 96]) {
         unsafe { ic_ec::ct_probes::p384_point_double_adx(buf) }
     }
 
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub unsafe fn ct_p384_point_add_adx(buf: &mut [MaybeUninit<u64>; 132]) {
+    pub unsafe fn ct_p384_point_add_adx(buf: &mut [MaybeUninit<u64>; 150]) {
         unsafe { ic_ec::ct_probes::p384_point_add_adx(buf) }
     }
 
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub unsafe fn ct_p384_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 114]) {
+    pub unsafe fn ct_p384_point_add_affine_adx(buf: &mut [MaybeUninit<u64>; 126]) {
         unsafe { ic_ec::ct_probes::p384_point_add_affine_adx(buf) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_point_double_in_place_adx(buf: &mut [MaybeUninit<u64>; 78]) {
+        unsafe { ic_ec::ct_probes::p384_point_double_in_place_adx(buf) }
     }
 
     /// The secret digit's read of a window of a prepared P-384 key, for
@@ -423,6 +437,54 @@ mod x86_p256 {
         out: &mut [[u64; 6]; 2],
     ) {
         ic_ec::ct_probes::p384_comb_select(comb, digit, out)
+    }
+
+    /// One digit's addition in P-384's multiplication on MULX/ADX, the
+    /// digit secret: the entry's read from an affine window, as in
+    /// `ct_p384_comb_select`, the mixed addition, and the masks that select
+    /// the identity cases. Its loop over the sixteen entries is excused by
+    /// rule in check-ct.py, up to a ceiling; the doublings between digits
+    /// are `ct_p384_point_double_in_place_adx`.
+    ///
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p384_ladder_add(
+        comb: &ic_ec::ct_probes::P384Comb,
+        digit: i8,
+        buf: &mut [MaybeUninit<u64>; 126],
+    ) {
+        unsafe { ic_ec::ct_probes::p384_ladder_add(comb, digit, buf) }
+    }
+
+    /// The same for P-256: the entry's read from the Jacobian window, the
+    /// addition, and the masks; the doublings are
+    /// `ct_p256_point_double_in_place_adx`.
+    ///
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p256_ladder_add(
+        window: &ic_ec::ct_probes::P256Window,
+        digit: i8,
+        buf: &mut [MaybeUninit<u64>; 96],
+    ) {
+        unsafe { ic_ec::ct_probes::p256_ladder_add(window, digit, buf) }
+    }
+
+    /// One digit of P-256's multiplication of the generator on MULX/ADX, as
+    /// signing makes it, the digit secret: the entry's read from a window
+    /// of thirty-two affine multiples, the mixed addition, and the masks.
+    ///
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_p256_table_add(
+        table: &ic_ec::ct_probes::P256Table,
+        digit: i8,
+        buf: &mut [MaybeUninit<u64>; 80],
+    ) {
+        unsafe { ic_ec::ct_probes::p256_table_add(table, digit, buf) }
     }
 }
 

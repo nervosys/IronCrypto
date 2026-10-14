@@ -116,8 +116,10 @@ pub trait Curve: Sized {
 
     /// The whole of [`Point::mul_scalar`], where the curve has a faster way
     /// to the same point (not necessarily the same coordinates); `None` to
-    /// use the loop there. P-256 and P-384 on x86-64 with AVX-512 IFMA have
-    /// one (`nist::ifma`).
+    /// use the loop there. P-256 and P-384 on x86-64 have one: on AVX-512
+    /// IFMA (`nist::ifma`), and otherwise with BMI2 and ADX the same loop on
+    /// one buffer (`nist::p256_x86`, `nist::p384_x86`). P-256's generator
+    /// table has both too ([`Self::table_mul_fast`]).
     #[inline(always)]
     fn mul_scalar_fast(_p: &Point<Self>, _scalar: &Self::Scalar) -> Option<Point<Self>> {
         None
