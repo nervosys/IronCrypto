@@ -105,6 +105,130 @@ if [ "$checked" -lt "$expected" ]; then
     exit 1
 fi
 
+# `cargo audit` is not required and is not installed by this script. When it is
+# present it gates, and it tolerates being offline: it fetches the RustSec
+# database over the network, so a database that cannot be loaded is a warning,
+# and the offline floors still gate. A vulnerability in a crate this workspace
+# compiles fails the script. One in a crate that only Cargo.lock lists is
+# printed as a warning, because the lock file names packages the compiler never
+# builds (see the header). cargo audit's own configuration (audit.toml or
+# .cargo/audit.toml, read from this directory) is the only ignore mechanism;
+# this script adds none.
+#
+# The verdict comes from cargo audit's JSON, not its exit status: it exits
+# non-zero both when it finds vulnerabilities and when it cannot load the
+# database. The JSON is printed only once the database has loaded, so a
+# "database" block with a non-zero advisory-count, plus "vulnerabilities", is
+# the proof that the check ran.
+#
+# This runs before the floor check so that a combined failure shows the audit
+# findings first. The floor check exits on its own; audit_fail is applied after it.
+audit_fail=0
+if command -v cargo-audit >/dev/null 2>&1 || cargo audit --version >/dev/null 2>&1; then
+    echo
+    echo "cargo audit is available; checking the RustSec advisory database."
+    echo "It reads Cargo.lock, which also lists packages this workspace never"
+    echo "compiles, so a finding can name one of those:"
+    lock_only=$(comm -23 \
+        <(grep '^name = ' Cargo.lock | sed 's/name = "//;s/"//' | sort -u) \
+        <(echo "$compiled" | cut -f1 | sort -u))
+    if [ -n "$lock_only" ]; then
+        echo "In Cargo.lock but never compiled:"
+        echo "$lock_only" | sed 's/^/  /'
+    fi
+
+    compiled_names=$(echo "$third_party" | cut -f1)
+
+    py=""
+    for candidate in python3 python; do
+        if "$candidate" -c 'import json' >/dev/null 2>&1; then
+            py=$candidate
+            break
+        fi
+    done
+
+    audit_err=$(mktemp)
+    audit_json=$(cargo audit --json 2>"$audit_err" || true)
+
+    # Reads cargo audit's JSON on stdin and prints one tab-separated record per
+    # line: DB (database loaded), VULN (a vulnerability), WARN (an unmaintained,
+    # unsound or yanked notice, which does not gate), or UNAVAILABLE.
+    audit_py='
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    d = {}
+db = d.get("database") or {}
+v = d.get("vulnerabilities")
+if not isinstance(v, dict) or not db.get("advisory-count"):
+    print("UNAVAILABLE")
+    sys.exit(0)
+print("DB\t%s\t%s" % (db["advisory-count"], db.get("last-updated", "?")))
+for item in v.get("list") or []:
+    a = item.get("advisory", {})
+    p = item.get("package", {})
+    patched = ", ".join((item.get("versions") or {}).get("patched") or []) or "none listed"
+    print("VULN\t%s\t%s\t%s\t%s" % (a.get("id", "?"), p.get("name", "?"), p.get("version", "?"), patched))
+for kind, items in (d.get("warnings") or {}).items():
+    for w in items:
+        a = w.get("advisory", {})
+        p = w.get("package", {})
+        print("WARN\t%s\t%s\t%s\t%s" % (kind, a.get("id", "?"), p.get("name", "?"), p.get("version", "?")))
+'
+
+    audit_read=""
+    if [ -z "$py" ]; then
+        echo "FAIL  cargo audit is installed, but python is needed to read its output and none was found."
+        audit_fail=1
+    elif ! audit_read=$(printf '%s' "$audit_json" | "$py" -I -c "$audit_py"); then
+        echo "FAIL  could not parse the JSON that cargo audit printed."
+        audit_fail=1
+    elif ! printf '%s\n' "$audit_read" | grep -q '^DB'; then
+        echo "WARNING: the RustSec advisory database could not be loaded (offline, or the fetch failed),"
+        echo "         so cargo audit did not check it. The offline floors above still gate."
+        if [ -s "$audit_err" ]; then
+            tail -n 3 "$audit_err" | sed 's/^/         cargo audit: /'
+        fi
+    else
+        db_line=$(printf '%s\n' "$audit_read" | grep '^DB' | head -1)
+        echo "RustSec database: $(echo "$db_line" | cut -f2) advisories, last updated $(echo "$db_line" | cut -f3)"
+
+        warn_lines=$(printf '%s\n' "$audit_read" | grep '^WARN' || true)
+        if [ -n "$warn_lines" ]; then
+            while IFS=$'\t' read -r _ kind id crate version; do
+                echo "warning ($kind) $id: $crate $version; not a vulnerability, does not fail the check"
+            done <<< "$warn_lines"
+        fi
+
+        vuln_lines=$(printf '%s\n' "$audit_read" | grep '^VULN' || true)
+        if [ -n "$vuln_lines" ]; then
+            echo
+            while IFS=$'\t' read -r _ id crate version patched; do
+                if grep -qxF "$crate" <<< "$compiled_names"; then
+                    audit_fail=1
+                    echo "FAIL  $id: $crate $version is vulnerable; fixed in $patched"
+                else
+                    echo "warning (lock-only, not compiled) $id: $crate $version; fixed in $patched"
+                fi
+            done <<< "$vuln_lines"
+            if [ "$audit_fail" -ne 0 ]; then
+                echo
+                echo "      To clear each FAIL: raise that crate's floor in the table in"
+                echo "      scripts/advisories.sh to the fixed version, raise its requirement in"
+                echo "      the Cargo.toml that names it (crates/ic-rustls/Cargo.toml for rustls"
+                echo "      and its dependencies), then run cargo update -p <crate>."
+                echo "      A lock-only warning is not in the build; decide what it means with"
+                echo "      cargo tree -i <crate>. Do not add an ignore to get past it here."
+            fi
+        else
+            echo "cargo audit: no vulnerabilities found"
+        fi
+    fi
+    rm -f "$audit_err"
+fi
+
+
 if [ "$fail" -ne 0 ]; then
     echo
     echo "Advisory floors are set in scripts/advisories.sh, last reviewed $reviewed."
@@ -112,6 +236,10 @@ if [ "$fail" -ne 0 ]; then
 fi
 
 echo "$checked third-party crates at or above their advisory floors (reviewed $reviewed)"
+if [ "$audit_fail" -ne 0 ]; then
+    exit 1
+fi
+
 
 # A floor can only go stale in one direction, and nothing here learns that by
 # itself, so say so once the review is a month old. A warning rather than a
@@ -122,23 +250,4 @@ if reviewed_epoch=$(date -d "$reviewed" +%s 2>/dev/null); then
     if [ "$age_days" -gt 30 ]; then
         echo "WARNING: the advisory floors were last reviewed $age_days days ago; check https://rustsec.org/advisories/ for these crates and update \$reviewed."
     fi
-fi
-
-# `cargo audit` is not required and is not installed by this script: it would be
-# a build-time dependency on a tool that fetches a database over the network,
-# which is not something a check that gates commits should do silently. When it
-# is present its second opinion is worth having.
-if command -v cargo-audit >/dev/null 2>&1 || cargo audit --version >/dev/null 2>&1; then
-    echo
-    echo "cargo audit is available; running it for a second opinion."
-    echo "Expect findings against packages this workspace never compiles --"
-    echo "cargo audit reads Cargo.lock, which lists the resolver's candidates."
-    lock_only=$(comm -23 \
-        <(grep '^name = ' Cargo.lock | sed 's/name = "//;s/"//' | sort -u) \
-        <(echo "$compiled" | cut -f1 | sort -u))
-    if [ -n "$lock_only" ]; then
-        echo "In Cargo.lock but never compiled:"
-        echo "$lock_only" | sed 's/^/  /'
-    fi
-    cargo audit || true
 fi

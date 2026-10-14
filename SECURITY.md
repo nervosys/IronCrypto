@@ -267,8 +267,11 @@ is the exception and depends on rustls plus six crates beneath it;
 crate, on every build.
 
 `scripts/advisories.sh` pins each of the seven to the version that fixed the
-advisories known against it, and runs on every commit. It is offline: it
-compares compiled versions against a table, so it gates without reaching the
+advisories known against it, and runs on every commit. When `cargo audit` is
+installed, the script runs it too and fails on a vulnerability in a crate the
+build compiles, naming the advisory, the crate, the version and the fixed
+version; an advisory database that cannot be fetched is a warning. The floor
+table is offline: it
 network. The table carries the date it was last reviewed against RustSec,
 because a floor cannot learn about a new advisory by itself.
 

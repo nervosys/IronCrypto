@@ -397,6 +397,13 @@ all of them.
 
 ### Changed
 
+- **`scripts/advisories.sh` gates on `cargo audit`'s findings.** When
+  `cargo audit` is installed it now fails the check on a vulnerability in a
+  crate the build compiles, naming the advisory, crate, version and fixed
+  version; it was previously printed and ignored. A database that cannot be
+  fetched is still a warning, so the check runs offline. A vulnerability
+  against a crate only `Cargo.lock` lists is printed as a warning.
+
 - **AArch64 is a gated target of the compiled-code check.**
   `scripts/check-ct.py` builds the harness for `aarch64-unknown-linux-gnu`
   (`rustup target add aarch64-unknown-linux-gnu`; a missing target fails, as

@@ -545,9 +545,10 @@ the build below it, so a downgrade into a known vulnerability cannot pass
 quietly. It runs on every commit and needs no network, because it compares
 compiled versions against a table rather than fetching a database. The table
 carries the date it was last reviewed, since a floor can only go stale in one
-direction and no check learns that by itself. `cargo audit` runs beside it in
-CI and is not allowed to fail the build: a gate that breaks when a remote
-service is slow teaches people to bypass gates.
+direction and no check learns that by itself. When `cargo audit` is installed,
+the script runs it too and fails on a vulnerability in a crate the build
+compiles. A database that cannot be fetched is only a warning, so a slow remote
+service does not break the gate, and a known vulnerability does.
 
 **A scanner will count more than seven.** `cargo audit`, Dependabot and most
 SCA tools read `Cargo.lock`, which lists what the resolver considered rather
