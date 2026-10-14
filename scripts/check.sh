@@ -34,6 +34,20 @@ fi
 : "${CARGO_TARGET_DIR:=target}"
 export CARGO_TARGET_DIR
 
+# qemu-aarch64 may be on PATH under either name (Debian's qemu-user-static
+# ships qemu-aarch64-static), or in ~/.local/bin after a no-root install
+# (docs/CI.md). Find one, so the ARMv8 step below is not skipped.
+if [ -z "${QEMU_AARCH64:-}" ]; then
+    for q in qemu-aarch64 qemu-aarch64-static \
+        "$HOME/.local/bin/qemu-aarch64" "$HOME/.local/bin/qemu-aarch64-static"; do
+        if command -v "$q" >/dev/null 2>&1; then
+            QEMU_AARCH64="$q"
+            export QEMU_AARCH64
+            break
+        fi
+    done
+fi
+
 step() {
     printf '\n=== %s ===\n' "$1"
 }

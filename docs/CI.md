@@ -191,6 +191,36 @@ scripts/test-aarch64.sh           # ic-core, ic-hash, ic-cipher, ic-ontology; th
 scripts/test-aarch64.sh --quick   # the backends' crates only
 ```
 
+There are two routes. With root, install the user-mode emulator from the
+distribution:
+
+```bash
+sudo apt install qemu-user-static   # provides qemu-aarch64-static
+```
+
+`qemu-user-static` is the package that provides the user-mode
+`qemu-aarch64-static`. `qemu-system-arm` and `qemu-efi-aarch64` are the full
+system emulator and do not provide it.
+
+Without root, on a Debian host where `apt-get download` works but nothing can
+be installed, the same package can be unpacked into the home directory and put
+on the search path. This is what was done on the WSL Debian (trixie) host:
+
+```bash
+cd ~ && mkdir -p ~/.local/qemu-dl ~/.local/bin && cd ~/.local/qemu-dl
+apt-get download qemu-user        # fetches qemu-user_1:10.0.13+ds-0+deb13u1_amd64.deb
+dpkg -x qemu-user_*.deb ~/.local/qemu
+ln -sfn ~/.local/qemu/usr/bin/qemu-aarch64 ~/.local/bin/qemu-aarch64
+~/.local/bin/qemu-aarch64 -cpu max --version   # qemu-aarch64 version 10.0.13
+```
+
+When `QEMU_AARCH64` is unset, `scripts/check.sh` and `scripts/test-aarch64.sh`
+look for `qemu-aarch64`, then `qemu-aarch64-static`, on `PATH`, then the same
+two names in `~/.local/bin`; no export is needed for either route. The `.deb` is about 16 MB; the download took over two minutes here, so
+run it in the background if a foreground shell times out. If `apt-get download`
+does not work, fetch the same file from
+`https://deb.debian.org/debian/pool/main/q/qemu/` with `curl`.
+
 The musl target links statically with `rust-lld` from the toolchain, so there
 is no cross compiler and no sysroot to install. On Windows, run it inside WSL.
 The script fails if a backend test reports that it skipped, or if the backend

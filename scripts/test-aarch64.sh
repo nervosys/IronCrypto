@@ -39,6 +39,17 @@ fi
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 target=aarch64-unknown-linux-musl
+# Either name on PATH (Debian's qemu-user-static ships qemu-aarch64-static), or
+# a no-root install in ~/.local/bin (docs/CI.md).
+if [ -z "${QEMU_AARCH64:-}" ]; then
+    for q in qemu-aarch64 qemu-aarch64-static \
+        "$HOME/.local/bin/qemu-aarch64" "$HOME/.local/bin/qemu-aarch64-static"; do
+        if command -v "$q" >/dev/null 2>&1; then
+            QEMU_AARCH64="$q"
+            break
+        fi
+    done
+fi
 qemu="${QEMU_AARCH64:-qemu-aarch64}"
 if ! command -v "$qemu" >/dev/null 2>&1; then
     echo "qemu-aarch64 not found; set QEMU_AARCH64 or put it on PATH (see this script's header)" >&2
@@ -58,8 +69,10 @@ log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 
 printf '\n=== backends: ic-core, ic-hash, ic-cipher, ic-ontology ===\n'
+# ct-probes exposes the ARMv8 probe wrappers, so their fixed-input tests run
+# here too: the audit reads those wrappers, and nothing else executes them.
 cargo test --target "$target" -p ic-core -p ic-hash -p ic-cipher -p ic-ontology \
-    --features ic-cipher/aarch64-crypto,ic-hash/aarch64-crypto \
+    --features ic-cipher/aarch64-crypto,ic-hash/aarch64-crypto,ic-cipher/ct-probes,ic-hash/ct-probes \
     -- --nocapture 2>&1 | tee "$log"
 
 # The tests skip, with a message, where the CPU lacks the instructions. Under

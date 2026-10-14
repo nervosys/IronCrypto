@@ -402,3 +402,118 @@ mod armv8 {
         unsafe { pmull::absorb8(acc, powers, blocks) }
     }
 }
+
+/// The ARMv8 probe wrappers, executed. The audit only reads them; these run
+/// each one on fixed inputs and hold it to an independent answer, so a wrapper
+/// that compiles but computes the wrong thing fails here. Needs the
+/// instructions, so it runs under QEMU (`scripts/test-aarch64.sh`), and asserts
+/// the detection rather than skipping: a probe that never ran is not a pass.
+#[cfg(all(test, target_arch = "aarch64", feature = "aarch64-crypto"))]
+mod armv8_probe_tests {
+    use super::armv8::*;
+    use crate::aes::portable;
+    use crate::armv8_ghash_model::tests::check_mul;
+    use crate::gcm::portable_ghash_mul;
+
+    /// FIPS 197, Appendix C.3: AES-256, key 00 01 .. 1f, plaintext
+    /// 00 11 22 .. ff, ciphertext 8e a2 b7 ca 51 67 45 bf ea fc 49 90 4b 49 60 89.
+    const C3_CIPHERTEXT: [u8; 16] = [
+        0x8e, 0xa2, 0xb7, 0xca, 0x51, 0x67, 0x45, 0xbf, 0xea, 0xfc, 0x49, 0x90, 0x4b, 0x49, 0x60,
+        0x89,
+    ];
+
+    /// The expanded AES-256 schedule as the probes take it: fifteen round keys
+    /// of sixteen bytes, in order.
+    fn round_keys(sched: &portable::Schedule) -> [u8; 240] {
+        let mut out = [0u8; 240];
+        for (r, chunk) in out.chunks_exact_mut(16).enumerate() {
+            chunk.copy_from_slice(sched.round_key(r));
+        }
+        out
+    }
+
+    #[test]
+    fn aes256_probes_match_fips197_and_the_portable_backend() {
+        assert!(
+            crate::aes::armv8_aes_available(),
+            "no ARMv8 AES instructions: the probes were not run"
+        );
+        let key: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let sched = portable::Schedule::expand(&key).unwrap();
+        let rk = round_keys(&sched);
+        let plain: [u8; 16] = core::array::from_fn(|i| (i as u8).wrapping_mul(0x11));
+
+        let mut enc = plain;
+        // SAFETY: guarded by the detection above.
+        unsafe { aes256_armv8_encrypt(&rk, &mut enc) };
+        assert_eq!(
+            enc, C3_CIPHERTEXT,
+            "aes256_armv8_encrypt against FIPS 197 C.3"
+        );
+
+        let mut dec = C3_CIPHERTEXT;
+        // SAFETY: guarded by the detection above.
+        unsafe { aes256_armv8_decrypt(&rk, &mut dec) };
+        assert_eq!(dec, plain, "aes256_armv8_decrypt against FIPS 197 C.3");
+
+        // Other blocks, against the portable backend.
+        for seed in 0..8u8 {
+            let block: [u8; 16] =
+                core::array::from_fn(|i| seed.wrapping_mul(31).wrapping_add(i as u8));
+            let mut want = block;
+            portable::encrypt_block(&sched, &mut want).unwrap();
+            let mut got = block;
+            // SAFETY: guarded by the detection above.
+            unsafe { aes256_armv8_encrypt(&rk, &mut got) };
+            assert_eq!(got, want, "aes256_armv8_encrypt, seed {seed}");
+        }
+
+        // The four-block batch, which takes its own path through the rounds.
+        let batch: [u8; 64] = core::array::from_fn(|i| (i as u8).wrapping_mul(7) ^ 0x5a);
+        let mut want = batch;
+        for block in want.chunks_exact_mut(16) {
+            portable::encrypt_block(&sched, block).unwrap();
+        }
+        let mut got = batch;
+        // SAFETY: guarded by the detection above.
+        unsafe { aes256_armv8_encrypt4(&rk, &mut got) };
+        assert_eq!(got, want, "aes256_armv8_encrypt4");
+    }
+
+    #[test]
+    fn ghash_probes_match_the_portable_multiply() {
+        assert!(
+            ic_core::cpu::has_ghash_pmull(),
+            "no PMULL: the probes were not run"
+        );
+        // SAFETY: guarded by the detection above.
+        check_mul(|x, h| unsafe { ghash_pmull_mul(x, h) });
+
+        // Eight powers of a fixed H, H^1 .. H^8, and three groups of eight
+        // blocks, held to the serial portable absorb.
+        let h: [u8; 16] = core::array::from_fn(|i| (i as u8).wrapping_mul(0x3b) ^ 0xa5);
+        let mut powers = [h; 8];
+        for i in 1..8 {
+            let mut p = powers[i - 1];
+            portable_ghash_mul(&mut p, &h);
+            powers[i] = p;
+        }
+        let blocks: [u8; 384] =
+            core::array::from_fn(|i| (i as u8).wrapping_mul(13).wrapping_add(7));
+        let start: [u8; 16] = core::array::from_fn(|i| 0x80 ^ i as u8);
+        let mut want = start;
+        for block in blocks.chunks_exact(16) {
+            for (w, b) in want.iter_mut().zip(block) {
+                *w ^= b;
+            }
+            portable_ghash_mul(&mut want, &h);
+        }
+        let mut got = start;
+        // SAFETY: guarded by the detection above.
+        unsafe { ghash_pmull_absorb8(&mut got, &powers, &blocks) };
+        assert_eq!(
+            got, want,
+            "ghash_pmull_absorb8 against the serial portable GHASH"
+        );
+    }
+}
