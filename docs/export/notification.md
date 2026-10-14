@@ -606,6 +606,16 @@ was kept on master, the maintainer wrote "Release 0.3.0 in the meantime".
 This records that instruction. Publication proceeds on it and on the
 reported notice.
 
+The maintainer then wrote "publish 0.3.0". This agent's attempt to run
+`cargo publish` was refused by its permission check, and the maintainer ran
+`cargo publish --workspace` themselves. The crates.io API confirmed all
+twenty-two 0.3.0 packages live and not yanked. The first upload was
+`ic-core` at 2026-10-14 00:19:44 UTC and the last `ic-cli` at 00:20:27 UTC.
+The published source commit is `3571ffa`; all twenty-two packages
+identified that clean commit in their VCS metadata. At publication the
+commit had not been pushed to GitHub, by intent: it describes a defect that
+no published version yet corrected.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not
