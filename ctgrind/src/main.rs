@@ -298,17 +298,27 @@ fn ic_cases() -> Vec<Case> {
             public(&ok);
             assert!(ok);
         }),
-        ("ic-rsa-2048-sign", || rsa_2048_sign(false)),
-        ("ic-rsa-2048-sign-adx", || rsa_2048_sign(true)),
+        ("ic-rsa-2048-sign", || rsa_sign(2048, false)),
+        ("ic-rsa-2048-sign-adx", || rsa_sign(2048, true)),
+        ("ic-rsa-4096-sign-adx", || rsa_sign(4096, true)),
     ]
 }
 
-/// RSA-2048 PKCS#1 v1.5 signing with only the private state marked. With `adx`
-/// the MULX/ADX Montgomery backend is taken whatever CPUID says, which is the
-/// path Valgrind would otherwise never run; see `ct_probes::with_forced_adx`.
-fn rsa_2048_sign(adx: bool) {
+/// RSA PKCS#1 v1.5 signing at `bits` with only the private state marked. With
+/// `adx` the MULX/ADX Montgomery backend is taken whatever CPUID says, which is
+/// the path Valgrind would otherwise never run; see `ct_probes::with_forced_adx`.
+/// At 4096 bits the primes are 32 words, where that backend squares and
+/// multiplies by Karatsuba over the 16-word kernels.
+fn rsa_sign(bits: usize, adx: bool) {
     let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x41u8; 48], b"ctgrind").unwrap();
-    let key = ic_rsa::generate(2048, &mut rng).unwrap();
+    // Key generation is not under test (nothing is marked yet); forcing the
+    // backend there only makes it finish sooner under Valgrind.
+    let mut generate = || ic_rsa::generate(bits, &mut rng).unwrap();
+    let key = if adx {
+        ic_rsa::ct_probes::with_forced_adx(generate)
+    } else {
+        generate()
+    };
     // Only the private state is marked: d, the primes p and q with their
     // Montgomery constants, and the CRT values dP, dQ, qInv, which are derived
     // from the primes. The public modulus n and exponent e stay defined, and so
@@ -316,7 +326,7 @@ fn rsa_2048_sign(adx: bool) {
     // (a function of the key size). Marking the whole key, as this case once
     // did, made loops bounded by the public modulus width report as secret.
     key.for_each_secret_region(vg::secret_region);
-    let mut sig = vec![0u8; 256];
+    let mut sig = vec![0u8; bits / 8];
     let mut sign = || ironcrypto::rsa::Pkcs1Sha256::sign(&key, b"message", &mut sig);
     let r = if adx {
         ic_rsa::ct_probes::with_forced_adx(sign)

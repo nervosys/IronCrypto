@@ -14,11 +14,17 @@
 //!
 //! # Which kernel
 //!
-//! Three shapes, chosen by the width `L`, which is public:
+//! Four shapes, chosen by the width `L`, which is public:
 //!
 //! - `L = 16`, the primes of an RSA-2048 key: straight-line product and
 //!   square, no loop at all (`mont_mul_16`, `mont_sqr_16`).
-//! - Other multiples of eight -- 24, 32, 48 and 64 words, every other RSA
+//! - `L = 32`, the primes of an RSA-4096 key and an RSA-2048 modulus: one
+//!   level of Karatsuba over the 16-word product and square without their
+//!   reduction (`mul_16`, `sqr_16`), three of them where schoolbook takes
+//!   four: 768 `mulx` for the product instead of 1024, 408 for the square
+//!   instead of 528. Then the reduction in eight-word blocks below
+//!   (`mont_mul_32`, `mont_sqr_32`; see the section comment above them).
+//! - Other multiples of eight -- 24, 48 and 64 words, every other RSA
 //!   modulus and prime: the product or square in full, then a separate
 //!   reduction, from blocks of eight words held in registers
 //!   (`mont_mul_8n`, `mont_sqr_8n`; see the section comment above them).
@@ -26,9 +32,21 @@
 //! - Other multiples of four: the interleaved kernel described next
 //!   (`mont_mul_adx`), for both product and square.
 //!
-//! All three leave `a * b / 2^(64L)`, below `2n`, in `t[L..=2L]`; [`finish`]
+//! All four leave `a * b / 2^(64L)`, below `2n`, in `t[L..=2L]`; [`finish`]
 //! then makes the one conditional subtraction, with a mask, into the
-//! caller's output. [`select`] is the exponentiation's table read in SSE2.
+//! caller's output. [`select`] is the exponentiation's table read in SSE2,
+//! and [`select_avx2`] the same read in AVX2 for RSA's prime widths.
+//!
+//! # Alignment
+//!
+//! Every `asm!` block starts with `.p2align 6`, and so does the loop over a
+//! block's groups. The kernels are long straight runs of long instructions
+//! (`adox r, [rbx + 136]` is ten bytes), and how they fall across 64-byte
+//! lines moved their speed between builds of the same source: a change to an
+//! unrelated function, or the path the crate was built from, made the
+//! 16-word product run at 40% of its speed in one build and not in the next,
+//! with the same instructions executed. Aligned, each block's layout is its
+//! own and every build has it. The padding runs once a call: a few `nop`s.
 //!
 //! # The interleaved kernel
 //!
@@ -60,15 +78,20 @@
 //! is a base pointer plus a constant or the loop counter. `MULX`, `ADCX`,
 //! `ADOX` and the SSE2 logic have data-independent latency, and the final
 //! subtraction and the table read choose by masking, not by branch or
-//! conditional move. `scripts/check-ct.py` reads the compiled kernels at 1024
-//! and 2048 bits (docs/CONSTANT_TIME.md), and ctgrind runs RSA-2048 signing
+//! conditional move. The sign of Karatsuba's middle term is a mask too: each
+//! difference of halves is taken as its absolute value with `sbb`, and the
+//! product of the two is added or subtracted by XOR with the masks' XOR (see
+//! the section comment above [`kmul_32`]). `scripts/check-ct.py` reads the
+//! compiled kernels at 1024, 1536 and 2048 bits and the table reads
+//! (docs/CONSTANT_TIME.md), and ctgrind runs RSA-2048 and RSA-4096 signing
 //! on this backend under Valgrind (docs/CTGRIND.md).
 //!
 //! # Safety
 //!
 //! [`mont_mul`] and [`mont_sqr`] are the only ways in. They check the CPU
 //! features (once, then cached), that `L` is a non-zero multiple of four,
-//! that every slice is `L` words, and that the scratch buffer holds `2L + 2`,
+//! that every slice is `L` words, and that the scratch buffer holds `2L + 2`
+//! (and [`KARA_T`] for Karatsuba at 32 words, else they take the blocks),
 //! and decline -- return `false` and touch nothing -- otherwise. Given those,
 //! every address the assembly forms is inside one of the slices; the
 //! comments on each block say which.
@@ -129,6 +152,10 @@ pub(crate) fn mont_mul(
         // SAFETY: the features were detected above; `a`, `b` and `n` are 16
         // words and `t` at least 34.
         unsafe { mont_mul_16(t.as_mut_ptr(), a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv) };
+    } else if l == 32 && t.len() >= KARA_T {
+        // SAFETY: the features were detected above; `a`, `b` and `n` are 32
+        // words and `t` at least `KARA_T`.
+        unsafe { mont_mul_32(t.as_mut_ptr(), a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv) };
     } else if l.is_multiple_of(8) {
         // SAFETY: the features were detected above; `a`, `b` and `n` are `l`
         // words, `t` at least `2l + 2`, and `l` a non-zero multiple of eight.
@@ -159,6 +186,9 @@ pub(crate) fn mont_sqr(t: &mut [u64], a: &[u64], n: &[u64], n0inv: u64, out: &mu
     if l == 16 {
         // SAFETY: as in `mont_mul`, with `a` for both operands.
         unsafe { mont_sqr_16(t.as_mut_ptr(), a.as_ptr(), n.as_ptr(), n0inv) };
+    } else if l == 32 && t.len() >= KARA_T {
+        // SAFETY: as in `mont_mul`, with `a` for both operands.
+        unsafe { mont_sqr_32(t.as_mut_ptr(), a.as_ptr(), n.as_ptr(), n0inv) };
     } else if l.is_multiple_of(8) {
         // SAFETY: as in `mont_mul`, with `a` for both operands.
         unsafe { mont_sqr_8n(t.as_mut_ptr(), a.as_ptr(), n.as_ptr(), n0inv, l) };
@@ -173,15 +203,15 @@ pub(crate) fn mont_sqr(t: &mut [u64], a: &[u64], n: &[u64], n0inv: u64, out: &mu
 }
 
 /// The product [`mont_mul`] makes at 2048 bits, after its checks, for
-/// `scripts/ct-audit` to read: the kernels at `L = 32`, then the final
-/// subtraction.
+/// `scripts/ct-audit` to read: one level of Karatsuba over the 16-word
+/// kernels, the reduction in eight-word blocks, then the final subtraction.
 ///
 /// # Safety
 ///
 /// The CPU must support BMI2 and ADX.
 #[cfg(feature = "ct-probes")]
 pub(crate) unsafe fn mont_mul_2048(
-    t: &mut core::mem::MaybeUninit<[u64; 66]>,
+    t: &mut core::mem::MaybeUninit<[u64; KARA_T]>,
     a: &[u64; 32],
     b: &[u64; 32],
     n: &[u64; 32],
@@ -189,12 +219,38 @@ pub(crate) unsafe fn mont_mul_2048(
     out: &mut [u64; 32],
 ) {
     // SAFETY: the caller guarantees the features; `a`, `b` and `n` are 32
-    // words, `t` is 66 = 2 * 32 + 2, and 32 is a multiple of eight. `t` may
+    // words and `t` is `KARA_T`. `t` may be uninitialised: the kernels write
+    // every word of it before reading it.
+    let t = t.as_mut_ptr().cast::<u64>();
+    unsafe {
+        mont_mul_32(t, a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv);
+        finish(out.as_mut_ptr(), t.add(32), *t.add(64), n.as_ptr(), 32);
+    }
+}
+
+/// The product [`mont_mul`] makes at 1536 bits, the primes of RSA-3072, for
+/// `scripts/ct-audit` to read: the eight-word blocks at `L = 24`, then the
+/// final subtraction.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX.
+#[cfg(feature = "ct-probes")]
+pub(crate) unsafe fn mont_mul_1536(
+    t: &mut core::mem::MaybeUninit<[u64; 50]>,
+    a: &[u64; 24],
+    b: &[u64; 24],
+    n: &[u64; 24],
+    n0inv: u64,
+    out: &mut [u64; 24],
+) {
+    // SAFETY: the caller guarantees the features; `a`, `b` and `n` are 24
+    // words, `t` is 50 = 2 * 24 + 2, and 24 is a multiple of eight. `t` may
     // be uninitialised: the kernels write every word of it before reading it.
     let t = t.as_mut_ptr().cast::<u64>();
     unsafe {
-        mont_mul_8n(t, a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv, 32);
-        finish(out.as_mut_ptr(), t.add(32), *t.add(64), n.as_ptr(), 32);
+        mont_mul_8n(t, a.as_ptr(), b.as_ptr(), n.as_ptr(), n0inv, 24);
+        finish(out.as_mut_ptr(), t.add(24), *t.add(48), n.as_ptr(), 24);
     }
 }
 
@@ -246,14 +302,15 @@ pub(crate) unsafe fn mont_sqr_1024(
 }
 
 /// The square [`mont_sqr`] makes at 2048 bits, after its checks, for
-/// `scripts/ct-audit` to read.
+/// `scripts/ct-audit` to read: Karatsuba over the 16-word square, then as
+/// the product.
 ///
 /// # Safety
 ///
 /// The CPU must support BMI2 and ADX.
 #[cfg(feature = "ct-probes")]
 pub(crate) unsafe fn mont_sqr_2048(
-    t: &mut core::mem::MaybeUninit<[u64; 66]>,
+    t: &mut core::mem::MaybeUninit<[u64; KARA_T]>,
     a: &[u64; 32],
     n: &[u64; 32],
     n0inv: u64,
@@ -262,43 +319,85 @@ pub(crate) unsafe fn mont_sqr_2048(
     // SAFETY: as in `mont_mul_2048`.
     let t = t.as_mut_ptr().cast::<u64>();
     unsafe {
-        mont_sqr_8n(t, a.as_ptr(), n.as_ptr(), n0inv, 32);
+        mont_sqr_32(t, a.as_ptr(), n.as_ptr(), n0inv);
         finish(out.as_mut_ptr(), t.add(32), *t.add(64), n.as_ptr(), 32);
     }
 }
 
-/// The masked scan of `uint::select`: `out[..limbs]` = the OR over the
-/// sixteen entries of `table` of each entry's low `limbs` words ANDed with
-/// its mask, where `masks` are all ones for the entry wanted and zero for
-/// the rest. Two words at a time, in SSE2 registers: every entry is read at
-/// every position, at addresses that depend only on the position.
+/// The square [`mont_sqr`] makes at 1536 bits, for `scripts/ct-audit` to
+/// read: the eight-word blocks' cross products, diagonal and reduction.
+///
+/// # Safety
+///
+/// The CPU must support BMI2 and ADX.
+#[cfg(feature = "ct-probes")]
+pub(crate) unsafe fn mont_sqr_1536(
+    t: &mut core::mem::MaybeUninit<[u64; 50]>,
+    a: &[u64; 24],
+    n: &[u64; 24],
+    n0inv: u64,
+    out: &mut [u64; 24],
+) {
+    // SAFETY: as in `mont_mul_1536`.
+    let t = t.as_mut_ptr().cast::<u64>();
+    unsafe {
+        mont_sqr_8n(t, a.as_ptr(), n.as_ptr(), n0inv, 24);
+        finish(out.as_mut_ptr(), t.add(24), *t.add(48), n.as_ptr(), 24);
+    }
+}
+
+/// The masked scan of `uint::select`: `out[..limbs]` = the OR over the `N`
+/// entries of `table`, 16 or 32, of each entry's low `limbs` words ANDed
+/// with its mask, where `masks` are all ones for the entry wanted and zero
+/// for the rest. Two words at a time, in SSE2 registers: every entry is read
+/// at every position, at addresses that depend only on the position.
 ///
 /// Returns `false` without touching anything when `limbs` is zero, odd or
-/// above the capacity; the caller then scans in Rust.
-pub(crate) fn select(
-    table: &[super::Limbs; 16],
+/// above the capacity, or `N` is neither 16 nor 32; the caller then scans in
+/// Rust.
+pub(crate) fn select<const N: usize>(
+    table: &[super::Limbs; N],
     limbs: usize,
-    masks: &[u64; 16],
+    masks: &[u64; N],
     out: &mut super::Limbs,
 ) -> bool {
     if limbs == 0 || !limbs.is_multiple_of(2) || limbs > super::MAX_LIMBS {
         return false;
     }
+    if N != 16 && N != 32 {
+        return false;
+    }
     // Each mask in both halves of a 16-byte lane, aligned for `pand`.
     #[repr(C, align(16))]
-    struct Lanes([u64; 32]);
-    let mut lanes = Lanes([0; 32]);
-    for (pair, &mask) in lanes.0.chunks_exact_mut(2).zip(masks) {
-        pair[0] = mask;
-        pair[1] = mask;
+    struct Lanes<const N: usize>([[u64; 2]; N]);
+    let mut lanes = Lanes([[0u64; 2]; N]);
+    for (pair, &mask) in lanes.0.iter_mut().zip(masks) {
+        *pair = [mask; 2];
     }
     let count = (limbs / 2).wrapping_neg();
+    if N == 32 {
+        // SAFETY: as below, for 32 entries: iteration `j` reads words
+        // `2j..2j + 2` of entry `k` at `table + 512k + 16j`, `k < 32`, the
+        // second sixteen through r8 = `table + 8192 + 16j`, and their masks
+        // at `lanes + 16k`, all of which are in `lanes`.
+        unsafe {
+            select32(
+                table.as_ptr().cast(),
+                lanes.0.as_ptr().cast(),
+                out.as_mut_ptr(),
+                count,
+            )
+        };
+        ic_core::Zeroize::zeroize(lanes.0.as_flattened_mut());
+        return true;
+    }
     // SAFETY: SSE2 is part of x86-64. Iteration `j` of the loop reads words
     // `2j..2j + 2` of each entry, at `table + 512k + 16j` for entry `k`, and
     // writes the same two words of `out`, for `j < limbs / 2 <= 32`: all in
     // bounds. The masks are read from `lanes`, 16-byte aligned.
     unsafe {
         asm!(
+            ".p2align 6",
             "2:",
             "pxor xmm0, xmm0",
             "movdqu xmm1, xmmword ptr [rdi]",
@@ -366,8 +465,345 @@ pub(crate) fn select(
         );
     }
     // Which mask was set is the secret digit.
-    ic_core::Zeroize::zeroize(&mut lanes.0);
+    ic_core::Zeroize::zeroize(lanes.0.as_flattened_mut());
     true
+}
+
+/// Whether this CPU has AVX2, asked once. Without `std` there is no
+/// detection, and [`select`]'s SSE2 scan is the only one.
+pub(crate) fn avx2() -> bool {
+    #[cfg(feature = "std")]
+    {
+        use core::sync::atomic::{AtomicU8, Ordering};
+        // 0 not yet asked, 1 yes, 2 no.
+        static CACHED: AtomicU8 = AtomicU8::new(0);
+        match CACHED.load(Ordering::Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let have = std::is_x86_feature_detected!("avx2");
+                CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
+                have
+            }
+        }
+    }
+    #[cfg(not(feature = "std"))]
+    false
+}
+
+/// [`select`] in AVX2 registers, for tables of 16 or 32 entries at 16, 24
+/// or 32 words, the widths of RSA's primes: the same masked scan, every word of every entry read, but entry
+/// by entry rather than position by position. The whole output stays in
+/// four, six or eight `ymm` accumulators, and each entry is read as consecutive
+/// 32-byte loads with its mask broadcast once. Reading every entry at one
+/// position after another, as the SSE2 scan does, puts sixteen or 32 loads
+/// 512 bytes apart in a row, all at the same offset in their cache lines.
+///
+/// Returns `false` without touching anything when the CPU lacks AVX2 or the
+/// shape is not one it takes; the caller then uses [`select`].
+pub(crate) fn select_avx2<const N: usize>(
+    table: &[super::Limbs; N],
+    limbs: usize,
+    masks: &[u64; N],
+    out: &mut super::Limbs,
+) -> bool {
+    if !matches!(limbs, 16 | 24 | 32) || (N != 16 && N != 32) || !avx2() {
+        return false;
+    }
+    // SAFETY: AVX2 was detected; the shape was checked above.
+    unsafe { select_avx2_unchecked(table, limbs, masks, out) };
+    true
+}
+
+/// [`select_avx2`] after its checks.
+///
+/// # Safety
+///
+/// The CPU must support AVX2; `N` must be 16 or 32 and `limbs` 16, 24 or
+/// 32.
+pub(crate) unsafe fn select_avx2_unchecked<const N: usize>(
+    table: &[super::Limbs; N],
+    limbs: usize,
+    masks: &[u64; N],
+    out: &mut super::Limbs,
+) {
+    let count = N.wrapping_neg();
+    // SAFETY: as the caller guarantees. Iteration `k` of the loop reads words
+    // `0..limbs` of entry `k`, at `table + 512k`, and mask `k`; the end
+    // writes `out[0..limbs]`. All in bounds: `k < N`, `limbs <= 32`.
+    unsafe {
+        let (t, m, o) = (table.as_ptr().cast(), masks.as_ptr(), out.as_mut_ptr());
+        match limbs {
+            32 => select_avx2_32w(t, m, o, count),
+            24 => select_avx2_24w(t, m, o, count),
+            _ => select_avx2_16w(t, m, o, count),
+        }
+    }
+}
+
+/// Four words of an entry at `[rdi + o]`, masked by ymm8, into `acc`.
+macro_rules! vrow {
+    ($o:literal, $acc:literal) => {
+        concat!(
+            "vpand ymm9, ymm8, ymmword ptr [rdi + ",
+            $o,
+            "]\n",
+            "vpor ",
+            $acc,
+            ", ",
+            $acc,
+            ", ymm9\n",
+        )
+    };
+}
+
+/// The loop over the entries, around `body`: the mask of entry `k`
+/// broadcast into ymm8, `body`, then on to the next entry and mask. The
+/// count in rcx runs from `-N` up to zero, stepped by `lea` and tested by
+/// `jrcxz`.
+macro_rules! vrows {
+    ($body:expr) => {
+        concat!(
+            "2:\n",
+            "vpbroadcastq ymm8, qword ptr [rsi]\n",
+            $body,
+            "lea rdi, [rdi + 512]\n",
+            "lea rsi, [rsi + 8]\n",
+            "lea rcx, [rcx + 1]\n",
+            "jrcxz 3f\n",
+            "jmp 2b\n",
+            "3:\n",
+        )
+    };
+}
+
+/// The AVX2 table read at 16 words: four accumulators.
+///
+/// # Safety
+///
+/// AVX2. `table` valid for reading `-count` entries of
+/// [`super::MAX_LIMBS`] words, `masks` `-count` words, `out` for writing 16.
+#[target_feature(enable = "avx2")]
+unsafe fn select_avx2_16w(table: *const u64, masks: *const u64, out: *mut u64, count: usize) {
+    // SAFETY: as the caller guarantees.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            "vpxor xmm0, xmm0, xmm0",
+            "vpxor xmm1, xmm1, xmm1",
+            "vpxor xmm2, xmm2, xmm2",
+            "vpxor xmm3, xmm3, xmm3",
+            vrows!(concat!(
+                vrow!("0", "ymm0"),
+                vrow!("32", "ymm1"),
+                vrow!("64", "ymm2"),
+                vrow!("96", "ymm3"),
+            )),
+            "vmovdqu ymmword ptr [rdx], ymm0",
+            "vmovdqu ymmword ptr [rdx + 32], ymm1",
+            "vmovdqu ymmword ptr [rdx + 64], ymm2",
+            "vmovdqu ymmword ptr [rdx + 96], ymm3",
+            "vzeroupper",
+            inout("rdi") table => _,
+            inout("rsi") masks => _,
+            in("rdx") out,
+            inout("rcx") count => _,
+            out("ymm0") _,
+            out("ymm1") _,
+            out("ymm2") _,
+            out("ymm3") _,
+            out("ymm8") _,
+            out("ymm9") _,
+            options(nostack),
+        );
+    }
+}
+
+/// The AVX2 table read at 24 words: six accumulators.
+///
+/// # Safety
+///
+/// As for [`select_avx2_16w`], with `out` valid for writing 24 words.
+#[target_feature(enable = "avx2")]
+unsafe fn select_avx2_24w(table: *const u64, masks: *const u64, out: *mut u64, count: usize) {
+    // SAFETY: as the caller guarantees.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            "vpxor xmm0, xmm0, xmm0",
+            "vpxor xmm1, xmm1, xmm1",
+            "vpxor xmm2, xmm2, xmm2",
+            "vpxor xmm3, xmm3, xmm3",
+            "vpxor xmm4, xmm4, xmm4",
+            "vpxor xmm5, xmm5, xmm5",
+            vrows!(concat!(
+                vrow!("0", "ymm0"),
+                vrow!("32", "ymm1"),
+                vrow!("64", "ymm2"),
+                vrow!("96", "ymm3"),
+                vrow!("128", "ymm4"),
+                vrow!("160", "ymm5"),
+            )),
+            "vmovdqu ymmword ptr [rdx], ymm0",
+            "vmovdqu ymmword ptr [rdx + 32], ymm1",
+            "vmovdqu ymmword ptr [rdx + 64], ymm2",
+            "vmovdqu ymmword ptr [rdx + 96], ymm3",
+            "vmovdqu ymmword ptr [rdx + 128], ymm4",
+            "vmovdqu ymmword ptr [rdx + 160], ymm5",
+            "vzeroupper",
+            inout("rdi") table => _,
+            inout("rsi") masks => _,
+            in("rdx") out,
+            inout("rcx") count => _,
+            out("ymm0") _,
+            out("ymm1") _,
+            out("ymm2") _,
+            out("ymm3") _,
+            out("ymm4") _,
+            out("ymm5") _,
+            out("ymm8") _,
+            out("ymm9") _,
+            options(nostack),
+        );
+    }
+}
+
+/// The AVX2 table read at 32 words: eight accumulators.
+///
+/// # Safety
+///
+/// As for [`select_avx2_16w`], with `out` valid for writing 32 words.
+#[target_feature(enable = "avx2")]
+unsafe fn select_avx2_32w(table: *const u64, masks: *const u64, out: *mut u64, count: usize) {
+    // SAFETY: as the caller guarantees.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            "vpxor xmm0, xmm0, xmm0",
+            "vpxor xmm1, xmm1, xmm1",
+            "vpxor xmm2, xmm2, xmm2",
+            "vpxor xmm3, xmm3, xmm3",
+            "vpxor xmm4, xmm4, xmm4",
+            "vpxor xmm5, xmm5, xmm5",
+            "vpxor xmm6, xmm6, xmm6",
+            "vpxor xmm7, xmm7, xmm7",
+            vrows!(concat!(
+                vrow!("0", "ymm0"),
+                vrow!("32", "ymm1"),
+                vrow!("64", "ymm2"),
+                vrow!("96", "ymm3"),
+                vrow!("128", "ymm4"),
+                vrow!("160", "ymm5"),
+                vrow!("192", "ymm6"),
+                vrow!("224", "ymm7"),
+            )),
+            "vmovdqu ymmword ptr [rdx], ymm0",
+            "vmovdqu ymmword ptr [rdx + 32], ymm1",
+            "vmovdqu ymmword ptr [rdx + 64], ymm2",
+            "vmovdqu ymmword ptr [rdx + 96], ymm3",
+            "vmovdqu ymmword ptr [rdx + 128], ymm4",
+            "vmovdqu ymmword ptr [rdx + 160], ymm5",
+            "vmovdqu ymmword ptr [rdx + 192], ymm6",
+            "vmovdqu ymmword ptr [rdx + 224], ymm7",
+            "vzeroupper",
+            inout("rdi") table => _,
+            inout("rsi") masks => _,
+            in("rdx") out,
+            inout("rcx") count => _,
+            out("ymm0") _,
+            out("ymm1") _,
+            out("ymm2") _,
+            out("ymm3") _,
+            out("ymm4") _,
+            out("ymm5") _,
+            out("ymm6") _,
+            out("ymm7") _,
+            out("ymm8") _,
+            out("ymm9") _,
+            options(nostack),
+        );
+    }
+}
+
+/// One entry of the table read: two words at `[t + to]`, masked by the lane
+/// at `[m + mo]`, ORed into xmm0.
+macro_rules! sel_entry {
+    ($t:literal, $to:literal, $m:literal, $mo:literal) => {
+        concat!(
+            "movdqu xmm1, xmmword ptr [",
+            $t,
+            " + ",
+            $to,
+            "]\n",
+            "pand xmm1, xmmword ptr [",
+            $m,
+            " + ",
+            $mo,
+            "]\n",
+            "por xmm0, xmm1\n",
+        )
+    };
+}
+
+/// Sixteen entries, 512 bytes apart, from `t`, their masks from `m`.
+macro_rules! sel_16 {
+    ($t:literal, $m:literal) => {
+        concat!(
+            sel_entry!($t, "0", $m, "0"),
+            sel_entry!($t, "512", $m, "16"),
+            sel_entry!($t, "1024", $m, "32"),
+            sel_entry!($t, "1536", $m, "48"),
+            sel_entry!($t, "2048", $m, "64"),
+            sel_entry!($t, "2560", $m, "80"),
+            sel_entry!($t, "3072", $m, "96"),
+            sel_entry!($t, "3584", $m, "112"),
+            sel_entry!($t, "4096", $m, "128"),
+            sel_entry!($t, "4608", $m, "144"),
+            sel_entry!($t, "5120", $m, "160"),
+            sel_entry!($t, "5632", $m, "176"),
+            sel_entry!($t, "6144", $m, "192"),
+            sel_entry!($t, "6656", $m, "208"),
+            sel_entry!($t, "7168", $m, "224"),
+            sel_entry!($t, "7680", $m, "240"),
+        )
+    };
+}
+
+/// [`select`]'s scan for a table of 32 entries: the same as for sixteen,
+/// with the second sixteen entries 8192 bytes on and their masks 256.
+///
+/// # Safety
+///
+/// SSE2. `table` valid for reading 32 entries of [`super::MAX_LIMBS`] words,
+/// `lanes` 64 words and 16-byte aligned, `out` for writing `-count * 2`
+/// words; `count` the negated number of pairs of words.
+unsafe fn select32(table: *const u64, lanes: *const u64, out: *mut u64, count: usize) {
+    // SAFETY: as the caller guarantees.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            "2:",
+            "pxor xmm0, xmm0",
+            sel_16!("rdi", "rsi"),
+            "lea r8, [rdi + 8192]",
+            sel_16!("r8", "rsi + 256"),
+            "movdqu xmmword ptr [rdx], xmm0",
+            "lea rdi, [rdi + 16]",
+            "lea rdx, [rdx + 16]",
+            "lea rcx, [rcx + 1]",
+            "jrcxz 3f",
+            "jmp 2b",
+            "3:",
+            inout("rdi") table => _,
+            in("rsi") lanes,
+            inout("rdx") out => _,
+            inout("rcx") count => _,
+            out("r8") _,
+            out("xmm0") _,
+            out("xmm1") _,
+            options(nostack),
+        );
+    }
 }
 
 /// `out = r - n` if `top` is set or `r >= n`, else `r`, over `l` words: the
@@ -391,6 +827,7 @@ unsafe fn finish(out: *mut u64, r: *const u64, top: u64, n: *const u64, l: usize
     // reads and writes `out[0..l]` again.
     unsafe {
         asm!(
+            ".p2align 6",
             "mov r8, rsi",
             "mov r9, rdx",
             "mov r10, rcx",
@@ -499,6 +936,7 @@ unsafe fn mont_mul_adx(
     // the flags are clobbered by default.
     unsafe {
         asm!(
+            ".p2align 6",
             // Outer loop: one row per word of `b`.
             "2:",
             "mov rdx, [{b}]",
@@ -768,6 +1206,7 @@ macro_rules! groups {
     ($m:ident, $r0:literal, $r1:literal, $r2:literal, $r3:literal,
      $r4:literal, $r5:literal, $r6:literal, $r7:literal) => {
         concat!(
+            ".p2align 6\n",
             "2:\n",
             "test rbp, rbp\n",
             "jz 3f\n",
@@ -1039,6 +1478,7 @@ macro_rules! mul_block_fn {
             // written is declared.
             unsafe {
                 asm!(
+                    ".p2align 6",
                     "push rbx",
                     "push rbp",
                     "push rdx",
@@ -1112,6 +1552,7 @@ macro_rules! sqr_block_fn {
             // `z[8g + 7..8g + 15]`.
             unsafe {
                 asm!(
+                    ".p2align 6",
                     "push rbx",
                     "push rbp",
                     "push rdx",
@@ -1237,6 +1678,7 @@ unsafe fn diag(t: *mut u64, a: *const u64, g: usize) {
     // `t[8j..8j + 8]`, for `j < 2g`.
     unsafe {
         asm!(
+            ".p2align 6",
             "xor eax, eax",
             "2:",
             diag_word!("0", "0", "8"),
@@ -1283,6 +1725,7 @@ unsafe fn redc_block(z: *mut u64, n: *const u64, n0inv: u64, g: usize, carry: u6
     // 16]`. The carry in is pushed and read back from the top of the stack.
     unsafe {
         asm!(
+            ".p2align 6",
             "push rbx",
             "push rbp",
             "push rdx",
@@ -1848,6 +2291,159 @@ macro_rules! zdiag_reg {
     };
 }
 
+/// The product `a * b` at 16 words into the 32 columns at rbx, written
+/// without reading: `a` in rsi, `b` in rdi, rbp zero. [`mont_mul_16`]
+/// reduces after it; [`mul_16`] stops there.
+macro_rules! zmul16 {
+    () => {
+        concat!(
+            // b[0..8] * a into columns 0..23, written without reading.
+            "xor r8d, r8d\n",
+            "xor r9d, r9d\n",
+            "xor r10d, r10d\n",
+            "xor r11d, r11d\n",
+            "xor r12d, r12d\n",
+            "xor r13d, r13d\n",
+            "xor r14d, r14d\n",
+            "xor r15d, r15d\n",
+            zgroup!(
+                fresh, "rsi", "rdi", "rbx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+            ),
+            zgroup!(
+                fresh, "rsi + 64", "rdi", "rbx + 64", "r8", "r9", "r10", "r11", "r12", "r13",
+                "r14", "r15"
+            ),
+            zstore!(
+                "rbx + 128",
+                "r8",
+                "r9",
+                "r10",
+                "r11",
+                "r12",
+                "r13",
+                "r14",
+                "r15"
+            ),
+            // b[8..16] * a added into columns 8..31.
+            "xor r8d, r8d\n",
+            "xor r9d, r9d\n",
+            "xor r10d, r10d\n",
+            "xor r11d, r11d\n",
+            "xor r12d, r12d\n",
+            "xor r13d, r13d\n",
+            "xor r14d, r14d\n",
+            "xor r15d, r15d\n",
+            zgroup!(
+                acc, "rsi", "rdi + 64", "rbx + 64", "r8", "r9", "r10", "r11", "r12", "r13", "r14",
+                "r15"
+            ),
+            zgroup!(
+                acc,
+                "rsi + 64",
+                "rdi + 64",
+                "rbx + 128",
+                "r8",
+                "r9",
+                "r10",
+                "r11",
+                "r12",
+                "r13",
+                "r14",
+                "r15"
+            ),
+            zstore!(
+                "rbx + 192",
+                "r8",
+                "r9",
+                "r10",
+                "r11",
+                "r12",
+                "r13",
+                "r14",
+                "r15"
+            ),
+        )
+    };
+}
+
+/// The square of the 16 words at rdi into the 32 columns at rbx, written
+/// without reading, rbp zero; clobbers rsi. [`mont_sqr_16`] reduces after
+/// it; [`sqr_16`] stops there.
+macro_rules! zsqr16 {
+    () => {
+        concat!(
+            "mov qword ptr [rbx], rbp\n",
+            // The triangle of a[0..8], from column 1, written without
+            // reading. Step one: a[0] * a[1], into column 1 and r9.
+            "xor r8d, r8d\n",
+            "xor r9d, r9d\n",
+            "xor r10d, r10d\n",
+            "xor r11d, r11d\n",
+            "xor r12d, r12d\n",
+            "xor r13d, r13d\n",
+            "xor r14d, r14d\n",
+            "xor r15d, r15d\n",
+            "mov rdx, qword ptr [rdi + 8]\n",
+            "mulx r9, rax, qword ptr [rdi]\n",
+            "mov qword ptr [rbx + 8], rax\n",
+            ztriangle!(fresh, "rdi", "rbx + 8"),
+            // a[0..8] * a[8..16], columns 8 to 15 out, 16 to 23 stored.
+            zgroup!(
+                fresh, "rdi + 64", "rdi", "rbx + 64", "r15", "r8", "r9", "r10", "r11", "r12",
+                "r13", "r14"
+            ),
+            zstore!(
+                "rbx + 128",
+                "r15",
+                "r8",
+                "r9",
+                "r10",
+                "r11",
+                "r12",
+                "r13",
+                "r14"
+            ),
+            // The triangle of a[8..16], added from column 17. Step one: the
+            // window is empty, so the low word and the column's value are
+            // the whole of column 17, and the high word all of 18.
+            "xor r8d, r8d\n",
+            "xor r9d, r9d\n",
+            "xor r10d, r10d\n",
+            "xor r11d, r11d\n",
+            "xor r12d, r12d\n",
+            "xor r13d, r13d\n",
+            "xor r14d, r14d\n",
+            "xor r15d, r15d\n",
+            "mov rdx, qword ptr [rdi + 72]\n",
+            "xor eax, eax\n",
+            "mulx r9, rax, qword ptr [rdi + 64]\n",
+            "adox rax, qword ptr [rbx + 136]\n",
+            "mov qword ptr [rbx + 136], rax\n",
+            "adox r9, rbp\n",
+            ztriangle!(acc, "rdi + 64", "rbx + 136"),
+            // Columns 24 to 31 are in r15, r8 .. r14. Double every column and
+            // add the squares, from column 0.
+            "xor eax, eax\n",
+            zdiag_mem!("0", "0", "8"),
+            zdiag_mem!("8", "16", "24"),
+            zdiag_mem!("16", "32", "40"),
+            zdiag_mem!("24", "48", "56"),
+            zdiag_mem!("32", "64", "72"),
+            zdiag_mem!("40", "80", "88"),
+            zdiag_mem!("48", "96", "104"),
+            zdiag_mem!("56", "112", "120"),
+            zdiag_mem!("64", "128", "136"),
+            zdiag_mem!("72", "144", "152"),
+            zdiag_mem!("80", "160", "168"),
+            zdiag_mem!("88", "176", "184"),
+            zdiag_reg!("96", "192", "200", "r15", "r8"),
+            zdiag_reg!("104", "208", "216", "r9", "r10"),
+            zdiag_reg!("112", "224", "232", "r11", "r12"),
+            zdiag_reg!("120", "240", "248", "r13", "r14"),
+        )
+    };
+}
+
 /// The Montgomery product at 16 words, straight-line: `t[0..32] = a * b`,
 /// then reduced; the result in `t[16..=32]`, as [`mont_mul_8n`] leaves it.
 ///
@@ -1862,36 +2458,14 @@ unsafe fn mont_mul_16(t: *mut u64, a: *const u64, b: *const u64, n: *const u64, 
     // two slots popped.
     unsafe {
         asm!(
+            ".p2align 6",
             "push rbx",
             "push rbp",
             "push rdx",
             "push rcx",
             "mov rbx, rax",
             "xor ebp, ebp",
-            // b[0..8] * a into columns 0..23, written without reading.
-            "xor r8d, r8d",
-            "xor r9d, r9d",
-            "xor r10d, r10d",
-            "xor r11d, r11d",
-            "xor r12d, r12d",
-            "xor r13d, r13d",
-            "xor r14d, r14d",
-            "xor r15d, r15d",
-            zgroup!(fresh, "rsi", "rdi", "rbx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"),
-            zgroup!(fresh, "rsi + 64", "rdi", "rbx + 64", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"),
-            zstore!("rbx + 128", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"),
-            // b[8..16] * a added into columns 8..31.
-            "xor r8d, r8d",
-            "xor r9d, r9d",
-            "xor r10d, r10d",
-            "xor r11d, r11d",
-            "xor r12d, r12d",
-            "xor r13d, r13d",
-            "xor r14d, r14d",
-            "xor r15d, r15d",
-            zgroup!(acc, "rsi", "rdi + 64", "rbx + 64", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"),
-            zgroup!(acc, "rsi + 64", "rdi + 64", "rbx + 128", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"),
-            zstore!("rbx + 192", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"),
+            zmul16!(),
             zredc!(),
             "pop rcx",
             "pop rdx",
@@ -1926,67 +2500,14 @@ unsafe fn mont_sqr_16(t: *mut u64, a: *const u64, n: *const u64, n0inv: u64) {
     // SAFETY: as in `mont_mul_16`.
     unsafe {
         asm!(
+            ".p2align 6",
             "push rbx",
             "push rbp",
             "push rsi",
             "push rcx",
             "mov rbx, rax",
             "xor ebp, ebp",
-            "mov qword ptr [rbx], rbp",
-            // The triangle of a[0..8], from column 1, written without
-            // reading. Step one: a[0] * a[1], into column 1 and r9.
-            "xor r8d, r8d",
-            "xor r9d, r9d",
-            "xor r10d, r10d",
-            "xor r11d, r11d",
-            "xor r12d, r12d",
-            "xor r13d, r13d",
-            "xor r14d, r14d",
-            "xor r15d, r15d",
-            "mov rdx, qword ptr [rdi + 8]",
-            "mulx r9, rax, qword ptr [rdi]",
-            "mov qword ptr [rbx + 8], rax",
-            ztriangle!(fresh, "rdi", "rbx + 8"),
-            // a[0..8] * a[8..16], columns 8 to 15 out, 16 to 23 stored.
-            zgroup!(fresh, "rdi + 64", "rdi", "rbx + 64", "r15", "r8", "r9", "r10", "r11", "r12", "r13", "r14"),
-            zstore!("rbx + 128", "r15", "r8", "r9", "r10", "r11", "r12", "r13", "r14"),
-            // The triangle of a[8..16], added from column 17. Step one: the
-            // window is empty, so the low word and the column's value are
-            // the whole of column 17, and the high word all of 18.
-            "xor r8d, r8d",
-            "xor r9d, r9d",
-            "xor r10d, r10d",
-            "xor r11d, r11d",
-            "xor r12d, r12d",
-            "xor r13d, r13d",
-            "xor r14d, r14d",
-            "xor r15d, r15d",
-            "mov rdx, qword ptr [rdi + 72]",
-            "xor eax, eax",
-            "mulx r9, rax, qword ptr [rdi + 64]",
-            "adox rax, qword ptr [rbx + 136]",
-            "mov qword ptr [rbx + 136], rax",
-            "adox r9, rbp",
-            ztriangle!(acc, "rdi + 64", "rbx + 136"),
-            // Columns 24 to 31 are in r15, r8 .. r14. Double every column and
-            // add the squares, from column 0.
-            "xor eax, eax",
-            zdiag_mem!("0", "0", "8"),
-            zdiag_mem!("8", "16", "24"),
-            zdiag_mem!("16", "32", "40"),
-            zdiag_mem!("24", "48", "56"),
-            zdiag_mem!("32", "64", "72"),
-            zdiag_mem!("40", "80", "88"),
-            zdiag_mem!("48", "96", "104"),
-            zdiag_mem!("56", "112", "120"),
-            zdiag_mem!("64", "128", "136"),
-            zdiag_mem!("72", "144", "152"),
-            zdiag_mem!("80", "160", "168"),
-            zdiag_mem!("88", "176", "184"),
-            zdiag_reg!("96", "192", "200", "r15", "r8"),
-            zdiag_reg!("104", "208", "216", "r9", "r10"),
-            zdiag_reg!("112", "224", "232", "r11", "r12"),
-            zdiag_reg!("120", "240", "248", "r13", "r14"),
+            zsqr16!(),
             zredc!(),
             "pop rcx",
             "pop rsi",
@@ -2006,6 +2527,656 @@ unsafe fn mont_sqr_16(t: *mut u64, a: *const u64, n: *const u64, n0inv: u64) {
             out("r14") _,
             out("r15") _,
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Thirty-two words, one level of Karatsuba: the product and the square at
+// 2048 bits, the primes of an RSA-4096 key.
+//
+// With `a = a1 2^1024 + a0` and `b = b1 2^1024 + b0`, halves of 16 words,
+//
+//     a b = a0 b0 + 2^2048 a1 b1 + 2^1024 (a0 b0 + a1 b1 - (a1 - a0)(b1 - b0)),
+//
+// three 16-word products on the straight-line kernels above instead of four:
+// 768 `mulx` against 1024, and for the square, where the middle term is
+// `(a1 - a0)^2`, 408 against 528. The reduction is `redc_8n`'s, unchanged.
+//
+// The middle term's sign is data. Each difference is taken as its absolute
+// value, `|a1 - a0|`, with a mask that is all ones where `a1 < a0`; the
+// value comes from a borrow and the mask from `sbb`, never a branch. The
+// product of the two absolute values is then subtracted or added according
+// to the XOR of the masks, which `kara_mid` applies as a mask too: XOR the
+// product with it, and add its low bit, so that subtracting is adding the
+// two's complement. For the square the two masks are the same and the term
+// is always subtracted, whatever the sign of `a1 - a0`: `kara_mid_sub`
+// complements it word by word with `not`, which leaves the flags alone.
+//
+// Scratch: the two differences in `t[0..32]` until the low product
+// overwrites them, the middle product in `t[66..98]`, after the `2L + 2`
+// words the reduction uses. The callers' scratch is 130 words.
+//
+// What it saves is less than the count of `mulx` suggests. Each step here is
+// bound by the carry chains, about one `mulx` a cycle, and the Karatsuba
+// square keeps three 16-word diagonals where the blocks have one 32-word
+// diagonal, and adds the differences and the recombination, about 80 cycles.
+// On a Zen 5 the square came out about 4% faster than the blocks' and the
+// product about 6% (`report_kernel_cycles_at_32_words`), the reduction,
+// unchanged, being two thirds of either. The 16-word kernels are separate
+// functions rather than inlined three times each: inlined, the 32-word
+// kernels were slower than the blocks they replace.
+// ---------------------------------------------------------------------------
+
+/// Words of `t` the 32-word kernels need: `2L + 2` and 32 more.
+pub(crate) const KARA_T: usize = 98;
+
+/// One word of a carry chain through rax: `[z + b + o] = [x + b + o] op
+/// [y + b + o]`.
+macro_rules! kword {
+    ($op:literal, $z:literal, $x:literal, $y:literal, $b:literal, $o:literal) => {
+        concat!(
+            "mov rax, qword ptr [",
+            $x,
+            " + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            $op,
+            " rax, qword ptr [",
+            $y,
+            " + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            "mov qword ptr [",
+            $z,
+            " + ",
+            $b,
+            " + ",
+            $o,
+            "], rax\n",
+        )
+    };
+}
+
+/// Eight words of a carry chain from `b`, the first with `first`.
+macro_rules! kword8 {
+    ($first:literal, $op:literal, $z:literal, $x:literal, $y:literal, $b:literal) => {
+        concat!(
+            kword!($first, $z, $x, $y, $b, "0"),
+            kword!($op, $z, $x, $y, $b, "8"),
+            kword!($op, $z, $x, $y, $b, "16"),
+            kword!($op, $z, $x, $y, $b, "24"),
+            kword!($op, $z, $x, $y, $b, "32"),
+            kword!($op, $z, $x, $y, $b, "40"),
+            kword!($op, $z, $x, $y, $b, "48"),
+            kword!($op, $z, $x, $y, $b, "56"),
+        )
+    };
+}
+
+/// The eight words at `[rdi + b]` into r8..r15, each XORed with rcx. The
+/// XORs clear CF; the caller sets it after.
+macro_rules! kload_xor8 {
+    ($b:literal) => {
+        concat!(
+            "mov r8, qword ptr [rdi + ",
+            $b,
+            "]\n",
+            "mov r9, qword ptr [rdi + ",
+            $b,
+            " + 8]\n",
+            "mov r10, qword ptr [rdi + ",
+            $b,
+            " + 16]\n",
+            "mov r11, qword ptr [rdi + ",
+            $b,
+            " + 24]\n",
+            "mov r12, qword ptr [rdi + ",
+            $b,
+            " + 32]\n",
+            "mov r13, qword ptr [rdi + ",
+            $b,
+            " + 40]\n",
+            "mov r14, qword ptr [rdi + ",
+            $b,
+            " + 48]\n",
+            "mov r15, qword ptr [rdi + ",
+            $b,
+            " + 56]\n",
+            "xor r8, rcx\n",
+            "xor r9, rcx\n",
+            "xor r10, rcx\n",
+            "xor r11, rcx\n",
+            "xor r12, rcx\n",
+            "xor r13, rcx\n",
+            "xor r14, rcx\n",
+            "xor r15, rcx\n",
+        )
+    };
+}
+
+/// CF added through r8..r15, stored to `[rdi + b]`.
+macro_rules! kadc_store8 {
+    ($b:literal) => {
+        concat!(
+            "adc r8, 0\n",
+            "adc r9, 0\n",
+            "adc r10, 0\n",
+            "adc r11, 0\n",
+            "adc r12, 0\n",
+            "adc r13, 0\n",
+            "adc r14, 0\n",
+            "adc r15, 0\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            "], r8\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            " + 8], r9\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            " + 16], r10\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            " + 24], r11\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            " + 32], r12\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            " + 40], r13\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            " + 48], r14\n",
+            "mov qword ptr [rdi + ",
+            $b,
+            " + 56], r15\n",
+        )
+    };
+}
+
+/// `z[0..16] = |x - y|` for 16-word `x` and `y`; returns all ones if
+/// `x < y`, else zero.
+///
+/// `x - y` on one borrow chain, the mask from the final borrow, then the
+/// two's complement taken by mask: `(s ^ m) - m`, the XOR in registers and
+/// `-m`, zero or one, carried in from the bottom.
+///
+/// # Safety
+///
+/// `x` and `y` valid for reading 16 words, `z` for writing 16; `z` may
+/// overlap neither.
+unsafe fn abs_diff_16(z: *mut u64, x: *const u64, y: *const u64) -> u64 {
+    let mask: u64;
+    // SAFETY: reads `x[0..16]` and `y[0..16]`, writes and then reads and
+    // writes `z[0..16]`; nothing else.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            kword8!("sub", "sbb", "rdi", "rsi", "rdx", "0"),
+            kword8!("sbb", "sbb", "rdi", "rsi", "rdx", "64"),
+            "sbb rcx, rcx",
+            kload_xor8!("0"),
+            // CF = -m, the low bit of the mask: `neg` sets it when its
+            // operand is non-zero.
+            "mov rax, rcx",
+            "neg rax",
+            kadc_store8!("0"),
+            // The carry, as 0 or all ones, across the XORs of the next eight.
+            "sbb rax, rax",
+            kload_xor8!("64"),
+            "neg rax",
+            kadc_store8!("64"),
+            inout("rdi") z => _,
+            inout("rsi") x => _,
+            inout("rdx") y => _,
+            out("rcx") mask,
+            out("rax") _,
+            out("r8") _,
+            out("r9") _,
+            out("r10") _,
+            out("r11") _,
+            out("r12") _,
+            out("r13") _,
+            out("r14") _,
+            out("r15") _,
+            options(nostack),
+        );
+    }
+    mask
+}
+
+/// One word of the middle sum: `[rsi + b + o] = [rdi + b + o] + [r8 + b +
+/// o]` on the CF chain, plus `[rsi + b + o]` on the OF chain -- as it is
+/// (`keep`), or complemented (`not`, which leaves the flags alone).
+macro_rules! kmid_word {
+    (keep, $b:literal, $o:literal) => {
+        concat!(
+            "mov rdx, qword ptr [rdi + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            "adcx rdx, qword ptr [r8 + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            "adox rdx, qword ptr [rsi + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + ",
+            $o,
+            "], rdx\n",
+        )
+    };
+    (not, $b:literal, $o:literal) => {
+        concat!(
+            "mov rax, qword ptr [rsi + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            "not rax\n",
+            "mov rdx, qword ptr [rdi + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            "adcx rdx, qword ptr [r8 + ",
+            $b,
+            " + ",
+            $o,
+            "]\n",
+            "adox rdx, rax\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + ",
+            $o,
+            "], rdx\n",
+        )
+    };
+}
+
+/// Eight words of the middle sum from `b`.
+macro_rules! kmid8 {
+    ($m:ident, $b:literal) => {
+        concat!(
+            kmid_word!($m, $b, "0"),
+            kmid_word!($m, $b, "8"),
+            kmid_word!($m, $b, "16"),
+            kmid_word!($m, $b, "24"),
+            kmid_word!($m, $b, "32"),
+            kmid_word!($m, $b, "40"),
+            kmid_word!($m, $b, "48"),
+            kmid_word!($m, $b, "56"),
+        )
+    };
+}
+
+/// Eight words at `[rsi + b]` XORed with rcx, in place.
+macro_rules! kxor8 {
+    ($b:literal) => {
+        concat!(
+            "mov rax, qword ptr [rsi + ",
+            $b,
+            "]\n",
+            "mov rdx, qword ptr [rsi + ",
+            $b,
+            " + 8]\n",
+            "xor rax, rcx\n",
+            "xor rdx, rcx\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            "], rax\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + 8], rdx\n",
+            "mov rax, qword ptr [rsi + ",
+            $b,
+            " + 16]\n",
+            "mov rdx, qword ptr [rsi + ",
+            $b,
+            " + 24]\n",
+            "xor rax, rcx\n",
+            "xor rdx, rcx\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + 16], rax\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + 24], rdx\n",
+            "mov rax, qword ptr [rsi + ",
+            $b,
+            " + 32]\n",
+            "mov rdx, qword ptr [rsi + ",
+            $b,
+            " + 40]\n",
+            "xor rax, rcx\n",
+            "xor rdx, rcx\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + 32], rax\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + 40], rdx\n",
+            "mov rax, qword ptr [rsi + ",
+            $b,
+            " + 48]\n",
+            "mov rdx, qword ptr [rsi + ",
+            $b,
+            " + 56]\n",
+            "xor rax, rcx\n",
+            "xor rdx, rcx\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + 48], rax\n",
+            "mov qword ptr [rsi + ",
+            $b,
+            " + 56], rdx\n",
+        )
+    };
+}
+
+/// One word of a carry propagation: `[r9 + o] += CF`, through rax.
+macro_rules! kcarry {
+    ($o:literal) => {
+        concat!(
+            "mov rax, qword ptr [r9 + ",
+            $o,
+            "]\n",
+            "adc rax, 0\n",
+            "mov qword ptr [r9 + ",
+            $o,
+            "], rax\n",
+        )
+    };
+}
+
+/// The end of the recombination, after the middle sum is in `p` with both
+/// carries pending and `rcx` the mask: the top word, then `t[16..48] += p`,
+/// the top word into `t[48]` and the carry on to `t[63]`.
+macro_rules! kmid_tail {
+    () => {
+        concat!(
+            // The top word: both carries, less one if p was subtracted (its
+            // complement added 2^2048 - 1, and the carry in the 1).
+            "mov eax, 0\n",
+            "adcx rax, rax\n",
+            "mov edx, 0\n",
+            "adox rax, rdx\n",
+            "add rcx, rax\n",
+            "lea r9, [rdi + 128]\n",
+            kword8!("add", "adc", "r9", "r9", "rsi", "0"),
+            kword8!("adc", "adc", "r9", "r9", "rsi", "64"),
+            kword8!("adc", "adc", "r9", "r9", "rsi", "128"),
+            kword8!("adc", "adc", "r9", "r9", "rsi", "192"),
+            "mov rax, qword ptr [r9 + 256]\n",
+            "adc rax, rcx\n",
+            "mov qword ptr [r9 + 256], rax\n",
+            kcarry!("264"),
+            kcarry!("272"),
+            kcarry!("280"),
+            kcarry!("288"),
+            kcarry!("296"),
+            kcarry!("304"),
+            kcarry!("312"),
+            kcarry!("320"),
+            kcarry!("328"),
+            kcarry!("336"),
+            kcarry!("344"),
+            kcarry!("352"),
+            kcarry!("360"),
+            kcarry!("368"),
+            kcarry!("376"),
+        )
+    };
+}
+
+/// The Karatsuba recombination at 32 words: with `L = t[0..32]` and
+/// `H = t[32..64]`, the two outer products, and `p[0..32]` the product of
+/// the two absolute differences, `t[16..64] += L + H - p` if `m` is all
+/// ones, `L + H + p` if it is zero. `p` is overwritten.
+///
+/// The middle sum is `L + H + (p ^ m) + (m & 1)`, `L + H` on the CF chain
+/// and the rest on OF, which for `m` all ones is `L + H - p + 2^2048`: the
+/// two's complement. It is below `2^2049`, as `a0 b1 + a1 b0` is: 32 words
+/// and a top bit, which is added at `t[48]`. Nothing carries out of
+/// `t[63]`, since `a b < 2^4096`.
+///
+/// # Safety
+///
+/// BMI2 and ADX; `t` valid for reading and writing 64 words, `p` for 32,
+/// not overlapping; `m` zero or all ones.
+#[target_feature(enable = "bmi2,adx")]
+unsafe fn kara_mid(t: *mut u64, p: *mut u64, m: u64) {
+    // SAFETY: the XOR pass reads and writes `p[0..32]`; the middle sum reads
+    // `t[0..64]` and reads and writes `p[0..32]`; the last pass reads
+    // `p[0..32]` and reads and writes `t[16..64]`.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            kxor8!("0"),
+            kxor8!("64"),
+            kxor8!("128"),
+            kxor8!("192"),
+            // `neg` of zero or one sets CF to it and clears OF.
+            "lea r8, [rdi + 256]",
+            "mov rax, rcx",
+            "and eax, 1",
+            "neg rax",
+            kmid8!(keep, "0"),
+            kmid8!(keep, "64"),
+            kmid8!(keep, "128"),
+            kmid8!(keep, "192"),
+            kmid_tail!(),
+            inout("rdi") t => _,
+            inout("rsi") p => _,
+            inout("rcx") m => _,
+            out("rax") _,
+            out("rdx") _,
+            out("r8") _,
+            out("r9") _,
+            options(nostack),
+        );
+    }
+}
+
+/// [`kara_mid`] with `m` all ones, for the square, where the middle term is
+/// always subtracted: the complement taken word by word with `not`, which
+/// leaves the flags alone, so there is no separate XOR pass.
+///
+/// # Safety
+///
+/// As for [`kara_mid`].
+#[target_feature(enable = "bmi2,adx")]
+unsafe fn kara_mid_sub(t: *mut u64, p: *mut u64) {
+    // SAFETY: as in `kara_mid`, without the XOR pass.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            // CF = 1, the one of the two's complement; OF = 0.
+            "lea r8, [rdi + 256]",
+            "mov rcx, -1",
+            "mov eax, 1",
+            "neg rax",
+            kmid8!(not, "0"),
+            kmid8!(not, "64"),
+            kmid8!(not, "128"),
+            kmid8!(not, "192"),
+            kmid_tail!(),
+            inout("rdi") t => _,
+            inout("rsi") p => _,
+            out("rcx") _,
+            out("rax") _,
+            out("rdx") _,
+            out("r8") _,
+            out("r9") _,
+            options(nostack),
+        );
+    }
+}
+
+/// `z[0..32] = a * b` at 16 words, the product of [`mont_mul_16`] without
+/// its reduction.
+///
+/// # Safety
+///
+/// BMI2 and ADX; `a` and `b` valid for reading 16 words, `z` for writing
+/// 32, overlapping neither.
+#[target_feature(enable = "bmi2,adx")]
+#[inline(never)]
+unsafe fn mul_16(z: *mut u64, a: *const u64, b: *const u64) {
+    // SAFETY: every address is `a` or `b` plus 0 to 120 or `z` plus 0 to
+    // 248; rbx and rbp are restored.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            "push rbx",
+            "push rbp",
+            "mov rbx, rax",
+            "xor ebp, ebp",
+            zmul16!(),
+            "pop rbp",
+            "pop rbx",
+            inout("rax") z => _,
+            inout("rsi") a => _,
+            inout("rdi") b => _,
+            out("rcx") _,
+            out("rdx") _,
+            out("r8") _,
+            out("r9") _,
+            out("r10") _,
+            out("r11") _,
+            out("r12") _,
+            out("r13") _,
+            out("r14") _,
+            out("r15") _,
+        );
+    }
+}
+
+/// `z[0..32] = a^2` at 16 words, the square of [`mont_sqr_16`] without its
+/// reduction.
+///
+/// # Safety
+///
+/// As for [`mul_16`], with `a` for both operands.
+#[target_feature(enable = "bmi2,adx")]
+#[inline(never)]
+unsafe fn sqr_16(z: *mut u64, a: *const u64) {
+    // SAFETY: as in `mul_16`.
+    unsafe {
+        asm!(
+            ".p2align 6",
+            "push rbx",
+            "push rbp",
+            "mov rbx, rax",
+            "xor ebp, ebp",
+            zsqr16!(),
+            "pop rbp",
+            "pop rbx",
+            inout("rax") z => _,
+            inout("rdi") a => _,
+            out("rcx") _,
+            out("rdx") _,
+            out("rsi") _,
+            out("r8") _,
+            out("r9") _,
+            out("r10") _,
+            out("r11") _,
+            out("r12") _,
+            out("r13") _,
+            out("r14") _,
+            out("r15") _,
+        );
+    }
+}
+
+/// The product `a * b` at 32 words by one level of Karatsuba into
+/// `t[0..64]`, using `t[66..98]`: the absolute differences of the halves in
+/// `t[0..32]`, their product in `t[66..98]`, then the outer products over
+/// the differences, and the recombination.
+///
+/// # Safety
+///
+/// BMI2 and ADX; `a` and `b` valid for reading 32 words, `t` for reading
+/// and writing [`KARA_T`], overlapping neither.
+#[target_feature(enable = "bmi2,adx")]
+unsafe fn kmul_32(t: *mut u64, a: *const u64, b: *const u64) {
+    // SAFETY: as the caller guarantees: the differences go to `t[0..32]`,
+    // their product to `t[66..98]`, the outer products to `t[0..64]` after
+    // that product has read the differences; the halves are `a`, `b` plus 0
+    // or 16 words.
+    unsafe {
+        let p = t.add(66);
+        let ma = abs_diff_16(t, a.add(16), a);
+        let mb = abs_diff_16(t.add(16), b.add(16), b);
+        mul_16(p, t, t.add(16));
+        mul_16(t, a, b);
+        mul_16(t.add(32), a.add(16), b.add(16));
+        // (a1 - a0)(b1 - b0) is subtracted when the signs agree.
+        kara_mid(t, p, !(ma ^ mb));
+    }
+}
+
+/// The square `a^2` at 32 words by one level of Karatsuba into `t[0..64]`,
+/// using `t[66..98]`, as [`kmul_32`].
+///
+/// # Safety
+///
+/// As for [`kmul_32`], with `a` for both operands.
+#[target_feature(enable = "bmi2,adx")]
+unsafe fn ksqr_32(t: *mut u64, a: *const u64) {
+    // SAFETY: as in `kmul_32`.
+    unsafe {
+        let p = t.add(66);
+        // The mask is not needed: (a1 - a0)^2 is subtracted either way.
+        let _ = abs_diff_16(t, a.add(16), a);
+        sqr_16(p, t);
+        sqr_16(t, a);
+        sqr_16(t.add(32), a.add(16));
+        kara_mid_sub(t, p);
+    }
+}
+
+/// The Montgomery product at 32 words: [`kmul_32`], then reduced; the result
+/// in `t[32..=64]`, as [`mont_mul_8n`] leaves it.
+///
+/// # Safety
+///
+/// BMI2 and ADX; `a`, `b` and `n` valid for reading 32 words, `t` for
+/// reading and writing [`KARA_T`], `t` overlapping none of them.
+#[target_feature(enable = "bmi2,adx")]
+#[inline(never)]
+unsafe fn mont_mul_32(t: *mut u64, a: *const u64, b: *const u64, n: *const u64, n0inv: u64) {
+    // SAFETY: as the caller guarantees; `t[0..64]` is the product.
+    unsafe {
+        kmul_32(t, a, b);
+        redc_8n(t, n, n0inv, 32);
+    }
+}
+
+/// The Montgomery square at 32 words: [`ksqr_32`], then reduced; the result
+/// in `t[32..=64]`.
+///
+/// # Safety
+///
+/// As for [`mont_mul_32`], with `a` for both operands.
+#[target_feature(enable = "bmi2,adx")]
+#[inline(never)]
+unsafe fn mont_sqr_32(t: *mut u64, a: *const u64, n: *const u64, n0inv: u64) {
+    // SAFETY: as in `mont_mul_32`.
+    unsafe {
+        ksqr_32(t, a);
+        redc_8n(t, n, n0inv, 32);
     }
 }
 
@@ -2111,11 +3282,439 @@ mod tests {
         }
     }
 
-    /// The SSE2 scan against the scan in Rust, for every digit and every
-    /// width it takes, and declining the widths it does not.
+    /// The 32-word Karatsuba product and square against the portable CIOS
+    /// product and square, and against the eight-word block kernels, which
+    /// `mont_mul` and `mont_sqr` take at 32 words when the scratch is too
+    /// short for Karatsuba: hundreds of moduli, and operands whose halves
+    /// compare every way -- equal, high below low, high above low -- so that
+    /// the middle term is subtracted, added, and zero, with carry-heavy
+    /// halves (all ones, a lone top bit, zero) on both sides.
     #[test]
-    fn the_sse2_table_read_matches_the_masked_scan() {
-        let mut table = [[0u64; MAX_LIMBS]; 16];
+    fn the_karatsuba_kernels_match_on_every_middle_term_sign() {
+        if !super::available() {
+            return;
+        }
+        const L: usize = 32;
+        const H: usize = L / 2;
+        let mut s = 0x5DEE_CE66_D1CE_4E5Bu64;
+        let mut next = move || {
+            s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = s;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+        let order = |x: &[u64], y: &[u64]| x.iter().rev().cmp(y.iter().rev());
+        // How many operands had their high half below, equal to and above
+        // their low half.
+        let mut seen = [0usize; 3];
+        for trial in 0..400 {
+            let mut n = [0u64; MAX_LIMBS];
+            for w in n[..L].iter_mut() {
+                *w = next();
+            }
+            match trial % 4 {
+                0 => n[..L].fill(u64::MAX),
+                1 => {
+                    n[..L].fill(0);
+                    n[L - 1] = 1 << 63;
+                }
+                _ => n[L - 1] |= 1 << 63,
+            }
+            n[0] |= 1;
+            let n0inv = super::super::neg_inv(n[0]);
+            // Halves: random, all ones, a lone top bit, zero, one.
+            let mut half = |k: usize| -> [u64; H] {
+                let mut h = [0u64; H];
+                match k {
+                    0 => h.iter_mut().for_each(|w| *w = next()),
+                    1 => h.fill(u64::MAX),
+                    2 => h[H - 1] = 1 << 63,
+                    3 => {}
+                    _ => h[0] = 1,
+                }
+                h
+            };
+            // (low, high) shapes; the second is overwritten below with equal
+            // random halves.
+            let shapes = [
+                (0, 0),
+                (0, 0),
+                (1, 1),
+                (1, 3),
+                (3, 1),
+                (2, 0),
+                (4, 2),
+                (0, 1),
+                (1, 4),
+            ];
+            let mut ops = [[0u64; MAX_LIMBS]; 9];
+            for (op, &(lo, hi)) in ops.iter_mut().zip(&shapes) {
+                op[..H].copy_from_slice(&half(lo));
+                op[H..L].copy_from_slice(&half(hi));
+            }
+            let r = half(0);
+            ops[1][..H].copy_from_slice(&r);
+            ops[1][H..L].copy_from_slice(&r);
+            // Below n, as a Montgomery operand must be: where it is not, the
+            // top word is reduced by n's.
+            for op in ops.iter_mut() {
+                if order(&op[..L], &n[..L]) != core::cmp::Ordering::Less {
+                    op[L - 1] %= n[L - 1];
+                }
+            }
+            for a in &ops {
+                seen[(order(&a[H..L], &a[..H]) as i8 + 1) as usize] += 1;
+                for b in &ops {
+                    let mut t = [0u64; 130];
+                    let mut want = [0u64; MAX_LIMBS];
+                    super::super::cios(&mut t, &a[..L], &b[..L], &n[..L], n0inv, &mut want[..L]);
+                    let mut got = [7u64; MAX_LIMBS];
+                    assert!(super::mont_mul(
+                        &mut t,
+                        &a[..L],
+                        &b[..L],
+                        &n[..L],
+                        n0inv,
+                        &mut got[..L]
+                    ));
+                    assert_eq!(got[..L], want[..L], "trial {trial}: Karatsuba product");
+                    let mut short = [0u64; 2 * L + 2];
+                    let mut blocks = [9u64; MAX_LIMBS];
+                    assert!(super::mont_mul(
+                        &mut short,
+                        &a[..L],
+                        &b[..L],
+                        &n[..L],
+                        n0inv,
+                        &mut blocks[..L]
+                    ));
+                    assert_eq!(blocks[..L], want[..L], "trial {trial}: block product");
+                }
+                let mut t = [0u64; 130];
+                let mut want = [0u64; MAX_LIMBS];
+                super::super::sqr(&mut t, &a[..L], &n[..L], n0inv, &mut want[..L]);
+                let mut got = [7u64; MAX_LIMBS];
+                assert!(super::mont_sqr(
+                    &mut t,
+                    &a[..L],
+                    &n[..L],
+                    n0inv,
+                    &mut got[..L]
+                ));
+                assert_eq!(got[..L], want[..L], "trial {trial}: Karatsuba square");
+                let mut short = [0u64; 2 * L + 2];
+                let mut blocks = [9u64; MAX_LIMBS];
+                assert!(super::mont_sqr(
+                    &mut short,
+                    &a[..L],
+                    &n[..L],
+                    n0inv,
+                    &mut blocks[..L]
+                ));
+                assert_eq!(blocks[..L], want[..L], "trial {trial}: block square");
+            }
+        }
+        // High below low, equal, and above, each hundreds of times.
+        assert!(seen.iter().all(|&c| c >= 250), "{seen:?}");
+    }
+
+    /// The unreduced 32-word Karatsuba product and square against schoolbook
+    /// arithmetic in `u128`, for operands no modulus would allow: every
+    /// half all ones, zero or a lone top bit, in every combination, and
+    /// random ones. With all ones throughout, the middle term's carry runs
+    /// up through every word of the high half.
+    #[test]
+    fn the_unreduced_karatsuba_products_are_exact() {
+        if !super::available() {
+            return;
+        }
+        let mut s = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let schoolbook = |x: &[u64; 32], y: &[u64; 32]| {
+            let mut z = [0u64; 64];
+            for i in 0..32 {
+                let mut c = 0u128;
+                for j in 0..32 {
+                    let v = x[i] as u128 * y[j] as u128 + z[i + j] as u128 + c;
+                    z[i + j] = v as u64;
+                    c = v >> 64;
+                }
+                z[i + 32] = c as u64;
+            }
+            z
+        };
+        let mut half = |k: usize| -> [u64; 16] {
+            let mut h = [0u64; 16];
+            match k {
+                0 => h.fill(u64::MAX),
+                1 => {}
+                2 => h[15] = 1 << 63,
+                3 => h[0] = 1,
+                _ => h.iter_mut().for_each(|w| *w = next()),
+            }
+            h
+        };
+        let mut ops = std::vec::Vec::new();
+        for lo in 0..6 {
+            for hi in 0..6 {
+                let mut x = [0u64; 32];
+                x[..16].copy_from_slice(&half(lo));
+                x[16..].copy_from_slice(&half(hi));
+                ops.push(x);
+            }
+        }
+        for a in &ops {
+            for b in &ops {
+                let mut t = [5u64; 130];
+                // SAFETY: the CPU has the features; `t` is 130 words, at
+                // least `KARA_T`, and distinct from `a` and `b`.
+                unsafe { super::kmul_32(t.as_mut_ptr(), a.as_ptr(), b.as_ptr()) };
+                assert_eq!(t[..64], schoolbook(a, b)[..], "product");
+            }
+            let mut t = [5u64; 130];
+            // SAFETY: as above.
+            unsafe { super::ksqr_32(t.as_mut_ptr(), a.as_ptr()) };
+            assert_eq!(t[..64], schoolbook(a, a)[..], "square");
+        }
+    }
+
+    /// The pieces of the Karatsuba kernels on their own, against schoolbook
+    /// arithmetic in `u128`: the absolute difference and its mask, and the
+    /// 16-word product and square without reduction.
+    #[test]
+    fn the_karatsuba_pieces_are_exact() {
+        if !super::available() {
+            return;
+        }
+        let mut s = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let schoolbook = |x: &[u64; 16], y: &[u64; 16]| {
+            let mut z = [0u64; 32];
+            for i in 0..16 {
+                let mut c = 0u128;
+                for j in 0..16 {
+                    let v = x[i] as u128 * y[j] as u128 + z[i + j] as u128 + c;
+                    z[i + j] = v as u64;
+                    c = v >> 64;
+                }
+                z[i + 16] = c as u64;
+            }
+            z
+        };
+        for trial in 0..2000 {
+            let mut x = [0u64; 16];
+            let mut y = [0u64; 16];
+            for (i, (a, b)) in x.iter_mut().zip(y.iter_mut()).enumerate() {
+                *a = match trial % 7 {
+                    5 => u64::MAX,
+                    6 if i == 15 => 1 << 63,
+                    6 => 0,
+                    _ => next(),
+                };
+                *b = match trial % 5 {
+                    0 => *a,
+                    1 => u64::MAX,
+                    2 if i == 15 => *a,
+                    3 => 0,
+                    _ => next(),
+                };
+            }
+            let lt = x.iter().rev().cmp(y.iter().rev()) == core::cmp::Ordering::Less;
+            let (big, small) = if lt { (&y, &x) } else { (&x, &y) };
+            let mut want = [0u64; 16];
+            let mut borrow = 0u128;
+            for i in 0..16 {
+                let d = (big[i] as u128).wrapping_sub(small[i] as u128 + borrow);
+                want[i] = d as u64;
+                borrow = (d >> 64) & 1;
+            }
+            let mut z = [5u64; 16];
+            // SAFETY: 16 words each, distinct.
+            let m = unsafe { super::abs_diff_16(z.as_mut_ptr(), x.as_ptr(), y.as_ptr()) };
+            assert_eq!(z, want, "trial {trial}: |x - y|");
+            assert_eq!(m, if lt { u64::MAX } else { 0 }, "trial {trial}: mask");
+            let mut got = [3u64; 32];
+            // SAFETY: the CPU has the features; 16 and 32 words, distinct.
+            unsafe { super::mul_16(got.as_mut_ptr(), x.as_ptr(), y.as_ptr()) };
+            assert_eq!(got, schoolbook(&x, &y), "trial {trial}: product");
+            // SAFETY: as above.
+            unsafe { super::sqr_16(got.as_mut_ptr(), x.as_ptr()) };
+            assert_eq!(got, schoolbook(&x, &x), "trial {trial}: square");
+        }
+    }
+
+    /// Where a 2048-bit Montgomery square or product spends its time, in
+    /// `rdtsc` ticks per call, best of many: the Karatsuba kernels against
+    /// the eight-word blocks, each output fed back in as an exponentiation
+    /// does, the two alternated; then the pieces alone; then the table reads.
+    /// Pin it to one core on a quiet machine: the ticks are the TSC's, not
+    /// the core clock's.
+    #[test]
+    #[ignore = "timing; run manually with --release"]
+    fn report_kernel_cycles_at_32_words() {
+        if !super::available() {
+            return;
+        }
+        use core::arch::x86_64::_rdtsc;
+        const L: usize = 32;
+        let mut n = [0u64; L];
+        let mut x = 0x0123_4567_89AB_CDEFu64;
+        for w in n.iter_mut() {
+            x = x.wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(17) ^ 0xD1B5_4A32_D192_ED03;
+            *w = x;
+        }
+        n[0] |= 1;
+        n[L - 1] |= 1 << 63;
+        let n0inv = super::super::neg_inv(n[0]);
+        let mut a = n;
+        a[L - 1] >>= 1;
+        let mut b = a;
+        b[3] ^= 0x55;
+        let mut t = [0u64; 130];
+        let cycles = |f: &mut dyn FnMut()| {
+            let mut best = u64::MAX;
+            for _ in 0..300 {
+                // SAFETY: `rdtsc` is on every x86-64 CPU.
+                let t0 = unsafe { _rdtsc() };
+                for _ in 0..100 {
+                    f();
+                }
+                // SAFETY: as above.
+                let t1 = unsafe { _rdtsc() };
+                best = best.min(t1 - t0);
+            }
+            best as f64 / 100.0
+        };
+        // `mont_sqr` and `mont_mul` take the eight-word blocks at 32 words
+        // when the scratch is too short for Karatsuba.
+        let mut best = [f64::MAX; 4];
+        for _ in 0..5 {
+            for (k, w) in [(0, t.len()), (1, 2 * L + 2)] {
+                let mut x = a;
+                let sq = cycles(&mut || {
+                    let mut o = [0u64; L];
+                    let _ = super::mont_sqr(&mut t[..w], &x, &n, n0inv, &mut o);
+                    x = o;
+                });
+                let mut x = a;
+                let mul = cycles(&mut || {
+                    let mut o = [0u64; L];
+                    let _ = super::mont_mul(&mut t[..w], &x, &b, &n, n0inv, &mut o);
+                    x = o;
+                });
+                best[k] = best[k].min(sq);
+                best[2 + k] = best[2 + k].min(mul);
+            }
+        }
+        let labels = [
+            "square, Karatsuba",
+            "square, blocks",
+            "product, Karatsuba",
+            "product, blocks",
+        ];
+        for (label, c) in labels.iter().zip(best) {
+            std::println!("{label:28} {c:8.0}");
+        }
+        let tp = t.as_mut_ptr();
+        let (ap, bp, np) = (a.as_ptr(), b.as_ptr(), n.as_ptr());
+        let mut out = [0u64; L];
+        let op = out.as_mut_ptr();
+        // SAFETY (each closure): the CPU has BMI2 and ADX; every pointer is
+        // to an array at least as long as the kernel reads or writes, and
+        // `t` (130 words) overlaps none of the others.
+        let pieces: [(&str, f64); 7] = [
+            (
+                "  abs_diff_16",
+                cycles(&mut || unsafe {
+                    let _ = super::abs_diff_16(tp, ap.add(16), ap);
+                }),
+            ),
+            ("  sqr_16", cycles(&mut || unsafe { super::sqr_16(tp, ap) })),
+            (
+                "  mul_16",
+                cycles(&mut || unsafe { super::mul_16(tp, ap, bp) }),
+            ),
+            (
+                "  kara_mid_sub",
+                cycles(&mut || unsafe { super::kara_mid_sub(tp, tp.add(66)) }),
+            ),
+            (
+                "  kara_mid",
+                cycles(&mut || unsafe { super::kara_mid(tp, tp.add(66), 0) }),
+            ),
+            (
+                "  redc_8n",
+                cycles(&mut || unsafe { super::redc_8n(tp, np, n0inv, L) }),
+            ),
+            (
+                "  finish",
+                cycles(&mut || unsafe { super::finish(op, tp.add(L), 0, np, L) }),
+            ),
+        ];
+        for (label, c) in pieces {
+            std::println!("{label:28} {c:8.0}");
+        }
+        let t16 = std::boxed::Box::new([[3u64; MAX_LIMBS]; 16]);
+        let t32 = std::boxed::Box::new([[3u64; MAX_LIMBS]; 32]);
+        let mut o = [0u64; MAX_LIMBS];
+        let (mut m16, mut m32) = ([0u64; 16], [0u64; 32]);
+        m16[5] = u64::MAX;
+        m32[5] = u64::MAX;
+        let mut reads = std::vec![
+            (
+                "  select, 16 entries, SSE2",
+                cycles(&mut || {
+                    let _ = super::select(&t16, L, &m16, &mut o);
+                })
+            ),
+            (
+                "  select, 32 entries, SSE2",
+                cycles(&mut || {
+                    let _ = super::select(&t32, L, &m32, &mut o);
+                })
+            ),
+        ];
+        if super::avx2() {
+            reads.push((
+                "  select, 16 entries, AVX2",
+                cycles(&mut || {
+                    let _ = super::select_avx2(&t16, L, &m16, &mut o);
+                }),
+            ));
+            reads.push((
+                "  select, 32 entries, AVX2",
+                cycles(&mut || {
+                    let _ = super::select_avx2(&t32, L, &m32, &mut o);
+                }),
+            ));
+        }
+        for (label, c) in reads {
+            std::println!("{label:28} {c:8.0}");
+        }
+    }
+
+    /// The SSE2 and AVX2 scans against the entry they should pick, for
+    /// every digit and every width each takes, at 16 and 32 entries, and
+    /// declining the shapes they do not.
+    #[test]
+    fn the_sse2_and_avx2_table_reads_match_the_masked_scan() {
+        table_reads_match::<16>();
+        table_reads_match::<32>();
+    }
+
+    fn table_reads_match<const N: usize>() {
+        let mut table = std::boxed::Box::new([[0u64; MAX_LIMBS]; N]);
         let mut x = 0x0123_4567_89AB_CDEFu64;
         for entry in table.iter_mut() {
             for w in entry.iter_mut() {
@@ -2123,27 +3722,53 @@ mod tests {
                 *w = x;
             }
         }
+        let avx2 = super::avx2();
         for limbs in (2..=MAX_LIMBS).step_by(2) {
-            for digit in 0..16u64 {
-                let mut masks = [0u64; 16];
-                masks[digit as usize] = u64::MAX;
+            for digit in 0..N {
+                let mut masks = [0u64; N];
+                masks[digit] = u64::MAX;
                 let mut out: Limbs = [0x5555; MAX_LIMBS];
                 assert!(super::select(&table, limbs, &masks, &mut out));
-                assert_eq!(
-                    out[..limbs],
-                    table[digit as usize][..limbs],
-                    "{limbs} {digit}"
-                );
+                assert_eq!(out[..limbs], table[digit][..limbs], "{N} {limbs} {digit}");
                 assert!(
                     out[limbs..].iter().all(|&w| w == 0x5555),
-                    "{limbs}: wrote past the width"
+                    "{N} {limbs}: wrote past the width"
                 );
+                let mut out: Limbs = [0x5555; MAX_LIMBS];
+                let took = super::select_avx2(&table, limbs, &masks, &mut out);
+                assert_eq!(
+                    took,
+                    avx2 && matches!(limbs, 16 | 24 | 32),
+                    "{N} {limbs}: AVX2 shape"
+                );
+                if took {
+                    assert_eq!(
+                        out[..limbs],
+                        table[digit][..limbs],
+                        "{N} {limbs} {digit}: AVX2"
+                    );
+                    assert!(
+                        out[limbs..].iter().all(|&w| w == 0x5555),
+                        "{N} {limbs}: AVX2 wrote past the width"
+                    );
+                } else {
+                    assert!(
+                        out.iter().all(|&w| w == 0x5555),
+                        "{N} {limbs}: declined but wrote"
+                    );
+                }
             }
         }
-        let masks = [0u64; 16];
+        let masks = [0u64; N];
         let mut out: Limbs = [0; MAX_LIMBS];
         for limbs in [0, 1, 3, 31, MAX_LIMBS + 2] {
             assert!(!super::select(&table, limbs, &masks, &mut out), "{limbs}");
+        }
+        for limbs in [0, 2, 8, 20, 30, 64] {
+            assert!(
+                !super::select_avx2(&table, limbs, &masks, &mut out),
+                "{limbs}"
+            );
         }
     }
 }

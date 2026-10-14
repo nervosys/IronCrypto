@@ -386,9 +386,9 @@ so its name cannot imply more than it delivers.
 
 ## Compiled-code regression gate
 
-`scripts/check-ct.py` gates 302 probe/target checks over the actual
+`scripts/check-ct.py` gates 308 probe/target checks over the actual
 implementations with fat LTO: 44 fixed-parameter probes on each of five targets
-(x86-64, Cortex-M0, Cortex-M4, 32-bit RISC-V and AArch64), 75 more on x86-64
+(x86-64, Cortex-M0, Cortex-M4, 32-bit RISC-V and AArch64), 81 more on x86-64
 and 7 more on AArch64.
 The first run caught secret-dependent branches in ML-DSA's rounding masks and
 ML-KEM compression, despite their arithmetic-only source. Input and output

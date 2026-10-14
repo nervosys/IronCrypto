@@ -73,6 +73,12 @@ X86_ONLY = (
     # unrolled on x86-64. On the 32-bit targets and RISC-V LLVM keeps the entry
     # loop rolled, a loop over a public count, so the probe is x86-64 only.
     "ct_rsa_select_2048",
+    # The same read from the 32 entries of the five-bit window that RSA's
+    # primes are exponentiated with: the SSE2 scan, which a build without
+    # `std` takes, and the AVX2 read, entry by entry into four, six or eight
+    # accumulators, at each prime width (1024, 1536, 2048 bits).
+    "ct_rsa_select32_2048", "ct_rsa_select32_avx2_1024", "ct_rsa_select32_avx2_1536",
+    "ct_rsa_select32_avx2_2048",
     # ChaCha20's sixteen-block AVX-512 keystream group, and Poly1305's
     # four-lane AVX2 step and final lane folding, under the key's r and s.
     "ct_chacha20_zmm_group", "ct_poly1305_avx2_step", "ct_poly1305_avx2_finish",
@@ -92,8 +98,12 @@ X86_ONLY = (
     # required there.
     "ct_rsa_adx_mont_mul_2048", "ct_rsa_ifma_amm_2048", "ct_rsa_cios_2048",
     # The MULX/ADCX/ADOX square at 2048 bits, and the straight-line product
-    # and square at 1024 bits that RSA-2048 signing runs on.
+    # and square at 1024 bits that RSA-2048 signing runs on. At 2048 bits,
+    # RSA-4096's primes, both are one level of Karatsuba over the 1024-bit
+    # kernels; the eight-word blocks they replaced there are read at 1536
+    # bits, RSA-3072's primes.
     "ct_rsa_adx_mont_sqr_2048", "ct_rsa_adx_mont_mul_1024", "ct_rsa_adx_mont_sqr_1024",
+    "ct_rsa_adx_mont_mul_1536", "ct_rsa_adx_mont_sqr_1536",
     # RSA's whole exponentiation on AVX-512 IFMA, compiled once per width:
     # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
     # bits, its modulus. Its loops are excused the same way.
@@ -177,20 +187,35 @@ EXCUSE_CEILINGS = {
 # ceiling fails. Counted per probe, following calls. Read on 2026-10-13,
 # rustc 1.99.0.
 X86_EXCUSE_CEILINGS = {
-    # MULX/ADX at 2048 bits, on the loop kernels: each block's loop over its
-    # groups of eight steps (`test`/`je` on the group count in rbp, `dec`, a
-    # `jmp` back) -- four product blocks and four reduction blocks -- and the
-    # final subtraction's two loops (`jrcxz` on rcx, stepped by `lea`).
-    "ct_rsa_adx_mont_mul_2048": {"counter loop": 10, "unconditional jump": 10},
-    # The same for the square: four blocks of cross products, the diagonal's
-    # `jrcxz` loop, four reduction blocks, and the final subtraction.
-    "ct_rsa_adx_mont_sqr_2048": {"counter loop": 11, "unconditional jump": 11},
+    # MULX/ADX at 2048 bits: the three 1024-bit products or squares of
+    # Karatsuba, the absolute differences and the recombination are
+    # straight-line; what loops is the reduction, each of its four blocks
+    # over its groups of eight steps (`test`/`je` on the group count in rbp,
+    # `dec`, a `jmp` back), and the final subtraction's two loops (`jrcxz`
+    # on rcx, stepped by `lea`).
+    "ct_rsa_adx_mont_mul_2048": {"counter loop": 6, "unconditional jump": 6},
+    "ct_rsa_adx_mont_sqr_2048": {"counter loop": 6, "unconditional jump": 6},
+    # MULX/ADX at 1536 bits, on the eight-word blocks: three product blocks
+    # and three reduction blocks, each looping over its groups as above, and
+    # the final subtraction's two loops.
+    "ct_rsa_adx_mont_mul_1536": {"counter loop": 8, "unconditional jump": 8},
+    # The same for the square: three blocks of cross products, the
+    # diagonal's `jrcxz` loop, three reduction blocks, and the final
+    # subtraction.
+    "ct_rsa_adx_mont_sqr_1536": {"counter loop": 9, "unconditional jump": 9},
     # MULX/ADX at 1024 bits: the kernels are straight-line, and the two loops
     # are the final subtraction's.
     "ct_rsa_adx_mont_mul_1024": {"counter loop": 2, "unconditional jump": 2},
     "ct_rsa_adx_mont_sqr_1024": {"counter loop": 2, "unconditional jump": 2},
-    # The table read's SSE2 scan: one `jrcxz` loop over pairs of words.
+    # The table read's SSE2 scan: one `jrcxz` loop over pairs of words, at
+    # sixteen entries and at 32.
     "ct_rsa_select_2048": {"counter loop": 1, "unconditional jump": 1},
+    "ct_rsa_select32_2048": {"counter loop": 1, "unconditional jump": 1},
+    # The AVX2 read: one `jrcxz` loop over the 32 entries, rcx counting up
+    # from -32 by `lea`, rdi stepping one entry and rsi one mask.
+    "ct_rsa_select32_avx2_1024": {"counter loop": 1, "unconditional jump": 1},
+    "ct_rsa_select32_avx2_1536": {"counter loop": 1, "unconditional jump": 1},
+    "ct_rsa_select32_avx2_2048": {"counter loop": 1, "unconditional jump": 1},
     # The kernel's row loop: `dec`/`jne` on the 40 rows.
     "ct_rsa_ifma_amm_2048": {"counter loop": 1},
     # The two inner j loops and the outer i loop of CIOS, the masked

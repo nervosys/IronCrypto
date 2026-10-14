@@ -223,6 +223,92 @@ all of them.
   tail passes every test: no test reads the stack. Five new constant-time
   probes (docs/CONSTANT_TIME.md, "Short messages on x86-64"): 119 on
   x86-64, 302 gating probe/target checks.
+- **RSA-4096 signing on x86-64 without AVX-512 IFMA: 1.08-1.09 times
+  Graviola's rate, from 1.01.** Four changes to the MULX/ADX backend
+  (`ic-rsa/src/uint/x86.rs`) and the exponentiation (`uint.rs`):
+
+  1. At 32 words, the primes of RSA-4096 (and an RSA-2048 modulus), the
+     product and the square are one level of Karatsuba over the 16-word
+     kernels without their reduction: three 1024-bit products (768 `mulx`
+     instead of 1024) or squares (408 instead of 528), then the reduction in
+     eight-word blocks as before. The middle term's sign is data, so each
+     difference of halves is taken as its absolute value with `sbb` and the
+     product of the two is added or subtracted by mask, never by branch; for
+     the square it is always subtracted. The scratch the callers already
+     pass, 130 words, holds the middle product.
+  2. On x86-64 with `std`, the exponentiation reads the exponent five bits
+     at a time from 16 words up, a table of 32 entries: a fifth of a
+     multiplication per bit instead of a quarter. Elsewhere it stays at four
+     bits, so that the table stays at 8 KiB of stack on small targets.
+  3. The table read on AVX2, where the CPU has it, at the prime widths 16,
+     24 and 32 words: entry by entry into four, six or eight `ymm`
+     accumulators instead of position by position, which put sixteen loads
+     512 bytes apart in a row, all at the same offset in their cache lines.
+     A read of sixteen entries at 32 words went from about 225 TSC ticks to
+     about 90 (`report_kernel_cycles_at_32_words`); the SSE2 scan stays for
+     the other widths and builds without `std`.
+  4. Every `asm!` block of the backend and each block's group loop start
+     on a 64-byte boundary. Before, the speed of the straight-line kernels
+     depended on where they landed: two builds of the same source, from
+     different paths, ran the 1024-bit product at 138 and at 343 ns, and one
+     build of this change ran RSA-4096 signing at 60% of its speed. Aligned,
+     three builds perturbed the same ways (the path, an unrelated constant)
+     kept their times.
+
+  Where the time went, before (Callgrind on RSA-4096 signing with MULX/ADX
+  forced, and `rdtsc` on the kernels at 32 words on a Zen 5): squarings 70%
+  of the instructions, multiplications 22%, the table read 2.4%, the final
+  subtractions and glue most of the rest; within a 32-word square, about
+  1650 TSC ticks, the reduction was about 1040 and the cross products and
+  diagonal about 600; within a product, about 2000, the reduction the same
+  and the product about 950. Each step there runs about one `mulx` a tick,
+  bound by its two carry chains, so the Karatsuba square, which keeps three
+  16-word diagonals and adds the differences and the recombination (about
+  80 ticks), came out only about 4% faster than the blocks' and the product
+  about 6%. The reduction, two thirds of either, is unchanged; Graviola's
+  is the same shape.
+
+  Measured with `RUSTFLAGS="--cfg ic_no_avx512" cargo run --release --
+  graviola-rsa`, the build before this change and this one alternated,
+  three rounds, each run pinned to one core at high priority on a Zen 5
+  that other jobs were using; IronCrypto's rate over Graviola's within each
+  run:
+
+  | | before | this change |
+  |---|---|---|
+  | RSA-2048 sign | 1.11-1.12 | 1.12-1.14 |
+  | RSA-2048 verify | 1.11 | 1.14 |
+  | RSA-3072 sign | 2.38-2.41 | 2.49-2.51 |
+  | RSA-3072 verify | 2.99-3.00 | 2.99-3.02 |
+  | RSA-4096 sign | 1.01 | 1.08-1.09 |
+  | RSA-4096 verify | 2.90-3.19 | 3.16-3.19 |
+
+  IronCrypto's own RSA-4096 signature went from 2118-2132 us to 1973-1992 us
+  in the same runs; RSA-2048 signing is level, 294-296 us against 293-295.
+  This is ahead at 4096 bits, not far ahead. The default build, where
+  AVX-512 IFMA runs RSA-4096's primes as a whole exponentiation, is
+  unchanged (1.77-1.78 before and after); so are its RSA-2048 and RSA-3072
+  rows.
+
+  Tests: the 32-word kernels against the portable CIOS product and square
+  and against the eight-word blocks, over 400 moduli with operands whose
+  halves compare every way (equal, high below low, high above low) and
+  carry-heavy halves; the unreduced Karatsuba product and square against
+  schoolbook arithmetic for every combination of all-ones, zero, top-bit
+  and random halves; the absolute difference, its mask and the 16-word
+  pieces alone; both table reads at 16 and 32 entries at every width. The
+  CAVP PSS, ACVP and Wycheproof RSA suites pass with and without
+  `--cfg ic_no_avx512`. Eleven deliberate breaks -- the product's middle
+  term with the wrong sign, the square's added, the carry into the top
+  quarter dropped, the carry through it dropped, either operation's halves
+  swapped, the difference's mask stuck at zero, the overflow chain's carry
+  left out of the top word, the AVX2 read's entry stride halved, the SSE2
+  read's second half misplaced, the five-bit window's bits from the next
+  word dropped -- each fail them. Compiled-code gate: six new x86-64
+  probes, 120 there and 303 probe/target checks in all
+  (docs/CONSTANT_TIME.md, "RSA-4096's primes by Karatsuba"). Valgrind:
+  a new `ic-rsa-4096-sign-adx` case reports the same one verdict as the
+  RSA-2048 cases (docs/CTGRIND.md).
 
 - **Ed25519 signing on x86-64 without AVX-512 IFMA: ahead of Graviola.**
   Two changes. (1) The basepoint multiplication on the MULX/ADX field takes
