@@ -648,6 +648,14 @@ all of them.
 
 ### Changed
 
+- **Every multi-instruction `asm!` block in `ic-ec` starts on a 64-byte
+  boundary**, through the generators for the generated kernels, as RSA's do.
+  Layout hygiene, not a speed claim: ten alternating rounds in two code
+  layouts, with and without AVX-512, showed no change beyond the spread,
+  which is wide on both sides -- Graviola's own times move 10 to 30 percent
+  between builds of unchanged source. Tests, the compiled-code gate and
+  check.sh pass unchanged.
+
 - **The ARMv8 probe wrappers now run, under QEMU.** `scripts/test-aarch64.sh`
   builds the backends with `ct-probes` and executes the AES, PMULL GHASH,
   SHA-256 and SHA-512 probe wrappers against FIPS 197 C.3 and the portable

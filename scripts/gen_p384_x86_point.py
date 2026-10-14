@@ -376,7 +376,8 @@ def emit(name, doc, slots, program, attrs=("#[inline(never)]",)):
           "    // registers it declares, and does not touch the stack. It reads no slot",
           "    // before writing it but the inputs, which the caller has written.",
           "    unsafe {",
-          "        asm!("]
+          "        asm!(",
+          '            ".p2align 6",']
     body = []
     for op, *args in program:
         if op == "cms":

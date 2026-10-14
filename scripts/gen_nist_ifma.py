@@ -2180,6 +2180,7 @@ def write_rust(path, fields, results):
             w("    // nothing, leaves the flags alone and ends with `vzeroupper`.")
             w("    unsafe {")
             w("        asm!(")
+            w('            ".p2align 6",')
             for line in text:
                 w(f'            "{line}",')
             w('            "vzeroupper",')

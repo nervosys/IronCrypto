@@ -335,6 +335,7 @@ pub(crate) unsafe fn p256_double(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{a} + 32]",
@@ -1278,6 +1279,7 @@ pub(crate) unsafe fn p256_add(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{b} + 128]",
             "vpmullq ymm1, ymm0, ymmword ptr [{c} + 32]",
             "vmovdqu ymm2, ymmword ptr [{b}]",
@@ -2782,6 +2784,7 @@ pub(crate) unsafe fn p256_madd(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{c} + 352]",
             "vpbroadcastq ymm1, qword ptr [{m}]",
             "vpblendvb ymm0, ymm0, ymmword ptr [{c} + 384], ymm1",
@@ -4248,6 +4251,7 @@ pub(crate) unsafe fn p256_from_fp(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{c} + 352]",
@@ -4461,6 +4465,7 @@ pub(crate) unsafe fn p256_to_fp(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{c} + 1184]",
@@ -4680,6 +4685,7 @@ pub(crate) unsafe fn p256_madd4(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{c} + 1312]",
             "vmovdqu ymm1, ymmword ptr [{m}]",
             "vpblendvb ymm2, ymm0, ymmword ptr [{c} + 1344], ymm1",
@@ -7249,6 +7255,7 @@ pub(crate) unsafe fn p256_to_fp4(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{c} + 1440]",
@@ -7789,6 +7796,7 @@ pub(crate) unsafe fn p256_mul(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{b} + 32]",
@@ -8005,6 +8013,7 @@ pub(crate) unsafe fn p256_lin(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a} + 128]",
             "vpmullq ymm0, ymm0, ymmword ptr [{c} + 1824]",
             "vmovdqu ymm1, ymmword ptr [{b} + 128]",
@@ -8405,6 +8414,7 @@ pub(crate) unsafe fn p384_double(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymm0",
@@ -10306,6 +10316,7 @@ pub(crate) unsafe fn p384_add(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{b}]",
             "vpmullq ymm1, ymm0, ymmword ptr [{c} + 32]",
             "vmovdqu ymm2, ymmword ptr [{b} + 32]",
@@ -13078,6 +13089,7 @@ pub(crate) unsafe fn p384_madd(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{c} + 352]",
             "vpbroadcastq ymm1, qword ptr [{m}]",
             "vpblendvb ymm0, ymm0, ymmword ptr [{c} + 384], ymm1",
@@ -15868,6 +15880,7 @@ pub(crate) unsafe fn p384_from_fp(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{c} + 1152]",
@@ -16288,6 +16301,7 @@ pub(crate) unsafe fn p384_to_fp(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{c} + 1408]",
@@ -16714,6 +16728,7 @@ pub(crate) unsafe fn p384_madd4(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{c} + 1504]",
             "vmovdqu ymm1, ymmword ptr [{m}]",
             "vpblendvb ymm2, ymm0, ymmword ptr [{c} + 1536], ymm1",
@@ -22200,6 +22215,7 @@ pub(crate) unsafe fn p384_to_fp4(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{c} + 2048]",
@@ -23389,6 +23405,7 @@ pub(crate) unsafe fn p384_mul(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpxor xmm1, xmm1, xmm1",
             "vpmadd52luq ymm1, ymm0, ymmword ptr [{b}]",
@@ -23812,6 +23829,7 @@ pub(crate) unsafe fn p384_lin(
     // nothing, leaves the flags alone and ends with `vzeroupper`.
     unsafe {
         asm!(
+            ".p2align 6",
             "vmovdqu ymm0, ymmword ptr [{a}]",
             "vpmullq ymm0, ymm0, ymmword ptr [{c} + 2144]",
             "vmovdqu ymm1, ymmword ptr [{a} + 32]",

@@ -111,6 +111,7 @@ pub fn ladder_step(ws: &mut [u64; slot::LEN], swap: u64) {
     // reached only after `available()` has confirmed.
     unsafe {
         asm!(
+            ".p2align 6",
             fe_sub_once!(192, 32, 64),   // dm = xm - zm
             fe_add_once!(224, 96, 128),  // sn = xn + zn
             fe_sub_once!(256, 96, 128),  // dn = xn - zn
@@ -166,6 +167,7 @@ pub fn ladder_double(ws: &mut [u64; slot::LEN]) {
     // `available()`.
     unsafe {
         asm!(
+            ".p2align 6",
             fe_add_once!(288, 96, 128),       // s = xn + zn
             fe_sub_once!(320, 96, 128),       // d = xn - zn
             fe_sqr!(448, 320),                // dd = d^2
@@ -403,6 +405,7 @@ impl Fe64 {
         // on every x86-64 CPU; no memory is read or written.
         unsafe {
             asm!(
+                ".p2align 6",
                 "add {r0}, {b0}",
                 "adc {r1}, {b1}",
                 "adc {r2}, {b2}",
@@ -440,6 +443,7 @@ impl Fe64 {
         // SAFETY: as in `add`.
         unsafe {
             asm!(
+                ".p2align 6",
                 "sub {r0}, {b0}",
                 "sbb {r1}, {b1}",
                 "sbb {r2}, {b2}",
@@ -489,6 +493,7 @@ impl Fe64 {
         // which every caller has established through `available()`.
         unsafe {
             asm!(
+                ".p2align 6",
                 // Row 0: a * b0 into r8..r12.
                 "mov rdx, qword ptr [rdi]",
                 "mulx r9, r8, qword ptr [rsi]",
@@ -604,6 +609,7 @@ impl Fe64 {
         // SAFETY: as in `mul`, with one input.
         unsafe {
             asm!(
+                ".p2align 6",
                 // a0 * (a1, a2, a3) into r9..r12.
                 "mov rdx, qword ptr [rsi]",
                 "mulx r10, r9, qword ptr [rsi + 8]",
@@ -702,6 +708,7 @@ impl Fe64 {
         // every caller through `available()`.
         unsafe {
             asm!(
+                ".p2align 6",
                 "mulx {h0}, {r0}, {a0}",
                 "mulx {h1}, {r1}, {a1}",
                 "add {r1}, {h0}",

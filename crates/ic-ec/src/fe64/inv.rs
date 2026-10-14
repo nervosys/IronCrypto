@@ -118,6 +118,7 @@ fn divsteps_20(zeta: i64, f0: u64, g0: u64) -> (i64, [i64; 4]) {
     // branch is emitted.
     unsafe {
         core::arch::asm!(
+            ".p2align 6",
             ".rept 10",
             // Step one: from f, g, z into f2, g1, zs.
             "lea {g1}, [{g} + {f}]",
