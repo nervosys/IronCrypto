@@ -558,6 +558,23 @@ aes_gcm!(Aes256Gcm, Aes256, "aes-256-gcm", "AES-256-GCM", 32);
 mod tests {
     use super::*;
 
+    /// The 512-bit kernels' four `asm!` blocks end with `vzeroall`, which
+    /// clears the round keys, keystream and GHASH state from `zmm0`-`zmm15`,
+    /// and none with `vzeroupper`, which would leave the low halves.
+    /// `scripts/check-ct.py` checks the eight- and sixteen-block kernels in
+    /// the compiled probes; the 512-bit ones are not probes, so this reads
+    /// their source. Text, not semantics: it fails if a block's ending is
+    /// changed back, which is the edit to guard against.
+    #[test]
+    fn the_512_bit_kernels_clear_their_registers() {
+        let source = include_str!("gcm_x86.rs");
+        // Built here so that this test's own text does not match.
+        let ending = |insn: &str| ["\"", insn, "\","].concat();
+        let count = |insn: &str| source.lines().filter(|l| l.trim() == ending(insn)).count();
+        assert_eq!(count("vzeroall"), 4);
+        assert_eq!(count("vzeroupper"), 0);
+    }
+
     /// The backend's counter mode against the generic one, on the portable
     /// cipher.
     ///

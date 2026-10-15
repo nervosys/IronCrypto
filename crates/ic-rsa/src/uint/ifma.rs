@@ -348,6 +348,23 @@ pub(crate) unsafe fn pow_fixed<const N: usize>(
 
     leave(&mut ctx, m, &mut w.acc, &w.unit, &mut w.wide, out);
     w.wipe();
+    // The kernel ends with `vzeroupper`, which leaves the low 128 bits of
+    // `zmm0`-`zmm15` as the last product left them: limbs of the result.
+    // Cleared once per exponentiation rather than per product, where it
+    // would be paid some fifteen hundred times (hardening;
+    // `docs/CONSTANT_TIME.md`).
+    // SAFETY: AVX-512F, as the caller guarantees, implies AVX. No memory,
+    // no flags, and every register written is declared clobbered.
+    unsafe {
+        asm!(
+            "vzeroall",
+            out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,
+            out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+            out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _,
+            out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
 }
 
 /// `base^e mod m` for a non-zero public `e`, left to right, branching on its

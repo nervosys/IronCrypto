@@ -312,6 +312,75 @@ unsafe fn run<C: LaneCurve>(
     unsafe { f(a, b, m.as_ptr(), o, s.mut_ptr()) }
 }
 
+/// Held for a whole multiplication ([`mul_scalar`], [`comb_mul`],
+/// [`table_mul`]): [`clear_vectors`] when it is dropped, after every kernel
+/// the multiplication ran. Declared first, so it is dropped last, on every
+/// way out.
+///
+/// Once per multiplication rather than after each kernel: after each, P-384
+/// ECDH measured about 2.5 percent slower (some 450 kernel calls, each
+/// paying for a `vzeroall`), and a value a kernel leaves is overwritten by
+/// the next kernel's or cleared here, with nothing but this module's code
+/// running in between. The test build counts the drops (`cleared_probe`).
+struct Cleared(Ifma);
+
+impl Drop for Cleared {
+    fn drop(&mut self) {
+        clear_vectors(self.0);
+        #[cfg(all(test, feature = "std"))]
+        cleared_probe::record();
+    }
+}
+
+/// Test-only count of [`Cleared`] drops on this thread.
+#[cfg(all(test, feature = "std"))]
+pub(crate) mod cleared_probe {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static DROPS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record() {
+        DROPS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// The drops so far, after zeroing the count.
+    pub(crate) fn take() -> usize {
+        DROPS.with(|c| c.replace(0))
+    }
+}
+
+/// `vzeroall`: zero `ymm0`..`ymm15` (and the `zmm` registers they are the
+/// low halves of), where the kernels left their working values.
+///
+/// The kernels are generated (`ifma_kernels`) and end with `vzeroupper`,
+/// which leaves the low 128 bits of each register as the kernel left them:
+/// limbs of secret-derived coordinates. [`Cleared`] runs this at the end of
+/// each multiplication. Nothing is live in vector registers across it (it
+/// declares all sixteen clobbered), so the compiler loses nothing it relied
+/// on. Hardening, not a fix: nothing reads a dead register, but a later
+/// disclosure (a context switch's saved state in a core dump, a speculative
+/// read) should find zeros. `scripts/check-ct.py` checks, on the probes,
+/// that it zeroes every register the kernels name. Done here rather than in
+/// the generated kernels, which `scripts/gen_nist_ifma.py` writes.
+#[inline(always)]
+fn clear_vectors(_: Ifma) {
+    // SAFETY: the token says the CPU has AVX, which `vzeroall` needs. It
+    // touches no memory and no flags, and every register it writes is
+    // declared clobbered.
+    unsafe {
+        core::arch::asm!(
+            "vzeroall",
+            out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,
+            out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+            out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _,
+            out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+}
+
 /// A point into lanes.
 fn load<C: LaneCurve>(t: Ifma, p: &Point<C>, s: &mut C::S) -> C::V {
     let mut j = C::V::zero();
@@ -390,6 +459,7 @@ fn doublings<C: LaneCurve>(t: Ifma, acc: &mut Pair<C::V, 1>, s: &mut C::S) {
 /// `scalar * p`, as [`Point::mul_scalar`]: the same digits, window and
 /// additions, with the same argument for the incomplete ones, in lanes.
 pub(crate) fn mul_scalar<C: LaneCurve>(t: Ifma, p: &Point<C>, scalar: &C::Scalar) -> Point<C> {
+    let _cleared = Cleared(t);
     let bytes = scalar.to_bytes();
     let digits = signed_digits_w(bytes.as_ref(), WIDTH);
     let n = digit_count(bytes.as_ref().len(), WIDTH);
@@ -506,6 +576,7 @@ pub(crate) fn comb_mul<C: LaneCurve>(
     windows: &[AffineWindow<C, ENTRIES>; TEETH],
     scalar: &C::Scalar,
 ) -> Point<C> {
+    let _cleared = Cleared(t);
     let bytes = scalar.to_bytes();
     let digits = signed_digits_w(bytes.as_ref(), WIDTH);
     let n = digit_count(C::SCALAR_BYTES, WIDTH);
@@ -593,6 +664,7 @@ pub(crate) fn table_mul<C: LaneCurve, const E: usize>(
     windows: &super::gentable::Windows<C, E>,
     scalar: &C::Scalar,
 ) -> Point<C> {
+    let _cleared = Cleared(t);
     let window = |i| super::gentable::window(windows, i);
     let width = super::gentable::width::<E>();
     let bytes = scalar.to_bytes();
@@ -877,6 +949,10 @@ pub mod probes {
                 // writes, and `o` and `t` are exclusive; the caller's for
                 // the CPU.
                 unsafe { $kernel(a.as_ptr().cast(), b.as_ptr().cast(), m.as_ptr(), o.as_mut_ptr().cast(), t.as_mut_ptr()) }
+                // As a multiplication ends after its last kernel (`Cleared`),
+                // so that the gate checks that `clear_vectors` zeroes every
+                // register this kernel names.
+                clear_vectors(Ifma(()));
             }
         )*};
     }

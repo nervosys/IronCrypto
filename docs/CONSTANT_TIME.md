@@ -1572,3 +1572,85 @@ Mutations, each restored afterwards:
 Probe count: seventy-five on x86-64 alone, where there were seventy: 119 on
 x86-64, and 302 gating probe/target checks with the other four targets
 unchanged.
+
+## Registers and stack after a kernel, 2026-10-14
+
+Hardening, not constant time: a register or a dead stack slot left holding
+a round key is not a timing leak, and nothing in the library reads one. It
+is cleared so that a later disclosure -- a register file saved at a context
+switch and dumped, a speculative read -- finds zeros. An asm review found the
+kernels below left secret-derived values in vector registers; only the
+ChaCha20 AVX-512 group ended with `vzeroall`.
+
+| Kernel | Cleared | How often |
+| --- | --- | --- |
+| AES-GCM 128-bit (`gcm_x86_asm::x8_*`) | `pxor` of xmm0-15 (`x8_wipe!`) | each call |
+| AES-GCM 256-bit (`gcm_x86_asm::y16_*`) | `vzeroall` for `vzeroupper` | each call |
+| AES-GCM 512-bit (`gcm_x86::zmm_groups`, `zmm32_groups`) | `vzeroall` for `vzeroupper` | each call |
+| Ed25519 signing's table read (`fe64::edwards`, `block_scan!`) | `vzeroall` for `vzeroupper` | each read, 26 a signature |
+| RSA table reads (`uint::x86::select`, `select32`, `select_avx2_*`) | `pxor` of xmm0, xmm1; `vzeroall` | each read |
+| RSA IFMA exponentiation (`uint::ifma::pow_fixed`) | `vzeroall` | once, at its end |
+| P-256/P-384 IFMA (`nist::ifma`, generated kernels) | `vzeroall` (`Cleared`) | once per multiplication |
+
+Every block that now ends with `vzeroall` already declared all sixteen
+vector registers clobbered; each list was read again. None uses `zmm16`-31
+or a mask register. The IFMA kernels are generated
+(`scripts/gen_nist_ifma.py`), so the clearing is in the hand-written
+`nist::ifma`: a guard held by `mul_scalar`, `comb_mul` and `table_mul`.
+After every kernel call it cost P-384 ECDH about 2.5 percent (some 450
+calls, each a `vzeroall`); once per multiplication it measures at parity.
+
+Stack buffers, wiped by volatile stores in a guard's `Drop`:
+
+- `p256_x86::Ladder`, the buffer `p256_x86::mul_scalar`, `table_mul` and
+  `p384_x86::mul_scalar` run in (accumulator, entries, intermediates),
+  once per multiplication. The per-formula buffers of `point_double` and
+  its siblings are not wrapped: those formulas are also verification's,
+  on public points.
+- `chacha::avx2::Words`, the eight-block kernel's keystream array, now
+  the caller's and wiped once per message (`chacha::xor_keystream`).
+- Not done: `sha3::x86`'s `a` and `e`. In the compiled code they are not
+  arrays; LLVM splits them into values and spills to slots of its own
+  (`permute_avx512vl`: a 968-byte frame, 151 stack references). Wrapping
+  them in a wiping guard was tried: it gave them a 1600-byte home, zeroed
+  on entry and wiped on exit, while the rounds kept spilling to their own
+  slots, so it wiped nothing that held the state. Only scrubbing the dead
+  frame by its depth would; that is not done.
+
+Verification paths, on public data, are left alone throughout.
+
+### Checks
+
+- `scripts/check-ct.py`, `X86_WIPED`: for 30 x86-64 probes -- the six
+  AES-GCM ones, the fourteen IFMA kernels, the two Ed25519 reads, the
+  seven RSA reads and exponentiations, and the ChaCha20 group -- the last
+  inline-assembly block the probe runs that names a vector register must
+  leave every register any of its blocks names known zero, read forward
+  (`vzeroall` or a zeroing idiom zeroes; any other write to a register
+  makes it unknown; a store of a zeroed register changes nothing). The
+  IFMA probes end with the same `clear_vectors` the multiplications'
+  guard runs. On master at be9fd78 the check fails 29 of the 30; only the
+  ChaCha20 group passes. It reads the blocks, not what the compiler does
+  with vector registers after them.
+- The 512-bit AES-GCM kernels are not probes; a test in `gcm.rs` reads
+  `gcm_x86.rs` and requires four `"vzeroall",` endings and no
+  `"vzeroupper",`.
+- Tests on the guards' records: `the_buffer_multiplications_wipe_their_buffers`
+  (P-256), `the_buffer_multiplication_wipes_its_buffer` (P-384),
+  `the_eight_block_kernel_wipes_its_keystream`, and
+  `each_multiplication_clears_the_vector_registers` (IFMA, one guard
+  dropped per multiplication).
+
+Mutations, each restored:
+
+- `y16_seal`'s `vzeroall` back to `vzeroupper`: `ct_gcm_vaes256_seal`
+  fails, all sixteen registers not zeroed.
+- `clear_vectors` removed after the IFMA kernels (when it was per call):
+  the fourteen IFMA probes fail.
+- `Ladder`'s volatile store deleted: both ladder tests fail, `(1, 1)`.
+- The eight-block keystream array unguarded: its test fails, `(0, 0)`;
+  `Words`'s store deleted: `(1, 1)`.
+- `comb_mul`'s guard deleted: the IFMA test fails, 0 drops.
+
+The gate's findings and excuses on x86-64 are unchanged, probe for probe:
+a zeroing instruction is not a branch.

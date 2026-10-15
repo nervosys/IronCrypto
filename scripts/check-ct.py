@@ -1241,6 +1241,101 @@ def inspect(assembly, target, excused=None):
     return failures
 
 
+# Probes whose kernels must leave no working value in a vector register: the
+# last inline-assembly block a probe runs that names a vector register (its
+# own, or a callee's, followed as `inspect` follows calls) must end by zeroing
+# every vector register that any block in the probe names -- `vzeroall` for
+# xmm0-15 and their ymm/zmm extensions, or a zeroing idiom (`pxor x, x` and
+# its VEX/EVEX forms) per register. Hardening, not constant time: a register
+# left holding a round key or a selected entry is not a timing leak. The
+# check reads only the assembly blocks; whatever the compiler does with
+# vector registers after them (copying a result out) is outside it.
+# docs/CONSTANT_TIME.md, "Registers and stack after a kernel".
+X86_WIPED = (
+    "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
+    "ct_gcm_vaes256_seal", "ct_gcm_vaes256_open", "ct_gcm_vaes256_group",
+    "ct_p256_ifma_double", "ct_p256_ifma_add", "ct_p256_ifma_madd", "ct_p256_ifma_madd4",
+    "ct_p256_ifma_from_fp", "ct_p256_ifma_to_fp", "ct_p256_ifma_to_fp4",
+    "ct_p384_ifma_double", "ct_p384_ifma_add", "ct_p384_ifma_madd", "ct_p384_ifma_madd4",
+    "ct_p384_ifma_from_fp", "ct_p384_ifma_to_fp", "ct_p384_ifma_to_fp4",
+    "ct_ed25519_fe64_scan", "ct_ed25519_fe64_madd_ext2_scan",
+    "ct_rsa_select_2048", "ct_rsa_select32_2048", "ct_rsa_select32_avx2_1024",
+    "ct_rsa_select32_avx2_1536", "ct_rsa_select32_avx2_2048",
+    "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_2048",
+    "ct_chacha20_zmm_group",
+)
+
+_VECTOR_REGISTER = re.compile(r"%[xyz]mm(\d+)\b")
+_ZEROING = {"pxor", "vpxor", "vpxord", "vpxorq", "xorps", "vxorps", "xorpd", "vxorpd"}
+
+
+def zeroed_at_end(block):
+    """The vector registers known to be zero when a block ends, read forward:
+    `vzeroall` zeroes xmm0-15, a zeroing idiom its register, and any other
+    instruction whose destination (AT&T: the last operand) is a vector
+    register makes that register unknown again. A store of a zeroed register
+    (the ChaCha20 kernel wipes its scratch from `zmm0` after `vzeroall`)
+    changes nothing."""
+    zeroed = set()
+    for line in block:
+        op, operands = _split(line)
+        if op == "vzeroall":
+            zeroed |= set(range(16))
+            continue
+        regs = [_VECTOR_REGISTER.fullmatch(o) for o in operands]
+        if op in _ZEROING and operands and all(regs) and len({r[1] for r in regs}) == 1:
+            zeroed.add(int(regs[0][1]))
+            continue
+        if operands and regs[-1]:
+            zeroed.discard(int(regs[-1][1]))
+    return zeroed
+
+
+def wipe_failures(assembly, target):
+    """A finding for each X86_WIPED probe whose last vector-touching assembly
+    block does not end by zeroing every vector register its blocks name."""
+    if not target.startswith("x86_64"):
+        return []
+    functions = bodies(assembly, symbols_for(target))
+    failures = []
+    for probe in X86_WIPED:
+        blocks = []
+
+        def walk(lines, seen):
+            # Each block in order, a callee's at its call.
+            current = None
+            for line in lines:
+                text = line.strip()
+                callee = None if current is not None else called(line, target, functions)
+                if callee is not None:
+                    if callee not in seen:
+                        seen.add(callee)
+                        walk(functions[callee], seen)
+                    continue
+                if text.startswith("#APP"):
+                    current = []
+                elif text.startswith("#NO_APP"):
+                    if current is not None:
+                        block = instructions_of(current)
+                        if any(_VECTOR_REGISTER.search(l) for l in block) or any(
+                                _split(l)[0] in {"vzeroall", "vzeroupper"} for l in block):
+                            blocks.append(block)
+                    current = None
+                elif current is not None:
+                    current.append(line)
+
+        walk(functions[probe], {probe})
+        if not blocks:
+            failures.append(f"{probe}: no assembly block names a vector register")
+            continue
+        used = {int(n) for block in blocks for l in block for n in _VECTOR_REGISTER.findall(l)}
+        missing = used - zeroed_at_end(blocks[-1])
+        if missing:
+            failures.append(f"{probe}: vector registers not zeroed after its last kernel: "
+                            + ", ".join(f"{n}" for n in sorted(missing)))
+    return failures
+
+
 def over_ceiling(target, excused):
     """A failure for each rule that excused more than it was reviewed for: per
     rule on the 32-bit targets, per probe and rule on x86-64 and aarch64."""
@@ -1293,9 +1388,13 @@ def main():
     failures = []
     for target in args.target or TARGETS:
         excused = collections.Counter()
-        found = inspect(build_probe(target), target, excused) + over_ceiling(target, excused)
+        assembly = build_probe(target)
+        found = (inspect(assembly, target, excused) + over_ceiling(target, excused)
+                 + wipe_failures(assembly, target))
         failures.extend(f"{target}: {finding}" for finding in found)
-        print(f"{target}: {len(symbols_for(target))} probes, {len(found)} failures"
+        wiped = (f", {len(X86_WIPED)} checked for cleared vector registers"
+                 if target.startswith("x86_64") else "")
+        print(f"{target}: {len(symbols_for(target))} probes{wiped}, {len(found)} failures"
               + ("; excused by rule: " + ", ".join(
                   f"{' '.join(rule) if isinstance(rule, tuple) else rule} {count}"
                   for rule, count in sorted(excused.items()))

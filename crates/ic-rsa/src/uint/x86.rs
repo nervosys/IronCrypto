@@ -455,6 +455,9 @@ pub(crate) fn select<const N: usize>(
             "jrcxz 3f",
             "jmp 2b",
             "3:",
+            // The entry and its mask, cleared (hardening).
+            "pxor xmm0, xmm0",
+            "pxor xmm1, xmm1",
             inout("rdi") table.as_ptr() => _,
             in("rsi") lanes.0.as_ptr(),
             inout("rdx") out.as_mut_ptr() => _,
@@ -603,7 +606,9 @@ unsafe fn select_avx2_16w(table: *const u64, masks: *const u64, out: *mut u64, c
             "vmovdqu ymmword ptr [rdx + 32], ymm1",
             "vmovdqu ymmword ptr [rdx + 64], ymm2",
             "vmovdqu ymmword ptr [rdx + 96], ymm3",
-            "vzeroupper",
+            // The accumulators held the chosen entry and ymm8 its mask:
+            // clear them (hardening; `docs/CONSTANT_TIME.md`).
+            "vzeroall",
             inout("rdi") table => _,
             inout("rsi") masks => _,
             in("rdx") out,
@@ -618,8 +623,8 @@ unsafe fn select_avx2_16w(table: *const u64, masks: *const u64, out: *mut u64, c
             out("ymm7") _,
             out("ymm8") _,
             out("ymm9") _,
-            // `vzeroupper` clears the upper half of every ymm register, so
-            // all sixteen are clobbered, not only those the loop uses.
+            // `vzeroall` clears every ymm register, so all sixteen are
+            // clobbered, not only those the loop uses.
             out("ymm10") _,
             out("ymm11") _,
             out("ymm12") _,
@@ -662,7 +667,9 @@ unsafe fn select_avx2_24w(table: *const u64, masks: *const u64, out: *mut u64, c
             "vmovdqu ymmword ptr [rdx + 96], ymm3",
             "vmovdqu ymmword ptr [rdx + 128], ymm4",
             "vmovdqu ymmword ptr [rdx + 160], ymm5",
-            "vzeroupper",
+            // The accumulators held the chosen entry and ymm8 its mask:
+            // clear them (hardening; `docs/CONSTANT_TIME.md`).
+            "vzeroall",
             inout("rdi") table => _,
             inout("rsi") masks => _,
             in("rdx") out,
@@ -677,8 +684,8 @@ unsafe fn select_avx2_24w(table: *const u64, masks: *const u64, out: *mut u64, c
             out("ymm7") _,
             out("ymm8") _,
             out("ymm9") _,
-            // `vzeroupper` clears the upper half of every ymm register, so
-            // all sixteen are clobbered, not only those the loop uses.
+            // `vzeroall` clears every ymm register, so all sixteen are
+            // clobbered, not only those the loop uses.
             out("ymm10") _,
             out("ymm11") _,
             out("ymm12") _,
@@ -727,7 +734,9 @@ unsafe fn select_avx2_32w(table: *const u64, masks: *const u64, out: *mut u64, c
             "vmovdqu ymmword ptr [rdx + 160], ymm5",
             "vmovdqu ymmword ptr [rdx + 192], ymm6",
             "vmovdqu ymmword ptr [rdx + 224], ymm7",
-            "vzeroupper",
+            // The accumulators held the chosen entry and ymm8 its mask:
+            // clear them (hardening; `docs/CONSTANT_TIME.md`).
+            "vzeroall",
             inout("rdi") table => _,
             inout("rsi") masks => _,
             in("rdx") out,
@@ -742,8 +751,8 @@ unsafe fn select_avx2_32w(table: *const u64, masks: *const u64, out: *mut u64, c
             out("ymm7") _,
             out("ymm8") _,
             out("ymm9") _,
-            // `vzeroupper` clears the upper half of every ymm register, so
-            // all sixteen are clobbered, not only those the loop uses.
+            // `vzeroall` clears every ymm register, so all sixteen are
+            // clobbered, not only those the loop uses.
             out("ymm10") _,
             out("ymm11") _,
             out("ymm12") _,
@@ -824,6 +833,9 @@ unsafe fn select32(table: *const u64, lanes: *const u64, out: *mut u64, count: u
             "jrcxz 3f",
             "jmp 2b",
             "3:",
+            // The entry and its mask, cleared (hardening).
+            "pxor xmm0, xmm0",
+            "pxor xmm1, xmm1",
             inout("rdi") table => _,
             in("rsi") lanes,
             inout("rdx") out => _,

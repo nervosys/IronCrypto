@@ -66,6 +66,13 @@ impl<const N: usize> Scrub for [u32; N] {
     }
 }
 
+impl Scrub for super::avx2::Words {
+    #[cfg(test)]
+    fn is_clear(&self) -> bool {
+        self.0.iter().flatten().all(|&w| w == 0)
+    }
+}
+
 /// Test-only record of every [`Scratch`] drop on this thread.
 #[cfg(test)]
 pub(super) mod probe {

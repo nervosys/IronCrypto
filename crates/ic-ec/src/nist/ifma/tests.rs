@@ -667,6 +667,32 @@ fn multiplications<C: TestCurve>(random: usize, seed: u64) -> usize {
     checked
 }
 
+/// Each multiplication clears the vector registers once, after its last
+/// kernel: one `Cleared` dropped per call, whichever of the three. With the
+/// guard deleted from one of them, its count is zero and this fails. That
+/// the drop's `vzeroall` zeroes every register the kernels name is
+/// `scripts/check-ct.py`'s to check, on the compiled probes.
+fn clears<C: TestCurve>() {
+    let Some(t) = token() else { return };
+    let g = Point::<C>::generator();
+    let k = C::Scalar::ONE.add(&C::Scalar::ONE).add(&C::Scalar::ONE);
+    let comb = Comb::new(&g);
+    C::prepare_generator_table();
+    cleared_probe::take();
+    mul_scalar(t, &g, &k);
+    assert_eq!(cleared_probe::take(), 1, "mul_scalar");
+    comb_mul(t, comb.windows(), &k);
+    assert_eq!(cleared_probe::take(), 1, "comb_mul");
+    Point::<C>::mul_generator(&k);
+    assert_eq!(cleared_probe::take(), 1, "table_mul");
+}
+
+#[test]
+fn each_multiplication_clears_the_vector_registers() {
+    clears::<P256>();
+    clears::<P384>();
+}
+
 #[test]
 fn p256_multiplications_agree_with_the_fp_form() {
     let n = multiplications::<P256>(count(1_000, 50), 7);
