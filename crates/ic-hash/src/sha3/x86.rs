@@ -50,6 +50,19 @@
 //! intrinsics were stabilised after this workspace's minimum Rust version;
 //! each is register to register, touches no memory and no flags.
 //!
+//! # What is left on the stack
+//!
+//! `a` and `e` are not arrays in the compiled code: the compiler splits them
+//! into twenty-five values each and keeps them in registers, and what does
+//! not fit -- a few hundred bytes of intermediate state, the four states
+//! may be secret -- goes to spill slots it allocates itself. Wrapping the
+//! two arrays in a wiping guard was tried and wiped nothing that held the
+//! state: the guard made the arrays real memory (1600 more bytes of frame,
+//! zeroed on entry and wiped on exit) while the rounds went on spilling to
+//! their own slots. No source-level wipe reaches those slots; only a scrub
+//! of the dead frame by its depth would, which is not done here
+//! (`docs/CONSTANT_TIME.md`, "Registers and stack after a kernel").
+//!
 //! # Constant-time properties
 //!
 //! Keccak has no key-indexed table and no data-dependent branch, and none is

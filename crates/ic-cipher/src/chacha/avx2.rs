@@ -77,13 +77,51 @@ fn rotl(x: __m256i, n: i32) -> __m256i {
     }
 }
 
+/// [`eight_blocks`]' keystream, word `i` of the eight blocks in row `i`.
+/// Wiped by sixteen 32-byte volatile stores, once per message. A first
+/// form -- a byte array, gathered from by byte slices and wiped eight bytes
+/// at a time -- measured 4 to 7 percent slower on 1 KiB messages without
+/// AVX-512; this one, the original layout and gather with a wider wipe,
+/// measured at parity.
+#[repr(C, align(32))]
+pub(crate) struct Words(pub(crate) [[u32; LANES]; 16]);
+
+impl Words {
+    pub(crate) const fn new() -> Self {
+        Words([[0; LANES]; 16])
+    }
+}
+
+impl ic_core::Zeroize for Words {
+    fn zeroize(&mut self) {
+        for row in self.0.iter_mut() {
+            // SAFETY: a row is 32 bytes, 32-byte aligned (`repr(align(32))`
+            // and a row size of 32), valid and uniquely borrowed, and
+            // `[u64; 4]` has the same size and a smaller alignment.
+            unsafe { core::ptr::write_volatile(row.as_mut_ptr().cast::<[u64; 4]>(), [0; 4]) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// XOR `data` with the keystream for `LANES` blocks starting at `counter`.
+///
+/// `words` is where the keystream is stored word by word and gathered from
+/// (see the module note): it is left holding the keystream, and the caller
+/// wipes it once its last group is done (`chacha::xor_keystream` holds it
+/// in a `Scratch`), rather than every call paying for a wipe.
 ///
 /// # Safety
 ///
 /// The CPU must support AVX2. `data` must be exactly [`STRIDE`] bytes.
 #[target_feature(enable = "avx2")]
-pub unsafe fn eight_blocks(key: &[u8; 32], nonce: &[u8; 12], counter: u32, data: &mut [u8]) {
+pub unsafe fn eight_blocks(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    counter: u32,
+    data: &mut [u8],
+    words: &mut Words,
+) {
     debug_assert_eq!(data.len(), STRIDE);
 
     let k = |i: usize| -> u32 {
@@ -161,7 +199,7 @@ pub unsafe fn eight_blocks(key: &[u8; 32], nonce: &[u8; 12], counter: u32, data:
 
     // Feed-forward, then back to block order. See the module note: stored and
     // gathered rather than transposed in registers.
-    let mut words = [[0u32; LANES]; 16];
+    let words = &mut words.0;
     for i in 0..16 {
         let sum = _mm256_add_epi32(v[i], start[i]);
         // SAFETY: `words[i]` is eight `u32`, which is the width of the store.

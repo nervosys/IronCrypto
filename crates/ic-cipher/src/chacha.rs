@@ -252,12 +252,16 @@ fn xor_keystream(
 
     // Eight at a time on AVX2: the whole message there, the tail here.
     #[cfg(all(target_arch = "x86_64", feature = "std"))]
-    if backend != Backend::Portable {
+    if backend != Backend::Portable && data.len() >= avx2::STRIDE {
+        // The kernel's keystream passes through this array on its way to
+        // the message; it is wiped once, when the message is done, not per
+        // group.
+        let mut words = Scratch::new(avx2::Words::new());
         let mut groups = data.chunks_exact_mut(avx2::STRIDE);
         for group in &mut groups {
             // SAFETY: both wide backends are chosen only where `avx2()`
             // confirmed AVX2, and the slice is exactly STRIDE bytes.
-            unsafe { avx2::eight_blocks(k, n, counter, group) };
+            unsafe { avx2::eight_blocks(k, n, counter, group, &mut words) };
             counter = counter.wrapping_add(avx2::LANES as u32);
         }
         data = groups.into_remainder();
@@ -1085,6 +1089,32 @@ mod tests {
         probe::reset();
         c.open_detached(&nonce, b"aad", &mut buf, &tag).unwrap();
         assert_eq!(probe::snapshot(), (2, 0), "open: keystream and poly key");
+    }
+
+    /// The eight-block AVX2 kernel stores each group's keystream word by
+    /// word in an array before XORing it in; that array is wiped once the
+    /// message is done. Three groups and a tail on the AVX2 backend: one
+    /// guard dropped, clear. With the wipe deleted from `Scratch`'s `Drop`
+    /// the last group's keystream is still in it, and this fails. A
+    /// message shorter than a group creates no array at all.
+    #[cfg(all(target_arch = "x86_64", feature = "std"))]
+    #[test]
+    fn the_eight_block_kernel_wipes_its_keystream() {
+        use scratch::probe;
+        if !avx2() {
+            println!("no AVX2; the eight-block kernel was not exercised");
+            return;
+        }
+        let k = [7u8; 32];
+        let n = [3u8; 12];
+        let mut data = std::vec![5u8; 3 * avx2::STRIDE + 40];
+        probe::reset();
+        xor_keystream(Backend::Avx2, &k, &n, 1, &mut data).unwrap();
+        assert_eq!(probe::snapshot(), (1, 0), "three groups and a tail");
+        let mut short = [5u8; avx2::STRIDE - 1];
+        probe::reset();
+        xor_keystream(Backend::Avx2, &k, &n, 1, &mut short).unwrap();
+        assert_eq!(probe::snapshot(), (0, 0), "under a group");
     }
 
     /// Under `--cfg ic_no_avx512` the sixteen-block kernel must not be chosen,

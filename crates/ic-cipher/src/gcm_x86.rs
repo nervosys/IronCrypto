@@ -1219,8 +1219,10 @@ unsafe fn zmm_groups<const ENC: bool>(
     // `state`, and the static constants. It uses `zmm0`..`zmm15` only, and
     // declares all sixteen clobbered (an `xmm` clobber covers the whole
     // `ymm`/`zmm` register), so on Windows the callee-saved `xmm6`..`xmm15`
-    // are preserved by this function's prologue. It ends with `vzeroupper`.
-    // It touches no stack. `zmm16`..`zmm31` and the mask registers are not
+    // are preserved by this function's prologue. It ends with `vzeroall`,
+    // which zeroes all of `zmm0`..`zmm15` -- the round keys, keystream and
+    // GHASH state -- as well as doing `vzeroupper`'s job (hardening; see
+    // `docs/CONSTANT_TIME.md`). It touches no stack. `zmm16`..`zmm31` and the mask registers are not
     // used, and this function is never inlined, so no caller value can be
     // live in them across it.
     unsafe {
@@ -1247,7 +1249,7 @@ unsafe fn zmm_groups<const ENC: bool>(
                 "jnz 2b",
                 "vmovdqu xmmword ptr [{st}], xmm9",
                 "vmovdqu xmmword ptr [{st} + 16], xmm10",
-                "vzeroupper",
+                "vzeroall",
                 p = inout(reg) p => _,
                 n = inout(reg) groups => _,
                 rk = in(reg) rk,
@@ -1286,7 +1288,7 @@ unsafe fn zmm_groups<const ENC: bool>(
                 "jnz 2b",
                 "vmovdqu xmmword ptr [{st}], xmm9",
                 "vmovdqu xmmword ptr [{st} + 16], xmm10",
-                "vzeroupper",
+                "vzeroall",
                 p = inout(reg) p => _,
                 n = inout(reg) groups => _,
                 rk = in(reg) rk,
@@ -1620,7 +1622,7 @@ unsafe fn zmm32_groups<const ENC: bool>(
     // SAFETY: as for `zmm_groups`: every memory access is within the regions
     // the caller vouches for (sealing also reads the group before `{p}`,
     // which it has just written, never before the first); `zmm0`..`zmm15`
-    // only, all declared clobbered; no stack; `vzeroupper` at the end; never
+    // only, all declared clobbered; no stack; `vzeroall` at the end; never
     // inlined.
     unsafe {
         if ENC {
@@ -1638,7 +1640,7 @@ unsafe fn zmm32_groups<const ENC: bool>(
                 "4:",
                 z32_ghash_only!("{p} - 512"),
                 "vmovdqu xmmword ptr [{st}], xmm9",
-                "vzeroupper",
+                "vzeroall",
                 p = inout(reg) p => _,
                 n = inout(reg) groups => _,
                 rk = in(reg) rk,
@@ -1663,7 +1665,7 @@ unsafe fn zmm32_groups<const ENC: bool>(
                 "dec {n}",
                 "jnz 2b",
                 "vmovdqu xmmword ptr [{st}], xmm9",
-                "vzeroupper",
+                "vzeroall",
                 p = inout(reg) p => _,
                 n = inout(reg) groups => _,
                 rk = in(reg) rk,

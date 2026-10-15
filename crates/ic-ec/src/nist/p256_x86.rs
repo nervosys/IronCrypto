@@ -380,6 +380,91 @@ const _: () = {
     assert!(f::ADD_AFFINE_H == f::ADD_AFFINE_X3 + 3 && f::ADD_AFFINE_R == f::ADD_AFFINE_H + 1);
 };
 
+/// The buffer a whole multiplication runs in ([`mul_scalar`],
+/// [`table_mul`], and `p384_x86::mul_scalar`), wiped when it leaves scope.
+///
+/// It holds the accumulator, each digit's entry and the formulas'
+/// intermediates: multiples of the secret scalar. The wipe is the guard's
+/// `Drop`, so no return skips it, and it is one pass of volatile stores
+/// over the buffer, once per multiplication; the formulas still run on the
+/// buffer in place, nothing is copied. The per-formula buffers of
+/// [`point_double`] and its siblings are not wrapped: those formulas are
+/// also verification's, on public points, where a wipe per formula would be
+/// paid on every addition.
+///
+/// The test build records at each drop whether the buffer was clear after
+/// the wipe ([`ladder_probe`]); the tests fail if the wipe is removed.
+pub(crate) struct Ladder<const N: usize>([MaybeUninit<u64>; N]);
+
+impl<const N: usize> Ladder<N> {
+    /// Uninitialised: the formulas write every slot they read but the
+    /// inputs, which the caller writes first.
+    #[inline(always)]
+    pub(crate) fn new() -> Self {
+        Self([const { MaybeUninit::uninit() }; N])
+    }
+}
+
+impl<const N: usize> core::ops::Deref for Ladder<N> {
+    type Target = [MaybeUninit<u64>; N];
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<const N: usize> core::ops::DerefMut for Ladder<N> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<const N: usize> Drop for Ladder<N> {
+    fn drop(&mut self) {
+        for w in self.0.iter_mut() {
+            // SAFETY: `w` is a valid, aligned, uniquely borrowed slot; a
+            // `MaybeUninit` may be overwritten whatever it held.
+            unsafe { core::ptr::write_volatile(w, MaybeUninit::new(0)) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(all(test, feature = "std"))]
+        ladder_probe::record(self.0.iter().all(|w| {
+            // SAFETY: every slot was written just above.
+            unsafe { w.assume_init() == 0 }
+        }));
+    }
+}
+
+/// Test-only record of every [`Ladder`] drop on this thread.
+#[cfg(all(test, feature = "std"))]
+pub(crate) mod ladder_probe {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static DROPS: Cell<usize> = const { Cell::new(0) };
+        static DIRTY: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record(clear: bool) {
+        DROPS.with(|c| c.set(c.get() + 1));
+        if !clear {
+            DIRTY.with(|c| c.set(c.get() + 1));
+        }
+    }
+
+    /// Clears the record. Call at the start of a test.
+    pub(crate) fn reset() {
+        DROPS.with(|c| c.set(0));
+        DIRTY.with(|c| c.set(0));
+    }
+
+    /// `(drops, drops that found their buffer not clear)` since [`reset`].
+    pub(crate) fn snapshot() -> (usize, usize) {
+        (DROPS.with(Cell::get), DIRTY.with(Cell::get))
+    }
+}
+
 /// Jacobian doubling as one block of assembly, where the CPU has BMI2 and
 /// ADX; `None` where it does not.
 #[inline(always)]
@@ -474,7 +559,7 @@ pub(crate) fn mul_scalar(
     let n = digit_count(bytes.len(), WIDTH);
     let window = Window::new(p);
 
-    let mut buf = [const { MaybeUninit::uninit() }; LADDER];
+    let mut buf = Ladder::<LADDER>::new();
     let put = |buf: &mut [MaybeUninit<u64>; LADDER], slot: usize, q: &Point<crate::p256::P256>| {
         for (k, c) in [q.x(), q.y(), q.z()].iter().enumerate() {
             for (j, w) in c.0.iter().enumerate() {
@@ -550,7 +635,7 @@ pub(crate) fn table_mul<const E: usize>(
         .find(|&i| w * (i + 1) >= P256::ORDER_BITS)
         .unwrap_or(n);
 
-    let mut buf = [const { MaybeUninit::uninit() }; TABLE];
+    let mut buf = Ladder::<TABLE>::new();
     let put = |buf: &mut [MaybeUninit<u64>; TABLE], slot: usize, words: &[u64; 4]| {
         for (j, x) in words.iter().enumerate() {
             buf[4 * slot + j].write(*x);
@@ -1644,6 +1729,29 @@ mod tests {
             let got = crate::p256::table_mul_adx_for_tests(k).expect("BMI2 and ADX");
             assert_eq!(words(&got), words(&P256::table_mul_generic_for_tests(k)));
         }
+    }
+
+    /// Each buffer multiplication wipes its buffer when it returns: one
+    /// [`Ladder`] drop per call, and the buffer clear at it. With the wipe
+    /// deleted from `Ladder`'s `Drop`, the accumulator is still in the
+    /// buffer and the second count is non-zero. P-384's `mul_scalar` holds
+    /// the same guard, and `p384_x86`'s tests check it.
+    #[test]
+    fn the_buffer_multiplications_wipe_their_buffers() {
+        use super::ladder_probe as probe;
+        use crate::nist::point::Point;
+        use crate::p256::P256;
+        if !has_adx() {
+            std::println!("no BMI2 and ADX; the buffer multiplications were not run");
+            return;
+        }
+        let k = &scalars(1)[81];
+        probe::reset();
+        mul_scalar(&Point::<P256>::generator(), k).expect("BMI2 and ADX");
+        assert_eq!(probe::snapshot(), (1, 0), "mul_scalar");
+        probe::reset();
+        crate::p256::table_mul_adx_for_tests(k).expect("BMI2 and ADX");
+        assert_eq!(probe::snapshot(), (1, 0), "table_mul");
     }
 
     #[test]

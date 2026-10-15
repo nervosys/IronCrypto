@@ -19,6 +19,24 @@ all of them.
   floor table in `scripts/advisories.sh` now holds 0.23.46, so a build that
   resolves an older rustls fails `scripts/check.sh`. Found by `cargo audit`
   in that script, which reports and does not gate.
+- **Vector registers and stack buffers are cleared after secret-handling
+  kernels.** Hardening, not a vulnerability fix: no code read the values
+  left behind, but a later disclosure (a register file saved at a context
+  switch and dumped, a speculative read) should find zeros. The AES-GCM
+  kernels end with `vzeroall` (256- and 512-bit) or a `pxor` of every
+  `xmm` register (128-bit), once per call, clearing round keys, keystream
+  and GHASH state; Ed25519 signing's AVX2 table read and RSA's AVX2 table
+  reads with `vzeroall`, its SSE2 reads with `pxor`; RSA's IFMA
+  exponentiation once at its end; the P-256/P-384 IFMA multiplications
+  once at their end (after each kernel cost P-384 ECDH about 2.5 percent).
+  The P-256/P-384 MULX/ADX multiplications wipe their working buffer on
+  return, and the AVX2 ChaCha20 kernel's keystream array is wiped once per
+  message. `scripts/check-ct.py` now also checks, on 30 x86-64 probes,
+  that the last kernel block zeroes every vector register the probe's
+  blocks name; tests fail if a buffer wipe is removed. Measured at parity.
+  Not done: the SHA-3 four-way permutation's stack residue is the
+  compiler's own spill slots, which no source-level wipe reaches
+  (docs/CONSTANT_TIME.md, "Registers and stack after a kernel").
 
 ### Changed
 

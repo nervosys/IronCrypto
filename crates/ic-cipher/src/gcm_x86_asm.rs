@@ -55,7 +55,9 @@
 //!   `H` (`gcm_x86::HashKey` is aligned). The round keys are loaded with
 //!   `movdqu`, as is the message, which is only ever loaded and stored so.
 //! - The sixteen-block kernel is VEX-encoded on `ymm` registers and needs
-//!   AVX2, `VAES` and `VPCLMULQDQ`; it ends with `vzeroupper`.
+//!   AVX2, `VAES` and `VPCLMULQDQ`; it ends with `vzeroall`, which also
+//!   clears the round keys, keystream and GHASH state from the registers
+//!   (the eight-block kernel ends with a `pxor` of each, `x8_wipe!`).
 //!
 //! # Key sizes
 //!
@@ -145,6 +147,38 @@ macro_rules! asm_all_vectors {
             out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
             out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _,
             out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
+        )
+    };
+}
+
+/// The last instructions of every eight-block kernel: zero all sixteen
+/// `xmm` registers, which held round keys, keystream and the GHASH state.
+/// Defence in depth: nothing reads a dead register, but a later
+/// disclosure bug (a spilled callee-saved register on Windows, a
+/// speculative read, a core dump) should find zeros there rather than key
+/// material. The sixteen-block kernels end with `vzeroall` instead, which
+/// does the same for the `ymm` registers; every block here declares all
+/// sixteen clobbered, so either is invisible to the compiler.
+/// `scripts/check-ct.py` checks that each kernel's code ends this way.
+macro_rules! x8_wipe {
+    () => {
+        concat!(
+            "pxor xmm0, xmm0\n",
+            "pxor xmm1, xmm1\n",
+            "pxor xmm2, xmm2\n",
+            "pxor xmm3, xmm3\n",
+            "pxor xmm4, xmm4\n",
+            "pxor xmm5, xmm5\n",
+            "pxor xmm6, xmm6\n",
+            "pxor xmm7, xmm7\n",
+            "pxor xmm8, xmm8\n",
+            "pxor xmm9, xmm9\n",
+            "pxor xmm10, xmm10\n",
+            "pxor xmm11, xmm11\n",
+            "pxor xmm12, xmm12\n",
+            "pxor xmm13, xmm13\n",
+            "pxor xmm14, xmm14\n",
+            "pxor xmm15, xmm15\n",
         )
     };
 }
@@ -451,6 +485,7 @@ pub(crate) unsafe fn x8_aes<const R: usize>(p: *mut u8, rk: *const u8, st: *mut 
     unsafe {
         asm_all_vectors!(
             x8_aes_group!(),
+            x8_wipe!(),
             p = in(reg) p,
             rk = in(reg) rk,
             st = in(reg) st,
@@ -478,6 +513,7 @@ pub(crate) unsafe fn x8_ghash(src: *const u8, pw: *const u8, pk: *const u8, st: 
             "movdqu xmm9, xmmword ptr [{st}]",
             x8_ghash8!("{s}"),
             "movdqu xmmword ptr [{st}], xmm9",
+            x8_wipe!(),
             s = in(reg) src,
             pw = in(reg) pw,
             pk = in(reg) pk,
@@ -521,6 +557,7 @@ pub(crate) unsafe fn x8_seal<const R: usize>(
             "jnz 2b",
             x8_ghash8!("{p} - 128"),
             "movdqu xmmword ptr [{st}], xmm9",
+            x8_wipe!(),
             p = inout(reg) p => _,
             n = inout(reg) n => _,
             rk = in(reg) rk,
@@ -562,6 +599,7 @@ pub(crate) unsafe fn x8_open<const R: usize>(
             "dec {n}",
             "jnz 2b",
             "movdqu xmmword ptr [{st}], xmm9",
+            x8_wipe!(),
             p = inout(reg) p => _,
             n = inout(reg) n => _,
             rk = in(reg) rk,
@@ -845,7 +883,7 @@ pub(crate) unsafe fn y16_aes<const R: usize>(p: *mut u8, rk: *const u8, st: *mut
     unsafe {
         asm_all_vectors!(
             y16_aes_group!(),
-            "vzeroupper",
+            "vzeroall",
             p = in(reg) p,
             rk = in(reg) rk,
             st = in(reg) st,
@@ -872,7 +910,7 @@ pub(crate) unsafe fn y16_ghash(src: *const u8, pw: *const u8, pk: *const u8, st:
             "vmovdqu xmm9, xmmword ptr [{st}]",
             y16_ghash16!("{s}"),
             "vmovdqu xmmword ptr [{st}], xmm9",
-            "vzeroupper",
+            "vzeroall",
             s = in(reg) src,
             pw = in(reg) pw,
             pk = in(reg) pk,
@@ -912,7 +950,7 @@ pub(crate) unsafe fn y16_seal<const R: usize>(
             "jnz 2b",
             y16_ghash16!("{p} - 256"),
             "vmovdqu xmmword ptr [{st}], xmm9",
-            "vzeroupper",
+            "vzeroall",
             p = inout(reg) p => _,
             n = inout(reg) n => _,
             rk = in(reg) rk,
@@ -953,7 +991,7 @@ pub(crate) unsafe fn y16_open<const R: usize>(
             "dec {n}",
             "jnz 2b",
             "vmovdqu xmmword ptr [{st}], xmm9",
-            "vzeroupper",
+            "vzeroall",
             p = inout(reg) p => _,
             n = inout(reg) n => _,
             rk = in(reg) rk,

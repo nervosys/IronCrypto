@@ -7,7 +7,7 @@
 //! BMI2 or ADX, and the caller then uses the generic arithmetic, which
 //! computes the same function.
 
-use super::p256_x86::has_adx;
+use super::p256_x86::{has_adx, Ladder};
 use core::mem::MaybeUninit;
 
 /// `a * b * 2^-384` modulo P-384's prime, canonical; `None` without BMI2
@@ -306,7 +306,7 @@ pub(crate) fn mul_scalar(
     let n = digit_count(bytes.len(), WIDTH);
     let window = AffineWindow::<P384, ENTRIES>::new(p);
 
-    let mut buf = [const { MaybeUninit::uninit() }; LADDER];
+    let mut buf = Ladder::<LADDER>::new();
     let put = |buf: &mut [MaybeUninit<u64>; LADDER], slot: usize, w: &[u64; 6]| {
         for (j, x) in w.iter().enumerate() {
             buf[6 * slot + j].write(*x);
@@ -678,6 +678,25 @@ mod tests {
                 assert_eq!(got.to_affine().map(|a| (a.x.0, a.y.0)), want);
             }
         }
+    }
+
+    /// The multiplication wipes its buffer when it returns: one `Ladder`
+    /// drop, the buffer clear at it. Fails with the wipe deleted from
+    /// `Ladder`'s `Drop`.
+    #[test]
+    fn the_buffer_multiplication_wipes_its_buffer() {
+        use crate::nist::arith::Field;
+        use crate::nist::p256_x86::ladder_probe as probe;
+        use crate::nist::point::Point;
+        type S = <P384 as Curve>::Scalar;
+        if !has_adx() {
+            std::println!("no BMI2 and ADX; the buffer multiplication was not run");
+            return;
+        }
+        let k = S::ONE.add(&S::ONE).add(&S::ONE);
+        probe::reset();
+        mul_scalar(&Point::<P384>::generator(), &k).expect("BMI2 and ADX");
+        assert_eq!(probe::snapshot(), (1, 0));
     }
 
     /// The fused operations on inputs built to take each side of their

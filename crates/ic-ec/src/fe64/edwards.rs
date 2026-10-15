@@ -706,6 +706,11 @@ macro_rules! scan_negate {
 
 /// Run one block over a [`Ws2Scan`]: the text macros, with the vector
 /// registers the table reads use declared clobbered.
+///
+/// The block ends with `vzeroall` rather than `vzeroupper`: the digits'
+/// masks and the entries they chose are cleared from `ymm0`..`ymm15`
+/// before it returns (hardening; `docs/CONSTANT_TIME.md`). All sixteen
+/// are declared clobbered, so the compiler keeps nothing in them across it.
 macro_rules! block_scan {
     ($ws:expr, $($text:expr),+ $(,)?) => {{
         let ws: *mut Ws2Scan = $ws;
@@ -720,7 +725,7 @@ macro_rules! block_scan {
             asm!(
                 ".p2align 6",
                 $($text),+,
-                "vzeroupper",
+                "vzeroall",
                 in("rdi") ws.cast::<u64>(),
                 out("rax") _,
                 out("rcx") _,
@@ -749,7 +754,7 @@ macro_rules! block_scan {
                 out("ymm12") _,
                 out("ymm13") _,
                 out("ymm14") _,
-                // Unused by the text, but `vzeroupper` clears its upper half.
+                // Unused by the text, but `vzeroall` clears it.
                 out("ymm15") _,
                 options(nostack),
             );
