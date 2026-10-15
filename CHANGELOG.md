@@ -731,6 +731,18 @@ all of them.
   a model without the feature, so a run with no SIGILL shows no such path was
   reached there. Not part of `check.sh`; documented in docs/CI.md. AVX-512 is
   not covered, because QEMU's TCG does not implement it.
+- **Assembly review follow-ups.** The generators for the P-256, P-384 and
+  IFMA kernels now refuse to emit a kernel that reads a slot before a step
+  writes it, and emit the output slots as named constants that the wrappers
+  use in place of literal indices. The MULX/ADX point and field probes that
+  were safe functions are `unsafe`, as their callers require, as are the
+  AVX2 and IFMA probe wrappers, the RSA forced-ADX switch and the IFMA
+  select helpers, which no longer make a capability token. The AVX2 table
+  scan is bounded at compile time. The IFMA `# Safety` text states
+  what each kernel reads and writes. Two reviewer tests are adopted, for the
+  RSA x86 final subtraction and for IFMA products near the top of their range.
+  Doc comments on the GCM and RSA kernels are corrected. Generated kernels
+  change only where those texts or constants changed; no speed claim.
 
 - **Every multi-instruction `asm!` block in `ic-ec` starts on a 64-byte
   boundary**, through the generators for the generated kernels, as RSA's do.

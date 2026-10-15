@@ -119,7 +119,10 @@ pub(crate) trait Vector: Copy {
     fn mut_ptr(&mut self) -> *mut u64;
     /// The OR over `w` of each entry masked by its mask, into `out`: a table
     /// scan, every entry read.
-    fn scan(t: Ifma, w: &[Self; ENTRIES], masks: &[u64; ENTRIES], out: &mut Self);
+    /// # Safety
+    ///
+    /// The CPU must have AVX2.
+    unsafe fn scan(w: &[Self; ENTRIES], masks: &[u64; ENTRIES], out: &mut Self);
 }
 
 impl<const L: usize> Vector for Lanes<L> {
@@ -145,8 +148,11 @@ impl<const L: usize> Vector for Lanes<L> {
     fn mut_ptr(&mut self) -> *mut u64 {
         self.0.as_mut_ptr().cast()
     }
-    fn scan(_: Ifma, w: &[Self; ENTRIES], masks: &[u64; ENTRIES], out: &mut Self) {
-        // SAFETY: the token says the CPU has AVX2.
+    /// # Safety
+    ///
+    /// As [`Vector::scan`]: the CPU must support AVX2.
+    unsafe fn scan(w: &[Self; ENTRIES], masks: &[u64; ENTRIES], out: &mut Self) {
+        // SAFETY: the caller guarantees AVX2.
         unsafe { scan_avx2(w, masks, out) }
     }
 }
@@ -371,11 +377,16 @@ fn store<C: LaneCurve>(t: Ifma, v: &C::V, s: &mut C::S) -> Point<C> {
 
 /// `|digit|` times the window's base, by a masked scan over every entry, and
 /// the digit's masks: negative, zero. A zero digit reads all zeros.
-fn select<V: Vector>(t: Ifma, w: &[V; ENTRIES], digit: i8, out: &mut V) -> (u64, u64) {
+///
+/// # Safety
+///
+/// The CPU must have AVX2.
+unsafe fn select<V: Vector>(w: &[V; ENTRIES], digit: i8, out: &mut V) -> (u64, u64) {
     let negative = u64::from((digit as u8) >> 7);
     let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u32;
     let masks = masks_for::<ENTRIES>(magnitude, 1);
-    V::scan(t, w, &masks, out);
+    // SAFETY: the caller guarantees AVX2.
+    unsafe { V::scan(w, &masks, out) };
     (negative.wrapping_neg(), zero_mask(digit))
 }
 
@@ -449,7 +460,8 @@ pub(crate) fn mul_scalar<C: LaneCurve>(t: Ifma, p: &Point<C>, scalar: &C::Scalar
     // The top digit: the accumulator is the identity, so the addition
     // returns the entry (mask 2).
     let mut e = C::V::zero();
-    let (neg, zero) = select(t, &w, digits[n - 1], &mut e);
+    // SAFETY: `t` proves AVX2.
+    let (neg, zero) = unsafe { select(&w, digits[n - 1], &mut e) };
     let (a, o) = acc.step();
     // SAFETY: one lane vector of each set, the entry another.
     unsafe { run::<C>(t, C::ADD, a, e.ptr(), &[neg, zero, u64::MAX], o, &mut s) };
@@ -458,7 +470,8 @@ pub(crate) fn mul_scalar<C: LaneCurve>(t: Ifma, p: &Point<C>, scalar: &C::Scalar
     for i in (1..n - 1).rev() {
         // The scan first: it does not depend on the accumulator, so the core
         // can run it beside the doublings.
-        let (neg, zero) = select(t, &w, digits[i], &mut e);
+        // SAFETY: `t` proves AVX2.
+        let (neg, zero) = unsafe { select(&w, digits[i], &mut e) };
         doublings::<C>(t, &mut acc, &mut s);
         let (a, o) = acc.step();
         // SAFETY: as above.
@@ -474,7 +487,8 @@ pub(crate) fn mul_scalar<C: LaneCurve>(t: Ifma, p: &Point<C>, scalar: &C::Scalar
         &Point::identity(),
         Choice::from_u8((acc_inf & 1) as u8),
     );
-    let (neg, _) = select(t, &w, digits[0], &mut e);
+    // SAFETY: `t` proves AVX2.
+    let (neg, _) = unsafe { select(&w, digits[0], &mut e) };
     let mut entry = store(t, &e, &mut s);
     entry.conditional_negate(Choice::from_u8((neg & 1) as u8));
     let mut out = sum.add(&entry);
@@ -910,10 +924,11 @@ pub mod probes {
     ///
     /// # Safety
     ///
-    /// The CPU must have AVX2 (`Ifma::get` implies it).
+    /// The CPU must have AVX2.
     #[inline(always)]
     pub unsafe fn p256_select(w: &[P256; ENTRIES], digit: i8, out: &mut P256) -> [u64; 2] {
-        let (neg, zero) = select(Ifma(()), w, digit, out);
+        // SAFETY: the caller guarantees AVX2.
+        let (neg, zero) = unsafe { select(w, digit, out) };
         [neg, zero]
     }
 
@@ -924,7 +939,8 @@ pub mod probes {
     /// As [`p256_select`].
     #[inline(always)]
     pub unsafe fn p384_select(w: &[P384; ENTRIES], digit: i8, out: &mut P384) -> [u64; 2] {
-        let (neg, zero) = select(Ifma(()), w, digit, out);
+        // SAFETY: the caller guarantees AVX2.
+        let (neg, zero) = unsafe { select(w, digit, out) };
         [neg, zero]
     }
 

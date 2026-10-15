@@ -102,6 +102,7 @@ pub fn ed25519_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
     target_arch = "x86_64",
     not(any(ic_limb32, ic_ec_portable))
 ))]
+#[allow(unsafe_code)]
 pub mod x86 {
     use crate::fe64::edwards;
     pub use crate::fe64::edwards::{Ws, Ws2};
@@ -112,43 +113,83 @@ pub mod x86 {
     pub use crate::f51x4::probes as ifma;
 
     /// `a * b`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn fe64_mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    pub unsafe fn fe64_mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
         Fe64::from_bytes(a).mul(&Fe64::from_bytes(b)).to_bytes()
     }
     /// `a^2`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn fe64_square(a: &[u8; 32]) -> [u8; 32] {
+    pub unsafe fn fe64_square(a: &[u8; 32]) -> [u8; 32] {
         Fe64::from_bytes(a).square().to_bytes()
     }
     /// `a + b`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn fe64_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    pub unsafe fn fe64_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
         Fe64::from_bytes(a).add(&Fe64::from_bytes(b)).to_bytes()
     }
     /// `a - b`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn fe64_sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    pub unsafe fn fe64_sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
         Fe64::from_bytes(a).sub(&Fe64::from_bytes(b)).to_bytes()
     }
     /// `121666 a`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn fe64_mul121666(a: &[u8; 32]) -> [u8; 32] {
+    pub unsafe fn fe64_mul121666(a: &[u8; 32]) -> [u8; 32] {
         Fe64::from_bytes(a).mul121666().to_bytes()
     }
     /// `a^-1`, by divsteps.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn fe64_invert(a: &[u8; 32]) -> [u8; 32] {
+    pub unsafe fn fe64_invert(a: &[u8; 32]) -> [u8; 32] {
         Fe64::from_bytes(a).invert().to_bytes()
     }
     /// One X25519 ladder step, the secret bit in `swap`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn x25519_step(ws: &mut [u64; 76], swap: u64) {
+    pub unsafe fn x25519_step(ws: &mut [u64; 76], swap: u64) {
         crate::fe64::ladder_step(ws, swap & 1)
     }
     /// X25519's doubling alone, at the top bit and the three clamped ones.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn x25519_double(ws: &mut [u64; 76]) {
+    pub unsafe fn x25519_double(ws: &mut [u64; 76]) {
         crate::fe64::ladder_double(ws)
     }
     /// Signing's table read: a window's entry by the secret digit.
@@ -157,8 +198,13 @@ pub mod x86 {
         edwards::select(dst, table, digit)
     }
     /// Signing's step: two mixed additions, interleaved.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn ed25519_madd_ext2(ws: &mut Ws2) {
+    pub unsafe fn ed25519_madd_ext2(ws: &mut Ws2) {
         edwards::madd_ext2(ws);
     }
     pub use crate::fe64::edwards::Ws2Scan;
@@ -173,8 +219,13 @@ pub mod x86 {
         crate::ed25519::signed_digits32(scalar)
     }
     /// Signing's doublings and final addition.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
     #[inline(always)]
-    pub fn ed25519_dbl_nadd(ws: &mut Ws) {
+    pub unsafe fn ed25519_dbl_nadd(ws: &mut Ws) {
         edwards::dbl(ws);
         edwards::to_proj(ws);
         edwards::dbl(ws);

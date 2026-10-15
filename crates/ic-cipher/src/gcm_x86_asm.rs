@@ -50,10 +50,10 @@
 //!
 //! - The eight-block kernel runs on any CPU with AES-NI, `PCLMULQDQ` and
 //!   SSSE3, AVX or not, so it is written in the legacy SSE encoding. Those
-//!   forms fault on a memory operand that is not 16-byte aligned, so every
-//!   memory operand here is: the constants, the round keys (`__m128i`), and
-//!   the powers of `H` (`gcm_x86::HashKey` is aligned). The message is only
-//!   ever loaded and stored with `movdqu`.
+//!   forms fault on a memory operand that is not 16-byte aligned, so the
+//!   memory operands they take are aligned: the constants, and the powers of
+//!   `H` (`gcm_x86::HashKey` is aligned). The round keys are loaded with
+//!   `movdqu`, as is the message, which is only ever loaded and stored so.
 //! - The sixteen-block kernel is VEX-encoded on `ymm` registers and needs
 //!   AVX2, `VAES` and `VPCLMULQDQ`; it ends with `vzeroupper`.
 //!
@@ -441,8 +441,8 @@ macro_rules! x8_stitched {
 ///
 /// - The CPU must have AES-NI and SSSE3.
 /// - `p` must point to 128 readable and writable bytes; `rk` to the round
-///   keys of an AES-NI schedule with `R` rounds (10, 12 or 14), 16-byte
-///   aligned; `st` to 32 readable and writable bytes, the accumulator and
+///   keys of an AES-NI schedule with `R` rounds (10, 12 or 14), which need no
+///   alignment; `st` to 32 readable and writable bytes, the accumulator and
 ///   then the counter in `gcm_x86::Counter`'s form. The counter is advanced
 ///   by eight.
 #[inline(never)]

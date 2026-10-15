@@ -1309,6 +1309,12 @@ pub unsafe fn double_adx(buf: &mut [MaybeUninit<u64>; 60]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const DOUBLE_X3: usize = 3;
+#[allow(dead_code)]
+pub const DOUBLE_Y3: usize = 4;
+#[allow(dead_code)]
+pub const DOUBLE_Z3: usize = 5;
 
 /// `double_adx` with X3, Y3 and Z3 written over X, Y and Z: the scalar multiplication's doubling, on a buffer whose first slots are its accumulator.
 ///
@@ -2598,6 +2604,12 @@ pub unsafe fn double_in_place_adx(buf: &mut [MaybeUninit<u64>; 48]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const DOUBLE_IN_PLACE_X: usize = 0;
+#[allow(dead_code)]
+pub const DOUBLE_IN_PLACE_Y: usize = 1;
+#[allow(dead_code)]
+pub const DOUBLE_IN_PLACE_Z: usize = 2;
 
 /// Jacobian addition, `add-2007-bl`, as `Point::add_formula`; also leaves `H` and `R`.
 ///
@@ -4980,6 +4992,16 @@ pub unsafe fn add_adx(buf: &mut [MaybeUninit<u64>; 96]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const ADD_X3: usize = 6;
+#[allow(dead_code)]
+pub const ADD_Y3: usize = 7;
+#[allow(dead_code)]
+pub const ADD_Z3: usize = 8;
+#[allow(dead_code)]
+pub const ADD_H: usize = 9;
+#[allow(dead_code)]
+pub const ADD_R: usize = 10;
 
 /// Mixed addition, `madd-2007-bl`, as `Point::add_affine_formula`; also leaves `H` and `R`.
 ///
@@ -6732,6 +6754,16 @@ pub unsafe fn add_affine_adx(buf: &mut [MaybeUninit<u64>; 80]) {
         );
     }
 }
+#[allow(dead_code)]
+pub const ADD_AFFINE_X3: usize = 5;
+#[allow(dead_code)]
+pub const ADD_AFFINE_Y3: usize = 6;
+#[allow(dead_code)]
+pub const ADD_AFFINE_Z3: usize = 7;
+#[allow(dead_code)]
+pub const ADD_AFFINE_H: usize = 8;
+#[allow(dead_code)]
+pub const ADD_AFFINE_R: usize = 9;
 
 /// `3 A - 8 B`, alone, for the tests: a fused operation the doubling uses.
 ///
@@ -6820,6 +6852,9 @@ pub unsafe fn cms_3_8_adx(buf: &mut [MaybeUninit<u64>; 12]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const CMS_3_8_OUT: usize = 2;
 
 /// `4 A - 1 B`, alone, for the tests: a fused operation the doubling uses.
 ///
@@ -6903,6 +6938,9 @@ pub unsafe fn cms_4_1_adx(buf: &mut [MaybeUninit<u64>; 12]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const CMS_4_1_OUT: usize = 2;
 
 /// `12 A - 9 B`, alone, for the tests: a fused operation the doubling uses.
 ///
@@ -6995,6 +7033,9 @@ pub unsafe fn cms_12_9_adx(buf: &mut [MaybeUninit<u64>; 12]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const CMS_12_9_OUT: usize = 2;
 
 /// `3 * A`, alone, for the tests: the small-multiple operation the formulas use.
 ///
@@ -7077,6 +7118,9 @@ pub unsafe fn times3_adx(buf: &mut [MaybeUninit<u64>; 8]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const TIMES3_OUT: usize = 1;
 
 /// `4 * A`, alone, for the tests: the small-multiple operation the formulas use.
 ///
@@ -7154,6 +7198,9 @@ pub unsafe fn times4_adx(buf: &mut [MaybeUninit<u64>; 8]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const TIMES4_OUT: usize = 1;
 
 /// `8 * A`, alone, for the tests: the small-multiple operation the formulas use.
 ///
@@ -7231,3 +7278,6 @@ pub unsafe fn times8_adx(buf: &mut [MaybeUninit<u64>; 8]) {
         );
     }
 }
+#[cfg(test)]
+#[allow(dead_code)]
+pub const TIMES8_OUT: usize = 1;

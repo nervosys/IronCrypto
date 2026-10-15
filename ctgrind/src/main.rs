@@ -315,7 +315,10 @@ fn rsa_sign(bits: usize, adx: bool) {
     // backend there only makes it finish sooner under Valgrind.
     let mut generate = || ic_rsa::generate(bits, &mut rng).unwrap();
     let key = if adx {
-        ic_rsa::ct_probes::with_forced_adx(generate)
+        // SAFETY: the ADX cases run on the x86-64 hardware ctgrind targets, which
+        // has BMI2 and ADX. Valgrind executes them while CPUID hides them, so
+        // this cannot be checked with CPUID here.
+        unsafe { ic_rsa::ct_probes::with_forced_adx(generate) }
     } else {
         generate()
     };
@@ -329,7 +332,8 @@ fn rsa_sign(bits: usize, adx: bool) {
     let mut sig = vec![0u8; bits / 8];
     let mut sign = || ironcrypto::rsa::Pkcs1Sha256::sign(&key, b"message", &mut sig);
     let r = if adx {
-        ic_rsa::ct_probes::with_forced_adx(sign)
+        // SAFETY: as for the key above.
+        unsafe { ic_rsa::ct_probes::with_forced_adx(sign) }
     } else {
         sign()
     };

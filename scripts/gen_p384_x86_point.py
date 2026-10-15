@@ -360,9 +360,31 @@ def cms(dst, a, b, cm, dm, scratch):
     return out + [f"mov {addr(dst, i)}, {n[i]}" for i in range(N)]
 
 
-def emit(name, doc, slots, program, attrs=("#[inline(never)]",)):
+def check_reads(name, slots, inputs, program):
+    """Every source operand is an input slot or was written by an earlier step.
+
+    A read of a slot nothing has written yet would silently use whatever the
+    buffer held. Refuse to generate that."""
+    written = set(inputs)
+    for x in inputs:
+        assert x in slots, f"{name}: input {x} is not a slot"
+    for op, dst, *args in program:
+        for x in args:
+            if isinstance(x, str) and x in slots and x not in written:
+                sys.exit(f"{name}: {op} into {dst} reads {x} before any step writes it")
+        written.add(dst)
+
+
+def emit(name, doc, slots, program, inputs, outputs, attrs=("#[inline(never)]",)):
+    """inputs: the slots the caller writes; outputs: the slots the Rust wrappers
+    read back, emitted as `pub const` indices."""
     slots = slots + ["scratch"]
     idx = {n: i for i, n in enumerate(slots)}
+    check_reads(name, slots, inputs, program)
+    for x in outputs:
+        assert x in slots, f"{name}: output {x} is not a slot"
+    # The slot indices by name: `<KERNEL>_<SLOT>`. Taken before `name` is reused.
+    base = (name[:-4] if name.endswith("_adx") else name).upper()
     o = [f"/// {doc}", "///"]
     o.append("/// Slots, 48 bytes each, in order: " + ", ".join(f"`{s}`" for s in slots) + ".")
     o += ["///", "/// # Safety", "///",
@@ -397,6 +419,13 @@ def emit(name, doc, slots, program, attrs=("#[inline(never)]",)):
             o.append(f"            {name} = out(reg) _,")
     o += ['            out("rax") _,', '            out("rdx") _,',
           "            options(nostack),", "        );", "    }", "}"]
+    for x in outputs:
+        if "#[cfg(test)]" in attrs:
+            o.append("#[cfg(test)]")
+        # Older compilers do not count a use in a `const` assertion, so a build
+        # that reads few of these would warn; the allow keeps every toolchain quiet.
+        o.append("#[allow(dead_code)]")
+        o.append(f"pub const {base}_{x.upper()}: usize = {idx[x]};")
     return "\n".join(o)
 
 
@@ -542,30 +571,32 @@ MADD = [
 def main():
     parts = [HEADER]
     parts.append(emit("fmul_adx", "`a * b * 2^-384 mod p`, canonical.", ["a", "b", "out"],
-                      [("mul", "out", "a", "b")], ("#[inline]",)))
+                      [("mul", "out", "a", "b")], ["a", "b"], ["out"], ("#[inline]",)))
     parts.append(emit("fsqr_adx", "`a^2 * 2^-384 mod p`, canonical.", ["a", "out"],
-                      [("sqr", "out", "a")], ("#[inline]",)))
+                      [("sqr", "out", "a")], ["a"], ["out"], ("#[inline]",)))
     parts.append(emit("fadd_adx", "`a + b mod p`; alone, only for the tests.", ["a", "b", "out"],
-                      [("add", "out", "a", "b")], ("#[cfg(test)]", "#[inline(never)]")))
+                      [("add", "out", "a", "b")], ["a", "b"], ["out"], ("#[cfg(test)]", "#[inline(never)]")))
     parts.append(emit("fsub_adx", "`a - b mod p`; alone, only for the tests.", ["a", "b", "out"],
-                      [("sub", "out", "a", "b")], ("#[cfg(test)]", "#[inline(never)]")))
+                      [("sub", "out", "a", "b")], ["a", "b"], ["out"], ("#[cfg(test)]", "#[inline(never)]")))
     # The fused operations the doubling uses, alone, for the tests.
     for cm, dm in CMS_USED:
         parts.append(emit(f"fcms_{cm}_{dm}_adx", f"`{cm} a - {dm} b mod p`; alone, only for the tests.",
-                          ["a", "b", "out"], [("cms", "out", "a", "b", cm, dm)],
+                          ["a", "b", "out"], [("cms", "out", "a", "b", cm, dm)], ["a", "b"], ["out"],
                           ("#[cfg(test)]", "#[inline(never)]")))
     parts.append(emit("double_adx", "Point doubling, `dbl-2001-b` for `a = -3`, as `Point::double`.",
-                      DOUBLE_SLOTS, DOUBLE))
+                      DOUBLE_SLOTS, DOUBLE, ["X", "Y", "Z"], ["X3", "Y3", "Z3"]))
     parts.append(emit("double_in_place_adx",
                       "`double_adx` with X3, Y3 and Z3 written over X, Y and Z: the scalar "
                       "multiplication's doubling, on a buffer whose first slots are its accumulator.",
-                      DOUBLE_IP_SLOTS, DOUBLE_IP))
+                      DOUBLE_IP_SLOTS, DOUBLE_IP, ["X", "Y", "Z"], ["X", "Y", "Z"]))
     parts.append(emit("add_adx",
                       "Jacobian addition, `add-2007-bl`, as `Point::add_formula`; also leaves `H` and `R`.",
-                      ADD_SLOTS, ADD))
+                      ADD_SLOTS, ADD, ["X1", "Y1", "Z1", "X2", "Y2", "Z2"],
+                      ["X3", "Y3", "Z3", "H", "R"]))
     parts.append(emit("add_affine_adx",
                       "Mixed addition, `madd-2007-bl`, as `Point::add_affine_formula`; also leaves `H` and `R`.",
-                      MADD_SLOTS, MADD))
+                      MADD_SLOTS, MADD, ["X1", "Y1", "Z1", "x2", "y2"],
+                      ["X3", "Y3", "Z3", "H", "R"]))
     text = "\n\n".join(parts) + "\n"
     with open(sys.argv[1], "w", encoding="utf-8", newline="\n") as f:
         f.write(text)

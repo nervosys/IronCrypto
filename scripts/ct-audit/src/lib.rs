@@ -200,44 +200,68 @@ pub fn ct_ed25519_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] 
 mod x86 {
     use ic_ec::ct_probes::x86 as p;
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_fe64_mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
-        p::fe64_mul(a, b)
+    pub unsafe fn ct_fe64_mul(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::fe64_mul(a, b) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_fe64_square(a: &[u8; 32]) -> [u8; 32] {
-        p::fe64_square(a)
+    pub unsafe fn ct_fe64_square(a: &[u8; 32]) -> [u8; 32] {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::fe64_square(a) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_fe64_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
-        p::fe64_add(a, b)
+    pub unsafe fn ct_fe64_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::fe64_add(a, b) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_fe64_sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
-        p::fe64_sub(a, b)
+    pub unsafe fn ct_fe64_sub(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::fe64_sub(a, b) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_fe64_mul121666(a: &[u8; 32]) -> [u8; 32] {
-        p::fe64_mul121666(a)
+    pub unsafe fn ct_fe64_mul121666(a: &[u8; 32]) -> [u8; 32] {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::fe64_mul121666(a) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_fe64_invert(a: &[u8; 32]) -> [u8; 32] {
-        p::fe64_invert(a)
+    pub unsafe fn ct_fe64_invert(a: &[u8; 32]) -> [u8; 32] {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::fe64_invert(a) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_x25519_fe64_step(ws: &mut [u64; 76], swap: u64) {
-        p::x25519_step(ws, swap)
+    pub unsafe fn ct_x25519_fe64_step(ws: &mut [u64; 76], swap: u64) {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::x25519_step(ws, swap) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_x25519_fe64_double(ws: &mut [u64; 76]) {
-        p::x25519_double(ws)
+    pub unsafe fn ct_x25519_fe64_double(ws: &mut [u64; 76]) {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::x25519_double(ws) }
     }
 
     #[no_mangle]
@@ -245,19 +269,31 @@ mod x86 {
         p::ed25519_select(dst, table, digit)
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_ed25519_fe64_madd_ext2(ws: &mut p::Ws2) {
-        p::ed25519_madd_ext2(ws)
+    pub unsafe fn ct_ed25519_fe64_madd_ext2(ws: &mut p::Ws2) {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ed25519_madd_ext2(ws) }
     }
 
+    /// # Safety
+    /// Requires AVX2.
     #[no_mangle]
-    pub fn ct_ed25519_fe64_scan(ws: &mut p::Ws2Scan, table: &[[u64; 12]; 16], d0: i8, d1: i8) {
+    pub unsafe fn ct_ed25519_fe64_scan(
+        ws: &mut p::Ws2Scan,
+        table: &[[u64; 12]; 16],
+        d0: i8,
+        d1: i8,
+    ) {
         // SAFETY: never executed; compiled to be read.
         unsafe { p::wide::scan(ws, table, d0, d1) }
     }
 
+    /// # Safety
+    /// Requires AVX2.
     #[no_mangle]
-    pub fn ct_ed25519_fe64_madd_ext2_scan(
+    pub unsafe fn ct_ed25519_fe64_madd_ext2_scan(
         ws: &mut p::Ws2Scan,
         table: &[[u64; 12]; 16],
         d0: i8,
@@ -272,31 +308,46 @@ mod x86 {
         p::ed25519_digits32(scalar)
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
     #[no_mangle]
-    pub fn ct_ed25519_fe64_dbl_nadd(ws: &mut p::Ws) {
-        p::ed25519_dbl_nadd(ws)
+    pub unsafe fn ct_ed25519_fe64_dbl_nadd(ws: &mut p::Ws) {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ed25519_dbl_nadd(ws) }
     }
 
+    /// # Safety
+    /// Requires AVX-512 IFMA.
     #[no_mangle]
-    pub fn ct_x25519_ifma_step(s: &p::ifma::Lanes, x1: &[u64; 4], swap: u64) -> p::ifma::Lanes {
+    pub unsafe fn ct_x25519_ifma_step(
+        s: &p::ifma::Lanes,
+        x1: &[u64; 4],
+        swap: u64,
+    ) -> p::ifma::Lanes {
         // SAFETY: never executed; compiled to be read.
         unsafe { p::ifma::ladder_step(s, x1, swap) }
     }
 
+    /// # Safety
+    /// Requires AVX-512 IFMA.
     #[no_mangle]
-    pub fn ct_ed25519_ifma_select(t: &[p::ifma::Lanes; 8], digit: i8) -> p::ifma::Lanes {
+    pub unsafe fn ct_ed25519_ifma_select(t: &[p::ifma::Lanes; 8], digit: i8) -> p::ifma::Lanes {
         // SAFETY: never executed; compiled to be read.
         unsafe { p::ifma::select(t, digit) }
     }
 
+    /// # Safety
+    /// Requires AVX-512 IFMA.
     #[no_mangle]
-    pub fn ct_ed25519_ifma_add(a: &p::ifma::Lanes, n: &p::ifma::Lanes) -> p::ifma::Lanes {
+    pub unsafe fn ct_ed25519_ifma_add(a: &p::ifma::Lanes, n: &p::ifma::Lanes) -> p::ifma::Lanes {
         // SAFETY: never executed; compiled to be read.
         unsafe { p::ifma::add(a, n) }
     }
 
+    /// # Safety
+    /// Requires AVX-512 IFMA.
     #[no_mangle]
-    pub fn ct_ed25519_ifma_double(a: &p::ifma::Lanes) -> p::ifma::Lanes {
+    pub unsafe fn ct_ed25519_ifma_double(a: &p::ifma::Lanes) -> p::ifma::Lanes {
         // SAFETY: never executed; compiled to be read.
         unsafe { p::ifma::double(a) }
     }

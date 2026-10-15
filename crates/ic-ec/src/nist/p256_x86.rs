@@ -214,9 +214,18 @@ pub(crate) fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64;
     // twelve-word Jacobian window it measured slower than SSE2 (25.7 against
     // 26.8 microseconds for ECDH, interleaved runs), and faster on the
     // affine table (5.7 against 6.3 for a public key).
-    if W.is_multiple_of(8) && has_avx2() {
-        // SAFETY: the CPU has AVX2.
-        unsafe { scan_avx2(entries, masks) }
+    // Only the eight-word entries take AVX2. The call names `scan_avx2::<8>`
+    // whatever `W` is: a call on `W` would instantiate the kernel for every
+    // width `scan` is used at, and its own bound, `W <= 12`, would refuse the
+    // wider ones at compile time. The branch is for `W == 8` alone.
+    if W == 8 && has_avx2() {
+        // SAFETY: `W` is 8, so each entry is `[u64; 8]` and `[u64; W]` is that
+        // same array; the CPU has AVX2.
+        unsafe {
+            let entries8 = core::slice::from_raw_parts(entries.as_ptr().cast::<[u64; 8]>(), n);
+            let r = scan_avx2::<8>(entries8, masks);
+            core::ptr::read(&r as *const [u64; 8] as *const [u64; W])
+        }
     } else {
         // SAFETY: SSE2 is part of the x86-64 baseline; every CPU this
         // module can run on has it.
@@ -258,6 +267,9 @@ fn scan_sse2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
 #[target_feature(enable = "avx2")]
 unsafe fn scan_avx2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
     use core::arch::x86_64::*;
+    // Up to twelve words, P-384's affine point, in whole lanes: `lanes` has
+    // three. Above that, `take(W / 4)` would stop short and drop words.
+    const { assert!(W.is_multiple_of(4) && W <= 12) };
     let mut acc = [0u64; W];
     let mut lanes = [_mm256_setzero_si256(); 3];
     for (entry, &mask) in entries.iter().zip(masks) {
@@ -354,6 +366,20 @@ unsafe fn read<const N: usize, const K: usize>(
     out
 }
 
+// `read` takes the outputs as contiguous slots: X3, Y3, Z3, and then H and R.
+const _: () = {
+    use super::p256_x86_point as f;
+    assert!(f::DOUBLE_Y3 == f::DOUBLE_X3 + 1 && f::DOUBLE_Z3 == f::DOUBLE_X3 + 2);
+    assert!(
+        f::DOUBLE_IN_PLACE_Y == f::DOUBLE_IN_PLACE_X + 1
+            && f::DOUBLE_IN_PLACE_Z == f::DOUBLE_IN_PLACE_X + 2
+    );
+    assert!(f::ADD_Y3 == f::ADD_X3 + 1 && f::ADD_Z3 == f::ADD_X3 + 2);
+    assert!(f::ADD_H == f::ADD_X3 + 3 && f::ADD_R == f::ADD_H + 1);
+    assert!(f::ADD_AFFINE_Y3 == f::ADD_AFFINE_X3 + 1 && f::ADD_AFFINE_Z3 == f::ADD_AFFINE_X3 + 2);
+    assert!(f::ADD_AFFINE_H == f::ADD_AFFINE_X3 + 3 && f::ADD_AFFINE_R == f::ADD_AFFINE_H + 1);
+};
+
 /// Jacobian doubling as one block of assembly, where the CPU has BMI2 and
 /// ADX; `None` where it does not.
 #[inline(always)]
@@ -366,7 +392,7 @@ pub(crate) fn point_double(x: &[u64; 4], y: &[u64; 4], z: &[u64; 4]) -> Option<[
     // 3 to 5.
     unsafe {
         super::p256_x86_point::double_adx(&mut buf);
-        Some(read(&buf, 3))
+        Some(read(&buf, super::p256_x86_point::DOUBLE_X3))
     }
 }
 
@@ -386,8 +412,8 @@ pub(crate) fn point_add(
     // slots 6 to 10.
     unsafe {
         super::p256_x86_point::add_adx(&mut buf);
-        let [h, r] = read(&buf, 9);
-        Some((read(&buf, 6), h, r))
+        let [h, r] = read(&buf, super::p256_x86_point::ADD_H);
+        Some((read(&buf, super::p256_x86_point::ADD_X3), h, r))
     }
 }
 
@@ -407,8 +433,8 @@ pub(crate) fn point_add_affine(
     // slots 5 to 9.
     unsafe {
         super::p256_x86_point::add_affine_adx(&mut buf);
-        let [h, r] = read(&buf, 8);
-        Some((read(&buf, 5), h, r))
+        let [h, r] = read(&buf, super::p256_x86_point::ADD_AFFINE_H);
+        Some((read(&buf, super::p256_x86_point::ADD_AFFINE_X3), h, r))
     }
 }
 
@@ -456,7 +482,11 @@ pub(crate) fn mul_scalar(
             }
         }
     };
-    put(&mut buf, 0, &window.select(digits[n - 1]));
+    put(
+        &mut buf,
+        super::p256_x86_point::DOUBLE_IN_PLACE_X,
+        &window.select(digits[n - 1]),
+    );
     let doublings = |buf: &mut [MaybeUninit<u64>; LADDER]| {
         let ip: &mut [MaybeUninit<u64>; 48] = (&mut buf[..48])
             .try_into()
@@ -477,7 +507,7 @@ pub(crate) fn mul_scalar(
     }
     doublings(&mut buf);
     // SAFETY: slots 0 to 2 are written.
-    let [x, y, z] = unsafe { read::<LADDER, 3>(&buf, 0) };
+    let [x, y, z] = unsafe { read::<LADDER, 3>(&buf, super::p256_x86_point::DOUBLE_IN_PLACE_X) };
     let acc = Point::from_coordinates(Fp(x), Fp(y), Fp(z));
     Some(acc.add(&window.select(digits[0])))
 }
@@ -1343,12 +1373,22 @@ mod tests {
             // slot 1, read below; it needs no CPU feature beyond the
             // baseline (`shld`, `adc`, `sbb`, `cmovc`).
             unsafe {
-                match k {
-                    3 => crate::nist::p256_x86_point::times3_adx(&mut buf),
-                    4 => crate::nist::p256_x86_point::times4_adx(&mut buf),
-                    _ => crate::nist::p256_x86_point::times8_adx(&mut buf),
-                }
-                read::<8, 2>(&buf, 0)[1]
+                use crate::nist::p256_x86_point as f;
+                let out = match k {
+                    3 => {
+                        f::times3_adx(&mut buf);
+                        f::TIMES3_OUT
+                    }
+                    4 => {
+                        f::times4_adx(&mut buf);
+                        f::TIMES4_OUT
+                    }
+                    _ => {
+                        f::times8_adx(&mut buf);
+                        f::TIMES8_OUT
+                    }
+                };
+                read::<8, 1>(&buf, out)[0]
             }
         };
         let below_p = |x: &[u64; 4]| {
@@ -1431,12 +1471,21 @@ mod tests {
             // and 1, written above, and writes slot 2, read below.
             unsafe {
                 use crate::nist::p256_x86_point as f;
-                match (cm, dm) {
-                    (3, 8) => f::cms_3_8_adx(&mut buf),
-                    (4, 1) => f::cms_4_1_adx(&mut buf),
-                    _ => f::cms_12_9_adx(&mut buf),
-                }
-                read::<12, 3>(&buf, 0)[2]
+                let out = match (cm, dm) {
+                    (3, 8) => {
+                        f::cms_3_8_adx(&mut buf);
+                        f::CMS_3_8_OUT
+                    }
+                    (4, 1) => {
+                        f::cms_4_1_adx(&mut buf);
+                        f::CMS_4_1_OUT
+                    }
+                    _ => {
+                        f::cms_12_9_adx(&mut buf);
+                        f::CMS_12_9_OUT
+                    }
+                };
+                read::<12, 1>(&buf, out)[0]
             }
         };
         let want = |cm: u64, dm: u64, a: [u64; 4], b: [u64; 4]| -> [u64; 4] {
@@ -1532,7 +1581,8 @@ mod tests {
                 unsafe { crate::nist::p256_x86_point::double_in_place_adx(&mut buf) };
             }
             // SAFETY: slots 0 to 2 are written.
-            let got: [[u64; 4]; 3] = unsafe { read(&buf, 0) };
+            let got: [[u64; 4]; 3] =
+                unsafe { read(&buf, crate::nist::p256_x86_point::DOUBLE_IN_PLACE_X) };
             let want = q.double_formula().double_formula();
             assert_eq!(got, [want.x().0, want.y().0, want.z().0], "{i}");
         }
