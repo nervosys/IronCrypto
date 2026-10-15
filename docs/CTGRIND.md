@@ -42,7 +42,7 @@ probes on five targets, and `ic timing`, which measures.
 
 ## Results, 2026-10-13
 
-Branches and addresses reported, IronCrypto at master 5f369cc and again at 89b34c2, 168d3ed, e9ee731, d427c4d and a93efff, with the same counts (after the
+Branches and addresses reported, IronCrypto at master 5f369cc and again at 89b34c2, 168d3ed, e9ee731, d427c4d, a93efff and 05b384c, with the same counts (after the
 Curve25519, P-256 and P-384 work merged), Graviola 0.4.1, both x86-64, rustc
 1.99.0, LTO. Both positive controls were reported.
 
