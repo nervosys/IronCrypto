@@ -462,6 +462,50 @@ cfg, and 1.15-1.29 before and 1.18-1.31 after without.
 What remains in a signature without AVX-512 is the 51 additions (2.3 us),
 the inversion (0.7), the two hashes (0.35) and the five doublings (0.25).
 
+#### X25519 without AVX-512, 2026-10-14
+
+Profiled first (`where_x25519_spends_its_time`, `--cfg ic_no_avx512`):
+251 ladder steps took 12.4 us, 49 ns a step, the inversion 0.7. Graviola's
+whole X25519 took 12.9 us in the same minutes, so its step is near 46.5 ns.
+Counted, Graviola's loop body executes more instructions than this one's
+(about 910 against 870), on the same multiplication; what differed was
+around it. s2n-bignum's ladder is one loop inside one function, and its two
+cross products `dm * sn` and `sm * dn` are left at five limbs and reduced
+once, in their sum and difference. Here each step was a call, which on
+Windows pushed and popped six registers and ran four alignment NOPs, and
+both products were fully reduced and then folded again by the addition.
+
+Each idea A/B'd alone against the build without it, alternating binaries,
+`graviola-25519`, 11 to 21 rounds per comparison, both layouts (as built,
+and `-C llvm-args=-align-all-functions=6`); IronCrypto's rate over
+Graviola's, median and interquartile range:
+
+| change | as built | aligned | kept |
+|---|---|---|---|
+| step inlined into the loop | 0.985 to 1.002 | 0.983 to 1.005 | yes |
+| products at five limbs, one fold in their sum and difference | 0.983 (0.981-0.984) to 0.993 (0.990-0.993) | 0.982 (0.980-0.985) to 0.993 (0.993-0.995) | yes |
+| squaring: three cross products without additions | 0.998 to 1.002 | 0.998 to 1.003 | no |
+| one-fold additions' carry by `CMOV` | 0.998 to 1.002 | 0.998 to 1.003 | no |
+| `121666 e + dd`: one `SHLD` fold, or the second fold by `CMOV` | 1.004 to 1.002-1.006 | 1.002 to 1.004-1.010 | no |
+
+The last three moved less than the rounds' spread (min to max) in one layout
+or both, and were dropped. The pointer select for the swap was not tried: it
+makes the address the squarings read from depend on the secret bit, which
+the constant-time rules here do not allow.
+
+The kept pair, the build before and after alternated, eleven rounds:
+
+| configuration | before | after |
+|---|---|---|
+| AVX2 only, as built | 0.964-0.966 | 0.992-0.994 |
+| AVX2 only, aligned | 0.963-0.966 | 0.989-0.994 |
+| default (IFMA), as built | 1.142-1.148 | 1.145-1.149 |
+| default (IFMA), aligned | 1.143-1.147 | 1.144-1.147 |
+
+Level with Graviola without AVX-512, as before, now within 1 percent of it
+rather than 3 to 4. The default build runs X25519 on IFMA and did not
+change.
+
 #### RSA, after the MULX/ADX rewrite
 
 `RUSTFLAGS="--cfg ic_no_avx512" cargo run --release -- graviola-rsa`, which

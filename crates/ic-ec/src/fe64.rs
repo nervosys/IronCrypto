@@ -92,17 +92,32 @@ mod slot {
 /// The same operations, in the same order, as the generic step in
 /// `x25519::ladder_in` -- which the tests compare this against, on the RFC
 /// 7748 vectors and on random inputs.
-#[inline(never)]
+///
+/// Inlined into the ladder's loop, so that a step is not also a call: on
+/// Windows that call saved and restored six registers, and the block's
+/// alignment ran as NOPs, at every one of the 251 steps. For the same
+/// reason the block has no `.p2align`: inside a loop it would pad each
+/// iteration. 1.5 to 2 percent of an X25519 without AVX-512.
+#[inline(always)]
 pub fn ladder_step(ws: &mut [u64; slot::LEN], swap: u64) {
     // Byte offsets: x1 0, xm 32, zm 64, xn 96, zn 128, then scratch -- sm
-    // 160, dm 192, sn 224, dn 256, s 288, d 320, dmsn 352, dnsm 384, ss 416,
-    // dd 448, t1 480, t2 512, e 544, t3 576.
+    // 160, dm 192, sn 224, dn 256, s 288, d 320, dmsn 352 (five limbs, to
+    // 392), ss 416, dd 448, t1 480, t2 512, dnsm 544 (five limbs, to 584,
+    // over e and t3, which are written after it is read), e 544, t3 576.
     //
-    // The additions and subtractions fold their carry once, not twice:
-    // every operand they see is a product or square, below 2^255 + 19 * 77,
-    // or one of the starting values 0, 1 and x1 < 2^255, which is the bound
-    // `fe_add_once!` and `fe_sub_once!` state. The test
-    // `the_block_ladder_agrees_with_the_generic_one` covers it.
+    // The additions and subtractions of the points fold their carry once,
+    // not twice: every operand they see is a product or square, below
+    // 2^255 + 19 * 77, or one of the starting values 0, 1 and x1 < 2^255,
+    // which is the bound `fe_add_once!` and `fe_sub_once!` state.
+    //
+    // dmsn and dnsm are left at five limbs, below 39 * 2^256, and their sum
+    // and difference finish the reduction in one fold each
+    // (`fe_add5_fold!`, `fe_sub5_fold!`): two products' final folds and two
+    // additions' carry folds become two folds. t1 and t2 are then below
+    // 2^255 + 19 * 205, and go only to squarings, which take any four limbs.
+    // `fe64::tests::the_text_kernels_agree_with_the_five_limb_field` checks
+    // these kernels at the edges, `x25519::tests::the_ladders_agree` the
+    // step against the generic ladder.
     //
     // SAFETY: every access is to `ws`, a live exclusive borrow of 608 bytes,
     // at constant offsets below 608; registers are declared as clobbered,
@@ -111,7 +126,6 @@ pub fn ladder_step(ws: &mut [u64; slot::LEN], swap: u64) {
     // reached only after `available()` has confirmed.
     unsafe {
         asm!(
-            ".p2align 6",
             fe_sub_once!(192, 32, 64),   // dm = xm - zm
             fe_add_once!(224, 96, 128),  // sn = xn + zn
             fe_sub_once!(256, 96, 128),  // dn = xn - zn
@@ -121,12 +135,12 @@ pub fn ladder_step(ws: &mut [u64; slot::LEN], swap: u64) {
             "test rsi, rsi\n",
             fe_cmovnz!(288, 224, 160), // s
             fe_cmovnz!(320, 256, 192), // d
-            fe_mul!(352, 192, 224),    // dmsn = dm * sn
-            fe_mul!(384, 160, 256),    // dnsm = sm * dn
+            fe_mul5!(352, 192, 224),   // dmsn = dm * sn, five limbs
+            fe_mul5!(544, 160, 256),   // dnsm = sm * dn, five limbs
             fe_sqr!(448, 320),         // dd = d^2
             fe_sqr!(416, 288),         // ss = s^2
-            fe_sub_once!(480, 352, 384),    // t1 = dmsn - dnsm
-            fe_add_once!(512, 352, 384),    // t2 = dmsn + dnsm
+            fe_sub5_fold!(480, 352, 544),   // t1 = dmsn - dnsm
+            fe_add5_fold!(512, 352, 544),   // t2 = dmsn + dnsm
             fe_sqr!(480, 480),         // t1 = t1^2
             fe_sqr!(32, 512),          // xm = t2^2
             fe_sub_once!(544, 416, 448),    // e = ss - dd
@@ -943,6 +957,108 @@ mod tests {
             let (x, y) = (rng.fe(), rng.fe());
             check(&x, &y);
             check1(&x);
+        }
+    }
+
+    /// The assembly text the ladder step and the Edwards blocks are built
+    /// from, run on its own rather than through a ladder: the squaring, the
+    /// five-limb product and the addition and subtraction that finish it,
+    /// the one-fold addition and subtraction, and the fused `121666 a + b`.
+    /// The methods above are separate code. A ladder on random points
+    /// rarely reaches the carries these can lose -- a squaring that dropped
+    /// its last carry passed every X25519 test -- so this runs them on the
+    /// edge values crossed with each other and on edge-biased random limbs.
+    #[test]
+    fn the_text_kernels_agree_with_the_five_limb_field() {
+        if skip() {
+            return;
+        }
+        fn run(a: &Fe64, b: &Fe64) -> [u64; 48] {
+            let mut ws = [0u64; 48];
+            ws[0..4].copy_from_slice(&a.0);
+            ws[4..8].copy_from_slice(&b.0);
+            // SAFETY: constant offsets below 384 into `ws`, a live exclusive
+            // borrow of 384 bytes; every register written is declared and
+            // nothing is pushed. `skip()` has confirmed BMI2 and ADX.
+            unsafe {
+                asm!(
+                    fe_sqr!(64, 0),                // a^2
+                    fe_mul5!(96, 0, 32),           // ab, five limbs
+                    fe_mul5!(136, 32, 32),         // b^2, five limbs
+                    fe_add5_fold!(176, 96, 136),   // ab + b^2
+                    fe_sub5_fold!(208, 96, 136),   // ab - b^2
+                    fe_sub5_fold!(240, 136, 96),   // b^2 - ab
+                    fe_add_once!(272, 64, 176),    // a^2 + (ab + b^2)
+                    fe_sub_once!(304, 64, 208),    // a^2 - (ab - b^2)
+                    fe_mul121666_add!(336, 0, 32), // 121666 a + b
+                    in("rdi") ws.as_mut_ptr(),
+                    out("rax") _,
+                    out("rcx") _,
+                    out("rdx") _,
+                    out("rsi") _,
+                    out("r8") _,
+                    out("r9") _,
+                    out("r10") _,
+                    out("r11") _,
+                    out("r12") _,
+                    out("r13") _,
+                    out("r14") _,
+                    out("r15") _,
+                    options(nostack),
+                );
+            }
+            ws
+        }
+        let four = |ws: &[u64; 48], at: usize| {
+            reference(&Fe64([ws[at], ws[at + 1], ws[at + 2], ws[at + 3]]))
+        };
+        // Five limbs: the low four, plus 2^256 = 38 times the fifth.
+        let five = |ws: &[u64; 48], at: usize| {
+            four(ws, at).add(&Fe::from_u64(38).mul(&Fe::from_u64(ws[at + 4])))
+        };
+        let check = |a: &Fe64, b: &Fe64| {
+            let ws = run(a, b);
+            let (ra, rb) = (reference(a), reference(b));
+            let (ab, bb) = (ra.mul(&rb), rb.square());
+            let sq = ra.square();
+            let want = [
+                (64, false, sq),
+                (96, true, ab),
+                (136, true, bb),
+                (176, false, ab.add(&bb)),
+                (208, false, ab.sub(&bb)),
+                (240, false, bb.sub(&ab)),
+                (272, false, sq.add(&ab.add(&bb))),
+                (304, false, sq.sub(&ab.sub(&bb))),
+                (336, false, ra.mul121666().add(&rb)),
+            ];
+            for (offset, wide, value) in want {
+                let at = offset / 8;
+                let got = if wide { five(&ws, at) } else { four(&ws, at) };
+                assert_eq!(
+                    got.to_bytes(),
+                    value.to_bytes(),
+                    "slot {offset}, {a:x?} {b:x?}"
+                );
+            }
+            // The five-limb product's fifth limb is at most 38, the bound
+            // the addition and subtraction after it are written for.
+            assert!(ws[96 / 8 + 4] <= 38 && ws[136 / 8 + 4] <= 38);
+        };
+        let edges = edges();
+        for a in &edges {
+            for b in &edges {
+                check(a, b);
+            }
+        }
+        let mut rng = Rng(0x5851_f42d_4c95_7f2d);
+        let n = if cfg!(debug_assertions) {
+            100_000
+        } else {
+            1_000_000
+        };
+        for _ in 0..n {
+            check(&rng.fe(), &rng.fe());
         }
     }
 
