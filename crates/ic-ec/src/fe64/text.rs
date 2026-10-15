@@ -17,9 +17,9 @@
 //! instructions, with memory operands -- and the tests in `super` compare
 //! blocks built from these against those methods.
 
-/// `[d] = [a] * [b]`, as [`super::Fe64::mul`].
-macro_rules! fe_mul {
-    ($d:literal, $a:literal, $b:literal) => {
+/// The 512-bit `[a] * [b]` into `r15..r8`: [`fe_mul!`] before its reduction.
+macro_rules! fe_mul_rows {
+    ($a:literal, $b:literal) => {
         concat!(
             // Row 0: a * b0 into r8..r12.
             "mov rdx, qword ptr [rdi + ",
@@ -119,7 +119,171 @@ macro_rules! fe_mul {
             "adcx r14, rax\n",
             "adox r15, rsi\n",
             "adcx r15, rsi\n",
-            fe_reduce_store!($d),
+        )
+    };
+}
+
+/// `[d] = [a] * [b]`, as [`super::Fe64::mul`].
+macro_rules! fe_mul {
+    ($d:literal, $a:literal, $b:literal) => {
+        concat!(fe_mul_rows!($a, $b), fe_reduce_store!($d))
+    };
+}
+
+/// `[d] = [a] * [b]` as five limbs, the fold of the top four limbs by 38
+/// alone: below `39 * 2^256`, the fifth limb at most 38. Only for
+/// [`fe_add5_fold!`] and [`fe_sub5_fold!`], which finish the reduction.
+macro_rules! fe_mul5 {
+    ($d:literal, $a:literal, $b:literal) => {
+        concat!(
+            fe_mul_rows!($a, $b),
+            "mov edx, 38\n",
+            "xor esi, esi\n",
+            "mulx rcx, rax, r12\n",
+            "adcx r8, rax\n",
+            "adox r9, rcx\n",
+            "mulx rcx, rax, r13\n",
+            "adcx r9, rax\n",
+            "adox r10, rcx\n",
+            "mulx rcx, rax, r14\n",
+            "adcx r10, rax\n",
+            "adox r11, rcx\n",
+            "mulx r12, rax, r15\n",
+            "adcx r11, rax\n",
+            "adox r12, rsi\n",
+            "adcx r12, rsi\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            "], r8\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            " + 8], r9\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            " + 16], r10\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            " + 24], r11\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            " + 32], r12\n",
+        )
+    };
+}
+
+/// Everything from bit 255 of `r12..r8` up, folded as 19 times itself into
+/// the low 255 bits, stored as four limbs at `[d]`. Correct when `r12` is
+/// below 2^58, so the fold neither overflows nor carries out.
+macro_rules! fe_fold5_store {
+    ($d:literal) => {
+        concat!(
+            "shld r12, r11, 1\n",
+            "btr r11, 63\n",
+            "imul r12, r12, 19\n",
+            "add r8, r12\n",
+            "adc r9, 0\n",
+            "adc r10, 0\n",
+            "adc r11, 0\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            "], r8\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            " + 8], r9\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            " + 16], r10\n",
+            "mov qword ptr [rdi + ",
+            $d,
+            " + 24], r11\n",
+        )
+    };
+}
+
+/// `[d] = [a] + [b]` for two outputs of [`fe_mul5!`]: below `78 * 2^256`,
+/// so the fifth limb is below 78 and one fold finishes it.
+macro_rules! fe_add5_fold {
+    ($d:literal, $a:literal, $b:literal) => {
+        concat!(
+            "mov r8, qword ptr [rdi + ",
+            $a,
+            "]\n",
+            "add r8, qword ptr [rdi + ",
+            $b,
+            "]\n",
+            "mov r9, qword ptr [rdi + ",
+            $a,
+            " + 8]\n",
+            "adc r9, qword ptr [rdi + ",
+            $b,
+            " + 8]\n",
+            "mov r10, qword ptr [rdi + ",
+            $a,
+            " + 16]\n",
+            "adc r10, qword ptr [rdi + ",
+            $b,
+            " + 16]\n",
+            "mov r11, qword ptr [rdi + ",
+            $a,
+            " + 24]\n",
+            "adc r11, qword ptr [rdi + ",
+            $b,
+            " + 24]\n",
+            "mov r12, qword ptr [rdi + ",
+            $a,
+            " + 32]\n",
+            "adc r12, qword ptr [rdi + ",
+            $b,
+            " + 32]\n",
+            fe_fold5_store!($d),
+        )
+    };
+}
+
+/// `[d] = [a] - [b]` for two outputs of [`fe_mul5!`], plus
+/// `64 * (2^256 - 38) = 128 p` so that it stays positive: the difference
+/// is above `-39 * 2^256`, so the sum is in `(25 * 2^256 - 2432,
+/// 103 * 2^256)` and one fold finishes it.
+macro_rules! fe_sub5_fold {
+    ($d:literal, $a:literal, $b:literal) => {
+        concat!(
+            "mov r8, qword ptr [rdi + ",
+            $a,
+            "]\n",
+            "sub r8, qword ptr [rdi + ",
+            $b,
+            "]\n",
+            "mov r9, qword ptr [rdi + ",
+            $a,
+            " + 8]\n",
+            "sbb r9, qword ptr [rdi + ",
+            $b,
+            " + 8]\n",
+            "mov r10, qword ptr [rdi + ",
+            $a,
+            " + 16]\n",
+            "sbb r10, qword ptr [rdi + ",
+            $b,
+            " + 16]\n",
+            "mov r11, qword ptr [rdi + ",
+            $a,
+            " + 24]\n",
+            "sbb r11, qword ptr [rdi + ",
+            $b,
+            " + 24]\n",
+            "mov r12, qword ptr [rdi + ",
+            $a,
+            " + 32]\n",
+            "sbb r12, qword ptr [rdi + ",
+            $b,
+            " + 32]\n",
+            // + 64 * 2^256 - 64 * 38: the last `sbb` adds the 64.
+            "sub r8, 2432\n",
+            "sbb r9, 0\n",
+            "sbb r10, 0\n",
+            "sbb r11, 0\n",
+            "sbb r12, -64\n",
+            fe_fold5_store!($d),
         )
     };
 }

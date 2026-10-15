@@ -160,6 +160,33 @@ all of them.
 
 ### Performance
 
+- **X25519 without AVX-512: about 3 percent faster, level with Graviola.**
+  Two changes to the MULX/ADX ladder (`fe64.rs`), each measured on its own
+  against the build without it:
+  - The ladder step is inlined into the ladder's loop. It was a call at
+    each of the 251 steps, which on Windows saved and restored six
+    registers and ran the block's `.p2align` padding as NOPs; the block
+    now has no alignment directive, since inside a loop it would pad every
+    iteration. 1.5 to 2 percent.
+  - `dm * sn` and `sm * dn` stay at five limbs, the fold by 38 alone
+    (below `39 * 2^256`), and their sum and difference finish the
+    reduction with one fold each, the difference biased by `128 p` to stay
+    positive (`fe_mul5!`, `fe_add5_fold!`, `fe_sub5_fold!`). About 1
+    percent.
+
+  `graviola-25519` with `--cfg ic_no_avx512`, the build before and after
+  alternated, eleven rounds, IronCrypto's rate over Graviola's within each
+  run: 0.964-0.966 to 0.992-0.994 as built, 0.963-0.966 to 0.989-0.994
+  with `-C llvm-args=-align-all-functions=6`. The default build, which runs
+  X25519 on IFMA, read 1.14-1.15 in both. Tried and not kept, their effects
+  inside the spread of rounds or worse: a squaring with three of its six
+  cross products made without additions (0.3-0.7 percent by median), the
+  additions' carry fold by `CMOV` instead of `SBB`/`AND` (about 0.4), and
+  two cheaper folds for `121666 e + dd`. A new test,
+  `the_text_kernels_agree_with_the_five_limb_field`, runs the assembly text
+  itself on edge values and edge-biased random limbs; a squaring that
+  dropped its last carry had passed every X25519 test.
+
 - **ECDSA P-256 and P-384 verification: one chain of doublings, and ahead
   of Graviola without AVX-512.** Profiled first under `--cfg ic_no_avx512`
   (`where_verification_spends_its_time` in `nist/ecdsa.rs`, loaded Zen 5):
