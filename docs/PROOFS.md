@@ -167,15 +167,18 @@ multiplications and refines them lazily, closes `mont_step` in minutes once
 its specification has no multiplication in it.
 
 CBMC 6.11, as bundled with Kani 0.68, encodes a *checked* multiplication
-wrongly on its text SMT-LIB back end, the one Kani uses for Bitwuzla: it
+wrongly in the SMT-LIB encoding it writes when datatypes are off, the one Kani
+uses for Bitwuzla: it
 builds the 65-bit result-and-flag tuple as `concat(product[63:0], overflow)`
 and reads it back as `concat(overflow, product)`, so the value is the product
 shifted left one bit and the flag is its bit 63. A four-line C program
 reproduces it: `__builtin_mul_overflow(x, 19, &r)` with `x < 2^59` fails under
-`cbmc --bitwuzla` and verifies under the default SAT back end, `--smt2`, and
-CBMC's native `--z3` and `--cvc5` back ends, which encode the tuple as a
-struct; the dumped text formula is satisfiable under Bitwuzla, Z3 and cvc5
-alike, so the fault is CBMC's encoding, not the solver's. Found here as a
+`cbmc --bitwuzla` and verifies under the default SAT back end, `--smt2` (Z3
+through text, with datatypes), and CBMC's native `--z3` and `--cvc5` back
+ends, which encode the tuple as a struct. The dumped flattened formula, from
+`--bitwuzla` or from `--smt2 --outfile`, is satisfiable under Bitwuzla, Z3 and
+cvc5 alike, so the fault is CBMC's encoding, not the solver's. Reported as
+[diffblue/cbmc#9215](https://github.com/diffblue/cbmc/issues/9215). Found here as a
 false overflow report on `19 * c4`. A checked multiplication through that back
 end is therefore wrong in both directions, not only noisy. Every proof run
 through Bitwuzla here has none:
