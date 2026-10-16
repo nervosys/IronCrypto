@@ -166,15 +166,19 @@ attempt at `mont_step` ran 25 minutes without a verdict on it.
 multiplications and refines them lazily, closes `mont_step` in minutes once
 its specification has no multiplication in it.
 
-Kani reaches Bitwuzla, Z3 and cvc5 through CBMC's SMT2 output, and CBMC 6.11
-encodes a *checked* multiplication there wrongly: it builds the result and the
-overflow flag into one bit-vector in one order and reads them back in the
-other, so the value is the product shifted left one bit and the flag is its
-top bit. The SAT path (CaDiCaL, Kissat) is not affected. Found here as a false
-overflow report: `19 * c4` for `c4 < 2^59.6` failed under Bitwuzla and passed
-under Z3 and CaDiCaL, and the dumped formula shows the swap. A checked
-multiplication through the SMT path is therefore wrong in both directions,
-not only noisy. Every proof run through Bitwuzla here has none:
+CBMC 6.11, as bundled with Kani 0.68, encodes a *checked* multiplication
+wrongly on its text SMT-LIB back end, the one Kani uses for Bitwuzla: it
+builds the 65-bit result-and-flag tuple as `concat(product[63:0], overflow)`
+and reads it back as `concat(overflow, product)`, so the value is the product
+shifted left one bit and the flag is its bit 63. A four-line C program
+reproduces it: `__builtin_mul_overflow(x, 19, &r)` with `x < 2^59` fails under
+`cbmc --bitwuzla` and verifies under the default SAT back end, `--smt2`, and
+CBMC's native `--z3` and `--cvc5` back ends, which encode the tuple as a
+struct; the dumped text formula is satisfiable under Bitwuzla, Z3 and cvc5
+alike, so the fault is CBMC's encoding, not the solver's. Found here as a
+false overflow report on `19 * c4`. A checked multiplication through that back
+end is therefore wrong in both directions, not only noisy. Every proof run
+through Bitwuzla here has none:
 
 - the code multiplies with `wrapping_mul` where a product is taken: `mac`'s
   64-by-64 product, `field::m`, and the 19, 38 and 2 scalings in
