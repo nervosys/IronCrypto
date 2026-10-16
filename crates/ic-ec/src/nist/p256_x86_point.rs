@@ -6755,6 +6755,16 @@ pub unsafe fn add_affine_adx(buf: &mut [MaybeUninit<u64>; 80]) {
     }
 }
 #[allow(dead_code)]
+pub const ADD_AFFINE_X1: usize = 0;
+#[allow(dead_code)]
+pub const ADD_AFFINE_Y1: usize = 1;
+#[allow(dead_code)]
+pub const ADD_AFFINE_Z1: usize = 2;
+#[allow(dead_code)]
+pub const ADD_AFFINE_X2: usize = 3;
+#[allow(dead_code)]
+pub const ADD_AFFINE_Y2: usize = 4;
+#[allow(dead_code)]
 pub const ADD_AFFINE_X3: usize = 5;
 #[allow(dead_code)]
 pub const ADD_AFFINE_Y3: usize = 6;

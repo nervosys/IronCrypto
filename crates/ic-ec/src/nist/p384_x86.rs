@@ -7,7 +7,7 @@
 //! BMI2 or ADX, and the caller then uses the generic arithmetic, which
 //! computes the same function.
 
-use super::p256_x86::{has_adx, Ladder};
+use super::p256_x86::{has_adx, Ladder, Secret};
 use core::mem::MaybeUninit;
 
 /// `a * b * 2^-384` modulo P-384's prime, canonical; `None` without BMI2
@@ -300,11 +300,13 @@ pub(crate) fn mul_scalar(
     if !has_adx() {
         return None;
     }
-    let bytes = scalar.to_bytes();
-    let bytes = bytes.as_ref();
-    let digits = signed_digits_w(bytes, WIDTH);
+    let secret_bytes = Secret::new(scalar.to_bytes());
+    let bytes = secret_bytes.as_ref();
+    let digits = Secret::new(signed_digits_w(bytes, WIDTH));
     let n = digit_count(bytes.len(), WIDTH);
     let window = AffineWindow::<P384, ENTRIES>::new(p);
+    // The selected entry's coordinates, one guarded slot for every digit.
+    let mut xy = Secret::new((Fp::ZERO, Fp::ZERO));
 
     let mut buf = Ladder::<LADDER>::new();
     let put = |buf: &mut [MaybeUninit<u64>; LADDER], slot: usize, w: &[u64; 6]| {
@@ -313,14 +315,15 @@ pub(crate) fn mul_scalar(
         }
     };
     let identity = Point::<P384>::identity();
-    let (x, y) = window.select(digits[n - 1]);
+    *xy = window.select(digits[n - 1]);
+    let top: &(Fp, Fp) = &xy;
     let top_zero = core::hint::black_box(zero_digit(digits[n - 1]));
     put(
         &mut buf,
         super::p384_x86_point::DOUBLE_IN_PLACE_X,
-        &select(top_zero, identity.x().0, x.0),
+        &select(top_zero, identity.x().0, top.0 .0),
     );
-    put(&mut buf, 1, &select(top_zero, identity.y().0, y.0));
+    put(&mut buf, 1, &select(top_zero, identity.y().0, top.1 .0));
     put(&mut buf, 2, &select(top_zero, identity.z().0, Fp::ONE.0));
     let doublings = |buf: &mut [MaybeUninit<u64>; LADDER]| {
         let ip: &mut [MaybeUninit<u64>; 78] = (&mut buf[..78])
@@ -334,11 +337,12 @@ pub(crate) fn mul_scalar(
     };
     for i in (1..n - 1).rev() {
         // The scan first: it does not depend on the accumulator.
-        let (x, y) = window.select(digits[i]);
+        *xy = window.select(digits[i]);
         doublings(&mut buf);
         // SAFETY: the CPU has BMI2 and ADX, and slots 0 to 2 hold the
         // accumulator.
-        unsafe { ladder_add(&mut buf, &x.0, &y.0, digits[i]) };
+        let cur: &(Fp, Fp) = &xy;
+        unsafe { ladder_add(&mut buf, &cur.0 .0, &cur.1 .0, digits[i]) };
     }
     doublings(&mut buf);
     // SAFETY: slots 0 to 2 are written.
@@ -686,7 +690,7 @@ mod tests {
     #[test]
     fn the_buffer_multiplication_wipes_its_buffer() {
         use crate::nist::arith::Field;
-        use crate::nist::p256_x86::ladder_probe as probe;
+        use crate::nist::p256_x86::{ladder_probe as probe, secret_probe};
         use crate::nist::point::Point;
         type S = <P384 as Curve>::Scalar;
         if !has_adx() {
@@ -695,8 +699,11 @@ mod tests {
         }
         let k = S::ONE.add(&S::ONE).add(&S::ONE);
         probe::reset();
+        secret_probe::reset();
         mul_scalar(&Point::<P384>::generator(), &k).expect("BMI2 and ADX");
         assert_eq!(probe::snapshot(), (1, 0));
+        // The scalar's bytes, the digits and the selected entry's coordinates.
+        assert_eq!(secret_probe::snapshot(), (3, 0));
     }
 
     /// The fused operations on inputs built to take each side of their

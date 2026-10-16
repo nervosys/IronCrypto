@@ -32,7 +32,7 @@ use super::point::{AffinePoint, Point};
 /// Z3, H, R, ..`; the doubling's begin `X, Y, Z`.
 macro_rules! joint {
     ($name:ident, $curve:ty, $fp:path, $limbs:literal, $buf:literal, $dbl:literal,
-     $double:path, $add:path) => {
+     $double:path, $add:path, $points:ident) => {
         /// `nist::verify::joint_vartime` for this curve on BMI2 and ADX, or
         /// `None` without them. **Variable time**: public inputs only.
         pub(crate) fn $name(
@@ -44,6 +44,23 @@ macro_rules! joint {
             if !has_adx() {
                 return None;
             }
+            use super::$points as pt;
+            // The slots by their generated names. The accumulator is the
+            // doubling's first three; the entry's x and y follow it, then the
+            // formula's X3, Y3, Z3, H and R, which the loops index in order.
+            const _: () = assert!(
+                pt::DOUBLE_IN_PLACE_X == pt::ADD_AFFINE_X1
+                    && pt::DOUBLE_IN_PLACE_Y == pt::ADD_AFFINE_Y1
+                    && pt::DOUBLE_IN_PLACE_Z == pt::ADD_AFFINE_Z1
+                    && pt::ADD_AFFINE_Y1 == pt::ADD_AFFINE_X1 + 1
+                    && pt::ADD_AFFINE_Z1 == pt::ADD_AFFINE_X1 + 2
+                    && pt::ADD_AFFINE_X2 == pt::ADD_AFFINE_X1 + 3
+                    && pt::ADD_AFFINE_Y2 == pt::ADD_AFFINE_X1 + 4
+                    && pt::ADD_AFFINE_Y3 == pt::ADD_AFFINE_X3 + 1
+                    && pt::ADD_AFFINE_Z3 == pt::ADD_AFFINE_X3 + 2
+                    && pt::ADD_AFFINE_H == pt::ADD_AFFINE_X3 + 3
+                    && pt::ADD_AFFINE_R == pt::ADD_AFFINE_H + 1,
+            );
             debug_assert_eq!(g_naf.len(), q_naf.len());
             let mut buf = [const { MaybeUninit::<u64>::uninit() }; $buf];
             let put = |buf: &mut [MaybeUninit<u64>; $buf], slot: usize, w: &[u64; $limbs]| {
@@ -85,24 +102,24 @@ macro_rules! joint {
                     let entry = &table[(digit.unsigned_abs() >> 1) as usize];
                     let y = if digit > 0 { entry.y } else { entry.y.neg() };
                     if at_infinity {
-                        put(&mut buf, 0, &entry.x.0);
-                        put(&mut buf, 1, &y.0);
-                        put(&mut buf, 2, &<$fp>::ONE.0);
+                        put(&mut buf, pt::ADD_AFFINE_X1, &entry.x.0);
+                        put(&mut buf, pt::ADD_AFFINE_Y1, &y.0);
+                        put(&mut buf, pt::ADD_AFFINE_Z1, &<$fp>::ONE.0);
                         at_infinity = false;
                         continue;
                     }
-                    put(&mut buf, 3, &entry.x.0);
-                    put(&mut buf, 4, &y.0);
-                    // SAFETY: the CPU has BMI2 and ADX; slots 0 to 4 are
-                    // written, every coordinate below p. The formula writes
-                    // X3, Y3, Z3, H and R, slots 5 to 9.
+                    put(&mut buf, pt::ADD_AFFINE_X2, &entry.x.0);
+                    put(&mut buf, pt::ADD_AFFINE_Y2, &y.0);
+                    // SAFETY: the CPU has BMI2 and ADX; the slots from X1 to
+                    // Y2 are written, every coordinate below p. The formula
+                    // writes X3, Y3, Z3, H and R.
                     unsafe { $add(&mut buf) };
-                    if get(&buf, 8) != [0; $limbs] {
+                    if get(&buf, pt::ADD_AFFINE_H) != [0; $limbs] {
                         for k in 0..3 {
-                            let c = get(&buf, 5 + k);
-                            put(&mut buf, k, &c);
+                            let c = get(&buf, pt::ADD_AFFINE_X3 + k);
+                            put(&mut buf, pt::ADD_AFFINE_X1 + k, &c);
                         }
-                    } else if get(&buf, 9) == [0; $limbs] {
+                    } else if get(&buf, pt::ADD_AFFINE_R) == [0; $limbs] {
                         // The accumulator is the entry: the sum is its double.
                         double(&mut buf);
                     } else {
@@ -114,7 +131,11 @@ macro_rules! joint {
             if at_infinity {
                 return Some(Point::identity());
             }
-            let [x, y, z] = [get(&buf, 0), get(&buf, 1), get(&buf, 2)];
+            let [x, y, z] = [
+                get(&buf, pt::ADD_AFFINE_X1),
+                get(&buf, pt::ADD_AFFINE_Y1),
+                get(&buf, pt::ADD_AFFINE_Z1),
+            ];
             Some(Point::from_coordinates($fp(x), $fp(y), $fp(z)))
         }
     };
@@ -128,7 +149,8 @@ joint!(
     80,
     48,
     super::p256_x86_point::double_in_place_adx,
-    super::p256_x86_point::add_affine_adx
+    super::p256_x86_point::add_affine_adx,
+    p256_x86_point
 );
 
 joint!(
@@ -139,5 +161,6 @@ joint!(
     126,
     78,
     super::p384_x86_point::double_in_place_adx,
-    super::p384_x86_point::add_affine_adx
+    super::p384_x86_point::add_affine_adx,
+    p384_x86_point
 );

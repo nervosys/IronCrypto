@@ -3757,9 +3757,6 @@ mod tests {
         }
     }
 
-    /// The SSE2 and AVX2 scans against the entry they should pick, for
-    /// every digit and every width each takes, at 16 and 32 entries, and
-    /// declining the shapes they do not.
     /// The products are exact whatever the scratch held, and write only
     /// `out[..l]` and `t[..tlen]`, over hundreds of moduli at each width
     /// from four to sixty-four words, with operands at the edges.
@@ -3835,6 +3832,9 @@ mod tests {
         }
     }
 
+    /// The SSE2 and AVX2 scans against the entry they should pick, for
+    /// every digit and every width each takes, at 16 and 32 entries, and
+    /// declining the shapes they do not.
     #[test]
     fn the_sse2_and_avx2_table_reads_match_the_masked_scan() {
         table_reads_match::<16>();

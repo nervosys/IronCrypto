@@ -57,6 +57,12 @@ all of them.
   precondition (a CPU feature, a length, a pointer's validity), and
   `scripts/check-safety-comments.py`, run by `scripts/check.sh`, fails on any
   that lacks one. Comments only; no code changed.
+- **Security review follow-ups in the x86-64 P-256, P-384 and RSA code.** The P-256 and
+  P-384 multiplications keep their secret-derived temporaries (digit array, scalar bytes,
+  selected entry) in a volatile-wiping guard, wiped on every exit path; the IFMA probe calls
+  an unchecked vector clear instead of building an `Ifma` token; the point generators assert
+  that every declared output is written; the verification chain indexes its slots by name.
+  Measured within noise on P-256 and P-384 ECDH and signing, with and without AVX-512.
 
 ### Added
 

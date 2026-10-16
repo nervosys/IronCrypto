@@ -375,14 +375,21 @@ def check_reads(name, slots, inputs, program):
         written.add(dst)
 
 
-def emit(name, doc, slots, program, inputs, outputs, attrs=("#[inline(never)]",)):
+def emit(name, doc, slots, program, inputs, outputs, attrs=("#[inline(never)]",), named=()):
     """inputs: the slots the caller writes; outputs: the slots the Rust wrappers
-    read back, emitted as `pub const` indices."""
+    read back, emitted as `pub const` indices; named: further slots (inputs
+    the wrappers index by name) emitted the same way."""
     slots = slots + ["scratch"]
     idx = {n: i for i, n in enumerate(slots)}
     check_reads(name, slots, inputs, program)
     for x in outputs:
         assert x in slots, f"{name}: output {x} is not a slot"
+    # Every output is one the program writes: a slot it only reads would hand
+    # the wrappers whatever the caller left there.
+    written_by_program = {dst for _, dst, *_ in program}
+    for x in outputs:
+        if x not in written_by_program:
+            sys.exit(f"{name}: output {x} is never written by the program")
     # The slot indices by name: `<KERNEL>_<SLOT>`. Taken before `name` is reused.
     base = (name[:-4] if name.endswith("_adx") else name).upper()
     o = [f"/// {doc}", "///"]
@@ -419,7 +426,7 @@ def emit(name, doc, slots, program, inputs, outputs, attrs=("#[inline(never)]",)
             o.append(f"            {name} = out(reg) _,")
     o += ['            out("rax") _,', '            out("rdx") _,',
           "            options(nostack),", "        );", "    }", "}"]
-    for x in outputs:
+    for x in [*named, *outputs]:
         if "#[cfg(test)]" in attrs:
             o.append("#[cfg(test)]")
         # Older compilers do not count a use in a `const` assertion, so a build
@@ -596,7 +603,7 @@ def main():
     parts.append(emit("add_affine_adx",
                       "Mixed addition, `madd-2007-bl`, as `Point::add_affine_formula`; also leaves `H` and `R`.",
                       MADD_SLOTS, MADD, ["X1", "Y1", "Z1", "x2", "y2"],
-                      ["X3", "Y3", "Z3", "H", "R"]))
+                      ["X3", "Y3", "Z3", "H", "R"], named=["X1", "Y1", "Z1", "x2", "y2"]))
     text = "\n\n".join(parts) + "\n"
     with open(sys.argv[1], "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
