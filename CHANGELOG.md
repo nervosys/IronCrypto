@@ -44,9 +44,14 @@ all of them.
   signature and key generation (hosted builds), and each KMAC tag. That is
   where the four-way SHA-3 permutation's spilled state had been left for a
   later stack disclosure to find. It reaches only the frames within its
-  window (16 KiB for ML-KEM, 64 KiB for ML-DSA, 2 KiB for KMAC), not the
-  caller's own frame, registers or the heap, and it is not a constant-time
-  property. Costs about 0.3 microseconds per ML-KEM call and about 40
+  window: 32 KiB for ML-KEM key generation (all parameter sets) and for every
+  ML-KEM-1024 operation, 16 KiB for ML-KEM-512 and ML-KEM-768 encapsulation
+  and decapsulation, 64 KiB for ML-DSA, 2 KiB for KMAC. Measured residue
+  below the caller's frame is now zero for every ML-KEM operation, apart from
+  9 to 11 code-address bytes in the public function's own frame that no scrub
+  inside it can reach. It does not reach the caller's own frame, registers or
+  the heap, and it is not a constant-time property. Costs about 0.4 to 0.8
+  microseconds for a 32 KiB ML-KEM call, 0.3 for 16 KiB, and about 40
   nanoseconds per KMAC tag (docs/CONSTANT_TIME.md, "Stack scrubbing after
   SHA-3's keyed uses").
 

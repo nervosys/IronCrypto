@@ -1727,15 +1727,22 @@ cases.
 
 ### Where it is called, and with what `N`
 
-- ML-KEM, `scheme.rs` (`STACK_SCRUB = 16384`), in `std` builds only:
-  `keygen`, `keygen_deterministic`, `encapsulate`, `encapsulate_deterministic`
-  and `decapsulate`. Each scrubs once, from the public function, with the
-  work in an `#[inline(never)]` inner function. 16 KiB covers the whole
-  measured dead region of ML-KEM-768 encapsulate and decapsulate. It does not
-  cover keygen (20.7 KiB: about 4 KiB of residue lies above 16 KiB) or
-  ML-KEM-1024 (27 to 29 KiB). 32 KiB covers all of them, but its call cost
-  about 0.8 microseconds, more than the noise on these operations of about
-  6 microseconds; see the cost below.
+- ML-KEM, `scheme.rs`, `std` builds only: `keygen`, `keygen_deterministic`,
+  `encapsulate`, `encapsulate_deterministic` and `decapsulate`. Each scrubs
+  once, from the public function, with the work in an `#[inline(never)]`
+  inner function. The size is `stack_scrub_bytes(k, keygen)`, by parameter
+  set and operation:
+
+  | Operation | Sets | Scrub |
+  | --- | --- | --- |
+  | `keygen`, `keygen_deterministic` | 512, 768, 1024 | 32 KiB |
+  | `encapsulate`, `encapsulate_deterministic`, `decapsulate` | 512, 768 | 16 KiB |
+  | `encapsulate`, `encapsulate_deterministic`, `decapsulate` | 1024 | 32 KiB |
+
+  The 16 KiB figure for 512 and 768 encapsulate and decapsulate is the hot
+  path and is what the harness needs for those (see the table below). Keygen
+  at 512 and 768 is sized to 32 KiB as a margin on the measured 768 residue,
+  not because the harness needed the full 32 KiB at 512.
 - ML-DSA, `scheme.rs` (`STACK_SCRUB = 65536`), `std` builds: `sign_framed`
   (`sign` and `sign_prehash`), and `keygen` after its consistency check.
   65536 is the next power of two above ML-DSA-87's sign, 37.5 KiB, and
@@ -1745,6 +1752,40 @@ cases.
 - Not scrubbed: the prepared-key forms (`PreparedEncapsulationKey`,
   `PreparedDecapsulationKey`), which are a follow-up; the public SHA-3,
   SHAKE and cSHAKE functions; and every verification path.
+
+### Residue after the per-operation sizes, 2026-10-16
+
+The same probe, on the ML-KEM public operations, with the scrub in place.
+"Below the caller" counts only bytes deeper than the operation's own frame
+(the probe's operation records its frame bottom before the call). Deepest
+nonzero residue, in bytes below that frame, and the count of such bytes:
+
+| Set | Operation | 16 KiB everywhere (before) | Now (after) |
+| --- | --- | --- | --- |
+| ML-KEM-512 | keygen, deterministic | 214 (10) | 214 (10) |
+| ML-KEM-512 | keygen | 0 | 0 |
+| ML-KEM-512 | encapsulate, deterministic | 215 (11) | 215 (11) |
+| ML-KEM-512 | encapsulate | 0 | 0 |
+| ML-KEM-512 | decapsulate | 215 (11) | 215 (11) |
+| ML-KEM-768 | keygen, deterministic | 17087 (483) | 215 (11) |
+| ML-KEM-768 | keygen | 17135 (467) | 0 |
+| ML-KEM-768 | encapsulate, deterministic | 215 (11) | 215 (11) |
+| ML-KEM-768 | encapsulate | 0 | 0 |
+| ML-KEM-768 | decapsulate | 215 (11) | 215 (11) |
+| ML-KEM-1024 | keygen, deterministic | 22559 (3275) | 214 (9) |
+| ML-KEM-1024 | keygen | 22607 (2978) | 0 |
+| ML-KEM-1024 | encapsulate, deterministic | 17935 (1162) | 215 (10) |
+| ML-KEM-1024 | encapsulate | 17951 (1147) | 0 |
+| ML-KEM-1024 | decapsulate | 19711 (1202) | 215 (10) |
+
+The residue that remains, at 162 to 215 bytes, is the same in every row where
+it appears: 9 to 11 nonzero bytes that a dump shows are code addresses
+(`0x00007ff6...` values) from the call boundary, at the public function's
+own frame. No scrub inside that function reaches its own frame, so it is
+outside what `stack_scrub` can clear, and it holds no key material. Every
+row that a scrub can reach is now clear. Measured with `E:/build/scrub2`, not
+in the repository; the "before" column is the 16 KiB build of the same
+harness, before this change.
 
 ### Cost
 
@@ -1761,6 +1802,31 @@ Against the operations: the 16 KiB scrub is about 5 percent of an ML-KEM-768
 operation of 5 to 7 microseconds; the 2 KiB scrub about 5 percent of a
 KMAC256 call on 32 bytes (about 0.8 microseconds); the 64 KiB scrub about
 0.3 percent of an ML-DSA-65 signature (about 0.5 milliseconds).
+
+The per-operation sizes, measured on 2026-10-16 with the timing mode of the
+scratch harness: alternating runs of the HEAD build (16 KiB everywhere) and
+this change, four rounds, in the default and `-align-all-functions=6`
+layouts, each run a median of nine batches. Medians of the four rounds, in
+microseconds, base against new:
+
+| Operation | Default layout | Aligned layout | Read |
+| --- | --- | --- | --- |
+| ML-KEM-768 keygen (32 KiB now) | 9.2 / 9.5 | 9.7 / 9.5 | parity |
+| ML-KEM-1024 keygen (32 KiB now) | 13.0 / 12.5 | 12.6 / 12.6 | parity |
+| ML-KEM-1024 decapsulate (32 KiB now) | 17.3 / 18.5 | 28.0 / 17.4 | not resolved |
+| ML-KEM-1024 encapsulate (32 KiB now) | 13.1 / 19.0 | 13.3 / 16.3 | not resolved |
+| ML-KEM-768 encapsulate (16 KiB, unchanged code) | 10.7 / 8.3 | 10.4 / 8.5 | control |
+| ML-KEM-768 decapsulate (16 KiB, unchanged code) | 11.8 / 12.2 | 12.6 / 12.2 | control |
+
+The two ML-KEM-768 rows at 16 KiB run byte-identical code in both builds, and
+their medians move by 2 microseconds or more in both directions. That is the
+noise on this machine. The standalone scrub costs above predict 0.4 to 0.8
+microseconds more per 32 KiB call (about 5 percent of a keygen), which these
+runs do not resolve. The 1024 encapsulate rows spread from 12.5 to 29
+microseconds across rounds; the new build's median is higher in both layouts,
+but the spreads overlap, and it is not a figure to rely on. The keygen rows
+read as parity; the two ML-KEM-1024 rows that are not resolved are not
+evidence of a cost either way.
 
 An earlier build at 32 KiB, with 8-byte volatile stores, measured ML-KEM-768
 decapsulation at a median of 7.2 microseconds against 6.3 without the scrub,
@@ -1788,8 +1854,9 @@ per-call timings above are the figures to use.
   memory. Only the `N` bytes below the scrubbing function's caller are reached.
 - Not reached: the caller's frame and its buffers (the output keys, the
   shared secret), registers, the heap, copies elsewhere, and any frame deeper
-  than `N`. ML-KEM keygen and ML-KEM-1024 keep residue between 16 KiB and
-  their depth.
+  than `N`. The residue the harness measures below the caller's frame, after
+  the per-operation sizes, is the 9 to 11 code-address bytes at the public
+  function's own frame, which no scrub inside it can reach.
 - The ML-KEM and ML-DSA scrubs are `std`-only, because a 16 to 64 KiB frame
   does not belong on a constrained stack. KMAC's 2 KiB scrub runs in every
   build.
