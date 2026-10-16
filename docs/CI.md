@@ -267,8 +267,8 @@ never reaches a path proves nothing about that path. Check that a model took
 the fallback by its self-checks, not by its exit status alone: the fast-path
 tests above are the ones that fail when the fast path did not run.
 
-The workspace test suite (65 test binaries) was run under Intel SDE 10.13.1 on the snb, hsw, bdw, skx, icl and spr models
-at commit 766cfe2, all passing; IC_EC_NO_ADX_OK was set for snb and hsw, which
+The workspace test suite (65 test binaries) was run under Intel SDE 10.13.1
+on the snb, hsw, bdw, skx, icl and spr models at commit 766cfe2, all passing; IC_EC_NO_ADX_OK was set for snb and hsw, which
 lack ADX. The 150 tests marked `ignored` per model (timing diagnostics, deep
 fuzz runs and the 4096-bit key test, slow in debug) were not run, and the
 `cold_tables` binary uses its own harness and prints `ok` rather than a test
