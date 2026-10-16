@@ -1743,6 +1743,27 @@ cases.
   path and is what the harness needs for those (see the table below). Keygen
   at 512 and 768 is sized to 32 KiB as a margin on the measured 768 residue,
   not because the harness needed the full 32 KiB at 512.
+
+  16 KiB is also the smallest of the sizes tried that clears ML-KEM-768. A
+  scratch copy of 4a23318 with the 512/768 encapsulate and decapsulate size set
+  to 0, 4, 8, 12 and 16 KiB (keygen and 1024 left at 32 KiB), each run twice,
+  in the default layout and with `-align-all-functions=6`, gave the deepest
+  nonzero byte below the operation's frame, in bytes, with the nonzero count:
+
+  | Scrub | 512 encaps_det | 512 decaps | 768 encaps_det | 768 decaps |
+  | --- | --- | --- | --- | --- |
+  | none | 8975 / 4462 | 9919 / 4083 | 12895 / 7158 | 14190 / 6551 |
+  | 8 KiB | 8975 / 559 | 9919 / 816 | 12895 / 3113 | 14190 / 3406 |
+  | 12 KiB | 215 / 11 | 215 / 11 | 12895 / 385 | 14190 / 818 |
+  | 16 KiB | 215 / 11 | 215 / 11 | 214 / 10 | 215 / 11 |
+
+  The 214 to 215 byte rows are code addresses at the call boundary. At 12 KiB
+  ML-KEM-768 still leaves 385 to 818 high-entropy bytes, so it is not enough
+  for 768. ML-KEM-512 is clean at 12 KiB, but that would save about 85 ns a
+  call (a standalone 12 KiB scrub measured 262 to 306 ns against 340 to
+  385 ns for 16 KiB) for a margin of about 2.4 KiB over its deepest residue,
+  which a compiler change could take; it stays at 16 KiB. Sizes between 14
+  and 16 KiB were not tried.
 - ML-DSA, `scheme.rs` (`STACK_SCRUB = 65536`), `std` builds: `sign_framed`
   (`sign` and `sign_prehash`), and `keygen` after its consistency check.
   65536 is the next power of two above ML-DSA-87's sign, 37.5 KiB, and
