@@ -54,20 +54,28 @@ pub(crate) fn j(parts: &[&[u8]]) -> [u8; 32] {
     out
 }
 
-/// Bytes of stack below the one-shot operations' frames that they scrub on
-/// return (`ic_core::stack_scrub`), in hosted builds only.
+/// Bytes of stack below the caller's frame that a one-shot operation scrubs on
+/// return (`ic_core::stack_scrub`), in hosted builds only, by parameter set
+/// (`k`) and by whether the operation is key generation.
 ///
 /// Measured with a harness that writes a sentinel below the caller, runs the
-/// operation, and finds the deepest byte left changed. Release, x86-64 with
-/// AVX-512VL: ML-KEM-768 keygen 20679 bytes, encapsulate 14023, decapsulate
-/// 14215; ML-KEM-1024 keygen 27303, encapsulate plus decapsulate 29271.
-/// 16384 covers the whole measured dead region of ML-KEM-768 encapsulate and
-/// decapsulate, and not keygen or ML-KEM-1024: a 32 KiB scrub cost about
-/// 0.8 microseconds per call, more than the noise on a 6 microsecond
-/// operation. The basis is in docs/CONSTANT_TIME.md, "Stack scrubbing after
-/// SHA-3's keyed uses".
+/// operation, and finds the deepest nonzero byte left (release, x86-64 with
+/// AVX-512VL). With a 16 KiB scrub, the residue below the operation's own
+/// frame reaches 17.1 KiB for ML-KEM-768 keygen, 22.6 KiB for ML-KEM-1024
+/// keygen, 18.0 KiB for ML-KEM-1024 encapsulate and 19.7 KiB for its
+/// decapsulate; ML-KEM-512 and -768 encapsulate and decapsulate leave nothing
+/// below 16 KiB. So key generation and all of ML-KEM-1024 scrub 32 KiB, and
+/// ML-KEM-512 and -768 encapsulate and decapsulate keep 16 KiB, the hot path.
+/// The basis is in docs/CONSTANT_TIME.md, "Stack scrubbing after SHA-3's keyed
+/// uses".
 #[cfg(feature = "std")]
-pub(crate) const STACK_SCRUB: usize = 16384;
+pub(crate) const fn stack_scrub_bytes(k: usize, keygen: bool) -> usize {
+    if keygen || k == 4 {
+        32768
+    } else {
+        16384
+    }
+}
 
 /// Instantiate ML-KEM for one parameter set, in the module that invokes it.
 macro_rules! ml_kem {
@@ -1223,7 +1231,7 @@ macro_rules! ml_kem {
                 let tested =
                     ic_core::module::conditional_self_test(Self::pairwise_consistency(ek, dk));
                 #[cfg(feature = "std")]
-                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
+                ic_core::stack_scrub::<{ $crate::scheme::stack_scrub_bytes($k, true) }>();
                 tested
             }
 
@@ -1285,7 +1293,7 @@ macro_rules! ml_kem {
                 ic_core::module::operational()?;
                 Self::keygen_inner(d, z, ek, dk);
                 #[cfg(feature = "std")]
-                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
+                ic_core::stack_scrub::<{ $crate::scheme::stack_scrub_bytes($k, true) }>();
                 Ok(())
             }
 
@@ -1338,7 +1346,7 @@ macro_rules! ml_kem {
                 Self::encapsulate_inner(&m, ek, ct, shared);
                 m.zeroize();
                 #[cfg(feature = "std")]
-                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
+                ic_core::stack_scrub::<{ $crate::scheme::stack_scrub_bytes($k, false) }>();
                 Ok(())
             }
 
@@ -1360,7 +1368,7 @@ macro_rules! ml_kem {
                 ic_core::module::operational()?;
                 Self::encapsulate_inner(m, ek, ct, shared);
                 #[cfg(feature = "std")]
-                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
+                ic_core::stack_scrub::<{ $crate::scheme::stack_scrub_bytes($k, false) }>();
                 Ok(())
             }
 
@@ -1440,7 +1448,7 @@ macro_rules! ml_kem {
                 ic_core::module::operational()?;
                 let outcome = Self::decapsulate_inner(dk, ct, shared);
                 #[cfg(feature = "std")]
-                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
+                ic_core::stack_scrub::<{ $crate::scheme::stack_scrub_bytes($k, false) }>();
                 outcome
             }
 
