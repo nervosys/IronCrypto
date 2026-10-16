@@ -54,6 +54,21 @@ pub(crate) fn j(parts: &[&[u8]]) -> [u8; 32] {
     out
 }
 
+/// Bytes of stack below the one-shot operations' frames that they scrub on
+/// return (`ic_core::stack_scrub`), in hosted builds only.
+///
+/// Measured with a harness that writes a sentinel below the caller, runs the
+/// operation, and finds the deepest byte left changed. Release, x86-64 with
+/// AVX-512VL: ML-KEM-768 keygen 20679 bytes, encapsulate 14023, decapsulate
+/// 14215; ML-KEM-1024 keygen 27303, encapsulate plus decapsulate 29271.
+/// 16384 covers the whole measured dead region of ML-KEM-768 encapsulate and
+/// decapsulate, and not keygen or ML-KEM-1024: a 32 KiB scrub cost about
+/// 0.8 microseconds per call, more than the noise on a 6 microsecond
+/// operation. The basis is in docs/CONSTANT_TIME.md, "Stack scrubbing after
+/// SHA-3's keyed uses".
+#[cfg(feature = "std")]
+pub(crate) const STACK_SCRUB: usize = 16384;
+
 /// Instantiate ML-KEM for one parameter set, in the module that invokes it.
 macro_rules! ml_kem {
     ($name:ident, $display:literal, $k:literal, $eta1:literal, $eta2:literal, $du:literal, $dv:literal) => {
@@ -1205,7 +1220,11 @@ macro_rules! ml_kem {
                 // caller has to know to call.
                 // A failure means this module disagrees with itself, so it ends the
                 // module and not only this call.
-                ic_core::module::conditional_self_test(Self::pairwise_consistency(ek, dk))
+                let tested =
+                    ic_core::module::conditional_self_test(Self::pairwise_consistency(ek, dk));
+                #[cfg(feature = "std")]
+                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
+                tested
             }
 
             /// The pairwise consistency test for a generated key pair.
@@ -1238,7 +1257,7 @@ macro_rules! ml_kem {
                 Self::encapsulate_inner(&m, ek, &mut ct, &mut sent);
 
                 let mut received = [0u8; SHARED_SECRET_LEN];
-                Self::decapsulate(dk, &ct, &mut received)?;
+                Self::decapsulate_inner(dk, &ct, &mut received)?;
 
                 let matched = ic_core::ct::verify(&sent, &received);
                 sent.zeroize();
@@ -1265,11 +1284,17 @@ macro_rules! ml_kem {
             ) -> Result<()> {
                 ic_core::module::operational()?;
                 Self::keygen_inner(d, z, ek, dk);
+                #[cfg(feature = "std")]
+                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
                 Ok(())
             }
 
             /// [`Self::keygen_deterministic`] after the caller has checked the
             /// module, as `keygen` has.
+            ///
+            /// `inline(never)`: the callers scrub the stack below their own frame
+            /// after this returns, which reaches this frame only if it is one.
+            #[inline(never)]
             fn keygen_inner(
                 d: &[u8; 32],
                 z: &[u8; 32],
@@ -1312,6 +1337,8 @@ macro_rules! ml_kem {
                 rng.fill(&mut m)?;
                 Self::encapsulate_inner(&m, ek, ct, shared);
                 m.zeroize();
+                #[cfg(feature = "std")]
+                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
                 Ok(())
             }
 
@@ -1332,11 +1359,15 @@ macro_rules! ml_kem {
             ) -> Result<()> {
                 ic_core::module::operational()?;
                 Self::encapsulate_inner(m, ek, ct, shared);
+                #[cfg(feature = "std")]
+                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
                 Ok(())
             }
 
             /// [`Self::encapsulate_deterministic`] after the caller has checked the
-            /// module.
+            /// module. `inline(never)`, so that the scrub in the public caller
+            /// reaches its frame.
+            #[inline(never)]
             fn encapsulate_inner(
                 m: &[u8; 32],
                 ek: &[u8; ENCAPS_KEY_LEN],
@@ -1407,6 +1438,20 @@ macro_rules! ml_kem {
                 shared: &mut [u8; SHARED_SECRET_LEN],
             ) -> Result<()> {
                 ic_core::module::operational()?;
+                let outcome = Self::decapsulate_inner(dk, ct, shared);
+                #[cfg(feature = "std")]
+                ic_core::stack_scrub::<{ $crate::scheme::STACK_SCRUB }>();
+                outcome
+            }
+
+            /// [`Self::decapsulate`] after the module check. `inline(never)`, so
+            /// that the scrub in `decapsulate` reaches its frame.
+            #[inline(never)]
+            fn decapsulate_inner(
+                dk: &[u8; DECAPS_KEY_LEN],
+                ct: &[u8; CIPHERTEXT_LEN],
+                shared: &mut [u8; SHARED_SECRET_LEN],
+            ) -> Result<()> {
                 // Where the four-way Keccak runs in hardware, the hash check's
                 // hash is computed alongside `J(z || c)` and the matrix, and
                 // compared by the same function `validate_decapsulation_key` uses.

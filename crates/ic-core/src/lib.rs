@@ -43,7 +43,7 @@ mod error;
 mod zeroize;
 
 pub use error::{Error, ErrorKind, Result};
-pub use zeroize::{Zeroize, Zeroizing};
+pub use zeroize::{stack_scrub, Zeroize, Zeroizing};
 
 /// The semantic version of the IronCrypto core contract.
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");

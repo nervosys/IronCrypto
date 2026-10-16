@@ -35,6 +35,12 @@ use ic_hash::sp800_185::{right_encode, MAX_ENCODE};
 /// The widest tag the fixed-length helpers handle.
 const MAX_TAG: usize = 64;
 
+/// Bytes of stack below a tag's frame that `finalize` scrubs on return. The
+/// keyed absorb and the squeeze run the scalar permutation, whose deepest dead
+/// frame in release on x86-64 measured 1711 bytes for `Kmac256::mac`; 2048 is
+/// the next power of two. See docs/CONSTANT_TIME.md.
+const STACK_SCRUB: usize = 2048;
+
 /// Declare a KMAC over one cSHAKE parameter set.
 macro_rules! kmac {
     ($name:ident, $cshake:ty, $id:literal, $disp:literal, $bits:literal) => {
@@ -75,6 +81,7 @@ macro_rules! kmac {
                 let used = right_encode((out.len() as u64) * 8, &mut buf);
                 self.inner.update(&buf[..used]);
                 self.inner.finalize_xof_unchecked(out);
+                ic_core::stack_scrub::<STACK_SCRUB>();
                 Ok(())
             }
 
@@ -88,6 +95,7 @@ macro_rules! kmac {
                 let used = right_encode(0, &mut buf);
                 self.inner.update(&buf[..used]);
                 self.inner.finalize_xof_unchecked(out);
+                ic_core::stack_scrub::<STACK_SCRUB>();
                 Ok(())
             }
 

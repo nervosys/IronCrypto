@@ -28,6 +28,15 @@ use ic_hash::Shake256;
 /// broken key. Looping forever would turn that into a hang instead of an error.
 pub(crate) const MAX_ATTEMPTS: usize = 1000;
 
+/// Bytes of stack below a signature's frame that it scrubs on return, in
+/// hosted builds only. The method is `ic_core::stack_scrub`. Measured in
+/// release on x86-64 with AVX-512VL: ML-DSA-65 keygen reaches 27327 bytes and
+/// sign 30927; ML-DSA-87 keygen 32543 and sign 37455 (the deepest). 65536 is
+/// the next power of two above that, shared by the three parameter sets. The
+/// basis is in docs/CONSTANT_TIME.md.
+#[cfg(feature = "std")]
+pub(crate) const STACK_SCRUB: usize = 65536;
+
 /// `H`: SHAKE-256 over the concatenation of `parts`.
 pub(crate) fn h(parts: &[&[u8]], out: &mut [u8]) {
     let mut x = Shake256::default();
@@ -452,6 +461,10 @@ macro_rules! ml_dsa {
                 // only this call.
                 ic_core::module::enter_error_state();
             }
+            // The verification above runs below this frame, after the scrub in
+            // `sign_framed` has returned, so it is scrubbed here.
+            #[cfg(feature = "std")]
+            ic_core::stack_scrub::<{ crate::scheme::STACK_SCRUB }>();
             ok
         }
 
@@ -683,7 +696,28 @@ macro_rules! ml_dsa {
         /// variant, the hash OID and digest for the pre-hash one. Threading it through
         /// rather than duplicating the loop means the two variants cannot drift in
         /// anything except the framing, which is the only thing that should differ.
+        ///
+        /// The signing body runs out of line and the stack below this frame is
+        /// scrubbed after it returns: the body's SHAKE and its secret-key
+        /// expansion leave the deepest dead frames of a signature.
         fn sign_framed(
+            sk: &[u8; SECRET_KEY_LEN],
+            domain: u8,
+            parts: &[&[u8]],
+            ctx: &[u8],
+            rnd: &[u8; 32],
+            sig: &mut [u8; SIGNATURE_LEN],
+        ) -> bool {
+            let ok = sign_framed_inner(sk, domain, parts, ctx, rnd, sig);
+            #[cfg(feature = "std")]
+            ic_core::stack_scrub::<{ crate::scheme::STACK_SCRUB }>();
+            ok
+        }
+
+        /// [`sign_framed`] without the scrub. `inline(never)`, so that the scrub
+        /// in `sign_framed` reaches its frame.
+        #[inline(never)]
+        fn sign_framed_inner(
             sk: &[u8; SECRET_KEY_LEN],
             domain: u8,
             parts: &[&[u8]],

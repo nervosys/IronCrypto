@@ -4,6 +4,7 @@
 //! compiler fence, so the erasure survives optimization. This is the mechanism
 //! behind the FIPS 140-3 zeroisation requirement for CSPs held in memory.
 
+use core::mem::MaybeUninit;
 use core::sync::atomic::{compiler_fence, Ordering};
 
 /// Types whose in-memory representation can be securely erased.
@@ -83,6 +84,75 @@ impl<const N: usize> Zeroize for [u64; N] {
     fn zeroize(&mut self) {
         self.as_mut_slice().zeroize();
     }
+}
+
+/// Overwrites the `N` bytes of stack directly below the caller's frame, at the
+/// point of the call, with zeros. Best effort; defence in depth.
+///
+/// Call it from a function `C` after a deeper call chain below `C` has
+/// returned. Those callees' frames were allocated at the stack pointer `C` had
+/// when it made its call, so the dead frames lie where `stack_scrub` now
+/// lives: its own local buffer sits in the `N` bytes (plus its return address
+/// and any alignment) immediately below `C`'s stack pointer, and the volatile
+/// stores zero it. The idea is libsodium's `sodium_stackzero`.
+///
+/// What it guarantees: the buffer's `N` bytes are written with non-elidable
+/// volatile stores and then a compiler fence, so they are zero when the
+/// function returns, whatever the optimiser would otherwise do with a buffer
+/// that is never read.
+///
+/// What it does not guarantee:
+///
+/// - It reaches only the `N` bytes below the caller. A dead frame deeper than
+///   `N` keeps its bytes. `N` must cover the deepest path from the caller
+///   that could have held the secret, with margin.
+/// - It relies on the dead frames having been in that region. A frame placed
+///   elsewhere (another caller's stack, a heap copy) is not reached.
+/// - It cannot reach registers. A secret left in a vector or general register
+///   is untouched.
+/// - It is not a proof that no copy exists. Only the stack region the callees
+///   used is cleared; a copy the caller made, or one in a spill slot that a
+///   later call overwrote with other data, is not something this can see.
+///
+/// It is a hardening measure against later disclosure of dead stack memory.
+/// It is not a constant-time property and does not change any result.
+#[inline(never)]
+pub fn stack_scrub<const N: usize>() {
+    let mut buf = MaybeUninit::<[u8; N]>::uninit();
+    // SAFETY: `buf` is `N` bytes of writable storage owned by this frame, and
+    // the pointer is valid for `N` bytes for the length of the call.
+    unsafe { wipe_raw(buf.as_mut_ptr().cast::<u8>(), N) };
+    // The buffer is never read. Its stores are volatile, so they are not
+    // removed as dead, and the fence keeps them ordered before the return.
+}
+
+/// Writes zeros over `n` bytes at `p`, with volatile stores, then fences.
+///
+/// # Safety
+///
+/// `p` must be valid for writes of `n` bytes for the duration of the call.
+#[inline(always)]
+unsafe fn wipe_raw(p: *mut u8, n: usize) {
+    // Sixteen bytes per volatile store, which is one 128-bit store on every
+    // target this builds for, so a 32 KiB scrub is 2048 stores, not 4096.
+    let mut i = 0;
+    while i + 16 <= n {
+        // SAFETY: `i + 16 <= n`, so these sixteen bytes lie inside the `n`
+        // bytes the caller promised; `[u8; 16]` has alignment 1.
+        unsafe { core::ptr::write_volatile(p.add(i).cast::<[u8; 16]>(), [0u8; 16]) };
+        i += 16;
+    }
+    while i + 8 <= n {
+        // SAFETY: `i + 8 <= n`, as above.
+        unsafe { core::ptr::write_volatile(p.add(i).cast::<[u8; 8]>(), [0u8; 8]) };
+        i += 8;
+    }
+    while i < n {
+        // SAFETY: `i < n`, inside the caller's `n` bytes.
+        unsafe { core::ptr::write_volatile(p.add(i), 0) };
+        i += 1;
+    }
+    compiler_fence(Ordering::SeqCst);
 }
 
 /// A wrapper that zeroizes its contents when dropped.
@@ -168,6 +238,40 @@ mod tests {
             assert!(v[..len].iter().all(|&b| b == 0), "length {len}");
             assert!(v[len..].iter().all(|&b| b == 0xff), "length {len}");
         }
+    }
+
+    #[test]
+    fn raw_wipe_zeroes_exactly_its_range() {
+        // Every length up to two chunks and a tail, inside a buffer whose
+        // bytes either side must survive. If the volatile stores were removed
+        // the range would keep its pattern and this would fail.
+        for n in 0..=19 {
+            let mut buf = [0xa5u8; 24];
+            // SAFETY: `buf` is 24 valid bytes and `2 + n <= 21`, so the range
+            // `2..2 + n` lies inside it.
+            unsafe { wipe_raw(buf.as_mut_ptr().add(2), n) };
+            assert!(
+                buf[..2].iter().all(|&b| b == 0xa5),
+                "length {n}: leading guard"
+            );
+            assert!(
+                buf[2..2 + n].iter().all(|&b| b == 0),
+                "length {n}: range not zeroed"
+            );
+            assert!(
+                buf[2 + n..].iter().all(|&b| b == 0xa5),
+                "length {n}: trailing guard"
+            );
+        }
+    }
+
+    #[test]
+    fn stack_scrub_returns_at_several_sizes() {
+        // Its effect is on the stack below this frame, which no safe test can
+        // read. This checks that each size compiles and returns.
+        stack_scrub::<0>();
+        stack_scrub::<7>();
+        stack_scrub::<4096>();
     }
 
     #[test]

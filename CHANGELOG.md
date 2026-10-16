@@ -34,9 +34,21 @@ all of them.
   message. `scripts/check-ct.py` now also checks, on 30 x86-64 probes,
   that the last kernel block zeroes every vector register the probe's
   blocks name; tests fail if a buffer wipe is removed. Measured at parity.
-  Not done: the SHA-3 four-way permutation's stack residue is the
-  compiler's own spill slots, which no source-level wipe reaches
+  The SHA-3 four-way permutation's spill slots are the compiler's own, and
+  no source-level wipe reaches them; the next entry covers them by depth
   (docs/CONSTANT_TIME.md, "Registers and stack after a kernel").
+- **Dead stack below ML-KEM, ML-DSA and KMAC keyed operations is scrubbed
+  (best effort).** Hardening, not a vulnerability fix: `ic_core::stack_scrub`
+  zeroes the bytes directly below the calling function's stack pointer after
+  each one-shot ML-KEM keygen, encapsulation and decapsulation, each ML-DSA
+  signature and key generation (hosted builds), and each KMAC tag. That is
+  where the four-way SHA-3 permutation's spilled state had been left for a
+  later stack disclosure to find. It reaches only the frames within its
+  window (16 KiB for ML-KEM, 64 KiB for ML-DSA, 2 KiB for KMAC), not the
+  caller's own frame, registers or the heap, and it is not a constant-time
+  property. Costs about 0.3 microseconds per ML-KEM call and about 40
+  nanoseconds per KMAC tag (docs/CONSTANT_TIME.md, "Stack scrubbing after
+  SHA-3's keyed uses").
 
 ### Changed
 

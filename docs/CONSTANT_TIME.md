@@ -1609,13 +1609,14 @@ Stack buffers, wiped by volatile stores in a guard's `Drop`:
   on public points.
 - `chacha::avx2::Words`, the eight-block kernel's keystream array, now
   the caller's and wiped once per message (`chacha::xor_keystream`).
-- Not done: `sha3::x86`'s `a` and `e`. In the compiled code they are not
-  arrays; LLVM splits them into values and spills to slots of its own
-  (`permute_avx512vl`: a 968-byte frame, 151 stack references). Wrapping
+- Not wiped by a guard: `sha3::x86`'s `a` and `e`. In the compiled code they
+  are not arrays; LLVM splits them into values and spills to slots of its
+  own (`permute_avx512vl`: a 968-byte frame, 151 stack references). Wrapping
   them in a wiping guard was tried: it gave them a 1600-byte home, zeroed
   on entry and wiped on exit, while the rounds kept spilling to their own
-  slots, so it wiped nothing that held the state. Only scrubbing the dead
-  frame by its depth would; that is not done.
+  slots, so it wiped nothing that held the state. Scrubbing the dead frame
+  by its depth is what was then done; see "Stack scrubbing after SHA-3's
+  keyed uses", below.
 
 Verification paths, on public data, are left alone throughout.
 
@@ -1654,3 +1655,131 @@ Mutations, each restored:
 
 The gate's findings and excuses on x86-64 are unchanged, probe for probe:
 a zeroing instruction is not a branch.
+
+## Stack scrubbing after SHA-3's keyed uses, 2026-10-16
+
+Hardening, best effort. `ic_core::stack_scrub::<N>()` (`crates/ic-core/src/zeroize.rs`)
+is an `#[inline(never)]` function. It declares an `N`-byte buffer, zeroes it
+with volatile 16-byte stores and a compiler fence, and returns. Called from a
+function `C` after a deeper call chain below `C` has returned, it overwrites
+the `N` bytes directly below `C`'s stack pointer, where those callees' dead
+frames lie. It is `sodium_stackzero` in Rust.
+
+It guarantees that the `N` bytes it reaches are zero when it returns. It does
+not reach anything deeper than `N`, the caller's own frame, registers, the
+heap, or a copy the compiler or the caller made elsewhere. It is not a
+constant-time property and changes no output.
+
+### What the x4 permutation leaves
+
+Scratch harness, outside the repository (`E:/build/scrub/harness`), release,
+x86-64 with AVX-512VL. The probe writes a sentinel over 96 KiB below its own
+frame, runs the operation, and reads the region back. The deepest byte that
+is no longer the sentinel is the depth reached; the nonzero residue is what a
+later disclosure would find.
+
+`KeccakX4::permute` on lane 0, final state (25 words), with
+`stack_scrub::<N>` called from the probe after it returns:
+
+| `N` | words of the state found below the probe | deepest residue |
+| --- | --- | --- |
+| none | 16 / 25 | 1991 bytes |
+| 256 | 16 / 25 | 1951 bytes |
+| 1024 | 12 / 25 | 1951 bytes |
+| 2048 | 0 / 25 | 2127 bytes (the scrub's own zeros) |
+| 4096 | 0 / 25 | 4175 bytes |
+
+The state is in the dead region at depths between 1 and 2 KiB, so 2 KiB
+reaches it; the 968-byte `permute_avx512vl` frame sits in that region.
+
+### What the one-shot operations leave
+
+The same probe, no scrub, deepest byte reached and nonzero residue (bytes):
+
+| Operation | Deepest | Nonzero residue |
+| --- | --- | --- |
+| ML-KEM-768 keygen | 20687 | 11095 |
+| ML-KEM-768 encapsulate | 14031 | 8355 |
+| ML-KEM-768 decapsulate | 14223 | 6632 |
+| ML-KEM-1024 keygen | 27311 | 15842 |
+| ML-KEM-1024 encapsulate and decapsulate | 29279 | 16963 |
+| ML-DSA-65 keygen | 27335 | 21872 |
+| ML-DSA-65 sign | 30935 | 19268 |
+| ML-DSA-87 keygen | 32551 | 26663 |
+| ML-DSA-87 sign | 37463 | 23260 |
+| KMAC256 `mac` | 1719 | 1049 |
+
+With the scrubs in place, the residue that remains is the caller's own
+buffers in the probe's frame (the `ek` and `dk` arrays, the `sk` and `pk`
+arrays), which the scrub does not reach by design. Nothing nonzero remains
+below the scrub region in the encapsulate, decapsulate, ML-DSA and KMAC
+cases.
+
+### Where it is called, and with what `N`
+
+- ML-KEM, `scheme.rs` (`STACK_SCRUB = 16384`), in `std` builds only:
+  `keygen`, `keygen_deterministic`, `encapsulate`, `encapsulate_deterministic`
+  and `decapsulate`. Each scrubs once, from the public function, with the
+  work in an `#[inline(never)]` inner function. 16 KiB covers the whole
+  measured dead region of ML-KEM-768 encapsulate and decapsulate. It does not
+  cover keygen (20.7 KiB: about 4 KiB of residue lies above 16 KiB) or
+  ML-KEM-1024 (27 to 29 KiB). 32 KiB covers all of them, but its call cost
+  about 0.8 microseconds, more than the noise on these operations of about
+  6 microseconds; see the cost below.
+- ML-DSA, `scheme.rs` (`STACK_SCRUB = 65536`), `std` builds: `sign_framed`
+  (`sign` and `sign_prehash`), and `keygen` after its consistency check.
+  65536 is the next power of two above ML-DSA-87's sign, 37.5 KiB, and
+  covers all three parameter sets.
+- KMAC, `ic-mac/src/kmac.rs` (`STACK_SCRUB = 2048`), every build: `finalize`
+  and `finalize_xof`. Its deepest dead frame measured 1.7 KiB.
+- Not scrubbed: the prepared-key forms (`PreparedEncapsulationKey`,
+  `PreparedDecapsulationKey`), which are a follow-up; the public SHA-3,
+  SHAKE and cSHAKE functions; and every verification path.
+
+### Cost
+
+One scrub call on its own, median of five batches, this machine:
+
+| Scrub | Time |
+| --- | --- |
+| 2 KiB | 37 to 44 ns |
+| 16 KiB | 299 to 355 ns |
+| 32 KiB | 715 to 939 ns |
+| 64 KiB | 1335 to 1521 ns |
+
+Against the operations: the 16 KiB scrub is about 5 percent of an ML-KEM-768
+operation of 5 to 7 microseconds; the 2 KiB scrub about 5 percent of a
+KMAC256 call on 32 bytes (about 0.8 microseconds); the 64 KiB scrub about
+0.3 percent of an ML-DSA-65 signature (about 0.5 milliseconds).
+
+An earlier build at 32 KiB, with 8-byte volatile stores, measured ML-KEM-768
+decapsulation at a median of 7.2 microseconds against 6.3 without the scrub,
+over four alternating rounds with the spreads not overlapping; that is what
+led to 16 KiB and 16-byte stores. The operation-level A/B runs on the final
+build (master against this branch, alternating, default and
+`-C llvm-args=-align-all-functions=6` layouts) did not resolve effects this
+size: the same binary's SHA3-256 time over 64 bytes ranged from 224 to 402
+nanoseconds across rounds, because another workload shared the machine. The
+per-call timings above are the figures to use.
+
+### Checks
+
+- `ic-core`: `raw_wipe_zeroes_exactly_its_range` (every length from 0 to 19
+  inside a guarded buffer) and `stack_scrub_returns_at_several_sizes`.
+  Mutation: the tail volatile store deleted fails the first test, restored.
+  A plain store in its place passes in a debug build, so the test catches a
+  deleted store, not a store that is not volatile.
+- The harness above is scratch and is not in the repository; its tables are
+  the evidence.
+
+### Limits
+
+- Best effort, and defence in depth against a later disclosure of dead stack
+  memory. Only the `N` bytes below the scrubbing function's caller are reached.
+- Not reached: the caller's frame and its buffers (the output keys, the
+  shared secret), registers, the heap, copies elsewhere, and any frame deeper
+  than `N`. ML-KEM keygen and ML-KEM-1024 keep residue between 16 KiB and
+  their depth.
+- The ML-KEM and ML-DSA scrubs are `std`-only, because a 16 to 64 KiB frame
+  does not belong on a constrained stack. KMAC's 2 KiB scrub runs in every
+  build.
