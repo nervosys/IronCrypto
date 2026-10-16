@@ -378,9 +378,19 @@ pub(crate) mod cleared_probe {
 /// the generated kernels, which `scripts/gen_nist_ifma.py` writes.
 #[inline(always)]
 fn clear_vectors(_: Ifma) {
-    // SAFETY: the token says the CPU has AVX, which `vzeroall` needs. It
-    // touches no memory and no flags, and every register it writes is
-    // declared clobbered.
+    // SAFETY: the token says the CPU has AVX, which `vzeroall` needs.
+    unsafe { clear_vectors_unchecked() }
+}
+
+/// [`clear_vectors`] without the token.
+///
+/// # Safety
+///
+/// The CPU must support AVX (`vzeroall`). It touches no memory and no flags,
+/// and every register it writes is declared clobbered.
+#[inline(always)]
+unsafe fn clear_vectors_unchecked() {
+    // SAFETY: the caller guarantees AVX; see the function's contract.
     unsafe {
         core::arch::asm!(
             "vzeroall",
@@ -971,8 +981,12 @@ pub mod probes {
                 unsafe { $kernel(a.as_ptr().cast(), b.as_ptr().cast(), m.as_ptr(), o.as_mut_ptr().cast(), t.as_mut_ptr()) }
                 // As a multiplication ends after its last kernel (`Cleared`),
                 // so that the gate checks that `clear_vectors` zeroes every
-                // register this kernel names.
-                clear_vectors(Ifma(()));
+                // register this kernel names. The probe holds no `Ifma`, so
+                // it calls the unchecked form; the caller's contract (AVX-512
+                // IFMA, which implies AVX) covers it.
+                // SAFETY: this fn's contract requires the CPU to have AVX-512
+                // IFMA, and that implies AVX, which `vzeroall` needs.
+                unsafe { clear_vectors_unchecked() }
             }
         )*};
     }

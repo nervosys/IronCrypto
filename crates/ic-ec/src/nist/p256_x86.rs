@@ -465,6 +465,83 @@ pub(crate) mod ladder_probe {
     }
 }
 
+/// A secret-derived temporary (a digit array, a scalar's bytes, a selected
+/// entry), wiped when it leaves scope by the same volatile stores as
+/// [`Ladder`], on every exit. Plain data only: the wipe writes a zero byte
+/// over every byte of the value, which is a valid value for these integer
+/// arrays and limb structs. The test build records at each drop whether the
+/// value was clear after the wipe ([`secret_probe`]).
+pub(crate) struct Secret<T>(T);
+
+impl<T> Secret<T> {
+    #[inline(always)]
+    pub(crate) fn new(value: T) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> core::ops::Deref for Secret<T> {
+    type Target = T;
+    #[inline(always)]
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> core::ops::DerefMut for Secret<T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
+impl<T> Drop for Secret<T> {
+    fn drop(&mut self) {
+        let p = core::ptr::addr_of_mut!(self.0).cast::<u8>();
+        for i in 0..core::mem::size_of::<T>() {
+            // SAFETY: `p + i` lies within `self.0`, which this guard owns
+            // exclusively, and a zero byte is a valid value of plain data.
+            unsafe { core::ptr::write_volatile(p.add(i), 0) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(all(test, feature = "std"))]
+        secret_probe::record(
+            (0..core::mem::size_of::<T>())
+                // SAFETY: every byte was written just above.
+                .all(|i| unsafe { core::ptr::read_volatile(p.add(i)) } == 0),
+        );
+    }
+}
+
+/// Test-only record of every [`Secret`] drop on this thread.
+#[cfg(all(test, feature = "std"))]
+pub(crate) mod secret_probe {
+    use core::cell::Cell;
+
+    std::thread_local! {
+        static DROPS: Cell<usize> = const { Cell::new(0) };
+        static DIRTY: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn record(clear: bool) {
+        DROPS.with(|c| c.set(c.get() + 1));
+        if !clear {
+            DIRTY.with(|c| c.set(c.get() + 1));
+        }
+    }
+
+    /// Clears the record. Call at the start of a test.
+    pub(crate) fn reset() {
+        DROPS.with(|c| c.set(0));
+        DIRTY.with(|c| c.set(0));
+    }
+
+    /// `(drops, drops that found their value not clear)` since [`reset`].
+    pub(crate) fn snapshot() -> (usize, usize) {
+        (DROPS.with(Cell::get), DIRTY.with(Cell::get))
+    }
+}
+
 /// Jacobian doubling as one block of assembly, where the CPU has BMI2 and
 /// ADX; `None` where it does not.
 #[inline(always)]
@@ -553,11 +630,14 @@ pub(crate) fn mul_scalar(
     if !has_adx() {
         return None;
     }
-    let bytes = scalar.to_bytes();
-    let bytes = bytes.as_ref();
-    let digits = signed_digits_w(bytes, WIDTH);
+    let secret_bytes = Secret::new(scalar.to_bytes());
+    let bytes = secret_bytes.as_ref();
+    let digits = Secret::new(signed_digits_w(bytes, WIDTH));
     let n = digit_count(bytes.len(), WIDTH);
     let window = Window::new(p);
+    // The selected entry, one guarded slot for every digit: assigned, not
+    // rebound, so that the one copy kept is the one wiped.
+    let mut entry = Secret::new(Point::<crate::p256::P256>::identity());
 
     let mut buf = Ladder::<LADDER>::new();
     let put = |buf: &mut [MaybeUninit<u64>; LADDER], slot: usize, q: &Point<crate::p256::P256>| {
@@ -567,11 +647,8 @@ pub(crate) fn mul_scalar(
             }
         }
     };
-    put(
-        &mut buf,
-        super::p256_x86_point::DOUBLE_IN_PLACE_X,
-        &window.select(digits[n - 1]),
-    );
+    *entry = window.select(digits[n - 1]);
+    put(&mut buf, super::p256_x86_point::DOUBLE_IN_PLACE_X, &entry);
     let doublings = |buf: &mut [MaybeUninit<u64>; LADDER]| {
         let ip: &mut [MaybeUninit<u64>; 48] = (&mut buf[..48])
             .try_into()
@@ -584,7 +661,7 @@ pub(crate) fn mul_scalar(
     };
     for i in (1..n - 1).rev() {
         // The scan first: it does not depend on the accumulator.
-        let entry = window.select(digits[i]);
+        *entry = window.select(digits[i]);
         doublings(&mut buf);
         // SAFETY: the CPU has BMI2 and ADX, and slots 0 to 2 hold the
         // accumulator.
@@ -594,7 +671,8 @@ pub(crate) fn mul_scalar(
     // SAFETY: slots 0 to 2 are written.
     let [x, y, z] = unsafe { read::<LADDER, 3>(&buf, super::p256_x86_point::DOUBLE_IN_PLACE_X) };
     let acc = Point::from_coordinates(Fp(x), Fp(y), Fp(z));
-    Some(acc.add(&window.select(digits[0])))
+    *entry = window.select(digits[0]);
+    Some(acc.add(&entry))
 }
 
 /// Words of the buffer [`table_mul`] keeps: the mixed addition's slots.
@@ -626,9 +704,9 @@ pub(crate) fn table_mul<const E: usize>(
         return None;
     }
     let w = width::<E>();
-    let bytes = scalar.to_bytes();
-    let digits = signed_digits_w(bytes.as_ref(), w);
-    let n = digit_count(bytes.as_ref().len(), w);
+    let secret_bytes = Secret::new(scalar.to_bytes());
+    let digits = Secret::new(signed_digits_w(secret_bytes.as_ref(), w));
+    let n = digit_count(secret_bytes.as_ref().len(), w);
     // The first window whose addition must be complete: public, from the
     // curve and the width.
     let first_complete = (0..n)
@@ -645,11 +723,16 @@ pub(crate) fn table_mul<const E: usize>(
     put(&mut buf, 0, &identity.x().0);
     put(&mut buf, 1, &identity.y().0);
     put(&mut buf, 2, &identity.z().0);
+    // The selected entry's coordinates, one guarded slot for every digit.
+    let mut xy = Secret::new(([0u64; 4], [0u64; 4]));
     for (i, &digit) in digits.iter().enumerate().take(first_complete) {
         let (x, y) = window(windows, i).select(digit);
+        let coords: &mut ([u64; 4], [u64; 4]) = &mut xy;
+        coords.0 = x.0;
+        coords.1 = y.0;
         // SAFETY: the CPU has BMI2 and ADX, and slots 0 to 2 hold the
         // accumulator.
-        unsafe { table_add(&mut buf, &x.0, &y.0, digit) };
+        unsafe { table_add(&mut buf, &coords.0, &coords.1, digit) };
     }
     // SAFETY: slots 0 to 2 are written.
     let [x, y, z] = unsafe { read::<TABLE, 3>(&buf, 0) };
@@ -1736,9 +1819,16 @@ mod tests {
     /// deleted from `Ladder`'s `Drop`, the accumulator is still in the
     /// buffer and the second count is non-zero. P-384's `mul_scalar` holds
     /// the same guard, and `p384_x86`'s tests check it.
+    ///
+    /// The secret-derived temporaries are wiped the same way: each
+    /// multiplication drops three [`Secret`]s (the scalar's bytes, the
+    /// digits, and the selected entry or entry's coordinates), each clear.
+    /// Without the wipe in `Secret`'s `Drop` the second count is non-zero;
+    /// without the guards the first is short.
     #[test]
     fn the_buffer_multiplications_wipe_their_buffers() {
         use super::ladder_probe as probe;
+        use super::secret_probe;
         use crate::nist::point::Point;
         use crate::p256::P256;
         if !has_adx() {
@@ -1747,11 +1837,15 @@ mod tests {
         }
         let k = &scalars(1)[81];
         probe::reset();
+        secret_probe::reset();
         mul_scalar(&Point::<P256>::generator(), k).expect("BMI2 and ADX");
         assert_eq!(probe::snapshot(), (1, 0), "mul_scalar");
+        assert_eq!(secret_probe::snapshot(), (3, 0), "mul_scalar's temporaries");
         probe::reset();
+        secret_probe::reset();
         crate::p256::table_mul_adx_for_tests(k).expect("BMI2 and ADX");
         assert_eq!(probe::snapshot(), (1, 0), "table_mul");
+        assert_eq!(secret_probe::snapshot(), (3, 0), "table_mul's temporaries");
     }
 
     #[test]

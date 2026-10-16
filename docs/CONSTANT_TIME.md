@@ -1600,6 +1600,12 @@ or a mask register. The IFMA kernels are generated
 After every kernel call it cost P-384 ECDH about 2.5 percent (some 450
 calls, each a `vzeroall`); once per multiplication it measures at parity.
 
+Not cleared: the vector registers of AES-GCM's intrinsic (non-asm) tail,
+key-setup and H-setup paths. The compiler allocates those registers, and a
+clear written in Rust cannot be guaranteed to zero the ones that held a
+secret, so no such clear is claimed for them. The asm kernels in the table
+above do clear theirs.
+
 Stack buffers, wiped by volatile stores in a guard's `Drop`:
 
 - `p256_x86::Ladder`, the buffer `p256_x86::mul_scalar`, `table_mul` and
@@ -1607,6 +1613,10 @@ Stack buffers, wiped by volatile stores in a guard's `Drop`:
   once per multiplication. The per-formula buffers of `point_double` and
   its siblings are not wrapped: those formulas are also verification's,
   on public points.
+- `p256_x86::Secret`, the scalar's bytes, the digit array and the selected
+  entry (or its coordinates) in `p256_x86::mul_scalar`, `table_mul` and
+  `p384_x86::mul_scalar`: wiped on every exit path by the same volatile
+  stores, once per multiplication. Its test counts the three drops per call.
 - `chacha::avx2::Words`, the eight-block kernel's keystream array, now
   the caller's and wiped once per message (`chacha::xor_keystream`).
 - Not done: `sha3::x86`'s `a` and `e`. In the compiled code they are not
