@@ -43,6 +43,24 @@ pub(crate) fn h(data: &[u8]) -> [u8; 32] {
     a
 }
 
+/// The last step of implicit rejection: `k` when `matched`, `reject`
+/// otherwise, byte by byte through `ic_core::ct::select_u8`.
+#[inline]
+pub(crate) fn select_key(
+    matched: ic_core::ct::Choice,
+    k: &[u8; 32],
+    reject: &[u8; 32],
+    shared: &mut [u8; 32],
+) {
+    for (i, out) in shared.iter_mut().enumerate() {
+        *out = ic_core::ct::select_u8(matched, k[i], reject[i]);
+    }
+}
+
+// Bounded proofs for Kani; see docs/PROOFS.md.
+#[cfg(kani)]
+mod proofs;
+
 /// `J(x) = SHAKE256(x, 32)`, the implicit-rejection key derivation.
 pub(crate) fn j(parts: &[&[u8]]) -> [u8; 32] {
     let mut x = Shake256::default();
@@ -1529,9 +1547,7 @@ macro_rules! ml_kem {
                 shared: &mut [u8; SHARED_SECRET_LEN],
             ) {
                 let matched = ic_core::ct::eq(recomputed, ct);
-                for (i, out) in shared.iter_mut().enumerate() {
-                    *out = ic_core::ct::select_u8(matched, k[i], reject[i]);
-                }
+                $crate::scheme::select_key(matched, k, reject, shared);
             }
 
             /// [`Self::decapsulate`] with its Keccak calls scheduled four lanes

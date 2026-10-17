@@ -527,6 +527,10 @@ pub type AffinePoint = crate::nist::point::AffinePoint<P384>;
 /// allocated.
 pub type PreparedPublicKey = crate::nist::ecdh::PreparedPublicKey<P384>;
 
+// Bounded proofs for Kani; see docs/PROOFS.md.
+#[cfg(kani)]
+mod proofs;
+
 #[cfg(test)]
 mod tests {
     use super::*;

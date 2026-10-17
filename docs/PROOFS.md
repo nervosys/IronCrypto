@@ -40,6 +40,85 @@ the static Linux release, installed under `$HOME/.local`).
 | `ic-ec` | `field::Fe::weak_reduce` | one carry pass preserves the value up to `c4 * p`, and leaves every limb below `2^51 + 64` | every limb below `2^53` |
 | `ic-ec` | `field::Fe::sub` | returns `a - b mod p`, with limbs below `2^51 + 96` | `a` limbs below `2^53`, `b` limbs below `2^52 - 38` |
 | `ic-ec` | `field::Fe::to_bytes` | returns the unique representative `v` below `p`, with `value = v + k p` for `k` in `0..=4` | every limb below `2^53` |
+| `ic-ec` | `p384::Fp::add_raw`, `Fn::add_raw` | returns `a + b mod m`, in `[0, m)`, for `m` the field prime and the group order | every `a`, `b` in `[0, m)` |
+| `ic-ec` | `p384::Fp::sub_raw`, `Fn::sub_raw` | returns `a - b mod m`, in `[0, m)`: adding `b` back gives `a` or `a + m` | every `a`, `b` in `[0, m)` |
+| `ic-ec` | `p384::canonical` | the closing step of a Montgomery multiplication: returns `v` or `v - m`, below `m`, for `v = t + top 2^384` | every `t`, every `top` in `{0, 1}`, `v < 2m`, both moduli |
+| `ic-ec` | `p384::P`, `N` | `P` is `2^384 - 2^128 - 2^96 + 2^32 - 1` computed from the powers of two, and `P`, `N` equal the constants the specifications spell out | no inputs |
+| `ic-mlkem` | `poly::montgomery_reduce` | returns `r` with `r 2^16 = a mod q`, in `(-q, q)` | every `a` with `abs(a) < 2^15 q` |
+| `ic-mlkem` | `poly::barrett_reduce` | returns `r = a mod q` with `abs(r) <= 1665` | every `i16` |
+| `ic-mlkem` | `poly::fqmul` | returns `r` with `r 2^16 = a b mod q`, in `(-q, q)` | every `i16` `a`, `b` in `(-q, q)` |
+| `ic-mlkem` | `poly::normalize_coefficient` (the conditional subtraction of `q`) | returns `a mod q` in `[0, q)` | every `i16` |
+| `ic-mlkem` | `poly::ZETAS` | every entry is in `[0, q)` | the 128 entries |
+| `ic-mlkem` | `poly::ntt_butterfly` | outputs are `a + t` and `a - t` with `t 2^16 = zeta b mod q`, as congruences; no `i16` operation overflows; outputs are within `(k + 1) q` | `abs(zeta) < q`, `a`, `b` within `k q`, `k` in `1..=7` |
+| `ic-mlkem` | `encode::compress` | is FIPS 203 equation 4.7, `floor((2^(d+1) x + q) / 2q) mod 2^d` | every `x` in `[0, q)`, every `d` in `1..=12` |
+| `ic-mlkem` | `encode::decompress` | is equation 4.8: the integer `r` with `r <= q y / 2^d + 1/2 < r + 1`, in `[0, q)` | every `y` below `2^d`, every `d` in `1..=12` |
+| `ic-mlkem` | `Decompress_d(Compress_d(x))` | is within `ceil(q / 2^(d+1))` of `x` modulo `q` (section 4.2.1) | every `x` in `[0, q)`, every `d` in `1..=11` |
+| `ic-mlkem` | `encode::reduce_12` | is `(x & 0xfff) mod q`, in `[0, q)`, and the identity below `q` | every `u16` |
+| `ic-mlkem` | `encode::pack8`, `unpack8` | for each width the code packs at (1, 4, 5, 10, 11, 12): unpack after pack returns the fields, the bytes above the first `D` are zero, bits above `D` in an input are ignored, and pack after unpack returns the bytes | eight symbolic fields, sixteen symbolic bytes |
+| `ic-mlkem` | `scheme::select_key` | writes `K` when the comparison matched and the rejection key otherwise, all 32 bytes | every `K`, rejection key and choice |
+| `ic-mlkem` | `ct::eq` at 768 bytes | is slice equality | every pair of 768-byte strings |
+
+### ML-KEM
+
+All of these are plain harnesses in `crates/ic-mlkem/src/{poly,encode,scheme}/proofs.rs`,
+run by `scripts/kani.sh -p ic-mlkem` (18 harnesses, 4 minutes on a 24-thread
+machine with other work running; the multipliers cost the most: `fqmul`
+34 s, `montgomery_reduce` 31 s, the butterfly 62 s, the 768-byte comparison
+51 s, everything else under 6 s). Specifications are congruences and ranges
+over `i64`, or FIPS 203's rounding written as its defining inequalities; none
+reads a constant from the code under test.
+
+Findings while writing them:
+
+- `barrett_reduce`'s doc comment said `[-q/2, q/2]`. The first version of the
+  harness asserted `[-1664, 1664]` and Kani refused it: `a = 11652` returns 1665
+  and `a = -31626` returns -1665, because `20158 = floor(2^26 / q)` is one short
+  of the true quotient at the extremes. The proved bound is `[-1665, 1665]`;
+  nothing depended on the narrower one, and the comment now says so.
+- `compress`'s comment said `40318 = floor(2^27 / q)`. It is the ceiling (the
+  floor is 40317). The proof holds for either constant, so the arithmetic was
+  never wrong; the comment is corrected.
+
+Three small refactors made the units provable, with no change to behaviour:
+`normalize_coefficient` (the loop body of `normalize_portable`), `ntt_butterfly`
+(the body of the NTT inner loop, `inline(always)`), and `select_key` (the byte
+loop of `select_shared_secret`). `scripts/check-ct.py` and `ctgrind.sh`, which
+inspect the compiled code of ML-KEM, were not rerun for this change, so the
+constant-time gate has not been re-confirmed on the refactored functions.
+
+Not proved here, and what covers it:
+
+- The seven-layer bound of the NTT is the single-step bound applied seven times
+  (inputs below `q` in magnitude, outputs below `8 q = 26632` after the last
+  layer); the induction is argued, the step is proved. `inv_ntt`, `basemul`
+  and the AVX2 code are tested against the portable code and against the
+  schoolbook product, not proved.
+- `ct::eq` is proved at 768 bytes and, in `ic-core`, up to length 6. The other
+  ciphertext lengths (1088 and 1568) are the same loop and are not separately
+  proved. `ct::eq` and `select_u8` are `ic-core`'s proofs; decapsulation's
+  re-encryption and the comparison's inputs are not.
+- Whole-polynomial `byte_encode`/`byte_decode` (the chunking of 256
+  coefficients into groups of eight) is tested, not proved; the group
+  pack/unpack is.
+- `black_box` is an identity to Kani. The barriers that keep the compiled code
+  branch-free are checked by `scripts/check-ct.py`, not here.
+
+### P-384
+
+`crates/ic-ec/src/p384/proofs.rs`, 7 harnesses, 94 s in all (`Fn` subtraction
+39 s, `Fp` subtraction 25 s, the rest under 4 s). They mirror P-256's `add` and
+`sub` and the `finish` step, over the macro-generated six-word code that both
+P-384 rings use on every target, and `canonical`, the closing subtraction of
+the x86-64 multiplication (the generic `mont_mul_raw` ends in the same
+expression, inline).
+
+Not proved: the Montgomery multiplication itself (`arith::wide::mont_mul`, a
+6-by-6 word CIOS loop nest) and so P-384 `mul` and `square`. P-256's reduction
+needed a decomposition into function contracts and a half hour of Bitwuzla for
+four words; the same method on six words and the multiplication was not
+attempted in this pass. P-384 multiplication is tested against big-integer
+arithmetic and published vectors, and the x86-64 assembly against the portable
+code.
 
 ### Multiplication and reduction
 
@@ -280,6 +359,36 @@ mutation of the function it proves, and each failed:
 | `p256_field` square schoolbook | low word of the cross products not doubled (`r1 << 1` dropped) | 12 s (CaDiCaL: 20 s) |
 | (polynomial identity) | `a_1 b_2` at weight `2^(64 * 4)` instead of `2^(64 * 3)` | `sat`, Z3 0.13 s, cvc5 0.06 s (kept as a negative control) |
 | (polynomial identity) | `a_0 a_1` not doubled | `sat`, Z3 0.12 s, cvc5 0.04 s (kept as a negative control) |
+| `poly::montgomery_reduce` | `Q_INV` -3327 changed to -3328 | congruence |
+| `poly::barrett_reduce` | rounding constant `1 << 25` changed to `1 << 24`; separately `V` reduced by 40 | range |
+| `poly::normalize_coefficient` | added `q - 1` instead of `q` | congruence |
+| `poly::fqmul` | product plus one | congruence |
+| `poly::ntt_butterfly` | second output `a + t` where `a - t` belongs | congruence |
+| `encode::compress` | multiplier 40318 changed to 40300; separately the final correction removed | equation 4.7 |
+| `encode::decompress` | rounding term `1 << (d - 1)` changed to `1 << d` | equation 4.8 |
+| `encode::compress` | rounding term `q / 2` changed to `q / 4` | error bound |
+| `encode::reduce_12` | added `q - 1` instead of `q` | the reduction |
+| `encode::pack8` | field 7 shifted one bit too far at width 11 | round trip, both directions |
+| `encode::unpack8` | mask halved at width 12 | round trip, both directions |
+| `scheme::select_key` | `K` and the rejection key swapped | selection |
+| `ct::eq` | loop starts at 1 | equality at 768 bytes |
+| `arith::add_raw` | final carry dropped (`need = carry`) | P-384 `Fp` add; with `need = 1 - borrow`, `Fn` add |
+| `arith::sub_raw` | modulus mask halved; separately mask forced to zero | P-384 `Fp` and `Fn` subtraction |
+| `p384::canonical` | the top word dropped from the selector; separately `borrow` for `1 - borrow` | both moduli |
+
+Two mutants of the ML-KEM proofs were not caught and are not failures of the
+proofs. Raising `barrett_reduce`'s `V` to 20159 (the value an old AVX2 comment
+named) still returns a representative within the proved range, so the harness
+passes: it is a different valid reduction, not a wrong one. Changing
+`compress`'s multiplier to 40317 (the floor) still computes `Compress_d`
+exactly, as the harness says. Neither is an error the specification could see,
+which is the point of writing it from the definition. The ML-KEM and P-384
+mutations were applied to the working tree, one at a time, the harness run
+against it (at its own name, with `--harness`), and the tree restored; each is
+a one-line `sed` edit, and each of the rows above failed. Restoring a file from
+a copy gives it an older modification time than the mutant build, and the next
+run then reused the mutant (the first full run after the mutations failed
+`ct::eq` at 768 bytes for that reason); `touch` restored files, then rerun.
 
 The mutations were applied to the working tree, the proof run, and the code
 restored, one at a time, each on the solver its proof uses (the schoolbook
@@ -294,6 +403,13 @@ symbolic input and was not mutated.
   `scripts/check-ct.py` and `scripts/ctgrind.sh`.
 - **Not a proof of the whole algorithm.** ML-DSA's rounding is proved; its
   sampling, NTT and encoding are tested against NIST's vectors, not proved.
+  ML-KEM's scalar reductions, compression, group packing and the butterfly's
+  bound are proved; its NTT as a whole, sampling, matrix products and the
+  AVX2 code are tested, not proved.
+- **Not a proof at the level of the compiled code.** Graviola's s2n-bignum
+  routines are proved to the instruction in HOL Light. These are bounded
+  checks of Rust semantics, on the portable code; the x86-64 assembly and
+  the AVX2 paths that run in practice are tested against it, not proved.
 - **Field multiplication is proved in part.** On P-256 the portable `mul`
   and `square` are proved end to end, `a b 2^-256 mod p` canonical for every
   `a`, `b` below `p`, except for two argued steps: that the schoolbook's

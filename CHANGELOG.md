@@ -5,6 +5,26 @@ all of them.
 
 ## Unreleased
 
+### Added
+
+- **Kani proofs for ML-KEM and P-384** (`docs/PROOFS.md`; `scripts/kani.sh`
+  now includes `ic-mlkem`). ML-KEM: Montgomery and Barrett reduction,
+  `fqmul`, the conditional subtraction of `q`, the zeta table's range, the
+  NTT butterfly's value and bound, `Compress_d` and `Decompress_d` against
+  FIPS 203 equations 4.7 and 4.8 for every `d` (with the decryption error
+  bound), `reduce_12`, group packing at widths 1, 4, 5, 10, 11 and 12, and
+  the 32-byte selection of implicit rejection. P-384: `add_raw` and
+  `sub_raw` for the field and the scalar ring, and the closing subtraction
+  of the Montgomery multiplication. Each was checked to fail on a mutated
+  implementation. Not proved: P-384 multiplication, the whole ML-KEM NTT.
+
+### Fixed
+
+- Two comments were wrong and the proofs found them: `barrett_reduce`
+  returns values in `[-1665, 1665]`, not `[-q/2, q/2]` (the code is
+  unchanged), and `compress`'s multiplier 40318 is `ceil(2^27 / q)`, not the
+  floor.
+
 ### Performance
 
 - **ML-KEM runs its Keccak calls eight lanes wide on AVX-512.** A new
@@ -36,6 +56,8 @@ all of them.
   Graviola's parse of a key, because the work is the roughly 360 point
   operations that build the windows, not inversions. Public-point data only;
   no secret is involved.
+- ML-KEM internals refactored into units the proofs can call, with the same
+  behaviour: `normalize_coefficient`, `ntt_butterfly`, `select_key`.
 
 ## 0.3.1
 

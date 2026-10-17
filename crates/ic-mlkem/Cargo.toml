@@ -16,6 +16,9 @@ publish.workspace = true
 default = ["std"]
 std = ["ic-core/std", "ic-hash/std"]
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+
 [dependencies]
 ic-core = { workspace = true }
 ic-hash = { workspace = true }

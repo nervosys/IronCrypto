@@ -12,7 +12,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 if [ $# -eq 0 ]; then
-    set -- -p ic-core -p ic-ec -p ic-mldsa
+    set -- -p ic-core -p ic-ec -p ic-mldsa -p ic-mlkem
 fi
 # Function contracts (`proof_for_contract`, `stub_verified`) and the stubbing
 # they use are unstable in Kani 0.68, so both flags are passed for every crate.

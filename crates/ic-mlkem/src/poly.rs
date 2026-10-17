@@ -80,7 +80,9 @@ pub fn montgomery_reduce(a: i32) -> i16 {
     ((a - (t as i32) * (Q as i32)) >> 16) as i16
 }
 
-/// Barrett reduction: return a representative of `a mod q` in `[-q/2, q/2]`.
+/// Barrett reduction: return a representative of `a mod q` in `[-1665, 1665]`,
+/// that is within one of `[-q/2, q/2]` (proved for every `i16` in
+/// `poly/proofs.rs`; `a = 11652` returns 1665).
 ///
 /// The final subtraction is done in `i32`. In `i16` it overflows: for `a` near
 /// `i16::MAX` the quotient reaches 10, and `10 * 3329 = 33290` does not fit.
@@ -95,6 +97,22 @@ pub fn barrett_reduce(a: i16) -> i16 {
     const V: i32 = (1i32 << 26) / (Q as i32);
     let t = (V * (a as i32) + (1 << 25)) >> 26;
     (a as i32 - t * (Q as i32)) as i16
+}
+
+/// One coefficient of `Poly::normalize_portable`: a representative of
+/// `a mod q` in `[0, q)`, by a Barrett reduction and a masked addition of `q`.
+#[inline]
+fn normalize_coefficient(a: i16) -> i16 {
+    let v = barrett_reduce(a);
+    v + ((v >> 15) & Q)
+}
+
+/// The Cooley-Tukey butterfly of the forward NTT: `(a + zeta b, a - zeta b)`,
+/// the product a Montgomery one.
+#[inline(always)]
+fn ntt_butterfly(zeta: i16, a: i16, b: i16) -> (i16, i16) {
+    let t = fqmul(zeta, b);
+    (a + t, a - t)
 }
 
 /// `a * b * 2^-16 mod q`.
@@ -304,8 +322,7 @@ impl Poly {
     /// Bring every coefficient into `[0, q)`.
     pub(crate) fn normalize_portable(&mut self) {
         for c in self.c.iter_mut() {
-            let v = barrett_reduce(*c);
-            *c = v + ((v >> 15) & Q);
+            *c = normalize_coefficient(*c);
         }
     }
 
@@ -324,9 +341,7 @@ impl Poly {
                 let zeta = ZETAS[k];
                 k += 1;
                 for j in start..start + len {
-                    let t = fqmul(zeta, self.c[j + len]);
-                    self.c[j + len] = self.c[j] - t;
-                    self.c[j] += t;
+                    (self.c[j], self.c[j + len]) = ntt_butterfly(zeta, self.c[j], self.c[j + len]);
                 }
                 start += 2 * len;
             }
@@ -414,6 +429,10 @@ fn basemul_pair(out: &mut [i16], a: &[i16], b: &[i16], zeta: i16) {
     out[0] = fqmul(fqmul(a[1], b[1]), zeta) + fqmul(a[0], b[0]);
     out[1] = fqmul(a[0], b[1]) + fqmul(a[1], b[0]);
 }
+
+// Bounded proofs for Kani; see docs/PROOFS.md.
+#[cfg(kani)]
+mod proofs;
 
 #[cfg(test)]
 mod tests {

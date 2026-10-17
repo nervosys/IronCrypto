@@ -43,9 +43,10 @@ pub fn compress(x: i16, d: u32) -> u16 {
     debug_assert!((1..=12).contains(&d));
     // x is assumed already in [0, q), so t is below 2^24.
     let t = ((x as u32) << d) + (Q as u32) / 2;
-    // 40318 = floor(2^27 / q). (t >> 8) is below 2^16, so the product is below
-    // 2^32, and the estimate is floor(t / q) or one less -- the tests check
-    // every x and d.
+    // 40318 = ceil(2^27 / q) (this said floor; the floor is 40317, and the
+    // proof in `encode/proofs.rs` holds for either). (t >> 8) is below 2^16,
+    // so the product is below 2^32, and the estimate is floor(t / q) or one
+    // less -- the tests check every x and d, and so does the proof.
     let mut e = ((t >> 8) * 40318) >> 19;
     let r = t - e * (Q as u32);
     // One more if the remainder reached q.
@@ -307,6 +308,10 @@ pub const fn encoded_len(d: u32) -> usize {
 /// Number of coefficients, re-exported so callers need not reach into
 /// [`crate::poly`] for a loop bound.
 pub const COEFFICIENTS: usize = N;
+
+// Bounded proofs for Kani; see docs/PROOFS.md.
+#[cfg(kani)]
+mod proofs;
 
 #[cfg(test)]
 mod tests {
