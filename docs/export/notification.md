@@ -76,6 +76,8 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.22 | 2026-10-10 04:08:14 | all twenty-two crates published from `a119889` by the maintainer, after writing "release 0.2.22" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
 | 0.2.23 | 2026-10-10 16:36:20 | all twenty-two crates published from `2b0c328` by the maintainer, after writing "release 0.2.23" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
 | 0.2.24 | 2026-10-11 01:25:11 | all twenty-two crates published from `6316a86` by the maintainer, after writing "release 0.2.24" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
+| 0.3.0 | 2026-10-14 00:19:44 | all twenty-two crates published from `3571ffa` by the maintainer, after the updated notice printed for them was reported "Sent" and they wrote "Release 0.3.0 in the meantime"; adds no location; adds algorithms (see the 0.3.0 entries below) |
+| 0.3.1 | 2026-10-17 03:54:00 | all twenty-two crates published from `0bc08d0` by the maintainer, after writing "release 0.3.1" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -638,8 +640,14 @@ had written, just before, "After that, release 0.3.1 and delete the
 IronCrypto directories in E:/build", "that" being a push of `master`.
 
 This records that instruction and that determination. No notice was printed
-or sent for this release. Publication proceeds on them. The publication
-itself, and what the crates.io API shows of it, will have its own entry.
+or sent for this release. Publication proceeds on them.
+
+The maintainer pushed `master` and the `v0.3.1` tag and ran `cargo publish
+--workspace` themselves. The crates.io API confirmed all twenty-two 0.3.1
+packages live and not yanked. The first upload was `ic-core` at 2026-10-17
+03:54:00 UTC and the last `ic-cli` at 03:54:51 UTC. The published source
+commit is `0bc08d0`; all twenty-two packages identified that clean commit in
+their VCS metadata.
 
 ## Determination
 
