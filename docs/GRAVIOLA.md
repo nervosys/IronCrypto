@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | **Default build, ahead:** AES-256-GCM at 4 MiB, 1 KiB and 64 B; ChaCha20-Poly1305 at all three sizes; SHA-512; HMAC-SHA256 at 200 B; X25519; Ed25519 sign, verify and verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH (all three rows) and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation (both rows) and decapsulation with the key parsed once; RSA-2048, -3072 and -4096 sign and verify. **Without AVX-512, ahead:** ChaCha20-Poly1305 at all three sizes; AES-256-GCM at 1 KiB and 64 B; SHA-512; HMAC-SHA256 at 200 B; Ed25519 verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH with the key prepared, and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation and decapsulation with the key parsed once; RSA-3072 sign and verify, RSA-4096 verify, RSA-2048 sign; P-384 ECDH from key bytes and against Graviola's key parsed once in `graviola-p384` only (level in `graviola`); Ed25519 sign in `graviola-25519` only (level in `graviola`); RSA-2048 verify in `graviola-rsa` only (level in `graviola`). Rule and every row: "Consolidated run, 2026-10-16" under Speed. | **Default build, level:** SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB; ML-KEM-768 key generation, like for like (no pairwise test). **Without AVX-512, level:** X25519; Ed25519 sign and verify (sign ahead in `graviola-25519`); SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB; P-384 ECDH and from key bytes in `graviola`; RSA-2048 verify in `graviola`; RSA-4096 sign; ML-KEM-768 key generation, like for like. | **Default build, behind:** P-384 key preparation (not like for like, see the section); ML-KEM-768 key generation with IronCrypto's pairwise test. **Without AVX-512, behind:** AES-256-GCM at 4 MiB, against Graviola's AVX-512 path (see the section); P-384 key preparation; ML-KEM-768 key generation with the pairwise test. |
+| Speed, x86-64 | **Default build, ahead:** AES-256-GCM at 4 MiB, 1 KiB and 64 B; ChaCha20-Poly1305 at all three sizes; SHA-512; HMAC-SHA256 at 200 B; X25519; Ed25519 sign, verify and verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH (all three rows) and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation (both rows) and decapsulation with the key parsed once; ML-KEM-768 key generation, like for like (from 2026-10-17, "ML-KEM on eight Keccak lanes"); RSA-2048, -3072 and -4096 sign and verify. **Without AVX-512, ahead:** ChaCha20-Poly1305 at all three sizes; AES-256-GCM at 1 KiB and 64 B; SHA-512; HMAC-SHA256 at 200 B; Ed25519 verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH with the key prepared, and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation and decapsulation with the key parsed once; RSA-3072 sign and verify, RSA-4096 verify, RSA-2048 sign; P-384 ECDH from key bytes and against Graviola's key parsed once in `graviola-p384` only (level in `graviola`); Ed25519 sign in `graviola-25519` only (level in `graviola`); RSA-2048 verify in `graviola-rsa` only (level in `graviola`). Rule and every row: "Consolidated run, 2026-10-16" under Speed. | **Default build, level:** SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB. **Without AVX-512, level:** X25519; Ed25519 sign and verify (sign ahead in `graviola-25519`); SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB; P-384 ECDH and from key bytes in `graviola`; RSA-2048 verify in `graviola`; RSA-4096 sign; ML-KEM-768 key generation, like for like. | **Default build, behind:** P-384 key preparation (not like for like, see the section); ML-KEM-768 key generation with IronCrypto's pairwise test. **Without AVX-512, behind:** AES-256-GCM at 4 MiB, against Graviola's AVX-512 path (see the section); P-384 key preparation; ML-KEM-768 key generation with the pairwise test. |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, the portable field additions, carries and reductions of P-256 and Curve25519, P-256's portable field multiplication and squaring, end to end except for two argued steps, and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -202,6 +202,88 @@ and a ratio inside that as parity.
 | ML-KEM-768 decapsulate, key prepared | 4.4 | 5.9 | 5.5 / 9.2 |
 | RSA-2048 PKCS#1 v1.5 sign | 255-300 | 345 | 572 / 868 |
 | RSA-2048 PKCS#1 v1.5 verify | 7.5-8.5 | 9-10.5 | 12.8 / 22.1 |
+
+### ML-KEM on eight Keccak lanes, 2026-10-17
+
+Starting point: master 0aa57cd, where ML-KEM-768 key generation without the
+pairwise test was level with Graviola (above) and with it 0.38-0.45 behind,
+and SHA3-256 was level. This change runs ML-KEM's Keccak calls (matrix
+expansion, noise PRFs, `H`, `J`) eight lanes wide on AVX-512, where that saves
+permutations. The AVX-512 build only; a CPU without AVX-512, or
+`--cfg ic_no_avx512`, takes the four-lane path unchanged.
+
+**Where key generation's time goes** (6.3 us, the like-for-like row,
+measured in one binary before the change): the Keccak schedule for the nine
+matrix entries and six noise polynomials 2.6-2.9 us, of which about 1 us is
+the scalar work around the permutations (absorbing, copying the squeezed
+block out of the interleaved state, rejection sampling, the centred binomial
+sample); `H(ek)`, a serial 9-permutation SHA3-256 of the 1184-byte key,
+1.7 us; the rest, six NTTs, the matrix-vector product and the encoding,
+about 1.8 us. The pairwise test adds an encapsulation (4.9 us from bytes)
+and a decapsulation (6.2 us) to that: 19.3 us in all.
+
+**What was done.** `ic-hash` gains `KeccakX8` (hidden, not API): eight states
+permuted by one `asm!` block that keeps all 25 lanes in `zmm0`-24 for 24
+rounds (`ic-hash/src/sha3/zmm.rs`, generated by `scripts/gen_keccak_x86.py`).
+The intrinsics form, four states on `ymm`, has 16 registers and spills; the
+same assembly four states wide measured 190 ns against its 181 ns, so the
+four-way path was left as it was. Eight states cost 194 ns, so a
+permutation of eight is about twice the throughput on this Zen 5 part
+(`vector_permutation_widths`, an ignored test: best of 40 batches of 20,000
+in one process). `ic-mlkem`'s lane scheduler is generic over the width and
+takes eight lanes only when its estimate says that needs fewer permutations:
+a schedule bound by one long hash, as encapsulation's `H(ek)` is, takes the
+same nine either way and pays more in scalar work around each.
+
+**Measured**, `bench` `graviola`, seven rounds of the binary built from
+0aa57cd and the binary built from this change, alternated, both libraries in
+every run, ratio of IronCrypto's rate over Graviola's as in the table above
+(minimum-median-maximum), load from other work on the host not controlled:
+
+| operation | before | after | class after |
+|---|---|---|---|
+| keygen (like for like, no pairwise test) | 1.03-1.09-1.13 | 1.11-1.18-1.26 | ahead |
+| keygen (ironcrypto with pairwise test) | 0.39-0.40-0.44 | 0.42-0.42-0.46 | behind |
+| ml-kem-768 encaps, from bytes, both | 1.60-1.67-1.82 | 1.71-1.73-1.75 | ahead |
+| ml-kem-768 encaps, parsed once, both | 1.98-2.08-2.19 | 2.06-2.24-2.33 | ahead |
+| ml-kem-768 decaps, parsed once, both | 1.29-1.32-1.35 | 1.15-1.32-1.37 | ahead |
+| sha3-256 | 0.96-0.97-0.98 | 0.93-0.97-0.98 | level |
+
+In microseconds, same binary pair, several rounds: key generation without
+the pairwise test 6.8-9.2 (typically 7.0) -> 6.27-6.38; with it 18.9-23.6
+(typically 19) -> 17.9-18.6; encapsulation from bytes 5.1-6.4 -> 5.0-5.2;
+encapsulation with the key parsed 2.2-2.9 -> 2.0-2.4; decapsulation with the
+key parsed 4.3-4.7 -> 4.3-4.5 once the width choice cost no more than the
+decision itself (an earlier version that ran the estimate twice over the
+tasks measured 4.6-5.1; it now makes one pass). Decapsulation from bytes,
+which has no Graviola row, 6.3-8.1 -> 5.7.
+
+**What did not pay.** SHA3-256 is a single serial sponge: nothing to run
+side by side. Its scalar permutation is already about 19 cycles a round
+(0.178 us at the clocks this part holds), and a single-state AVX-512
+permutation is bound by its dependent shuffles at roughly 16 to 20 cycles a
+round (latencies measured on this part: `vpermq` 2.5 cycles, `vprolq` and
+`vpternlogq` 1), so it was not built; SHA3-256 stays level. The pairwise
+test stays 2.4 times behind, and no restructuring that keeps the test whole
+brings it near level: encapsulation and decapsulation together cost
+more than key generation does (10.7 us from bytes, 6.5 us with the keys
+parsed, against 6.3), and Graviola's whole key generation is 7.5 us. What
+could be shared is the matrix: encapsulation and decapsulation each expand
+`A^T` again, and handing the one expansion to both would save, by an
+estimate from the scalar work per block and not built, about 1 us of 18.
+It was not done, because it also changes what the test covers: with the
+key's own `A` or the test's `A^T` held in common, a fault in the expansion
+no longer shows as a disagreement. Eight lanes did not help encapsulation
+from bytes (a nine-permutation `H(ek)` bounds it); a measured change there
+is inside the spread.
+
+**Where this does not apply.** Measured on one CPU, a Zen 5 part with 512-bit
+vector units whose eight-state permutation costs what the four-state one
+does. On a CPU that executes 512-bit operations at half rate, eight states
+would cost about twice four, and the saving in permutations would not be
+a saving in time; this was not measured, and runtime detection here is by
+feature, not by microarchitecture. The Intel SDE runs in CI test
+correctness, not speed.
 
 ### The last run, master e9d1261
 

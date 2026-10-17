@@ -57,7 +57,7 @@ pub use sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256, XofRe
 // Four SHAKE or SHA3-256 streams in step, for ML-KEM. Not API: hidden, and free
 // to change in any release.
 #[doc(hidden)]
-pub use sha3::{KeccakX4, Rate136};
+pub use sha3::{KeccakX4, KeccakX8, Rate136};
 // The ARMv8 SHA-2 kernels and the x86-64 HMAC-SHA256 compositions, for
 // scripts/ct-audit. Not API.
 #[cfg(all(
@@ -69,6 +69,10 @@ pub use sha3::{KeccakX4, Rate136};
 ))]
 #[doc(hidden)]
 pub use sha2::ct_probes;
+// The eight-way Keccak assembly, for scripts/ct-audit. Not API.
+#[cfg(all(target_arch = "x86_64", feature = "ct-probes"))]
+#[doc(hidden)]
+pub use sha3::ct_probes as sha3_ct_probes;
 pub use sp800_185::{CShake128, CShake256};
 pub use sp800_185::{ParallelHash128, ParallelHash256, TupleHash128, TupleHash256};
 

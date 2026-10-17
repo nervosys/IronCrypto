@@ -89,6 +89,9 @@ X86_ONLY = (
     # ChaCha20's sixteen-block AVX-512 keystream group, and Poly1305's
     # four-lane AVX2 step and final lane folding, under the key's r and s.
     "ct_chacha20_zmm_group", "ct_poly1305_avx2_step", "ct_poly1305_avx2_finish",
+    # Keccak-f[1600] over eight states, one block of assembly on thirty-one
+    # zmm registers; its loop over the twelve round pairs is a counter loop.
+    "ct_keccak_x8_permute",
     # Short messages: ChaCha20's two-block AVX2 kernel, two blocks side by
     # side in each register and its rounds written out, once and as two
     # pairs; the AEAD's tag in radix 2^64 over thirteen bytes of associated
@@ -263,6 +266,9 @@ X86_EXCUSE_CEILINGS = {
     # opening), written nowhere else in the loop.
     "ct_gcm_clmul8_seal": {"counter loop": 1},
     "ct_gcm_clmul8_open": {"counter loop": 1},
+    # Keccak-f[1600] on eight states: the `dec`/`jnz` back edge over the twelve
+    # passes of two rounds, the counter written nowhere else in the loop.
+    "ct_keccak_x8_permute": {"counter loop": 1},
     "ct_gcm_vaes256_seal": {"counter loop": 1},
     "ct_gcm_vaes256_open": {"counter loop": 1},
     # The IFMA multiplication's window read (`nist::ifma::scan_avx2`): the
@@ -1262,7 +1268,7 @@ X86_WIPED = (
     "ct_rsa_select_2048", "ct_rsa_select32_2048", "ct_rsa_select32_avx2_1024",
     "ct_rsa_select32_avx2_1536", "ct_rsa_select32_avx2_2048",
     "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_2048",
-    "ct_chacha20_zmm_group",
+    "ct_chacha20_zmm_group", "ct_keccak_x8_permute",
 )
 
 _VECTOR_REGISTER = re.compile(r"%[xyz]mm(\d+)\b")

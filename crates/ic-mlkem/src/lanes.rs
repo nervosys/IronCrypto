@@ -23,6 +23,19 @@
 //! nine permutations while the other three expand all nine matrix entries
 //! in the same nine.
 //!
+//! # Four lanes or eight
+//!
+//! Where the CPU has AVX-512 the lanes are eight, on `ic_hash::KeccakX8`:
+//! one permutation of eight states costs what one of four does (194 ns
+//! against 181 ns on the Zen 5 part this was measured on), because the
+//! register-resident assembly kernel is bound by the dependent rounds rather
+//! than by the vector pipes. [`run`] takes eight only when that saves
+//! permutations; see [`eight_lanes_save_permutations`]. A schedule bound by one long hash,
+//! as encapsulation's is, takes the same number of permutations on either,
+//! and then four lanes do less scalar work around each. Key generation's
+//! Keccak schedule went from 2.6-2.9 us to 2.3-2.4 us, decapsulation's
+//! shorter.
+//!
 //! # Trusting it
 //!
 //! Each task's output is the same bytes the single-stream code produces;
@@ -41,7 +54,7 @@
 use crate::poly::{Poly, N};
 use crate::sample::{rej_uniform, sample_poly_cbd};
 use ic_core::Zeroize;
-use ic_hash::KeccakX4;
+use ic_hash::{KeccakX4, KeccakX8};
 
 /// SHAKE128's rate, for SampleNTT.
 const RATE_128: usize = 168;
@@ -128,7 +141,7 @@ impl Drop for Lane {
 }
 
 /// Xor block `b` of `task`'s padded input into lane `s`.
-fn absorb_block(x: &mut KeccakX4, s: usize, task: &Task<'_>, b: usize) {
+fn absorb_block(x: &mut impl Sponges, s: usize, task: &Task<'_>, b: usize) {
     let rate = task.rate();
     let start = b * rate;
     let end = start + rate;
@@ -151,7 +164,7 @@ fn absorb_block(x: &mut KeccakX4, s: usize, task: &Task<'_>, b: usize) {
 /// Take what `lane`'s task needs from the block lane `s` has just produced.
 /// Returns whether the task is complete.
 fn squeeze_block(
-    x: &KeccakX4,
+    x: &impl Sponges,
     s: usize,
     task: &Task<'_>,
     lane: &mut Lane,
@@ -192,13 +205,96 @@ fn squeeze_block(
     }
 }
 
-/// Run every task, four lanes at a time, writing each result to its slot.
+/// What the scheduler needs of a set of interleaved Keccak states: the
+/// lane-by-lane interface of [`KeccakX4`] and [`KeccakX8`].
+trait Sponges {
+    fn reset_lane(&mut self, s: usize);
+    fn xor_lane(&mut self, s: usize, offset: usize, data: &[u8]);
+    fn read_lane(&self, s: usize, offset: usize, out: &mut [u8]);
+    fn permute(&mut self);
+}
+
+macro_rules! sponges {
+    ($t:ty) => {
+        impl Sponges for $t {
+            fn reset_lane(&mut self, s: usize) {
+                <$t>::reset_lane(self, s)
+            }
+            fn xor_lane(&mut self, s: usize, offset: usize, data: &[u8]) {
+                <$t>::xor_lane(self, s, offset, data)
+            }
+            fn read_lane(&self, s: usize, offset: usize, out: &mut [u8]) {
+                <$t>::read_lane(self, s, offset, out)
+            }
+            fn permute(&mut self) {
+                <$t>::permute(self)
+            }
+        }
+    };
+}
+sponges!(KeccakX4);
+sponges!(KeccakX8);
+
+/// Run every task, writing each result to its slot: eight lanes at a time
+/// where the eight-way permutation is one vector permutation, four where the
+/// four-way one is.
 ///
 /// A slot outside `polys` or `hashes` discards the result rather than
 /// panicking; every caller here passes slots it sized the arrays for.
 pub(crate) fn run(tasks: &[Task<'_>], polys: &mut [Poly], hashes: &mut [[u8; 32]]) {
-    let mut x = KeccakX4::zeroed();
-    let mut lanes: [Option<Lane>; 4] = [None, None, None, None];
+    #[cfg(test)]
+    if WIDTH_FOUR.with(|w| w.get()) {
+        schedule::<_, 4>(KeccakX4::zeroed(), tasks, polys, hashes);
+        return;
+    }
+    if KeccakX8::is_available() && eight_lanes_save_permutations(tasks) {
+        schedule::<_, 8>(KeccakX8::zeroed(), tasks, polys, hashes);
+    } else {
+        schedule::<_, 4>(KeccakX4::zeroed(), tasks, polys, hashes);
+    }
+}
+
+/// Whether eight lanes need fewer permutations than four for `tasks`, estimated:
+/// no fewer than the longest task, and no fewer than the work shared out
+/// evenly. A SampleNTT stream is counted at three blocks, which is what
+/// 256 accepted candidates usually take.
+///
+/// The wider permutation costs about what the narrower one does, so wider is
+/// better only when it saves permutations; a schedule bound by one long hash,
+/// as encapsulation's is, takes the same number either way and pays more in
+/// the scalar work around each.
+fn eight_lanes_save_permutations(tasks: &[Task<'_>]) -> bool {
+    let (mut longest, mut total) = (0, 0);
+    for task in tasks {
+        let blocks = match task {
+            Task::Uniform { .. } => 3,
+            Task::Noise { .. } => 1,
+            // Both hashes the scheduler runs are at the 136-byte rate.
+            Task::Hash { parts, .. } => (parts[0].len() + parts[1].len()) / RATE_256 + 1,
+        };
+        longest = longest.max(blocks);
+        total += blocks;
+    }
+    longest.max(total.div_ceil(8)) < longest.max(total.div_ceil(4))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Set to make `run` use four lanes on this thread, so the narrower
+    /// schedule is tested on a CPU that would take the wider one.
+    pub(crate) static WIDTH_FOUR: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// [`run`] over `x`, whatever its width: each lane takes the next task when
+/// it is free.
+#[inline(never)]
+fn schedule<X: Sponges, const W: usize>(
+    mut x: X,
+    tasks: &[Task<'_>],
+    polys: &mut [Poly],
+    hashes: &mut [[u8; 32]],
+) {
+    let mut lanes: [Option<Lane>; W] = core::array::from_fn(|_| None);
     let mut next = 0;
     loop {
         for (s, slot) in lanes.iter_mut().enumerate() {
@@ -259,6 +355,171 @@ mod tests {
     /// them, then matrix entries and noise at both widths interleaved.
     #[test]
     fn scheduled_tasks_match_the_single_stream_functions() {
+        check_scheduled_tasks();
+    }
+
+    /// The same on four lanes, which a CPU with the eight-way permutation
+    /// would not otherwise run.
+    #[test]
+    fn four_lane_schedule_matches_the_single_stream_functions() {
+        WIDTH_FOUR.with(|w| w.set(true));
+        check_scheduled_tasks();
+        WIDTH_FOUR.with(|w| w.set(false));
+    }
+
+    /// Eight lanes explicitly, whatever the CPU: on one without AVX-512 the
+    /// eight permutations are eight scalar ones, which is the same function.
+    #[test]
+    fn eight_lane_schedule_matches_the_single_stream_functions() {
+        let rho = [0x42u8; 32];
+        let mut tasks = Vec::new();
+        let mut want = Vec::new();
+        for n in 0..23u8 {
+            tasks.push(Task::Uniform {
+                rho: &rho,
+                index: [n % 5, n / 5],
+                slot: n as usize,
+            });
+            want.push(sample_ntt(&rho, n % 5, n / 5));
+        }
+        let mut polys = vec![Poly::ZERO; want.len()];
+        schedule::<_, 8>(KeccakX8::zeroed(), &tasks, &mut polys, &mut []);
+        assert!(polys == want);
+    }
+
+    /// The cost of ML-KEM-768 key generation's Keccak schedule alone, at each
+    /// lane width. A measurement, not an assertion.
+    #[test]
+    #[ignore = "diagnostic, not a test"]
+    fn keygen_schedule_cost() {
+        use std::time::Instant;
+        let rho = [0x42u8; 32];
+        let sigma = [0x43u8; 32];
+        let tasks: Vec<Task<'_>> = (0..15usize)
+            .map(|n| {
+                if n < 9 {
+                    Task::Uniform {
+                        rho: &rho,
+                        index: [(n / 3) as u8, (n % 3) as u8],
+                        slot: n,
+                    }
+                } else {
+                    Task::Noise {
+                        seed: &sigma,
+                        nonce: (n - 9) as u8,
+                        eta: 2,
+                        slot: n,
+                    }
+                }
+            })
+            .collect();
+        let mut polys = vec![Poly::ZERO; 15];
+        let n = 5000;
+        let mut best = [f64::INFINITY; 2];
+        for _ in 0..20 {
+            let t = Instant::now();
+            for _ in 0..n {
+                schedule::<_, 4>(KeccakX4::zeroed(), &tasks, &mut polys, &mut []);
+            }
+            best[0] = best[0].min(t.elapsed().as_secs_f64() / n as f64 * 1e6);
+            let t = Instant::now();
+            for _ in 0..n {
+                schedule::<_, 8>(KeccakX8::zeroed(), &tasks, &mut polys, &mut []);
+            }
+            best[1] = best[1].min(t.elapsed().as_secs_f64() / n as f64 * 1e6);
+        }
+        println!(
+            "\n  keygen: 4 lanes {:.3} us, 8 lanes {:.3} us",
+            best[0], best[1]
+        );
+
+        // Encapsulation's: H(ek) first, then the nine matrix entries.
+        let ek = vec![0x11u8; 1184];
+        let mut tasks = vec![Task::Hash {
+            parts: [&ek, &[]],
+            domain: 0x06,
+            slot: 0,
+        }];
+        for n in 0..9usize {
+            tasks.push(Task::Uniform {
+                rho: &rho,
+                index: [(n / 3) as u8, (n % 3) as u8],
+                slot: n,
+            });
+        }
+        let mut hashes = [[0u8; 32]];
+        let mut best = [f64::INFINITY; 2];
+        for _ in 0..20 {
+            let t = Instant::now();
+            for _ in 0..n {
+                schedule::<_, 4>(KeccakX4::zeroed(), &tasks, &mut polys, &mut hashes);
+            }
+            best[0] = best[0].min(t.elapsed().as_secs_f64() / n as f64 * 1e6);
+            let t = Instant::now();
+            for _ in 0..n {
+                schedule::<_, 8>(KeccakX8::zeroed(), &tasks, &mut polys, &mut hashes);
+            }
+            best[1] = best[1].min(t.elapsed().as_secs_f64() / n as f64 * 1e6);
+        }
+        println!(
+            "  encaps: 4 lanes {:.3} us, 8 lanes {:.3} us",
+            best[0], best[1]
+        );
+    }
+
+    #[test]
+    #[ignore = "diagnostic, not a test"]
+    fn prepared_decapsulation_width() {
+        use crate::kem as m;
+        use std::time::Instant;
+        let mut ek = Box::new([0u8; m::ENCAPS_KEY_LEN]);
+        let mut dk = Box::new([0u8; m::DECAPS_KEY_LEN]);
+        let mut ct = Box::new([0u8; m::CIPHERTEXT_LEN]);
+        let mut ss = [0u8; 32];
+        crate::MlKem768::keygen_deterministic(&[1; 32], &[2; 32], &mut ek, &mut dk).unwrap();
+        crate::MlKem768::encapsulate_deterministic(&[3; 32], &ek, &mut ct, &mut ss).unwrap();
+        let p = m::PreparedDecapsulationKey::new(&dk).unwrap();
+        let n = 3000;
+        let mut best = [f64::INFINITY; 2];
+        for _ in 0..30 {
+            for (i, four) in [false, true].into_iter().enumerate() {
+                WIDTH_FOUR.with(|w| w.set(four));
+                let t = Instant::now();
+                for _ in 0..n {
+                    p.decapsulate(&ct, &mut ss).unwrap();
+                }
+                best[i] = best[i].min(t.elapsed().as_secs_f64() / n as f64 * 1e6);
+            }
+        }
+        WIDTH_FOUR.with(|w| w.set(false));
+        println!(
+            "\n  prepared decaps: chosen {:.3} us, four lanes {:.3} us",
+            best[0], best[1]
+        );
+
+        // As the bench runs it: a batch of key generations and prepared
+        // encapsulations, then the decapsulations.
+        let pe = m::PreparedEncapsulationKey::new(&ek).unwrap();
+        let mut after = f64::INFINITY;
+        for _ in 0..5 {
+            for _ in 0..2000 {
+                crate::MlKem768::keygen_deterministic(&[1; 32], &[2; 32], &mut ek, &mut dk)
+                    .unwrap();
+            }
+            for _ in 0..2000 {
+                pe.encapsulate_deterministic(&[3; 32], &mut ct, &mut ss)
+                    .unwrap();
+            }
+            let t = Instant::now();
+            for _ in 0..2000 {
+                p.decapsulate(&ct, &mut ss).unwrap();
+            }
+            after = after.min(t.elapsed().as_secs_f64() / 2000.0 * 1e6);
+        }
+        println!("  prepared decaps after keygen and encaps batches: {after:.3} us");
+    }
+
+    fn check_scheduled_tasks() {
         let ek: Vec<u8> = (0..1184u32).map(|i| (i * 7 + 1) as u8).collect();
         let z = [0x5au8; 32];
         let ct: Vec<u8> = (0..1088u32).map(|i| (i * 13 + 5) as u8).collect();

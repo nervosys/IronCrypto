@@ -933,6 +933,22 @@ mod x86_hmac {
     }
 }
 
+// x86-64: Keccak-f[1600] over eight interleaved states, one block of assembly
+// on thirty-one `zmm` registers (`ic_hash::sha3::zmm`, generated). ML-KEM
+// runs it over secret noise seeds and secret inputs to H, J and G. Compiled to
+// be read, never run: it needs AVX-512F.
+#[cfg(target_arch = "x86_64")]
+mod x86_keccak {
+    /// # Safety
+    /// Requires AVX-512F.
+    #[no_mangle]
+    pub unsafe fn ct_keccak_x8_permute(state: &mut [[u64; 8]; 25]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F.
+        unsafe { ic_hash::sha3_ct_probes::keccak_x8_permute(state) }
+    }
+}
+
 // RSA's Montgomery products at 2048 bits: the portable CIOS product on every
 // target, and on x86-64 the MULX/ADCX/ADOX product and the AVX-512 IFMA
 // almost-Montgomery product. Their loops run over the public width; on x86-64
