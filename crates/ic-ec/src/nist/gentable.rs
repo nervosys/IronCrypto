@@ -258,7 +258,8 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
     /// Normalised with one inversion
     /// for the whole window (Montgomery's trick): the product of every `Z`,
     /// inverted once, then unwound.
-    #[cfg(feature = "std")]
+    // Called by std code and, on x86-64, by the P-384 ladder and the probes.
+    #[cfg_attr(not(feature = "std"), allow(dead_code))]
     pub(crate) fn new(base: &Point<C>) -> Self {
         let [window] = Self::new_many(&[*base]);
         window

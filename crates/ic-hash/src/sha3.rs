@@ -477,7 +477,7 @@ mod zmm;
 #[cfg(all(target_arch = "x86_64", feature = "ct-probes"))]
 #[doc(hidden)]
 pub mod ct_probes {
-    /// [`super::zmm::permute_x8`].
+    /// `zmm::permute_x8`, the eight-way permutation.
     ///
     /// # Safety
     ///
