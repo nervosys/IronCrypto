@@ -3,7 +3,11 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.3.1
+
+A compatible release: no API is removed or changed in signature, and no
+algorithm is added. It raises `ic-rustls`'s rustls requirement to 0.23.46
+for four rustls advisories; see **Security**.
 
 ### Security
 

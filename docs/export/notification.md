@@ -616,6 +616,31 @@ identified that clean commit in their VCS metadata. At publication the
 commit had not been pushed to GitHub, by intent: it describes a defect that
 no published version yet corrected.
 
+## 0.3.1 release authorization
+
+0.3.1 adds no package: the locations are the twenty-two already named, and
+no manifest adds or renames one. It adds no algorithm and no cryptographic
+functionality. What it adds are implementations of algorithms 0.3.0 already
+had: AVX-512 IFMA paths for P-256 and P-384, an x86-64 assembly path for
+AES-GCM, and ARMv8 backends for SHA-256, SHA-512 and GHASH behind the
+existing off-by-default `aarch64-crypto` feature. It also adds prepared ECDH
+peer keys, an API over the existing ECDH; clearing of vector registers and
+scrubbing of dead stack after secret-handling code; and a higher rustls
+requirement in `ic-rustls`, 0.23.46, for four rustls advisories.
+
+On 2026-10-16 the maintainer was asked: "0.3.1 has no new package or
+location and no new algorithm, only faster backends of existing ones plus
+the rustls 0.23.46 floor. Does the earlier export notice cover it, or do you
+want an updated notice printed to send first?" They answered "Earlier notice
+suffices", against the option described as: "Record your answer verbatim in
+docs/export/notification.md, as for 0.2.21 to 0.2.24. No new notice." They
+had written, just before, "After that, release 0.3.1 and delete the
+IronCrypto directories in E:/build", "that" being a push of `master`.
+
+This records that instruction and that determination. No notice was printed
+or sent for this release. Publication proceeds on them. The publication
+itself, and what the crates.io API shows of it, will have its own entry.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not

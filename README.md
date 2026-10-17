@@ -116,16 +116,23 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.3.0"
+ironcrypto = "0.3.1"
 ```
 
-The current release is **0.3.0**, published for all twenty-two crates on
-crates.io. **It is a security release:** from 0.2.7 to 0.2.24, on CPUs with
+The current release is **0.3.1**, published for all twenty-two crates on
+crates.io. `ic-rustls` now requires rustls 0.23.46, which fixes four rustls
+advisories (RUSTSEC-2026-0346 to -0349). It clears vector registers and
+scrubs dead stack after secret-handling code, adds prepared ECDH peer keys
+for the NIST curves and ARMv8 backends for SHA-2 and GHASH, and makes
+P-256, P-384, RSA, X25519, Ed25519, AES-GCM and short messages faster on
+x86-64, with AVX-512 IFMA paths for the NIST curves. It adds no algorithm.
+**0.3.0 was a security release:** from 0.2.7 to 0.2.24, on CPUs with
 AVX2, ChaCha20 could wrap its block counter and reuse keystream -- through
 `chacha20_xor` with a starting counter near the top, or one
-ChaCha20-Poly1305 message over 256 GiB. Use 0.3.0 if you use ChaCha20. It is
-also **breaking**: hashes, XOFs and MACs now return a `Result` and refuse
-after a failed self-test, so add `?` where their output is used. It adds
+ChaCha20-Poly1305 message over 256 GiB. Use 0.3.0 or later if you use
+ChaCha20. It was also **breaking**: hashes, XOFs and MACs return a `Result`
+and refuse after a failed self-test, so add `?` where their output is used.
+It added
 OPAQUE, OPRFs, hashing to P-256, scrypt, bcrypt and yescrypt verification,
 XChaCha20-Poly1305, passphrase sealing, BLAKE2s and BLAKE3, a build with
 only the FIPS-approved algorithms, and faster AES-GCM, ChaCha20-Poly1305,
@@ -138,17 +145,17 @@ directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.3.0"   # AES, ChaCha20, the AEADs
-ic-hash = "0.3.0"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
-ic-ec = "0.3.0"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.3.0"     # HPKE, RFC 9180
-ic-sig = "0.3.0"      # verify any signature over an X.509 public key
-ic-lms = "0.3.0"      # verify HSS/LMS hash-based signatures
-ic-slhdsa = "0.3.0"   # SLH-DSA, FIPS 205
+ic-cipher = "0.3.1"   # AES, ChaCha20, the AEADs
+ic-hash = "0.3.1"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
+ic-ec = "0.3.1"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.3.1"     # HPKE, RFC 9180
+ic-sig = "0.3.1"      # verify any signature over an X.509 public key
+ic-lms = "0.3.1"      # verify HSS/LMS hash-based signatures
+ic-slhdsa = "0.3.1"   # SLH-DSA, FIPS 205
 ```
 
 ```console
-$ cargo install ic-cli --version 0.3.0   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.3.1   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -159,7 +166,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.3.0 publication.
+submission and the 0.3.1 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
