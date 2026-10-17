@@ -141,7 +141,7 @@ impl<C: Curve> Comb<C> {
             bases[c] = b;
         }
         Self {
-            windows: core::array::from_fn(|c| AffineWindow::new(&bases[c])),
+            windows: AffineWindow::new_many(&bases),
         }
     }
 
@@ -258,30 +258,52 @@ impl<C: Curve, const E: usize> AffineWindow<C, E> {
     /// Normalised with one inversion
     /// for the whole window (Montgomery's trick): the product of every `Z`,
     /// inverted once, then unwound.
+    #[cfg(feature = "std")]
     pub(crate) fn new(base: &Point<C>) -> Self {
-        let points: [Point<C>; E] = multiples(base);
-        let mut prefix = [C::Field::ONE; E];
+        let [window] = Self::new_many(&[*base]);
+        window
+    }
+
+    /// The windows for each of `bases`, normalised with a single inversion
+    /// between them all: Montgomery's trick over the `N * E` values of `Z`,
+    /// where [`Self::new`] on each would invert `N` times. A field inversion
+    /// costs on the order of fifty multiplications; the trick spends three
+    /// multiplications per value to save all but one.
+    ///
+    /// Everything here is a public point's, so nothing depends on a secret,
+    /// and nothing branches on a value: the same operations run for any bases.
+    /// Each must satisfy the requirement of [`Self::new`], so that no `Z` is
+    /// zero and the product is invertible.
+    pub(crate) fn new_many<const N: usize>(bases: &[Point<C>; N]) -> [Self; N] {
+        let points: [[Point<C>; E]; N] = core::array::from_fn(|w| multiples(&bases[w]));
+        let mut prefix = [[C::Field::ONE; E]; N];
         let mut acc = C::Field::ONE;
-        for (p, point) in prefix.iter_mut().zip(points.iter()) {
-            *p = acc;
-            acc = acc.mul(&point.z());
+        for (row, pts) in prefix.iter_mut().zip(points.iter()) {
+            for (p, point) in row.iter_mut().zip(pts.iter()) {
+                *p = acc;
+                acc = acc.mul(&point.z());
+            }
         }
-        // acc = z_0 * .. * z_{E-1}; walk back, peeling one z at a time.
+        // acc = the product of every z; walk back, peeling one z at a time.
         let mut inv = acc.invert();
-        let mut entries = [AffinePoint {
+        let mut out = [AffinePoint {
             x: C::Field::ZERO,
             y: C::Field::ZERO,
         }; E];
-        for i in (0..E).rev() {
-            let z_inv = inv.mul(&prefix[i]);
-            inv = inv.mul(&points[i].z());
-            let z_inv2 = z_inv.square();
-            entries[i] = AffinePoint {
-                x: points[i].x().mul(&z_inv2),
-                y: points[i].y().mul(&z_inv2.mul(&z_inv)),
-            };
+        let mut windows: [Self; N] = core::array::from_fn(|_| Self(out));
+        for w in (0..N).rev() {
+            for i in (0..E).rev() {
+                let z_inv = inv.mul(&prefix[w][i]);
+                inv = inv.mul(&points[w][i].z());
+                let z_inv2 = z_inv.square();
+                out[i] = AffinePoint {
+                    x: points[w][i].x().mul(&z_inv2),
+                    y: points[w][i].y().mul(&z_inv2.mul(&z_inv)),
+                };
+            }
+            windows[w] = Self(out);
         }
-        Self(entries)
+        windows
     }
 
     /// `|digit| * base`'s coordinates, negated in `y` for a negative digit,

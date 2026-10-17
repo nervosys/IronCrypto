@@ -3,6 +3,20 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Changed
+
+- Preparing an ECDH public key (`PreparedPublicKey::new`, all three NIST
+  curves) now normalises its sixty-four multiples with one field inversion
+  instead of four (one per window; Montgomery's trick across the windows).
+  The values are identical. P-384 preparation measured about 8 percent faster
+  under an interleaved A/B (median 77.3 to 69.0 microseconds, x86-64, eight
+  rounds); it is still about one agreement's cost and about twenty times
+  Graviola's parse of a key, because the work is the roughly 360 point
+  operations that build the windows, not inversions. Public-point data only;
+  no secret is involved.
+
 ## 0.3.1
 
 A compatible release: no API is removed or changed in signature, and no

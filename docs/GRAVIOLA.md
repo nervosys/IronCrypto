@@ -125,7 +125,16 @@ classification is read with them in mind:
   not repeated here.
 - **P-384 key preparation** sets IronCrypto's prepared key, with sixty-four
   affine multiples, against Graviola's parsing of a key. It is the cost of
-  building the key once, not a per-operation rate.
+  building the key once, not a per-operation rate. Measured again on
+  2026-10-17 after batching the field inversions of all four windows into one
+  (the table was already normalised per window, not per multiple, so the
+  suspected sixty-four inversions were four): `graviola-p384`, eight
+  interleaved A/B rounds, preparation 74.0-77.4-85.5 us before and
+  68.1-69.0-69.4 us after, against Graviola's 3.5 us parse. That is about
+  0.045x before and 0.05x after, which the table's rows above (taken before the
+  change) do not reflect. The remaining time is about 300 doublings and 60
+  window operations that build the four spacings; only a smaller table, or
+  deferring the work to first use, would remove it, and neither was done.
 - **Key generation with the pairwise test** runs IronCrypto's pairwise
   consistency check, which Graviola does not; the like-for-like row is the one
   without it.
