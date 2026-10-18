@@ -78,6 +78,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.2.24 | 2026-10-11 01:25:11 | all twenty-two crates published from `6316a86` by the maintainer, after writing "release 0.2.24" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
 | 0.3.0 | 2026-10-14 00:19:44 | all twenty-two crates published from `3571ffa` by the maintainer, after the updated notice printed for them was reported "Sent" and they wrote "Release 0.3.0 in the meantime"; adds no location; adds algorithms (see the 0.3.0 entries below) |
 | 0.3.1 | 2026-10-17 03:54:00 | all twenty-two crates published from `0bc08d0` by the maintainer, after writing "release 0.3.1" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
+| 0.3.2 | 2026-10-18 04:53:02 | all twenty-two crates published from `6431251` by the maintainer, after answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -673,6 +674,16 @@ run the push, tag and publish."
 
 This records that instruction and that determination. No notice was printed
 or sent for this release. Publication proceeds on them.
+
+The maintainer ran `git push origin master`, then `git tag v0.3.2`, `git push
+origin v0.3.2` and `cargo publish --workspace`. The repository's pre-push hook
+refused both pushes, on a fault in its own probe script (fixed in the next
+commit, `084deb6`), and the publish ran regardless. The crates.io API
+confirmed all twenty-two 0.3.2 packages live and not yanked. The first upload
+was `ic-core` at 2026-10-18 04:53:02 UTC and the last `ic-cli` at 04:53:47
+UTC. The published source commit is `6431251`, clean in the VCS metadata of
+the packages read (`ic-core`, `ironcrypto`, `ic-cli`). At publication that
+commit and the `v0.3.2` tag were not yet on GitHub.
 
 ## Determination
 
