@@ -259,11 +259,10 @@ tasks measured 4.6-5.1; it now makes one pass). Decapsulation from bytes,
 which has no Graviola row, 6.3-8.1 -> 5.7.
 
 **What did not pay.** SHA3-256 is a single serial sponge: nothing to run
-side by side. Its scalar permutation is already about 19 cycles a round
-(0.178 us at the clocks this part holds), and a single-state AVX-512
-permutation is bound by its dependent shuffles at roughly 16 to 20 cycles a
-round (latencies measured on this part: `vpermq` 2.5 cycles, `vprolq` and
-`vpternlogq` 1), so it was not built; SHA3-256 stays level. The pairwise
+side by side. Its scalar permutation is about 38 cycles a round (0.18 us; the 19 first
+written here was wrong, see the 2026-10-18 section). A single-state AVX-512
+permutation was built after this note and did not beat it; SHA3-256 stays
+level. The pairwise
 test stays 2.4 times behind, and no restructuring that keeps the test whole
 brings it near level: encapsulation and decapsulation together cost
 more than key generation does (10.7 us from bytes, 6.5 us with the keys
@@ -284,6 +283,73 @@ would cost about twice four, and the saving in permutations would not be
 a saving in time; this was not measured, and runtime detection here is by
 feature, not by microarchitecture. The Intel SDE runs in CI test
 correctness, not speed.
+
+### SHA3-256 on one AVX-512 state, tried and not kept, 2026-10-18
+
+SHA3-256 was level (0.93-0.98). The 2026-10-17 note above estimated a
+single-state AVX-512 permutation at 16 to 20 cycles a round and did not build
+it. Two versions were built and measured; neither beat the scalar one, and
+neither is in the tree.
+
+**The target.** Graviola's `sha3_keccak_f1600` on x86-64 is scalar assembly
+(Andy Polyakov's OpenSSL kernel, as vendored by s2n-bignum): no `zmm`, no
+`ymm`, no `vpternlogq` anywhere in the file. Ours is scalar too, so "level"
+is two scalar permutations. The 4 MiB row is permutation-bound: 690 MiB/s is
+about 192 ns a 136-byte block against a 181 ns permutation, so absorb
+overhead is about 10 ns and there is nothing to win outside the permutation.
+
+**A correction.** The earlier note put the scalar permutation at "about 19
+cycles a round". The clock on this part, measured with a dependent `add`
+chain, is 4.9 GHz, so 181 ns is 905 cycles, 37.7 cycles a round. (19 is what
+the same time gives at 2.5 GHz.)
+
+**Latencies on this part, measured as dependent chains (cycles).** Logic
+(`vpternlogq`, `vpxorq`, `vprolq`, `vprolvq`) and in-lane shuffles
+(`vpshufd`, `vpalignr`, `vpunpcklqdq`) 1.9; `vpermq`, `vpermt2q` and
+`valignq` on `zmm` 4.8, 3.9 on `ymm`; a cross-lane shuffle feeding a logic
+operation costs 8.9 together, not 4.8 + 1.9. Throughput: about 2 shuffles
+and 3 logic operations a cycle.
+
+**Version 1: five lanes of a plane per `zmm`, 55 operations a round.**
+Theta by `vpternlogq` and two `vpermq` for the column rotation, rho by
+`vprolvq`, pi by two `vpermt2q`, one `vpermq` and a three-way or per row, chi
+by two `vpermq` and `vpternlogq 0xd2`, iota folded into the parity. Correct
+against the scalar permutation on 150 chained states. In one process,
+alternating, best of 40 batches of 20,000: scalar 181 ns, vector 207 ns
+(8.6 ns a round, 43 cycles). Taking out rho, the chi shuffles, the pi
+shuffles or theta's shuffles in turn saved 2 to 5 cycles a round each, and
+with all four replaced by single-cycle operations it still took 141 ns: the
+chain through four shuffle-to-logic crossings is the bound. It is the 16 to
+20 cycles the note guessed only if a shuffle plus a logic operation cost 4.8
++ 1.9, which they do not.
+
+**Version 2: spend operations to shorten the chain.** Rows are kept in three
+rotations (`A[x-1]`, `A[x]`, `A[x+1]` at lane `x`) so theta's column parities
+are plain xor trees with no shuffle, rho and the theta xor are folded into
+`rol(S) ^ rol(Cm) ^ rol(Cp)`, and chi is evaluated at three alignments from
+the four rotations of each new row. About 110 operations a round, one
+shuffle-to-logic crossing fewer. Correct on the same states. Measured in
+process against the scalar permutation, on a machine that was loaded by
+other builds (the scalar figure moved between 181 and 237 ns across runs, so
+only the pair within one run is read): 214.0 against 215.6, 211.9 against
+220.2, 214.4 against 237.1. Replacing every chi and pi shuffle by a
+single-cycle operation moved it from 214 to 194, so it is now bound by
+operation count (about 2.5 operations a cycle), not by the chain. Parity,
+within the noise, at best; with the state load and store around it and no
+dispatch cost counted, nothing for SHA3-256 to gain.
+
+**Why it stops there.** A single Keccak state is 25 lanes of a serial
+chain. The scalar kernel retires about 5 operations a cycle on six integer
+ports; the vector kernel either has too few operations to hide its shuffle
+latency (version 1) or too many to issue (version 2). The 8-way kernel works
+because eight independent states fill the width; one state cannot. A hybrid
+that splits one round between the integer and vector units pays a
+cross-domain move on every lane it hands over, which is the cost it would
+have to save.
+
+**Verdict.** SHA3-256 and the SHAKE sponges stay level with Graviola; no
+code changed, nothing added to the build. The four-way and eight-way paths
+that ML-KEM and ML-DSA use are unaffected.
 
 ### The last run, master e9d1261
 

@@ -3,6 +3,16 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
+## Unreleased
+
+### Changed
+
+- Documentation only: a single-state AVX-512 Keccak-f[1600] was built twice and
+  measured against the scalar permutation (181 ns scalar; 207 ns and about
+  parity), and not kept. `docs/GRAVIOLA.md`, "SHA3-256 on one AVX-512 state",
+  records the latencies and the verdict; SHA3-256 stays level with Graviola.
+  It also corrects the scalar permutation's cost to about 38 cycles a round.
+
 ## 0.3.2
 
 A compatible release: no API is removed or changed in signature, and no
