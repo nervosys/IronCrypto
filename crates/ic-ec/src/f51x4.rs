@@ -153,7 +153,7 @@ unsafe fn madd52hi(acc: __m256i, a: __m256i, b: __m256i) -> __m256i {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -179,7 +179,7 @@ unsafe fn times19(x: __m256i) -> __m256i {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -281,7 +281,7 @@ macro_rules! square4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[cfg(test)]
@@ -295,7 +295,7 @@ unsafe fn mul(a: &F4, b: &F4) -> F4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[cfg(test)]
@@ -313,7 +313,7 @@ unsafe fn square(a: &F4) -> F4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -338,7 +338,7 @@ unsafe fn finish(lo: &[__m256i; 9], hi: &[__m256i; 9]) -> F4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -351,7 +351,7 @@ unsafe fn add(a: &F4, b: &F4) -> F4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -368,7 +368,7 @@ unsafe fn add_raw(a: &[__m256i; 5], b: &[__m256i; 5]) -> [__m256i; 5] {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -390,7 +390,7 @@ unsafe fn neg16(b: &F4) -> [__m256i; 5] {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -420,7 +420,7 @@ const fn lanes(bits: i32) -> i32 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -437,7 +437,7 @@ unsafe fn permute<const IMM: i32>(a: &F4) -> F4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -468,7 +468,7 @@ macro_rules! completed_to_extended {
 
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[target_feature(enable = "avx2")]
@@ -498,7 +498,7 @@ unsafe fn double_impl(p: &P4) -> P4 {
 
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[target_feature(enable = "avx2")]
@@ -522,7 +522,7 @@ unsafe fn add_impl(p: &P4, n: &N4) -> P4 {
 
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[target_feature(enable = "avx2")]
@@ -535,7 +535,7 @@ unsafe fn negate_operand_impl(n: &N4) -> N4 {
 
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[target_feature(enable = "avx2")]
@@ -564,7 +564,7 @@ unsafe fn select_impl(table: &[N4; 8], digit: i8) -> N4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[inline]
@@ -596,7 +596,7 @@ unsafe fn mul121666_add(e: &F4, d: &F4) -> F4 {
 ///
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[target_feature(enable = "avx2")]
@@ -642,7 +642,7 @@ unsafe fn ladder_step_impl(state: &F4, x1: &F4, swap: __m256i) -> F4 {
 
 /// # Safety
 ///
-/// The CPU must have AVX2 and AVX-512 IFMA, which `Ifma::get` checks. Its callers
+/// The CPU must have AVX2 and AVX-512F, DQ, VL and IFMA, which `Ifma::get` checks. Its callers
 /// are the `Ifma` methods, which hold the token, and the `probes` functions, which
 /// document the same requirement.
 #[target_feature(enable = "avx2")]
