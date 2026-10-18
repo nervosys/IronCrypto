@@ -649,6 +649,31 @@ packages live and not yanked. The first upload was `ic-core` at 2026-10-17
 commit is `0bc08d0`; all twenty-two packages identified that clean commit in
 their VCS metadata.
 
+## 0.3.2 release authorization
+
+0.3.2 adds no package: the locations are the twenty-two already named, and
+no manifest adds or renames one. It adds no algorithm and no cryptographic
+functionality. What it adds is an implementation of a function 0.3.1 already
+had: an eight-state AVX-512 Keccak-f[1600] permutation (`ic_hash::KeccakX8`,
+hidden, not API) that ML-KEM's matrix and noise sampling use where the CPU
+has AVX-512. It also changes how a prepared NIST-curve ECDH public key is
+normalised (one field inversion instead of four, the same values), and adds
+Kani proofs, which do not compile into the crates.
+
+On 2026-10-17 the maintainer was offered three directions, the third being:
+"0.3.2 release: only if you want one. Tell me 'release 0.3.2' and whether
+the earlier export notice still covers it." They answered "Do all three".
+They were then asked: "Does the earlier BIS/NSA export notice cover 0.3.2?
+It has the same 22 crates and adds no algorithm or cryptographic function.
+The changes are an 8-lane Keccak path for ML-KEM, a cheaper key-table build
+for the NIST curves, and new Kani proofs." They answered "Earlier notice
+suffices", against the option described as: "I record your answer verbatim
+in docs/export/notification.md and prepare the 0.3.2 release commit. You
+run the push, tag and publish."
+
+This records that instruction and that determination. No notice was printed
+or sent for this release. Publication proceeds on them.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not

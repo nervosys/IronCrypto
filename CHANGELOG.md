@@ -3,7 +3,13 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.3.2
+
+A compatible release: no API is removed or changed in signature, and no
+algorithm is added. ML-KEM's Keccak calls run eight lanes wide on AVX-512,
+NIST-curve ECDH key preparation takes one inversion instead of four, and 25
+new Kani proofs cover ML-KEM's arithmetic and P-384's field addition,
+subtraction and closing reduction.
 
 ### Added
 

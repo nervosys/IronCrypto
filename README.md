@@ -116,16 +116,20 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.3.1"
+ironcrypto = "0.3.2"
 ```
 
-The current release is **0.3.1**, published for all twenty-two crates on
-crates.io. `ic-rustls` now requires rustls 0.23.46, which fixes four rustls
-advisories (RUSTSEC-2026-0346 to -0349). It clears vector registers and
-scrubs dead stack after secret-handling code, adds prepared ECDH peer keys
-for the NIST curves and ARMv8 backends for SHA-2 and GHASH, and makes
-P-256, P-384, RSA, X25519, Ed25519, AES-GCM and short messages faster on
-x86-64, with AVX-512 IFMA paths for the NIST curves. It adds no algorithm.
+The current release is **0.3.2**, published for all twenty-two crates on
+crates.io. It is compatible with 0.3.1 and adds no algorithm: ML-KEM's
+Keccak calls run eight lanes wide on AVX-512, preparing a NIST-curve ECDH
+public key takes one field inversion instead of four, and 25 new Kani
+proofs cover ML-KEM's arithmetic and P-384's field addition, subtraction and
+reduction. **0.3.1** made `ic-rustls` require rustls 0.23.46, which fixes
+four rustls advisories (RUSTSEC-2026-0346 to -0349); it also cleared vector
+registers and scrubbed dead stack after secret-handling code, added prepared
+ECDH peer keys for the NIST curves and ARMv8 backends for SHA-2 and GHASH,
+and made P-256, P-384, RSA, X25519, Ed25519, AES-GCM and short messages
+faster on x86-64, with AVX-512 IFMA paths for the NIST curves.
 **0.3.0 was a security release:** from 0.2.7 to 0.2.24, on CPUs with
 AVX2, ChaCha20 could wrap its block counter and reuse keystream -- through
 `chacha20_xor` with a starting counter near the top, or one
@@ -145,17 +149,17 @@ directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.3.1"   # AES, ChaCha20, the AEADs
-ic-hash = "0.3.1"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
-ic-ec = "0.3.1"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.3.1"     # HPKE, RFC 9180
-ic-sig = "0.3.1"      # verify any signature over an X.509 public key
-ic-lms = "0.3.1"      # verify HSS/LMS hash-based signatures
-ic-slhdsa = "0.3.1"   # SLH-DSA, FIPS 205
+ic-cipher = "0.3.2"   # AES, ChaCha20, the AEADs
+ic-hash = "0.3.2"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
+ic-ec = "0.3.2"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.3.2"     # HPKE, RFC 9180
+ic-sig = "0.3.2"      # verify any signature over an X.509 public key
+ic-lms = "0.3.2"      # verify HSS/LMS hash-based signatures
+ic-slhdsa = "0.3.2"   # SLH-DSA, FIPS 205
 ```
 
 ```console
-$ cargo install ic-cli --version 0.3.1   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.3.2   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -166,7 +170,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.3.1 publication.
+submission and the 0.3.2 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 
