@@ -351,6 +351,145 @@ have to save.
 code changed, nothing added to the build. The four-way and eight-way paths
 that ML-KEM and ML-DSA use are unaffected.
 
+### ML-KEM key generation with the pairwise test, 2026-10-18
+
+Starting point: master 4ce0dc7 (0.3.2), where key generation with
+IronCrypto's FIPS 140-3 pairwise consistency test (PCT) ran at 0.42 of
+Graviola's rate, which has no such test. The test stays whole: it still
+encapsulates to the generated key from its bytes, decapsulates with the
+generated `dk`, and compares the secrets, on every key and not optionally.
+What changed is how its Keccak work is scheduled and one matrix expansion.
+
+**Where the time went.** The PCT added 14 us to a 7 us key generation:
+`H(ek)` once more in key generation itself (a serial scalar SHA3-256 of
+1184 bytes, 9 permutations, 1.7 us), once in the encapsulation (nine
+permutations, with `A^T` beside it), once in the decapsulation's hash
+check (nine again), `J(z || c)` in the decapsulation (a 9-block hash again,
+bound by it), and `A^T` expanded twice. Each of those hash chains is long
+and serial, and the three stages ran one after the other, so the test paid
+for three 9-permutation chains where one would do.
+
+**What was done** (`ic-mlkem/src/scheme.rs`, `pairwise_consistency_lanes`;
+the AVX2 and AVX-512 paths, which are the ones `parallel()` selects):
+
+1. Every Keccak call in the test that needs only `ek` runs in one schedule:
+   `H(ek)` as key generation stores it, `H(ek)` for the encapsulation, `H`
+   of the copy of `ek` inside `dk` for the decapsulation's hash check, and
+   `A^T`. Three lanes of one schedule instead of three chains in series;
+   key generation's own serial `H(ek)` is gone, the stored hash coming out
+   of this schedule (`keygen_deterministic`, which has no test, still hashes
+   as before).
+2. The decapsulation in the test skips `J(z || c)`. Nothing in the
+   comparison reads it: the test compares `K` with `K'`, and the rejection
+   key is selected only when the re-encryption differs, in which case the
+   comparison already fails (the selected key is then zeros, not `J`). `z`
+   is drawn by key generation, not computed from the key pair, so there is
+   nothing in `J` for the test to check.
+3. The encapsulation and the decapsulation share one expansion of `A^T`,
+   from `ek`'s seed. This is the item the previous section declined, and it
+   needs the argument it asked for, below.
+
+**Why sharing `A^T` between the test's two halves keeps the test meaningful.**
+The test must fail if key generation's output is inconsistent. Key
+generation's matrix `A_k` (sampled earlier, in a separate Keccak run that the
+test never reads) enters only through `t = A_k s + e` in `ek`; the test
+expands its own `A'` afresh from the seed stored in `ek`. The decryption in
+the decapsulation forms `v - s^T u`, with `v = t^T y + e2 + m` from the
+encapsulation and `u = A'^T y + e1`. The terms cancel to leave `m` and small
+noise only if `s^T A_k^T y = s^T A'^T y`, which for a fault anywhere in key
+generation's sampling, NTT or product (a different `A_k`, `s` or `t`) does not
+hold with overwhelming probability, whether `A'` is shared between the two
+halves of the test or not. The second, independent expansion in the
+unshared form cross-checked the test's own expansion against itself, which
+detects a fault in the test and not one in key generation; a fault in the
+shared `A'` is still detected, as a failure of the decryption above, since
+`t` carries the true matrix. What stays true after the change: no value that
+key generation computed is reused by the test (`A_k`, `s`, `e`, `t` and the
+seed hash chain are all rebuilt from the bytes of `ek` and `dk`), the
+decapsulation decrypts with the `s` stored in `dk` and re-encrypts from the
+copy of `ek` stored in `dk`, as the public function does, and the hash lanes
+are compared with the stored hash. Pinned by
+`the_scheduled_pairwise_test_refuses_each_corruption`: a flipped bit in `s`
+(first and last byte), in `t`, in the seed of `ek`, in the copy of `ek` in
+`dk` (its `t` and its seed), and in the stored hash, each refused by the
+scheduled and the streaming forms, with `ek` corrupted likewise when called
+as key generation calls it. Checked by breaking: with the decapsulation's
+hash lane left out of the comparison, the copy-of-`ek`-seed case is accepted
+and the test fails, on all three parameter sets.
+
+**What is weaker, stated plainly.** The three `H(ek)` lanes are permuted by
+the same instruction stream in the same calls, where before they were
+three separate calls (and key generation's was the scalar permutation, a
+different code path). A fault that hits one lane's data shows as a
+disagreement between lanes. A fault common to all lanes of one permutation
+call (a corrupted round constant, say) corrupts the three hashes alike and
+passes the hash comparison; it would also corrupt the lanes that expand the
+test's `A'`, which the decryption above then catches, but a common-mode fault
+that left `A'` intact would let a wrong stored `H(ek)` through at generation.
+Such a key is refused at its first use (the decapsulation's hash check
+recomputes `H`), so it fails closed. A persistent fault in the vector
+permutation breaks every known-answer test before it breaks this one.
+Nothing in this change removes a check; this one is narrower in what it can
+tell apart for a common-mode fault in one call.
+
+**Measured**, `bench` `graviola`, nine rounds of the binary built from
+4ce0dc7 and the binary built from this change, alternated, both libraries in
+every run, load from other work on the host not controlled (it read heavily
+loaded through most of the session, so absolute times are 20 to 30 percent
+above the figures in the section above); ratio of IronCrypto's rate over
+Graviola's, then IronCrypto's time with the test, minimum-median-maximum:
+
+| build | ratio before | ratio after | us before | us after |
+|---|---|---|---|---|
+| default (AVX-512 lanes) | 0.40-0.43-0.48 | 0.50-0.59-0.91 | 21.3-23.2-55.4 | 15.9-16.9-19.7 |
+| `--cfg ic_no_avx512` | 0.32-0.35-0.38 | 0.38-0.45-0.46 | 26.0-28.3-34.7 | 20.3-21.9-27.3 |
+
+An earlier round of nine on the same pair, under heavier load, read 0.33-0.40-0.46
+before and 0.40-0.56-0.74 after. The 0.91 is one round in which Graviola's
+own time spiked; the median is the figure. Key generation without the test
+did not change (7.3 to 8 us before and after, inside the spread);
+encapsulation and decapsulation outside the test were not touched.
+Inside the test, on the loaded host, stage by stage (us): the one schedule
+about 3.5 to 4.5 (the previous encapsulation's `H(ek)` and `A^T` alone were
+about 2.4 to 3.4 under the same load), `G` 0.4, noise 0.7 twice,
+encryption 1.8, decryption with `G` 1.4, re-encryption 2.0. Peak stack by
+`ic-bench stack mlkem` is unchanged for ML-KEM-768 (keygen 36559 bytes
+before and after) and 64 bytes more for ML-KEM-512 and -1024 keygen, against
+scrubs of 32 KiB; the scrub sizes in the table above are unchanged.
+
+**The gap is narrowed, not closed, and under this constraint it cannot be.**
+With the test whole, key generation does an encapsulation from bytes and
+a decapsulation after its own work; those two cost 2.4 and 5.4 us even with
+the key parsed once, which alone exceeds Graviola's 7.5 us key generation,
+and the test's ciphertext round trip is a dependency chain (encapsulate,
+then decrypt, then re-encrypt) that cannot be overlapped with itself. The
+remaining time is the NTT-domain arithmetic of two encryptions and a
+decryption (18 transforms of about 0.09 us, 27 `basemul_add` of 0.03 us:
+about 2.5 us), the scalar glue around the Keccak schedules (about half of
+each schedule), and `G` and the noise. Sharing more would mean sharing state
+between key generation and the test, which this change does not do.
+
+**What did not pay, or was declined.**
+
+- *Sharing `A_k` (key generation's own matrix) with the test*: declined. It
+  would let a fault in key generation's expansion cancel in the test.
+- *Dropping the decapsulation's re-encryption and comparing `m` with `m'`*:
+  declined. It would stop testing the copy of `ek` inside `dk` and the
+  re-encryption check, and it is not the decapsulation the standard names.
+- *Two `H(ek)` lanes in place of three*: no measurable difference (the
+  schedule is bound by the nine-permutation chain either way and the third
+  lane costs a few hundred cycles); three kept, for the comparison.
+- *AVX-512 NTT*: not built. A transform is 0.08 to 0.1 us on AVX2; the
+  test runs 18, and a 1.5 times faster transform would save about 0.5 us of
+  16, against a new kernel to prove constant time and a probe.
+- *Faster `H(ek)` on one state*: as the previous section found, a single
+  AVX-512 permutation is bound by its dependent shuffles; nothing here
+  changed that, and the hash now hides behind the matrix expansion instead.
+- *The glue around the lanes* (`xor_lane`, `read_lane`, `reset_lane`: scalar
+  strided word accesses, about as long per step as the permutation itself):
+  not attempted; it is the next place to look and benefits every ML-KEM
+  operation.
+
 ### The last run, master e9d1261
 
 Taken 2026-10-13 after everything above had merged, three rounds of each

@@ -13,6 +13,25 @@ all of them.
   records the latencies and the verdict; SHA3-256 stays level with Graviola.
   It also corrects the scalar permutation's cost to about 38 cycles a round.
 
+- **ML-KEM key generation is faster with its pairwise consistency test on
+  (about 0.42 to 0.59 of Graviola's rate on x86-64, from 23.2 to 16.9 us for
+  ML-KEM-768; 0.35 to 0.45 without AVX-512).** The test still runs on every
+  generated key and refuses every single-bit corruption tested below. It is
+  weaker in one respect: the three `H(ek)` computations now share permutation
+  calls, so a fault common to every lane of one call could let a wrong stored
+  `H(ek)` through at generation; such a key is refused at its first
+  decapsulation, which recomputes the hash and fails closed. The Keccak calls in it that
+  need only the public key (`H(ek)` three ways and `A^T`) now run in one
+  lane schedule rather than three chains in series, the decapsulation in the
+  test no longer computes the rejection key `J(z || c)` that its comparison
+  never reads, and the test's encryption and re-encryption share one fresh
+  expansion of `A^T` (none of key generation's own values is reused; the
+  fault-coverage argument is in `docs/GRAVIOLA.md`, "ML-KEM key generation
+  with the pairwise test, 2026-10-18"). The public `decapsulate` and
+  `encapsulate` are unchanged. A new test flips one bit in each of the secret,
+  `t`, the seed, the copy of `ek` in `dk` and the stored hash, and requires
+  both forms of the test to refuse each.
+
 ## 0.3.2
 
 A compatible release: no API is removed or changed in signature, and no

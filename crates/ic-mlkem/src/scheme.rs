@@ -568,6 +568,38 @@ macro_rules! ml_kem {
                 run(&tasks[..n + KK + 2 * K + 1], polys, hashes);
             }
 
+            /// The pairwise test's one Keccak schedule: `H(ek)` twice
+            /// (slots 0 and 1, the stored copy's and the encapsulation's),
+            /// `H` of the copy of `ek` inside `dk` (slot 2, the
+            /// decapsulation's hash check), and `A^T` from `ek`'s seed.
+            /// Nothing here depends on the ciphertext, so the decapsulation's
+            /// hash check need not wait for it.
+            pub(super) fn pairwise_matrices_and_hashes(
+                ek: &[u8; ENCAPS_KEY_LEN],
+                ek_in_dk: &[u8],
+                hashes: &mut [[u8; 32]; 3],
+                at: &mut [Poly; KK],
+            ) {
+                let mut rho = [0u8; 32];
+                rho.copy_from_slice(&ek[384 * K..]);
+                let mut tasks = [Task::Hash {
+                    parts: [&[], &[]],
+                    domain: 0,
+                    slot: usize::MAX,
+                }; 3 + KK];
+                for (slot, t) in tasks[..3].iter_mut().enumerate() {
+                    *t = Task::Hash {
+                        parts: [if slot == 2 { ek_in_dk } else { &ek[..] }, &[]],
+                        domain: 0x06,
+                        slot,
+                    };
+                }
+                for f in 0..KK {
+                    tasks[3 + f] = uniform(&rho, f / K, f % K, true, f);
+                }
+                run(&tasks, at, hashes);
+            }
+
             /// K-PKE encryption, given `A^T` (`k * k` entries) and the
             /// `2k + 1` noise polynomials already drawn, decoding `t` from
             /// `ek` as the inner product reaches it. Clears `noise`.
@@ -1163,6 +1195,74 @@ macro_rules! ml_kem {
                 });
             }
 
+            /// The scheduled pairwise test accepts what the streaming one
+            /// accepts and refuses what it refuses, site by site.
+            ///
+            /// A test that only passes good pairs proves nothing about the
+            /// check: each corruption below is one the test exists to catch,
+            /// and each must fail it on both paths. They cover the secret
+            /// in `dk`, `t` and the seed in `ek`, the copy of `ek` inside
+            /// `dk` (`t` and the seed), and the stored hash.
+            #[cfg(feature = "std")]
+            #[test]
+            fn the_scheduled_pairwise_test_refuses_each_corruption() {
+                for seed in 0..6u8 {
+                    let mut ek = [0u8; ENCAPS_KEY_LEN];
+                    let mut dk = [0u8; DECAPS_KEY_LEN];
+                    $name::keygen_deterministic(&bytes(seed), &bytes(seed + 100), &mut ek, &mut dk)
+                        .unwrap();
+                    $name::pairwise_consistency_streaming(&ek, &dk).unwrap();
+                    let h = $name::pairwise_consistency_lanes(&ek, &dk, true).unwrap();
+                    assert_eq!(h, $crate::scheme::h(&ek), "the hash it reports");
+
+                    // As key generation calls it, with the hash not yet stored.
+                    let hash_at = 384 * K + ENCAPS_KEY_LEN;
+                    let mut blank = dk;
+                    blank[hash_at..hash_at + 32].fill(0);
+                    assert_eq!(
+                        $name::pairwise_consistency_lanes(&ek, &blank, false).unwrap(),
+                        h
+                    );
+
+                    let dk_sites = [
+                        ("secret, first byte", 0),
+                        ("secret, last byte", 384 * K - 1),
+                        ("copy of ek: t", 384 * K + 7),
+                        ("copy of ek: seed", 384 * K + ENCAPS_KEY_LEN - 1),
+                        ("stored hash", hash_at + 3),
+                    ];
+                    for (what, at) in dk_sites {
+                        let mut bad = dk;
+                        bad[at] ^= 0x01;
+                        assert!(
+                            $name::pairwise_consistency_streaming(&ek, &bad).is_err(),
+                            "streaming accepted a flipped {what}"
+                        );
+                        assert!(
+                            $name::pairwise_consistency_lanes(&ek, &bad, true).is_err(),
+                            "scheduled accepted a flipped {what}"
+                        );
+                    }
+                    let ek_sites = [("t", 5), ("seed", ENCAPS_KEY_LEN - 1)];
+                    for (what, at) in ek_sites {
+                        let mut bad = ek;
+                        bad[at] ^= 0x01;
+                        assert!(
+                            $name::pairwise_consistency_streaming(&bad, &dk).is_err(),
+                            "streaming accepted a flipped ek {what}"
+                        );
+                        assert!(
+                            $name::pairwise_consistency_lanes(&bad, &dk, true).is_err(),
+                            "scheduled accepted a flipped ek {what}"
+                        );
+                        assert!(
+                            $name::pairwise_consistency_lanes(&bad, &blank, false).is_err(),
+                            "scheduled, as keygen calls it, accepted a flipped ek {what}"
+                        );
+                    }
+                }
+            }
+
             /// On a CPU with the vector permutation, the public functions take
             /// the scheduled form; say which, so a vector run is not silently
             /// testing the other.
@@ -1238,7 +1338,13 @@ macro_rules! ml_kem {
                 let mut z = [0u8; 32];
                 rng.fill(&mut d)?;
                 rng.fill(&mut z)?;
-                Self::keygen_inner(&d, &z, ek, dk);
+                // Where the pairwise test runs in lanes it also computes the
+                // stored `H(ek)`, in the same permutations as its own hashes.
+                #[cfg(feature = "std")]
+                let in_lanes = parallel();
+                #[cfg(not(feature = "std"))]
+                let in_lanes = false;
+                Self::keygen_body(&d, &z, ek, dk, !in_lanes);
                 d.zeroize();
                 z.zeroize();
                 // FIPS 140-3 requires a pairwise consistency test on a generated key
@@ -1246,11 +1352,30 @@ macro_rules! ml_kem {
                 // caller has to know to call.
                 // A failure means this module disagrees with itself, so it ends the
                 // module and not only this call.
-                let tested =
-                    ic_core::module::conditional_self_test(Self::pairwise_consistency(ek, dk));
+                let outcome = Self::generated_pair_test(ek, dk, in_lanes);
+                let tested = ic_core::module::conditional_self_test(outcome);
                 #[cfg(feature = "std")]
                 ic_core::stack_scrub::<{ $crate::scheme::stack_scrub_bytes($k, true) }>();
                 tested
+            }
+
+            /// The pairwise test for a pair `keygen` has just made, completing
+            /// `dk` first when `keygen_body` left `H(ek)` for the schedule to
+            /// compute.
+            fn generated_pair_test(
+                ek: &[u8; ENCAPS_KEY_LEN],
+                dk: &mut [u8; DECAPS_KEY_LEN],
+                in_lanes: bool,
+            ) -> Result<()> {
+                #[cfg(feature = "std")]
+                if in_lanes {
+                    let hash = Self::pairwise_consistency_lanes(ek, dk, false)?;
+                    dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32]
+                        .copy_from_slice(&hash);
+                    return Ok(());
+                }
+                let _ = in_lanes;
+                Self::pairwise_consistency(ek, dk)
             }
 
             /// The pairwise consistency test for a generated key pair.
@@ -1269,6 +1394,18 @@ macro_rules! ml_kem {
             /// RNG. That keeps the test deterministic, costs no entropy, and means a
             /// failure reproduces.
             fn pairwise_consistency(
+                ek: &[u8; ENCAPS_KEY_LEN],
+                dk: &[u8; DECAPS_KEY_LEN],
+            ) -> Result<()> {
+                #[cfg(feature = "std")]
+                if parallel() {
+                    return Self::pairwise_consistency_lanes(ek, dk, true).map(|_| ());
+                }
+                Self::pairwise_consistency_streaming(ek, dk)
+            }
+
+            /// [`Self::pairwise_consistency`], one Keccak call at a time.
+            fn pairwise_consistency_streaming(
                 ek: &[u8; ENCAPS_KEY_LEN],
                 dk: &[u8; DECAPS_KEY_LEN],
             ) -> Result<()> {
@@ -1294,6 +1431,105 @@ macro_rules! ml_kem {
                     "ml-kem key pair failed its pairwise consistency test; the key is withheld"
                 );
                 Ok(())
+            }
+
+            /// [`Self::pairwise_consistency`] with every Keccak call that does
+            /// not wait for the ciphertext run in one schedule.
+            ///
+            /// What is computed is what the streaming form computes: `ek`
+            /// encapsulated to with the message `H(ek)`, the ciphertext
+            /// decapsulated with `dk`, the two secrets compared, and the hash
+            /// check of FIPS 203 section 7.3 on the way. What differs is the
+            /// order and the sharing.
+            ///
+            /// * Three Keccak calls that only need `ek` go into one schedule
+            ///   with `A^T`: `H(ek)` as key generation will store it,
+            ///   `H(ek)` for the encapsulation, and `H` of the copy of `ek`
+            ///   inside `dk` for the decapsulation's hash check. They are
+            ///   three lanes with their own states, compared with one
+            ///   another and with the copy in `dk`; a hash chain nine
+            ///   permutations long made the three cost in series.
+            /// * `A^T` is expanded once, from `ek`'s seed, and used by the
+            ///   encryption and by the decapsulation's re-encryption. The
+            ///   matrix key generation used is not shared with it: this
+            ///   one is a fresh expansion from the bytes of `ek`. The test
+            ///   still fails if key generation's matrix differed from it,
+            ///   because the decryption step forms `v - s^T u` from `t`
+            ///   (key generation's `A s + e`) and `u` (this matrix), and the
+            ///   two cancel only if the matrices agree. A fault in this
+            ///   expansion shows the same way. The seed of the copy in `dk`
+            ///   is covered by its hash.
+            /// * The decapsulation re-encrypts from the copy of `ek` inside
+            ///   `dk` and decrypts with `dk`'s secret, as the public
+            ///   `decapsulate` does, and skips only `J(z || c)`, which
+            ///   nothing in the comparison reads: the key it would select is
+            ///   never the one compared, and `z` is a seed key generation
+            ///   drew and did not compute.
+            ///
+            /// `stored_in_dk` says whether `dk` already carries `H(ek)`:
+            /// true for a key being checked, false straight out of key
+            /// generation, which writes it after this returns. Returns the
+            /// hash the schedule computed for the stored copy.
+            #[cfg(feature = "std")]
+            #[inline(never)]
+            fn pairwise_consistency_lanes(
+                ek: &[u8; ENCAPS_KEY_LEN],
+                dk: &[u8; DECAPS_KEY_LEN],
+                stored_in_dk: bool,
+            ) -> Result<[u8; 32]> {
+                let mut hashes = [[0u8; 32]; 3];
+                let mut at = [Poly::ZERO; KK];
+                let ek_in_dk = &dk[384 * K..384 * K + ENCAPS_KEY_LEN];
+                fast::pairwise_matrices_and_hashes(ek, ek_in_dk, &mut hashes, &mut at);
+                let [h_stored, h_enc, h_dec] = hashes;
+                let in_dk: [u8; 32] = if stored_in_dk {
+                    let mut c = [0u8; 32];
+                    c.copy_from_slice(&dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32]);
+                    c
+                } else {
+                    h_stored
+                };
+                // The three computations of `H(ek)` and the copy in `dk`
+                // must all agree.
+                let hashes_agree = bool::from(ic_core::ct::eq(&h_stored, &in_dk))
+                    & bool::from(ic_core::ct::eq(&h_enc, &in_dk))
+                    & bool::from(ic_core::ct::eq(&h_dec, &in_dk));
+
+                // Encapsulation. The message is `H(ek)` as key generation
+                // stored it.
+                let m = h_stored;
+                let mut ct = [0u8; CIPHERTEXT_LEN];
+                let (mut k, mut r) = $crate::scheme::g(&[&m, &h_enc]);
+                let mut noise = [Poly::ZERO; 2 * K + 1];
+                fast::encryption_noise(&r, &mut noise);
+                fast::pke_encrypt(ek, &m, &at, &mut noise, &mut ct);
+                r.zeroize();
+
+                // Decapsulation, from `dk`'s secret and `ek`'s bytes.
+                let mut m2 = pke_decrypt(&dk[..384 * K], &ct);
+                let (mut k2, mut r2) = $crate::scheme::g(&[&m2, &in_dk]);
+                fast::encryption_noise(&r2, &mut noise);
+                let mut recomputed = [0u8; CIPHERTEXT_LEN];
+                fast::pke_encrypt(ek_in_dk, &m2, &at, &mut noise, &mut recomputed);
+                let mut received = [0u8; SHARED_SECRET_LEN];
+                Self::select_shared_secret(&ct, &recomputed, &k2, &[0u8; 32], &mut received);
+
+                let matched = ic_core::ct::verify(&k, &received) & hashes_agree;
+                recomputed.zeroize();
+                received.zeroize();
+                m2.zeroize();
+                k.zeroize();
+                k2.zeroize();
+                r2.zeroize();
+                for p in at.iter_mut() {
+                    p.zeroize();
+                }
+                ensure!(
+                    matched,
+                    SelfTestFailed,
+                    "ml-kem key pair failed its pairwise consistency test; the key is withheld"
+                );
+                Ok(h_stored)
             }
 
             /// Generate a key pair from explicit seeds.
@@ -1327,6 +1563,19 @@ macro_rules! ml_kem {
                 ek: &mut [u8; ENCAPS_KEY_LEN],
                 dk: &mut [u8; DECAPS_KEY_LEN],
             ) {
+                Self::keygen_body(d, z, ek, dk, true);
+            }
+
+            /// Key generation proper. `with_hash` false leaves `H(ek)` in
+            /// `dk` unwritten, for `keygen`'s pairwise test to supply.
+            #[inline(never)]
+            fn keygen_body(
+                d: &[u8; 32],
+                z: &[u8; 32],
+                ek: &mut [u8; ENCAPS_KEY_LEN],
+                dk: &mut [u8; DECAPS_KEY_LEN],
+                with_hash: bool,
+            ) {
                 #[cfg(feature = "std")]
                 if parallel() {
                     fast::pke_keygen(d, ek, &mut dk[..384 * K]);
@@ -1336,8 +1585,11 @@ macro_rules! ml_kem {
                 #[cfg(not(feature = "std"))]
                 pke_keygen(d, ek, &mut dk[..384 * K]);
                 dk[384 * K..384 * K + ENCAPS_KEY_LEN].copy_from_slice(ek);
-                let hash = $crate::scheme::h(ek);
-                dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32].copy_from_slice(&hash);
+                if with_hash {
+                    let hash = $crate::scheme::h(ek);
+                    dk[384 * K + ENCAPS_KEY_LEN..384 * K + ENCAPS_KEY_LEN + 32]
+                        .copy_from_slice(&hash);
+                }
                 dk[384 * K + ENCAPS_KEY_LEN + 32..].copy_from_slice(z);
             }
 
