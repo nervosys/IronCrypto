@@ -1364,8 +1364,11 @@ def over_ceiling(target, excused):
 
 def build_root():
     """Where the harness is built: under CARGO_TARGET_DIR, as everything
-    scripts/check.sh runs is, or the repository's own target/."""
-    return Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "ct-audit"
+    scripts/check.sh runs is, or the repository's own target/. Made
+    absolute: check.sh sets a relative `target` when none is given, and rustc,
+    which cargo starts in another directory, would resolve `--emit` against
+    that one instead."""
+    return Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target").resolve() / "ct-audit"
 
 
 def build_probe(target):
