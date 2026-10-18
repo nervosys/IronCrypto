@@ -82,9 +82,11 @@ Findings while writing them:
 Three small refactors made the units provable, with no change to behaviour:
 `normalize_coefficient` (the loop body of `normalize_portable`), `ntt_butterfly`
 (the body of the NTT inner loop, `inline(always)`), and `select_key` (the byte
-loop of `select_shared_secret`). `scripts/check-ct.py` and `ctgrind.sh`, which
-inspect the compiled code of ML-KEM, were not rerun for this change, so the
-constant-time gate has not been re-confirmed on the refactored functions.
+loop of `select_shared_secret`). Both constant-time gates were rerun after them on
+2026-10-17: `scripts/check-ct.py` passed on all five targets (131 probes on
+x86-64, at e8c593e), and `ctgrind.sh` reported the counts of
+[CTGRIND.md](CTGRIND.md) unchanged, ML-KEM's included (at dc690fc). The full
+Kani run at dc690fc verified all 63 harnesses.
 
 Not proved here, and what covers it:
 
