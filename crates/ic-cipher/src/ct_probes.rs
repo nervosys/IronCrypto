@@ -17,8 +17,8 @@ pub use gcm::*;
 #[cfg(target_arch = "x86_64")]
 pub use x86::*;
 
-/// The 128- and 256-bit AES-GCM loops (`gcm_x86_asm`) at AES-256, and the
-/// twist of a power of `H`. Each seal and open runs its loop over a fixed
+/// The 128-, 256- and 512-bit AES-GCM loops (`gcm_x86_asm`) at AES-256, and
+/// the twist of a power of `H`. Each seal and open runs its loop over a fixed
 /// count of groups; the loop's back edge is the only branch, and its counter
 /// is that count. What the library adds around them -- choosing the call by
 /// the message length -- branches only on lengths.
@@ -31,6 +31,16 @@ mod gcm {
     /// eight-block kernel's legacy-encoded memory operands require.
     #[repr(C, align(16))]
     pub struct Powers(pub [[u8; 16]; 16]);
+
+    /// Sixteen powers of `H` (or their Karatsuba factors) for the 512-bit
+    /// kernel, aligned to a cache line as its `zmm` loads are.
+    #[repr(C, align(64))]
+    pub struct ZmmPowers(pub [[u8; 16]; 16]);
+
+    /// Thirty-two powers of `H` (or their Karatsuba factors) for the 512-bit
+    /// kernel's thirty-two-block loop, aligned as [`ZmmPowers`].
+    #[repr(C, align(64))]
+    pub struct ZmmPowers32(pub [[u8; 16]; 32]);
 
     /// Three groups of eight blocks sealed: one alone, two stitched
     /// iterations, the last group hashed alone. `st` is the accumulator, then
@@ -181,6 +191,121 @@ mod gcm {
                 pk.0.as_ptr().cast(),
                 st.as_mut_ptr(),
             );
+        }
+    }
+
+    /// [`gcm_vaes256_seal`] on the 512-bit kernel: three groups of sixteen
+    /// blocks.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    pub unsafe fn gcm_vaes512_seal(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &ZmmPowers,
+        pk: &ZmmPowers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: the caller has the features. `data` is three 256-byte groups;
+        // `rk` is the 15 round keys of AES-256 with round key 14 last, so
+        // `rk_last` and `rounds` (14) are its; `pw` and `pk` are 256 bytes;
+        // `st` is 32.
+        unsafe {
+            k::zmm_groups::<true>(
+                data.as_mut_ptr(),
+                3,
+                rk.as_ptr().cast(),
+                rk.as_ptr().add(14).cast(),
+                14,
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
+        }
+    }
+
+    /// [`gcm_vaes256_open`] on the 512-bit kernel.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    pub unsafe fn gcm_vaes512_open(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &ZmmPowers,
+        pk: &ZmmPowers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as above.
+        unsafe {
+            k::zmm_groups::<false>(
+                data.as_mut_ptr(),
+                3,
+                rk.as_ptr().cast(),
+                rk.as_ptr().add(14).cast(),
+                14,
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
+        }
+    }
+
+    /// [`gcm_vaes512_seal`] on the thirty-two-block loop: two groups of
+    /// thirty-two blocks, `zmm32_groups`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    pub unsafe fn gcm_vaes512x32_seal(
+        data: &mut [u8; 1024],
+        rk: &[__m128i; 15],
+        pw: &ZmmPowers32,
+        pk: &ZmmPowers32,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: the caller has the features. `data` is two 512-byte groups;
+        // `rk` and the rounds are as in `gcm_vaes512_seal`; `pw` and `pk` are
+        // 512 bytes; `st` is 32.
+        unsafe {
+            k::zmm32_groups::<true>(
+                data.as_mut_ptr(),
+                2,
+                rk.as_ptr().cast(),
+                rk.as_ptr().add(14).cast(),
+                14,
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
+        }
+    }
+
+    /// [`gcm_vaes512x32_seal`] opening.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    pub unsafe fn gcm_vaes512x32_open(
+        data: &mut [u8; 1024],
+        rk: &[__m128i; 15],
+        pw: &ZmmPowers32,
+        pk: &ZmmPowers32,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: as above.
+        unsafe {
+            k::zmm32_groups::<false>(
+                data.as_mut_ptr(),
+                2,
+                rk.as_ptr().cast(),
+                rk.as_ptr().add(14).cast(),
+                14,
+                pw.0.as_ptr().cast(),
+                pk.0.as_ptr().cast(),
+                st.as_mut_ptr(),
+            )
         }
     }
 

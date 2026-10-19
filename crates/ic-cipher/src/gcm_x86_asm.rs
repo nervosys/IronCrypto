@@ -1,5 +1,5 @@
-//! The bulk loops of the 128- and 256-bit fused AES-GCM kernels, as inline
-//! assembly.
+//! The bulk loops of the 128-, 256- and 512-bit fused AES-GCM kernels, as
+//! inline assembly.
 //!
 //! [`crate::gcm_x86`] chooses a kernel and handles the AAD, the message tail,
 //! the length block and the tag; the whole groups in between come here, a
@@ -1003,5 +1003,752 @@ pub(crate) unsafe fn y16_open<const R: usize>(
             last = const R * 16,
             options(nostack),
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The 512-bit kernel: VAES and VPCLMULQDQ on zmm registers, sixteen blocks
+// per iteration in four registers.
+//
+// Unlike the 256-bit kernel, this cannot be built from one-instruction
+// wrappers: naming a `zmm` register as an `asm!` operand needs the `avx512f`
+// target feature, which Rust 1.87 does not have. So the whole loop over
+// 256-byte groups is one `asm!` block that names its registers itself --
+// `zmm0` to `zmm15` only, every one of them declared clobbered -- inside a
+// function that is never inlined and holds nothing else live. Its inputs and
+// outputs pass through memory: the counter and the GHASH accumulator in
+// `state`, and the constants below.
+//
+// The arithmetic is the 256-bit kernel's, widened: the same counter layout,
+// the same field arithmetic -- products by Karatsuba with twisted powers, see
+// `zmm_ghash!`, and the two-multiply reduction of `gcm_x86_asm::x8_reduce!`.
+
+/// Masks and increments for the 512-bit kernel, one 128-bit lane per block:
+/// the byte reversal, the counter-field reversal, `+4` in each lane's counter,
+/// and the lane offsets `0, 1, 2, 3`; then, at 256, the reduction's constant
+/// `x^-1` (as `gcm_x86_asm::CONSTS` holds it at 144).
+#[repr(C, align(64))]
+struct ZmmConsts([u8; 272]);
+
+static ZMM_CONSTS: ZmmConsts = ZmmConsts({
+    let mut c = [0u8; 272];
+    let mut lane = 0;
+    while lane < 4 {
+        let mut i = 0;
+        while i < 16 {
+            // Byte reversal.
+            c[lane * 16 + i] = (15 - i) as u8;
+            // Counter-field reversal: bytes 12..16 reversed, the rest kept.
+            c[64 + lane * 16 + i] = if i < 12 { i as u8 } else { (27 - i) as u8 };
+            i += 1;
+        }
+        // `+4` in the top 32-bit lane, little-endian.
+        c[128 + lane * 16 + 12] = 4;
+        // Lane `k` starts `k` counters on.
+        c[192 + lane * 16 + 12] = lane as u8;
+        lane += 1;
+    }
+    // `x^-1`, byte-reversed: the reduction's constant, as in `gcm_x86_asm`.
+    c[256] = 1;
+    c[256 + 15] = 0xc2;
+    c
+});
+
+/// One AES round, `$insn`, with the round key at `$addr`, on all four state
+/// registers.
+macro_rules! zmm_round {
+    ($insn:literal, $addr:literal) => {
+        concat!(
+            "vbroadcasti32x4 zmm4, xmmword ptr [",
+            $addr,
+            "]\n",
+            $insn,
+            " zmm0, zmm0, zmm4\n",
+            $insn,
+            " zmm1, zmm1, zmm4\n",
+            $insn,
+            " zmm2, zmm2, zmm4\n",
+            $insn,
+            " zmm3, zmm3, zmm4\n",
+        )
+    };
+}
+
+/// Sixteen counter blocks, encrypted, in `zmm0..zmm3`; the counter in `zmm10`
+/// advanced by sixteen.
+macro_rules! zmm_aes {
+    () => {
+        concat!(
+            "vpshufb zmm0, zmm10, zmm12\n",
+            "vpaddd zmm10, zmm10, zmm11\n",
+            "vpshufb zmm1, zmm10, zmm12\n",
+            "vpaddd zmm10, zmm10, zmm11\n",
+            "vpshufb zmm2, zmm10, zmm12\n",
+            "vpaddd zmm10, zmm10, zmm11\n",
+            "vpshufb zmm3, zmm10, zmm12\n",
+            "vpaddd zmm10, zmm10, zmm11\n",
+            "vbroadcasti32x4 zmm4, xmmword ptr [{rk}]\n",
+            "vpxorq zmm0, zmm0, zmm4\n",
+            "vpxorq zmm1, zmm1, zmm4\n",
+            "vpxorq zmm2, zmm2, zmm4\n",
+            "vpxorq zmm3, zmm3, zmm4\n",
+            zmm_round!("vaesenc", "{rk} + 16"),
+            zmm_round!("vaesenc", "{rk} + 32"),
+            zmm_round!("vaesenc", "{rk} + 48"),
+            zmm_round!("vaesenc", "{rk} + 64"),
+            zmm_round!("vaesenc", "{rk} + 80"),
+            zmm_round!("vaesenc", "{rk} + 96"),
+            zmm_round!("vaesenc", "{rk} + 112"),
+            zmm_round!("vaesenc", "{rk} + 128"),
+            zmm_round!("vaesenc", "{rk} + 144"),
+            // AES-128 has ten rounds and is done; AES-192 two more, AES-256
+            // four. The branch is on the key size, which is public.
+            "cmp {rounds}, 10\n",
+            "je 3f\n",
+            zmm_round!("vaesenc", "{rk} + 160"),
+            zmm_round!("vaesenc", "{rk} + 176"),
+            "cmp {rounds}, 12\n",
+            "je 3f\n",
+            zmm_round!("vaesenc", "{rk} + 192"),
+            zmm_round!("vaesenc", "{rk} + 208"),
+            "3:\n",
+            zmm_round!("vaesenclast", "{rkl}"),
+        )
+    };
+}
+
+/// XOR the keystream in `zmm0..zmm3` into the group at `{p}`, in place.
+macro_rules! zmm_xor_store {
+    () => {
+        concat!(
+            "vpxorq zmm0, zmm0, zmmword ptr [{p}]\n",
+            "vpxorq zmm1, zmm1, zmmword ptr [{p} + 64]\n",
+            "vpxorq zmm2, zmm2, zmmword ptr [{p} + 128]\n",
+            "vpxorq zmm3, zmm3, zmmword ptr [{p} + 192]\n",
+            "vmovdqu64 zmmword ptr [{p}], zmm0\n",
+            "vmovdqu64 zmmword ptr [{p} + 64], zmm1\n",
+            "vmovdqu64 zmmword ptr [{p} + 128], zmm2\n",
+            "vmovdqu64 zmmword ptr [{p} + 192], zmm3\n",
+        )
+    };
+}
+
+/// Byte-reverse four blocks into `zmm5`: from a register (`reg`), or loaded
+/// from `{p}` at an offset (`mem`).
+macro_rules! zmm_load {
+    (reg $src:literal) => {
+        concat!("vpshufb zmm5, ", $src, ", zmm13\n")
+    };
+    (mem $off:literal) => {
+        concat!(
+            "vmovdqu64 zmm5, zmmword ptr [{p} + ",
+            $off,
+            "]\n",
+            "vpshufb zmm5, zmm5, zmm13\n",
+        )
+    };
+}
+
+/// GHASH over sixteen blocks, the four groups of four loaded by `$l0..$l3`,
+/// into the accumulator `xmm9`.
+///
+/// Two things keep the accumulator's dependency chain short, which is what
+/// bounds this loop: the carry-less multiplier issues once every two cycles
+/// whatever the width, with five cycles of latency, so a chain through it is
+/// expensive and the sixteen independent products are not.
+///
+/// - The sixteen block products do not involve the accumulator at all. `Y`
+///   enters as its own product, `Y*H^16`, in 128-bit registers, added after
+///   the lanes are summed: `(Y ^ X0)*H^16 = Y*H^16 ^ X0*H^16`. So the chain
+///   from one group's `Y` to the next is three multiplies and the reduction,
+///   and everything else overlaps it.
+/// - Each product is Karatsuba's: `lo = a0*b0`, `hi = a1*b1`, and
+///   `(a0^a1)*(b0^b1)`, from which the middle term is recovered as that
+///   XOR `lo ^ hi` once, after the sums. Three multiplies a block, not four.
+///   `kara` at `{pk}` holds `b0^b1` for each power.
+/// - The powers are twisted ([`twist`]), so the sums are the product in place
+///   and the reduction is two more multiplies, as in
+///   `gcm_x86_asm::x8_reduce!`, rather than `clmul::reduce`'s shifts: nine
+///   percent off the 512-bit loop's time per byte, measured.
+///
+/// `zmm6`/`zmm7`/`zmm8` collect lo, Karatsuba middle, and hi.
+macro_rules! zmm_ghash {
+    ($l0:expr, $l1:expr, $l2:expr, $l3:expr) => {
+        concat!(
+            // Blocks 0..4 times H^16..H^13.
+            $l0,
+            "vpshufd zmm4, zmm5, 0x4e\n",
+            "vpxorq zmm4, zmm4, zmm5\n",
+            "vpclmulqdq zmm6, zmm5, zmmword ptr [{pw}], 0x00\n",
+            "vpclmulqdq zmm8, zmm5, zmmword ptr [{pw}], 0x11\n",
+            "vpclmulqdq zmm7, zmm4, zmmword ptr [{pk}], 0x00\n",
+            $l1,
+            zmm_mul_acc!("64"),
+            $l2,
+            zmm_mul_acc!("128"),
+            $l3,
+            zmm_mul_acc!("192"),
+            // Sum the four lanes of each of lo, mid, hi.
+            "vextracti64x4 ymm14, zmm6, 1\n",
+            "vpxor ymm6, ymm6, ymm14\n",
+            "vextracti128 xmm14, ymm6, 1\n",
+            "vpxor xmm6, xmm6, xmm14\n",
+            "vextracti64x4 ymm14, zmm7, 1\n",
+            "vpxor ymm7, ymm7, ymm14\n",
+            "vextracti128 xmm14, ymm7, 1\n",
+            "vpxor xmm7, xmm7, xmm14\n",
+            "vextracti64x4 ymm14, zmm8, 1\n",
+            "vpxor ymm8, ymm8, ymm14\n",
+            "vextracti128 xmm14, ymm8, 1\n",
+            "vpxor xmm8, xmm8, xmm14\n",
+            // Y*H^16, Karatsuba too, added in.
+            "vpshufd xmm4, xmm9, 0x4e\n",
+            "vpxor xmm4, xmm4, xmm9\n",
+            "vpclmulqdq xmm14, xmm9, xmmword ptr [{pw}], 0x00\n",
+            "vpclmulqdq xmm15, xmm9, xmmword ptr [{pw}], 0x11\n",
+            "vpclmulqdq xmm4, xmm4, xmmword ptr [{pk}], 0x00\n",
+            "vpxor xmm6, xmm6, xmm14\n",
+            "vpxor xmm8, xmm8, xmm15\n",
+            "vpxor xmm7, xmm7, xmm4\n",
+            // The true middle term: Karatsuba's, minus lo and hi.
+            "vpxor xmm7, xmm7, xmm6\n",
+            "vpxor xmm7, xmm7, xmm8\n",
+            // lo ^= mid << 64; hi ^= mid >> 64; then the two folds of
+            // `gcm_x86_asm::x8_reduce!`, the powers being twisted.
+            "vpslldq xmm14, xmm7, 8\n",
+            "vpxor xmm6, xmm6, xmm14\n",
+            "vpsrldq xmm14, xmm7, 8\n",
+            "vpxor xmm8, xmm8, xmm14\n",
+            "vpclmulqdq xmm14, xmm6, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm6, xmm6, 0x4e\n",
+            "vpxor xmm6, xmm6, xmm14\n",
+            "vpclmulqdq xmm14, xmm6, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm6, xmm6, 0x4e\n",
+            "vpxor xmm6, xmm6, xmm8\n",
+            "vpxor xmm9, xmm6, xmm14\n",
+        )
+    };
+}
+
+/// Four blocks in `zmm5` times the four powers at `{pw} + $off`, Karatsuba,
+/// added into the unreduced sums.
+macro_rules! zmm_mul_acc {
+    ($off:literal) => {
+        concat!(
+            "vpshufd zmm4, zmm5, 0x4e\n",
+            "vpxorq zmm4, zmm4, zmm5\n",
+            "vpclmulqdq zmm14, zmm5, zmmword ptr [{pw} + ",
+            $off,
+            "], 0x00\n",
+            "vpclmulqdq zmm15, zmm5, zmmword ptr [{pw} + ",
+            $off,
+            "], 0x11\n",
+            "vpclmulqdq zmm4, zmm4, zmmword ptr [{pk} + ",
+            $off,
+            "], 0x00\n",
+            // zmm6 ^= lo, zmm8 ^= hi, zmm7 ^= middle.
+            "vpxorq zmm6, zmm6, zmm14\n",
+            "vpxorq zmm8, zmm8, zmm15\n",
+            "vpxorq zmm7, zmm7, zmm4\n",
+        )
+    };
+}
+
+/// The loop over `groups` 256-byte groups at `p`, sealing (`ENC`) or opening.
+///
+/// `state` is the GHASH accumulator (byte-reversed) followed by the counter
+/// (in [`crate::gcm_x86::Counter`]'s form); both are read on entry and written back on exit.
+///
+/// # Safety
+///
+/// - The CPU must have AVX-512F, AVX-512BW, VAES and VPCLMULQDQ: a
+///   [`crate::gcm_x86::Wide512`] token's guarantee.
+/// - `p` must point to `groups * 256` readable and writable bytes, and
+///   `groups` must be at least one.
+/// - `rk` must point to the 15 round keys of an AES-NI schedule with `rounds`
+///   rounds (10, 12 or 14), and `rk_last` to round key `rounds`.
+/// - `pw` and `pk` must point to [`crate::gcm_x86::HashKey::twisted`] and [`crate::gcm_x86::HashKey::kara`],
+///   256 bytes each; `state` to 32 readable and writable bytes.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn zmm_groups<const ENC: bool>(
+    p: *mut u8,
+    groups: usize,
+    rk: *const u8,
+    rk_last: *const u8,
+    rounds: usize,
+    pw: *const u8,
+    pk: *const u8,
+    state: *mut u8,
+) {
+    debug_assert!(groups > 0);
+    // SAFETY: the caller upholds the contract above, which is every memory
+    // access the block makes: the groups at `p`, the round keys, the powers,
+    // `state`, and the static constants. It uses `zmm0`..`zmm15` only, and
+    // declares all sixteen clobbered (an `xmm` clobber covers the whole
+    // `ymm`/`zmm` register), so on Windows the callee-saved `xmm6`..`xmm15`
+    // are preserved by this function's prologue. It ends with `vzeroall`,
+    // which zeroes all of `zmm0`..`zmm15` -- the round keys, keystream and
+    // GHASH state -- as well as doing `vzeroupper`'s job (hardening; see
+    // `docs/CONSTANT_TIME.md`). It touches no stack. `zmm16`..`zmm31` and the mask registers are not
+    // used, and this function is never inlined, so no caller value can be
+    // live in them across it.
+    unsafe {
+        if ENC {
+            asm!(
+                "vmovdqu64 zmm13, zmmword ptr [{c}]",
+                "vmovdqu64 zmm12, zmmword ptr [{c} + 64]",
+                "vmovdqu64 zmm11, zmmword ptr [{c} + 128]",
+                "vbroadcasti32x4 zmm10, xmmword ptr [{st} + 16]",
+                "vpaddd zmm10, zmm10, zmmword ptr [{c} + 192]",
+                "vmovdqu xmm9, xmmword ptr [{st}]",
+                "2:",
+                zmm_aes!(),
+                zmm_xor_store!(),
+                // Sealing: GHASH the ciphertext, still in zmm0..zmm3.
+                zmm_ghash!(
+                    zmm_load!(reg "zmm0"),
+                    zmm_load!(reg "zmm1"),
+                    zmm_load!(reg "zmm2"),
+                    zmm_load!(reg "zmm3")
+                ),
+                "add {p}, 256",
+                "dec {n}",
+                "jnz 2b",
+                "vmovdqu xmmword ptr [{st}], xmm9",
+                "vmovdqu xmmword ptr [{st} + 16], xmm10",
+                "vzeroall",
+                p = inout(reg) p => _,
+                n = inout(reg) groups => _,
+                rk = in(reg) rk,
+                rkl = in(reg) rk_last,
+                rounds = in(reg) rounds,
+                pw = in(reg) pw,
+                pk = in(reg) pk,
+                st = in(reg) state,
+                c = in(reg) ZMM_CONSTS.0.as_ptr(),
+                out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,
+                out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+                out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _,
+                out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
+                options(nostack),
+            );
+        } else {
+            asm!(
+                "vmovdqu64 zmm13, zmmword ptr [{c}]",
+                "vmovdqu64 zmm12, zmmword ptr [{c} + 64]",
+                "vmovdqu64 zmm11, zmmword ptr [{c} + 128]",
+                "vbroadcasti32x4 zmm10, xmmword ptr [{st} + 16]",
+                "vpaddd zmm10, zmm10, zmmword ptr [{c} + 192]",
+                "vmovdqu xmm9, xmmword ptr [{st}]",
+                "2:",
+                // Opening: GHASH the ciphertext before it is overwritten.
+                zmm_ghash!(
+                    zmm_load!(mem "0"),
+                    zmm_load!(mem "64"),
+                    zmm_load!(mem "128"),
+                    zmm_load!(mem "192")
+                ),
+                zmm_aes!(),
+                zmm_xor_store!(),
+                "add {p}, 256",
+                "dec {n}",
+                "jnz 2b",
+                "vmovdqu xmmword ptr [{st}], xmm9",
+                "vmovdqu xmmword ptr [{st} + 16], xmm10",
+                "vzeroall",
+                p = inout(reg) p => _,
+                n = inout(reg) groups => _,
+                rk = in(reg) rk,
+                rkl = in(reg) rk_last,
+                rounds = in(reg) rounds,
+                pw = in(reg) pw,
+                pk = in(reg) pk,
+                st = in(reg) state,
+                c = in(reg) ZMM_CONSTS.0.as_ptr(),
+                out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,
+                out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+                out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _,
+                out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
+                options(nostack),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The 512-bit kernel's main loop: thirty-two blocks per iteration, in eight
+// registers, with GHASH stitched between the AES rounds.
+//
+// Why thirty-two, and why stitched. On the CPU this was measured on (Zen 5),
+// `VAESENC` issues twice a cycle with four cycles of latency, and
+// `VPCLMULQDQ` once every two cycles, whatever the width, with five. Four
+// registers of AES -- the sixteen-block loop above -- are four dependency
+// chains, so AES runs at half rate on its own; and when each group's GHASH
+// waits for that group's ciphertext, the two never overlap and their times
+// add. Eight chains keep AES at full rate, and hashing the *previous* group's
+// ciphertext, which is already in memory, between this group's rounds gives
+// the multiplier independent work for the whole of them.
+//
+// Register use: `zmm0..zmm7` the AES states, `zmm8` the round key (and the
+// counter before the rounds start), `zmm9` the accumulator `Y` (lane 0),
+// `zmm10..zmm12` the unreduced lo / Karatsuba middle / hi, `zmm13..zmm15`
+// GHASH temporaries. The masks and increments are memory operands.
+
+/// The thirty-two counter blocks of this iteration into `zmm0..zmm7`, and the
+/// counter at `{st} + 16` advanced past them.
+macro_rules! z32_ctr {
+    () => {
+        concat!(
+            "vbroadcasti32x4 zmm8, xmmword ptr [{st} + 16]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 192]\n",
+            "vpshufb zmm0, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            "vpshufb zmm1, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            "vpshufb zmm2, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            "vpshufb zmm3, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            "vpshufb zmm4, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            "vpshufb zmm5, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            "vpshufb zmm6, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            "vpshufb zmm7, zmm8, zmmword ptr [{c} + 64]\n",
+            "vpaddd zmm8, zmm8, zmmword ptr [{c} + 128]\n",
+            // Lane 0 is now the counter thirty-two on.
+            "vmovdqu xmmword ptr [{st} + 16], xmm8\n",
+            "vbroadcasti32x4 zmm8, xmmword ptr [{rk}]\n",
+            "vpxorq zmm0, zmm0, zmm8\n",
+            "vpxorq zmm1, zmm1, zmm8\n",
+            "vpxorq zmm2, zmm2, zmm8\n",
+            "vpxorq zmm3, zmm3, zmm8\n",
+            "vpxorq zmm4, zmm4, zmm8\n",
+            "vpxorq zmm5, zmm5, zmm8\n",
+            "vpxorq zmm6, zmm6, zmm8\n",
+            "vpxorq zmm7, zmm7, zmm8\n",
+        )
+    };
+}
+
+/// One AES round, `$insn`, with the round key at `$addr`, on all eight state
+/// registers.
+macro_rules! z32_round {
+    ($insn:literal, $addr:literal) => {
+        concat!(
+            "vbroadcasti32x4 zmm8, xmmword ptr [",
+            $addr,
+            "]\n",
+            $insn,
+            " zmm0, zmm0, zmm8\n",
+            $insn,
+            " zmm1, zmm1, zmm8\n",
+            $insn,
+            " zmm2, zmm2, zmm8\n",
+            $insn,
+            " zmm3, zmm3, zmm8\n",
+            $insn,
+            " zmm4, zmm4, zmm8\n",
+            $insn,
+            " zmm5, zmm5, zmm8\n",
+            $insn,
+            " zmm6, zmm6, zmm8\n",
+            $insn,
+            " zmm7, zmm7, zmm8\n",
+        )
+    };
+}
+
+/// Rounds 10 to the last, which depend on the key size. The branch is on the
+/// key size, which is public.
+macro_rules! z32_last_rounds {
+    () => {
+        concat!(
+            "cmp {rounds}, 10\n",
+            "je 3f\n",
+            z32_round!("vaesenc", "{rk} + 160"),
+            z32_round!("vaesenc", "{rk} + 176"),
+            "cmp {rounds}, 12\n",
+            "je 3f\n",
+            z32_round!("vaesenc", "{rk} + 192"),
+            z32_round!("vaesenc", "{rk} + 208"),
+            "3:\n",
+            z32_round!("vaesenclast", "{rkl}"),
+        )
+    };
+}
+
+/// XOR the keystream in `zmm0..zmm7` into the 512 bytes at `{p}`, in place.
+macro_rules! z32_xor_store {
+    () => {
+        concat!(
+            "vpxorq zmm0, zmm0, zmmword ptr [{p}]\n",
+            "vpxorq zmm1, zmm1, zmmword ptr [{p} + 64]\n",
+            "vpxorq zmm2, zmm2, zmmword ptr [{p} + 128]\n",
+            "vpxorq zmm3, zmm3, zmmword ptr [{p} + 192]\n",
+            "vpxorq zmm4, zmm4, zmmword ptr [{p} + 256]\n",
+            "vpxorq zmm5, zmm5, zmmword ptr [{p} + 320]\n",
+            "vpxorq zmm6, zmm6, zmmword ptr [{p} + 384]\n",
+            "vpxorq zmm7, zmm7, zmmword ptr [{p} + 448]\n",
+            "vmovdqu64 zmmword ptr [{p}], zmm0\n",
+            "vmovdqu64 zmmword ptr [{p} + 64], zmm1\n",
+            "vmovdqu64 zmmword ptr [{p} + 128], zmm2\n",
+            "vmovdqu64 zmmword ptr [{p} + 192], zmm3\n",
+            "vmovdqu64 zmmword ptr [{p} + 256], zmm4\n",
+            "vmovdqu64 zmmword ptr [{p} + 320], zmm5\n",
+            "vmovdqu64 zmmword ptr [{p} + 384], zmm6\n",
+            "vmovdqu64 zmmword ptr [{p} + 448], zmm7\n",
+        )
+    };
+}
+
+/// GHASH step `k` of eight: the four blocks at `[$src + $off]`, times the four
+/// powers at `{pw} + $off` (Karatsuba, `{pk}`), added into the sums. `first`
+/// starts the sums instead of adding to them.
+macro_rules! z32_gstep {
+    (first, $src:literal) => {
+        concat!(
+            "vmovdqu64 zmm13, zmmword ptr [",
+            $src,
+            "]\n",
+            "vpshufb zmm13, zmm13, zmmword ptr [{c}]\n",
+            "vpshufd zmm14, zmm13, 0x4e\n",
+            "vpxorq zmm14, zmm14, zmm13\n",
+            "vpclmulqdq zmm10, zmm13, zmmword ptr [{pw}], 0x00\n",
+            "vpclmulqdq zmm12, zmm13, zmmword ptr [{pw}], 0x11\n",
+            "vpclmulqdq zmm11, zmm14, zmmword ptr [{pk}], 0x00\n",
+        )
+    };
+    ($src:literal, $off:literal) => {
+        concat!(
+            "vmovdqu64 zmm13, zmmword ptr [",
+            $src,
+            " + ",
+            $off,
+            "]\n",
+            "vpshufb zmm13, zmm13, zmmword ptr [{c}]\n",
+            "vpshufd zmm14, zmm13, 0x4e\n",
+            "vpxorq zmm14, zmm14, zmm13\n",
+            "vpclmulqdq zmm15, zmm13, zmmword ptr [{pw} + ",
+            $off,
+            "], 0x00\n",
+            "vpxorq zmm10, zmm10, zmm15\n",
+            "vpclmulqdq zmm15, zmm13, zmmword ptr [{pw} + ",
+            $off,
+            "], 0x11\n",
+            "vpxorq zmm12, zmm12, zmm15\n",
+            "vpclmulqdq zmm15, zmm14, zmmword ptr [{pk} + ",
+            $off,
+            "], 0x00\n",
+            "vpxorq zmm11, zmm11, zmm15\n",
+        )
+    };
+}
+
+/// Sum the lanes, add `Y*H^32`, recover the middle term, and reduce into
+/// `xmm9`: the same steps as `zmm_ghash!`'s, on `xmm10..xmm12`.
+macro_rules! z32_reduce {
+    () => {
+        concat!(
+            "vextracti64x4 ymm13, zmm10, 1\n",
+            "vpxor ymm10, ymm10, ymm13\n",
+            "vextracti128 xmm13, ymm10, 1\n",
+            "vpxor xmm10, xmm10, xmm13\n",
+            "vextracti64x4 ymm13, zmm11, 1\n",
+            "vpxor ymm11, ymm11, ymm13\n",
+            "vextracti128 xmm13, ymm11, 1\n",
+            "vpxor xmm11, xmm11, xmm13\n",
+            "vextracti64x4 ymm13, zmm12, 1\n",
+            "vpxor ymm12, ymm12, ymm13\n",
+            "vextracti128 xmm13, ymm12, 1\n",
+            "vpxor xmm12, xmm12, xmm13\n",
+            // Y*H^32, Karatsuba.
+            "vpshufd xmm13, xmm9, 0x4e\n",
+            "vpxor xmm13, xmm13, xmm9\n",
+            "vpclmulqdq xmm14, xmm9, xmmword ptr [{pw}], 0x00\n",
+            "vpclmulqdq xmm15, xmm9, xmmword ptr [{pw}], 0x11\n",
+            "vpclmulqdq xmm13, xmm13, xmmword ptr [{pk}], 0x00\n",
+            "vpxor xmm10, xmm10, xmm14\n",
+            "vpxor xmm12, xmm12, xmm15\n",
+            "vpxor xmm11, xmm11, xmm13\n",
+            "vpxor xmm11, xmm11, xmm10\n",
+            "vpxor xmm11, xmm11, xmm12\n",
+            // lo ^= mid << 64; hi ^= mid >> 64; then the two folds.
+            "vpslldq xmm14, xmm11, 8\n",
+            "vpxor xmm10, xmm10, xmm14\n",
+            "vpsrldq xmm14, xmm11, 8\n",
+            "vpxor xmm12, xmm12, xmm14\n",
+            "vpclmulqdq xmm14, xmm10, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm10, xmm10, 0x4e\n",
+            "vpxor xmm10, xmm10, xmm14\n",
+            "vpclmulqdq xmm14, xmm10, xmmword ptr [{c} + 256], 0x10\n",
+            "vpshufd xmm10, xmm10, 0x4e\n",
+            "vpxor xmm10, xmm10, xmm12\n",
+            "vpxor xmm9, xmm10, xmm14\n",
+        )
+    };
+}
+
+/// AES on this iteration's thirty-two counters, with GHASH over the 512
+/// bytes at `$src` stitched between rounds 1 to 9; then the keystream XORed
+/// in at `{p}`.
+macro_rules! z32_stitched {
+    ($src:literal) => {
+        concat!(
+            z32_ctr!(),
+            z32_round!("vaesenc", "{rk} + 16"),
+            z32_gstep!(first, $src),
+            z32_round!("vaesenc", "{rk} + 32"),
+            z32_gstep!($src, "64"),
+            z32_round!("vaesenc", "{rk} + 48"),
+            z32_gstep!($src, "128"),
+            z32_round!("vaesenc", "{rk} + 64"),
+            z32_gstep!($src, "192"),
+            z32_round!("vaesenc", "{rk} + 80"),
+            z32_gstep!($src, "256"),
+            z32_round!("vaesenc", "{rk} + 96"),
+            z32_gstep!($src, "320"),
+            z32_round!("vaesenc", "{rk} + 112"),
+            z32_gstep!($src, "384"),
+            z32_round!("vaesenc", "{rk} + 128"),
+            z32_gstep!($src, "448"),
+            z32_round!("vaesenc", "{rk} + 144"),
+            z32_reduce!(),
+            z32_last_rounds!(),
+            z32_xor_store!(),
+        )
+    };
+}
+
+/// AES alone on this iteration's counters, and the XOR at `{p}`.
+macro_rules! z32_aes_only {
+    () => {
+        concat!(
+            z32_ctr!(),
+            z32_round!("vaesenc", "{rk} + 16"),
+            z32_round!("vaesenc", "{rk} + 32"),
+            z32_round!("vaesenc", "{rk} + 48"),
+            z32_round!("vaesenc", "{rk} + 64"),
+            z32_round!("vaesenc", "{rk} + 80"),
+            z32_round!("vaesenc", "{rk} + 96"),
+            z32_round!("vaesenc", "{rk} + 112"),
+            z32_round!("vaesenc", "{rk} + 128"),
+            z32_round!("vaesenc", "{rk} + 144"),
+            z32_last_rounds!(),
+            z32_xor_store!(),
+        )
+    };
+}
+
+/// GHASH alone over the 512 bytes at `$src`.
+macro_rules! z32_ghash_only {
+    ($src:literal) => {
+        concat!(
+            z32_gstep!(first, $src),
+            z32_gstep!($src, "64"),
+            z32_gstep!($src, "128"),
+            z32_gstep!($src, "192"),
+            z32_gstep!($src, "256"),
+            z32_gstep!($src, "320"),
+            z32_gstep!($src, "384"),
+            z32_gstep!($src, "448"),
+            z32_reduce!(),
+        )
+    };
+}
+
+/// The loop over `groups` 512-byte groups at `p`, sealing (`ENC`) or opening.
+///
+/// Sealing, GHASH needs the ciphertext, so the first group is encrypted
+/// alone, each later iteration hashes the group before it while encrypting
+/// its own, and the last group is hashed after the loop. Opening, each
+/// iteration hashes the group it is about to decrypt; the hash reads it
+/// before the store at the end of the iteration overwrites it.
+///
+/// `state` is as for [`zmm_groups`]: the accumulator, then the counter.
+///
+/// # Safety
+///
+/// As [`zmm_groups`], with `p` pointing to `groups * 512` bytes, and `pw`
+/// and `pk` to all 32 entries (512 bytes) of [`crate::gcm_x86::HashKey::twisted`] and
+/// [`crate::gcm_x86::HashKey::kara`].
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn zmm32_groups<const ENC: bool>(
+    p: *mut u8,
+    groups: usize,
+    rk: *const u8,
+    rk_last: *const u8,
+    rounds: usize,
+    pw: *const u8,
+    pk: *const u8,
+    state: *mut u8,
+) {
+    debug_assert!(groups > 0);
+    // SAFETY: as for `zmm_groups`: every memory access is within the regions
+    // the caller vouches for (sealing also reads the group before `{p}`,
+    // which it has just written, never before the first); `zmm0`..`zmm15`
+    // only, all declared clobbered; no stack; `vzeroall` at the end; never
+    // inlined.
+    unsafe {
+        if ENC {
+            asm!(
+                "vmovdqu xmm9, xmmword ptr [{st}]",
+                z32_aes_only!(),
+                "add {p}, 512",
+                "dec {n}",
+                "jz 4f",
+                "2:",
+                z32_stitched!("{p} - 512"),
+                "add {p}, 512",
+                "dec {n}",
+                "jnz 2b",
+                "4:",
+                z32_ghash_only!("{p} - 512"),
+                "vmovdqu xmmword ptr [{st}], xmm9",
+                "vzeroall",
+                p = inout(reg) p => _,
+                n = inout(reg) groups => _,
+                rk = in(reg) rk,
+                rkl = in(reg) rk_last,
+                rounds = in(reg) rounds,
+                pw = in(reg) pw,
+                pk = in(reg) pk,
+                st = in(reg) state,
+                c = in(reg) ZMM_CONSTS.0.as_ptr(),
+                out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,
+                out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+                out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _,
+                out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
+                options(nostack),
+            );
+        } else {
+            asm!(
+                "vmovdqu xmm9, xmmword ptr [{st}]",
+                "2:",
+                z32_stitched!("{p}"),
+                "add {p}, 512",
+                "dec {n}",
+                "jnz 2b",
+                "vmovdqu xmmword ptr [{st}], xmm9",
+                "vzeroall",
+                p = inout(reg) p => _,
+                n = inout(reg) groups => _,
+                rk = in(reg) rk,
+                rkl = in(reg) rk_last,
+                rounds = in(reg) rounds,
+                pw = in(reg) pw,
+                pk = in(reg) pk,
+                st = in(reg) state,
+                c = in(reg) ZMM_CONSTS.0.as_ptr(),
+                out("xmm0") _, out("xmm1") _, out("xmm2") _, out("xmm3") _,
+                out("xmm4") _, out("xmm5") _, out("xmm6") _, out("xmm7") _,
+                out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _,
+                out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
+                options(nostack),
+            );
+        }
     }
 }

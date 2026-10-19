@@ -404,6 +404,103 @@ class X86LoopTests(unittest.TestCase):
         self.assertEqual(excused[(self.ADX, "counter loop")], 1)
 
 
+class RoundCountDispatchTests(unittest.TestCase):
+    """The round-count dispatch rule: a `je` or `jne` straight after
+    `cmp $10` or `cmp $12` on a register is excused in the four 512-bit
+    AES-GCM probes listed under it, and nowhere else."""
+
+    X86 = "x86_64-unknown-linux-gnu"
+    PROBE = "ct_gcm_vaes512_seal"   # ceiling: round-count dispatch 2
+    ADX = "ct_rsa_adx_mont_mul_2048"
+
+    def run_on(self, lines, probe):
+        return X86LoopTests.run_on(self, lines, probe)
+
+    def test_a_dispatch_on_10_or_12_rounds_is_excused(self):
+        for lines in (["cmpq $10, %r11", "je .LBB0_1", ".LBB0_1:", "retq"],
+                      ["cmpq $12, %r11", "jne .LBB0_1", ".LBB0_1:", "retq"],
+                      ["cmpl $10, %ebx", "je .LBB0_1", ".LBB0_1:", "retq"]):
+            with self.subTest(lines[0]):
+                failures, excused = self.run_on(lines, self.PROBE)
+                self.assertEqual(failures, [])
+                self.assertEqual(excused, collections.Counter(
+                    {(self.PROBE, "round-count dispatch"): 1}))
+
+    def test_another_count_is_not_excused(self):
+        failures, excused = self.run_on(
+            ["cmpq $11, %r11", "je .LBB0_1", ".LBB0_1:", "retq"], self.PROBE)
+        self.assertEqual(failures, [f"{self.PROBE}: je .LBB0_1"])
+        self.assertFalse(excused)
+
+    def test_a_branch_with_no_compare_before_it_is_not(self):
+        failures, excused = self.run_on(
+            ["xorl %eax, %eax", "je .LBB0_1", ".LBB0_1:", "retq"], self.PROBE)
+        self.assertEqual(failures, [f"{self.PROBE}: je .LBB0_1"])
+        self.assertFalse(excused)
+
+    def test_only_the_probes_listed_get_it(self):
+        failures, excused = self.run_on(
+            ["cmpq $10, %r11", "je .LBB0_1", ".LBB0_1:", "retq"], self.ADX)
+        self.assertEqual(failures, [f"{self.ADX}: je .LBB0_1"])
+        self.assertFalse(excused)
+        for probe in ("ct_gcm_vaes512_seal", "ct_gcm_vaes512_open",
+                      "ct_gcm_vaes512x32_seal", "ct_gcm_vaes512x32_open"):
+            with self.subTest(probe):
+                self.assertIn("round-count dispatch", audit.X86_EXCUSE_CEILINGS[probe])
+
+
+class LoopCountGuardTests(unittest.TestCase):
+    """The loop-count guard rule: a `je`/`jne` right after `dec r`, outside a
+    loop whose counter is `r`, that jumps past the loop's back edge, is excused
+    in the probes listed under it, and nowhere else."""
+
+    X86 = "x86_64-unknown-linux-gnu"
+    PROBE = "ct_gcm_vaes512x32_seal"   # ceiling: loop-count guard 1
+
+    def run_on(self, lines, probe):
+        return X86LoopTests.run_on(self, lines, probe)
+
+    def loop(self, guard_reg="r10", back_reg="r10"):
+        return [f"decq %{guard_reg}", "je .LBB0_2", ".LBB0_1:", "movq (%rsi), %rax",
+                "addq %rax, %rdx", f"decq %{back_reg}", "jne .LBB0_1", ".LBB0_2:", "retq"]
+
+    def test_a_back_edge_after_another_loop_is_not_a_guard(self):
+        # The second loop's back edge is `dec r10; jne` and lands past the first
+        # loop's back edge, the same shape as a guard, but it is within a loop.
+        lines = self.loop()[2:7] + [".LBB0_2:", "movq (%rsi), %rax", "decq %r10", "jne .LBB0_2", "retq"]
+        failures, excused = self.run_on(["decq %r10"] + lines, self.PROBE)
+        self.assertNotIn((self.PROBE, "loop-count guard"), excused)
+        self.assertEqual(excused[(self.PROBE, "counter loop")], 2)
+
+    def test_the_real_shape_is_excused(self):
+        failures, excused = self.run_on(self.loop(), self.PROBE)
+        self.assertEqual(failures, [])
+        self.assertEqual(excused, collections.Counter(
+            {(self.PROBE, "loop-count guard"): 1, (self.PROBE, "counter loop"): 1}))
+
+    def test_a_guard_on_a_different_register_is_not(self):
+        failures, excused = self.run_on(self.loop(guard_reg="r9"), self.PROBE)
+        self.assertEqual(failures, [f"{self.PROBE}: je .LBB0_2"])
+        self.assertNotIn((self.PROBE, "loop-count guard"), excused)
+
+    def test_a_guard_into_the_loop_is_not(self):
+        # Jumping to the loop's header, not past its back edge.
+        lines = self.loop()
+        lines[1] = "je .LBB0_1"
+        failures, excused = self.run_on(lines, self.PROBE)
+        self.assertEqual(failures, [f"{self.PROBE}: je .LBB0_1"])
+        self.assertNotIn((self.PROBE, "loop-count guard"), excused)
+
+    def test_a_probe_not_listed_excuses_nothing(self):
+        failures, excused = self.run_on(self.loop(), "ct_reduce_q")
+        self.assertIn("ct_reduce_q: je .LBB0_2", failures)
+        self.assertFalse([k for k in excused if k[1] == "loop-count guard"])
+        self.assertNotIn("ct_reduce_q", audit.X86_EXCUSE_CEILINGS)
+
+    def test_the_listed_ceiling_is_one(self):
+        self.assertEqual(audit.X86_EXCUSE_CEILINGS[self.PROBE]["loop-count guard"], 1)
+
+
 class Aarch64LoopTests(unittest.TestCase):
     """On aarch64 a loop over a counter is excused, in the probes listed in
     AARCH64_EXCUSE_CEILINGS and up to their ceilings, and nothing that only

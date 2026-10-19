@@ -2,7 +2,7 @@
 """Check the twisted-key GHASH reduction against SP 800-38D's own multiply.
 
 The x86-64 AES-GCM kernels (`ic-cipher/src/gcm_x86_asm.rs`, and the 512-bit
-loops in `gcm_x86.rs`) multiply each byte-reversed block by a power of H
+loops in `gcm_x86_asm.rs`) multiply each byte-reversed block by a power of H
 "twisted" by x^-1 (`gcm_x86::twist`), and reduce the 256-bit carry-less sum
 with two more carry-less multiplies by 0xc2000000_00000000. This models that
 arithmetic on Python integers -- the twist, the Karatsuba product, the

@@ -123,12 +123,16 @@ X86_ONLY = (
     # to X86_EXCUSE_CEILINGS. The additions after it are the point formulas
     # above; the multiplication as a whole is not a probe (CONSTANT_TIME.md).
     "ct_p384_comb_select",
-    # AES-GCM's eight-block (AES-NI, PCLMULQDQ) and sixteen-block (VAES-256)
-    # loops at AES-256 over a fixed three groups, sealing and opening, one
-    # group alone, and the twist of a power of H. The loops' back edges are
-    # excused by the x86-64 counter-loop rule below.
+    # AES-GCM's eight-block (AES-NI, PCLMULQDQ), sixteen-block (VAES-256) and
+    # 512-bit (AVX-512) loops at AES-256 over a fixed count of groups, sealing
+    # and opening, one group alone, and the twist of a power of H. The 512-bit
+    # loops are the sixteen-block kernel on zmm registers, and the same over
+    # thirty-two blocks. The loops' back edges are excused by the x86-64
+    # counter-loop rule below.
     "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
     "ct_gcm_vaes256_seal", "ct_gcm_vaes256_open", "ct_gcm_vaes256_group",
+    "ct_gcm_vaes512_seal", "ct_gcm_vaes512_open",
+    "ct_gcm_vaes512x32_seal", "ct_gcm_vaes512x32_open",
     "ct_gcm_twist",
     # P-256's and P-384's point formulas on AVX-512 IFMA (nist::ifma_kernels,
     # generated), each kernel one block of straight-line assembly; the secret
@@ -247,6 +251,16 @@ X86_EXCUSE_CEILINGS = {
     # into radix 2^52 (39 limbs each), and the masked subtraction at the end
     # (32 words).
     "ct_rsa_ifma_pow_2048": {"counter loop": 12, "constant memset": 1},
+    # The 512-bit AES-GCM loops at AES-256 (round count 14, see the round-count
+    # dispatch rule above): each `cmpq $10`/`cmpq $12` dispatch on the round
+    # count, and the loop's back edge, the counter loop. Counted from the
+    # emitted assembly: the sealing body of zmm32_groups has two sites, each
+    # dispatching on 10 and on 12; the other bodies have one site.
+    "ct_gcm_vaes512_seal": {"round-count dispatch": 2, "counter loop": 1},
+    "ct_gcm_vaes512_open": {"round-count dispatch": 2, "counter loop": 1},
+    "ct_gcm_vaes512x32_seal": {"round-count dispatch": 4, "counter loop": 1,
+                               "loop-count guard": 1},
+    "ct_gcm_vaes512x32_open": {"round-count dispatch": 2, "counter loop": 1},
     # A prepared P-384 key's window read: the loop over its sixteen entries,
     # `incq`/`cmpq $16`/`jne` on the entry counter.
     "ct_p384_comb_select": {"counter loop": 1},
@@ -523,7 +537,7 @@ def excuse(target, ins, i):
 
 # --- x86-64: loops over a public count -------------------------------------
 #
-# The rules below excuse three shapes in x86-64 code, and only in the probes
+# The rules below excuse five shapes in x86-64 code, and only in the probes
 # X86_EXCUSE_CEILINGS names, each up to its own count. They read AT&T syntax,
 # which is what rustc emits, inline assembly included; a body that switches to
 # Intel syntax gets no excuse at all.
@@ -545,6 +559,27 @@ def excuse(target, ins, i):
 # "constant memset": a call to `memset` whose length was loaded as a constant
 # into rdx, value zeroed in rsi, and destination computed as rsp plus a
 # constant in rdi, all in the call's own basic block.
+#
+# "round-count dispatch": a `je` or `jne` immediately after `cmp $10, reg` or
+# `cmp $12, reg`, in the same basic block. The 512-bit AES-GCM kernels take
+# the round count at run time, and test it inside their AES rounds, for AES-192
+# (12 rounds) and AES-128 (10). The round count is the key length's, which is
+# public, and the four probes that run those kernels fix it at 14 (AES-256), so
+# the dispatch never takes the 10- or 12-round branches, and the gate does not
+# read those paths. Only the four probes listed under this rule in
+# X86_EXCUSE_CEILINGS get it; any other compare-and-branch is not excused.
+#
+# "loop-count guard": a `je` or `jne` in a block outside a loop, immediately
+# after `dec r` or `sub $1, r`, where `r` is a counter of that loop (every write
+# in the loop is a constant step, and the back edge's condition is `dec r` or
+# `sub $1, r` too), and whose target begins after the back edge, so that a zero
+# count skips the loop. The count is the message length's in whole groups,
+# which is public. The skip is taken only when the count is one, and the probe
+# fixes it at two groups, so the gate never reads that path. Only the probes
+# listed under this rule in
+# X86_EXCUSE_CEILINGS get it. It is not taken for a branch into the loop, nor
+# for a branch within a loop (its block and target share one), nor for one
+# whose register is not the loop's counter.
 
 _X86_FAMILIES = {}
 for _fam, _names in {
@@ -788,6 +823,10 @@ class X86Body:
             return "unconditional jump" if self._target(operands) is not None else None
         if op.startswith("call") and operands and operands[0].lstrip("*").split("@")[0] == "memset":
             return "constant memset" if self._constant_memset(i) else None
+        if op in {"je", "jne"} and self._round_dispatch(i):
+            return "round-count dispatch"
+        if op in {"je", "jne"} and self._loop_guard(i):
+            return "loop-count guard"
         if not (_JCC.fullmatch(op) or op in {"jrcxz", "jecxz"}):
             return None
         b = self.block_of[i]
@@ -837,6 +876,55 @@ class X86Body:
                     return "counter loop"
             elif all(self._counter(body, c) for c in counters):
                 return "counter loop"
+        return None
+
+    def _round_dispatch(self, i):
+        """Whether the instruction before `i` is `cmp $10` or `cmp $12` on a
+        register, in the same basic block: see the round-count dispatch rule."""
+        if i < 1 or self.block_of[i - 1] != self.block_of[i]:
+            return False
+        op, operands = self.ins[i - 1]
+        return bool(re.fullmatch(r"cmp[bwlq]?", op) and len(operands) == 2
+                    and operands[0] in {"$10", "$12"} and _family(operands[1]) is not None)
+
+    def _loop_guard(self, i):
+        """Whether the `je`/`jne` at `i` is a loop-count guard: see the rule
+        of that name."""
+        b = self.block_of[i]
+        if i < 1 or self.block_of[i - 1] != b or i != self.blocks[b][-1]:
+            return False
+        op, operands = self.ins[i - 1]
+        if re.fullmatch(r"dec[lq]", op) and len(operands) == 1:
+            reg = _family(operands[0])
+        elif re.fullmatch(r"sub[lq]", op) and len(operands) == 2 and operands[0] == "$1":
+            reg = _family(operands[1])
+        else:
+            return False
+        target = self._target(self.ins[i][1])
+        if reg is None or target is None:
+            return False
+        if any(b in body and target in body for body in self.loops.values()):
+            return False  # a branch within a loop, which is not a guard
+        past = self.blocks[target][0]
+        for header, body in self.loops.items():
+            if b in body or not self._counter(body, reg):
+                continue
+            for u in body:
+                last = self.blocks[u][-1]
+                jop, joperands = self.ins[last]
+                if not (_JCC.fullmatch(jop) and self._target(joperands) == header):
+                    continue
+                if past > last and self._back_edge_counter(u) == reg:
+                    return True
+        return False
+
+    def _back_edge_counter(self, b):
+        """The register that the condition of block `b`'s last branch reads as
+        a constant step, from the instruction before it in the same block."""
+        last = self.blocks[b][-1]
+        for j in range(last - 1, self.blocks[b][0] - 1, -1):
+            if not _NO_FLAGS.fullmatch(self.ins[j][0]):
+                return _step(*self.ins[j])
         return None
 
     def _constant_memset(self, i):
@@ -1260,6 +1348,8 @@ def inspect(assembly, target, excused=None):
 X86_WIPED = (
     "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
     "ct_gcm_vaes256_seal", "ct_gcm_vaes256_open", "ct_gcm_vaes256_group",
+    "ct_gcm_vaes512_seal", "ct_gcm_vaes512_open",
+    "ct_gcm_vaes512x32_seal", "ct_gcm_vaes512x32_open",
     "ct_p256_ifma_double", "ct_p256_ifma_add", "ct_p256_ifma_madd", "ct_p256_ifma_madd4",
     "ct_p256_ifma_from_fp", "ct_p256_ifma_to_fp", "ct_p256_ifma_to_fp4",
     "ct_p384_ifma_double", "ct_p384_ifma_add", "ct_p384_ifma_madd", "ct_p384_ifma_madd4",

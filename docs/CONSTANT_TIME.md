@@ -1282,13 +1282,34 @@ in the loop and in the last group's hash), `ct_gcm_clmul8_open` and
 inside the loop is not excused: it is in the loop but is neither its exit
 nor its back edge.
 
-Not covered: the 512-bit kernel's loops (`zmm_groups`, `zmm32_groups` in
-`gcm_x86.rs`), which branch on the round count inside the assembly
-(`cmp {rounds}, 10; je`) -- public, but not a loop counter, so the rule
-does not excuse it; the AAD, tail, length-block and tag code (`Pending`,
+The 512-bit kernels, `zmm_groups` and `zmm32_groups` in `gcm_x86_asm.rs`, are
+probes at AES-256: `ct_gcm_vaes512_seal`, `ct_gcm_vaes512_open` (three groups)
+and `ct_gcm_vaes512x32_seal`, `ct_gcm_vaes512x32_open` (two groups of
+thirty-two blocks). Each takes the round count at run time and dispatches on
+it inside its AES rounds (`cmp $10` and `cmp $12`, then `je`). That dispatch
+is excused by the round-count dispatch rule in `scripts/check-ct.py`, and
+only in those four probes, each up to its count (2, 2, 4, 2). The round count
+is the key length's, which is public. The probes fix it at 14, so the dispatch
+never takes the 10- or 12-round branches, and the gate does not read those
+paths; the 128- and 256-bit kernels take it as a constant instead. Their loop
+back edges are the counter loop, excused as before.
+
+The sealing body of `zmm32_groups` also has a loop-count guard before its loop:
+`decq %r10; je`, which skips the loop when the group count is one. The
+"loop-count guard" rule in `scripts/check-ct.py` excuses it, and only in
+`ct_gcm_vaes512x32_seal`, once (ceiling 1). The rule needs the `dec` to be on
+the loop's own counter, the branch to sit outside the loop, and its target to
+begin after the back edge. The group count is the message length's, so it is
+public; the probe fixes it at two, so the skip is never taken and the gate
+never reads that path. A branch within a loop, or on a register that is not the
+loop's counter, is not excused.
+
+Not covered: the AAD, tail, length-block and tag code (`Pending`,
 `finish`), intrinsics that branch on lengths; and the choice of kernel,
 which branches on the CPU's features. Valgrind (docs/CTGRIND.md) runs the
 AES-GCM path the CPU it runs on selects.
+
+x86-64 probes: 135, up from 131, the four 512-bit probes added here.
 
 Probe count: forty-one on x86-64 alone, where there were thirty-four. All
 eighty-five pass on x86-64, and the forty-four on each 32-bit target are
@@ -1613,7 +1634,7 @@ ChaCha20 AVX-512 group ended with `vzeroall`.
 | --- | --- | --- |
 | AES-GCM 128-bit (`gcm_x86_asm::x8_*`) | `pxor` of xmm0-15 (`x8_wipe!`) | each call |
 | AES-GCM 256-bit (`gcm_x86_asm::y16_*`) | `vzeroall` for `vzeroupper` | each call |
-| AES-GCM 512-bit (`gcm_x86::zmm_groups`, `zmm32_groups`) | `vzeroall` for `vzeroupper` | each call |
+| AES-GCM 512-bit (`gcm_x86_asm::zmm_groups`, `zmm32_groups`) | `vzeroall` for `vzeroupper` | each call |
 | Ed25519 signing's table read (`fe64::edwards`, `block_scan!`) | `vzeroall` for `vzeroupper` | each read, 26 a signature |
 | RSA table reads (`uint::x86::select`, `select32`, `select_avx2_*`) | `pxor` of xmm0, xmm1; `vzeroall` | each read |
 | RSA IFMA exponentiation (`uint::ifma::pow_fixed`) | `vzeroall` | once, at its end |
@@ -1671,7 +1692,7 @@ Verification paths, on public data, are left alone throughout.
   ChaCha20 group passes. It reads the blocks, not what the compiler does
   with vector registers after them.
 - The 512-bit AES-GCM kernels are not probes; a test in `gcm.rs` reads
-  `gcm_x86.rs` and requires four `"vzeroall",` endings and no
+  the 512-bit section of `gcm_x86_asm.rs` and requires four `"vzeroall",` endings and no
   `"vzeroupper",`.
 - Tests on the guards' records: `the_buffer_multiplications_wipe_their_buffers`
   (P-256), `the_buffer_multiplication_wipes_its_buffer` (P-384),

@@ -1245,6 +1245,66 @@ mod x86_gcm {
         unsafe { p::gcm_vaes256_group(data, rk, pw, pk, st) }
     }
 
+    /// # Safety
+    /// Requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_vaes512_seal(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &p::ZmmPowers,
+        pk: &p::ZmmPowers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+        unsafe { p::gcm_vaes512_seal(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_vaes512_open(
+        data: &mut [u8; 768],
+        rk: &[__m128i; 15],
+        pw: &p::ZmmPowers,
+        pk: &p::ZmmPowers,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+        unsafe { p::gcm_vaes512_open(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_vaes512x32_seal(
+        data: &mut [u8; 1024],
+        rk: &[__m128i; 15],
+        pw: &p::ZmmPowers32,
+        pk: &p::ZmmPowers32,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+        unsafe { p::gcm_vaes512x32_seal(data, rk, pw, pk, st) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_vaes512x32_open(
+        data: &mut [u8; 1024],
+        rk: &[__m128i; 15],
+        pw: &p::ZmmPowers32,
+        pk: &p::ZmmPowers32,
+        st: &mut [u8; 32],
+    ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F, AVX-512BW, VAES and VPCLMULQDQ.
+        unsafe { p::gcm_vaes512x32_open(data, rk, pw, pk, st) }
+    }
+
     #[no_mangle]
     pub fn ct_gcm_twist(h: &[u8; 16]) -> [u8; 16] {
         p::gcm_twist(h)

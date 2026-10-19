@@ -567,7 +567,13 @@ mod tests {
     /// changed back, which is the edit to guard against.
     #[test]
     fn the_512_bit_kernels_clear_their_registers() {
-        let source = include_str!("gcm_x86.rs");
+        // The 512-bit kernels are the last section of `gcm_x86_asm.rs`. The 256-bit
+        // kernels above them end with `vzeroall` too, and are not counted.
+        let whole = include_str!("gcm_x86_asm.rs");
+        let at = whole
+            .find("The 512-bit kernel: VAES")
+            .expect("section header");
+        let source = &whole[at..];
         // Built here so that this test's own text does not match.
         let ending = |insn: &str| ["\"", insn, "\","].concat();
         let count = |insn: &str| source.lines().filter(|l| l.trim() == ending(insn)).count();
