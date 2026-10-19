@@ -572,12 +572,11 @@ def excuse(target, ins, i):
 # "loop-count guard": a `je` or `jne` in a block outside a loop, immediately
 # after `dec r` or `sub $1, r`, where `r` is a counter of that loop (every write
 # in the loop is a constant step, and the back edge's condition is `dec r` or
-# `sub $1, r` too), and whose target begins after the back edge, so that a zero
-# count skips the loop. The count is the message length's in whole groups,
+# `sub $1, r` too), and whose target begins after the back edge, so that a
+# count of one (zero after the decrement) skips the loop. The count is the message length's in whole groups,
 # which is public. The skip is taken only when the count is one, and the probe
 # fixes it at two groups, so the gate never reads that path. Only the probes
-# listed under this rule in
-# X86_EXCUSE_CEILINGS get it. It is not taken for a branch into the loop, nor
+# listed under this rule in X86_EXCUSE_CEILINGS get it. It is not taken for a branch into the loop, nor
 # for a branch within a loop (its block and target share one), nor for one
 # whose register is not the loop's counter.
 
