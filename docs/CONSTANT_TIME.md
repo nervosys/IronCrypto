@@ -1309,7 +1309,10 @@ Not covered: the AAD, tail, length-block and tag code (`Pending`,
 which branches on the CPU's features. Valgrind (docs/CTGRIND.md) runs the
 AES-GCM path the CPU it runs on selects.
 
-x86-64 probes: 135, up from 131, the four 512-bit probes added here.
+x86-64 probes: 137, up from 135, the ChaCha20 eight-block AVX2 probe
+(`ct_chacha20_avx2_eight_blocks`, its keystream scratch passed in) and the
+Keccak four-way AVX2 probe (`ct_keccak_x4_permute`, the `ic-hash` AVX2
+permutation, now compiled under `ct-probes` without `std`).
 
 Probe count: forty-one on x86-64 alone, where there were thirty-four. All
 eighty-five pass on x86-64, and the forty-four on each 32-bit target are

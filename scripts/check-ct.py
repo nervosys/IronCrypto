@@ -92,12 +92,18 @@ X86_ONLY = (
     # Keccak-f[1600] over eight states, one block of assembly on thirty-one
     # zmm registers; its loop over the twelve round pairs is a counter loop.
     "ct_keccak_x8_permute",
+    # Keccak-f[1600] over four states on AVX2, one state per 64-bit lane: the
+    # four-lane permutation ML-KEM's and SHAKE's batched squeezes take where
+    # AVX-512 is absent.
+    "ct_keccak_x4_permute",
     # Short messages: ChaCha20's two-block AVX2 kernel, two blocks side by
     # side in each register and its rounds written out, once and as two
-    # pairs; the AEAD's tag in radix 2^64 over thirteen bytes of associated
-    # data and sixty-four of ciphertext; and HMAC-SHA256's SHA-NI key-pad
-    # compressions and its last inner and outer compressions.
-    "ct_chacha20_avx2_pair", "ct_chacha20_avx2_two_pairs", "ct_poly1305_short",
+    # pairs; ChaCha20's eight-block AVX2 kernel over a 512-byte group; the
+    # AEAD's tag in radix 2^64 over thirteen bytes of associated data and
+    # sixty-four of ciphertext; and HMAC-SHA256's SHA-NI key-pad compressions
+    # and its last inner and outer compressions.
+    "ct_chacha20_avx2_pair", "ct_chacha20_avx2_two_pairs",
+    "ct_chacha20_avx2_eight_blocks", "ct_poly1305_short",
     "ct_hmac_sha256_pads", "ct_hmac_sha256_tail",
     # RSA's Montgomery products at 2048 bits: the MULX/ADCX/ADOX product, the
     # AVX-512 IFMA almost-Montgomery product, and the portable CIOS product.
@@ -283,6 +289,14 @@ X86_EXCUSE_CEILINGS = {
     # Keccak-f[1600] on eight states: the `dec`/`jnz` back edge over the twelve
     # passes of two rounds, the counter written nowhere else in the loop.
     "ct_keccak_x8_permute": {"counter loop": 1},
+    # ChaCha20's eight-block AVX2 kernel: the double-round loop, `movl $10,
+    # %eax`/`decl %eax`/`jne`, ten double rounds over a fixed count, the
+    # counter written nowhere else in the loop.
+    "ct_chacha20_avx2_eight_blocks": {"counter loop": 1},
+    # Keccak-f[1600] on four states, AVX2: the `addq $16`/`cmpq $192`/`jne`
+    # back edge over the twelve passes of two rounds, `%rax` written nowhere
+    # else in the loop.
+    "ct_keccak_x4_permute": {"counter loop": 1},
     "ct_gcm_vaes256_seal": {"counter loop": 1},
     "ct_gcm_vaes256_open": {"counter loop": 1},
     # The IFMA multiplication's window read (`nist::ifma::scan_avx2`): the

@@ -461,9 +461,15 @@ impl XofReader {
     }
 }
 
-// Four permutations at once, where the CPU has AVX2. Only under `std`, because
-// the detection needs it; see `crate::sha2::avx2`.
-#[cfg(all(target_arch = "x86_64", feature = "std"))]
+// Four permutations at once, where the CPU has AVX2. The module needs no
+// `std`; its runtime detection, in the dispatcher `keccak_f1600_x4`, does, and
+// `ct-probes` reaches the permutations without it. Under `ct-probes` alone only
+// `ct_probes::keccak_x4_permute` uses them, so the rest reads as dead code.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(feature = "std", all(feature = "ct-probes", not(ic_approved_only)))
+))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[allow(unsafe_code)]
 mod x86;
 
@@ -473,7 +479,8 @@ mod x86;
 #[allow(unsafe_code)]
 mod zmm;
 
-/// The eight-way assembly permutation, for `scripts/ct-audit`. Not API.
+/// The eight-way assembly permutation and the four-way AVX2 one, for
+/// `scripts/ct-audit`. Not API.
 #[cfg(all(target_arch = "x86_64", feature = "ct-probes"))]
 #[doc(hidden)]
 pub mod ct_probes {
@@ -486,6 +493,18 @@ pub mod ct_probes {
     pub unsafe fn keccak_x8_permute(state: &mut [[u64; 8]; 25]) {
         // SAFETY: forwards the precondition above.
         unsafe { super::zmm::permute_x8(state) }
+    }
+
+    /// `x86::permute`, the four-way AVX2 permutation.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    #[cfg(not(ic_approved_only))]
+    #[allow(unsafe_code)]
+    pub unsafe fn keccak_x4_permute(state: &mut [[u64; 4]; 25]) {
+        // SAFETY: forwards the precondition above.
+        unsafe { super::x86::permute(state) }
     }
 }
 

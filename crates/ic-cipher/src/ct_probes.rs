@@ -424,6 +424,30 @@ mod x86 {
         unsafe { avx2::two_pairs(key, nonce, counter, out) }
     }
 
+    /// The eight-block kernel's keystream scratch, as the library holds it.
+    /// The probe takes it from its caller, so the probe itself zeroes and
+    /// wipes nothing; the library's wipe is `Scratch`'s, outside the kernel.
+    #[repr(C, align(32))]
+    pub struct Ws8(avx2::Words);
+
+    /// Eight ChaCha20 blocks on AVX2, xored into `out`, the keystream going
+    /// through `ws`: the message kernel the library runs over whole 512-byte
+    /// groups.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    pub unsafe fn chacha20_avx2_eight_blocks(
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        out: &mut [u8; 512],
+        ws: &mut Ws8,
+    ) {
+        // SAFETY: as the caller guarantees; `out` is `avx2::STRIDE` bytes.
+        unsafe { avx2::eight_blocks(key, nonce, counter, out, &mut ws.0) }
+    }
+
     /// The AEAD's tag in radix 2^64, under the one-time key `key`, over
     /// thirteen bytes of associated data and sixty-four of ciphertext -- a
     /// TLS 1.2 record's header and a short record -- so that both the padded

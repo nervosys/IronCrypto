@@ -895,6 +895,21 @@ mod x86_chacha {
         unsafe { p::chacha20_avx2_two_pairs(key, nonce, counter, out) }
     }
 
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_chacha20_avx2_eight_blocks(
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        counter: u32,
+        out: &mut [u8; 512],
+        ws: &mut p::Ws8,
+    ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { p::chacha20_avx2_eight_blocks(key, nonce, counter, out, ws) }
+    }
+
     #[no_mangle]
     pub fn ct_poly1305_short(key: &[u8; 32], aad: &[u8; 13], ct: &[u8; 64]) -> [u8; 16] {
         p::poly1305_short(key, aad, ct)
@@ -946,6 +961,15 @@ mod x86_keccak {
         // SAFETY: forwards the `# Safety` precondition of the function above, which
         // requires AVX-512F.
         unsafe { ic_hash::sha3_ct_probes::keccak_x8_permute(state) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_keccak_x4_permute(state: &mut [[u64; 4]; 25]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { ic_hash::sha3_ct_probes::keccak_x4_permute(state) }
     }
 }
 
