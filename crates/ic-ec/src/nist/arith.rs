@@ -90,6 +90,123 @@ pub(crate) mod wide {
         (out, borrow as u64)
     }
 
+    /// `x * y` for two words, as a `u128`.
+    ///
+    /// `wrapping_mul` and not `*`: a product of two 64-bit values is below
+    /// `2^128` and never wraps, so the instruction is the same, but the model
+    /// checker tests `*` for overflow with a multiplier whose SMT encoding is
+    /// wrong in CBMC 6.11 (docs/PROOFS.md). A function of its own so that the
+    /// proofs can replace the multiplication, and only the multiplication, by
+    /// an arbitrary bounded value (`proofs`).
+    #[inline(always)]
+    pub(crate) const fn word_mul(x: u64, y: u64) -> u128 {
+        (x as u128).wrapping_mul(y as u128)
+    }
+
+    /// The quotient digit of one Montgomery step: `t0 * neg_inv mod 2^64`,
+    /// the `u` for which `t0 + u * m0` is a multiple of `2^64`. A function of
+    /// its own for the proofs, like [`word_mul`].
+    #[inline(always)]
+    pub(crate) const fn quotient_digit(t0: u64, neg_inv: u64) -> u64 {
+        t0.wrapping_mul(neg_inv)
+    }
+
+    /// The last step of Montgomery multiplication, on the loops' `t` (below
+    /// `2 m`): returns `t - m`, `t`, and whether the first is the answer.
+    #[inline(always)]
+    pub(crate) const fn close<const N: usize>(
+        t: [u64; MAX_LIMBS + 2],
+        m: [u64; N],
+    ) -> ([u64; N], [u64; N], u64) {
+        // A single conditional subtraction brings the result below m.
+        let mut lo = [0u64; N];
+        let mut k = 0;
+        while k < N {
+            lo[k] = t[k];
+            k += 1;
+        }
+        let (reduced, borrow) = sbb(lo, m);
+        (reduced, lo, t[N] | (1 - borrow))
+    }
+
+    /// The first half of one outer iteration of the Montgomery multiplication
+    /// (CIOS), for the multiplier word `$bi`: `t += a * bi`, into `N + 2`
+    /// words.
+    ///
+    /// A macro, expanded in `mont_mul` and, for the
+    /// proofs, in the functions `cios_mul_phase` and `cios_reduce_phase`: the same
+    /// tokens, so what the proofs take a phase or a row at a time is what the
+    /// loop runs. Written as a function called from the loop instead, the
+    /// compiled code of the other curves changed (P-521's multiplication among
+    /// them), as it did for P-256's schoolbook.
+    macro_rules! cios_mul_phase {
+        ($t:ident, $a:ident, $bi:expr) => {{
+            // t += a * bi
+            let mut carry = 0u128;
+            let mut j = 0;
+            while j < N {
+                let sum = ($t[j] as u128) + word_mul($a[j], $bi) + carry;
+                $t[j] = sum as u64;
+                carry = sum >> 64;
+                j += 1;
+            }
+            let sum = ($t[N] as u128) + carry;
+            $t[N] = sum as u64;
+            $t[N + 1] = (sum >> 64) as u64;
+        }};
+    }
+
+    /// The second half: `t = (t + u m) / 2^64` for the quotient digit `u` of
+    /// `t[0]`, leaving `t[N + 1]` zero.
+    macro_rules! cios_reduce_phase {
+        ($t:ident, $m:ident, $neg_inv:ident) => {{
+            // t = (t + m * (t[0] * neg_inv mod 2^64)) / 2^64
+            let u = quotient_digit($t[0], $neg_inv);
+            let sum = ($t[0] as u128) + word_mul(u, $m[0]);
+            let mut carry = sum >> 64;
+            let mut j = 1;
+            while j < N {
+                let sum = ($t[j] as u128) + word_mul(u, $m[j]) + carry;
+                $t[j - 1] = sum as u64;
+                carry = sum >> 64;
+                j += 1;
+            }
+            let sum = ($t[N] as u128) + carry;
+            $t[N - 1] = sum as u64;
+            $t[N] = ($t[N + 1] as u128 + (sum >> 64)) as u64;
+            $t[N + 1] = 0;
+        }};
+    }
+
+    /// One outer iteration: the two phases. On entry `t[N + 1]` is zero; on
+    /// exit it is again.
+    macro_rules! cios_row {
+        ($t:ident, $a:ident, $bi:expr, $m:ident, $neg_inv:ident) => {{
+            cios_mul_phase!($t, $a, $bi);
+            cios_reduce_phase!($t, $m, $neg_inv);
+        }};
+    }
+
+    /// [`cios_mul_phase`] as a function, for the proofs only.
+    #[cfg(kani)]
+    pub(crate) fn cios_mul_phase<const N: usize>(
+        t: &mut [u64; MAX_LIMBS + 2],
+        a: [u64; N],
+        bi: u64,
+    ) {
+        cios_mul_phase!(t, a, bi)
+    }
+
+    /// [`cios_reduce_phase`] as a function, for the proofs only.
+    #[cfg(kani)]
+    pub(crate) fn cios_reduce_phase<const N: usize>(
+        t: &mut [u64; MAX_LIMBS + 2],
+        m: [u64; N],
+        neg_inv: u64,
+    ) {
+        cios_reduce_phase!(t, m, neg_inv)
+    }
+
     /// Montgomery multiplication (CIOS), up to its last step: returns `t - m`,
     /// `t`, and whether the first is the answer. The caller makes that choice,
     /// with a barrier at run time and without one in a `const`.
@@ -110,46 +227,11 @@ pub(crate) mod wide {
         let mut t = [0u64; MAX_LIMBS + 2];
         let mut i = 0;
         while i < N {
-            // t += a * b[i]
-            let mut carry = 0u128;
-            let mut j = 0;
-            while j < N {
-                let sum = (t[j] as u128) + (a[j] as u128) * (b[i] as u128) + carry;
-                t[j] = sum as u64;
-                carry = sum >> 64;
-                j += 1;
-            }
-            let sum = (t[N] as u128) + carry;
-            t[N] = sum as u64;
-            t[N + 1] = (sum >> 64) as u64;
-
-            // t = (t + m * (t[0] * neg_inv mod 2^64)) / 2^64
-            let u = t[0].wrapping_mul(neg_inv);
-            let sum = (t[0] as u128) + (u as u128) * (m[0] as u128);
-            let mut carry = sum >> 64;
-            let mut j = 1;
-            while j < N {
-                let sum = (t[j] as u128) + (u as u128) * (m[j] as u128) + carry;
-                t[j - 1] = sum as u64;
-                carry = sum >> 64;
-                j += 1;
-            }
-            let sum = (t[N] as u128) + carry;
-            t[N - 1] = sum as u64;
-            t[N] = (t[N + 1] as u128 + (sum >> 64)) as u64;
-            t[N + 1] = 0;
+            cios_row!(t, a, b[i], m, neg_inv);
             i += 1;
         }
 
-        // A single conditional subtraction brings the result below m.
-        let mut lo = [0u64; N];
-        let mut k = 0;
-        while k < N {
-            lo[k] = t[k];
-            k += 1;
-        }
-        let (reduced, borrow) = sbb(lo, m);
-        (reduced, lo, t[N] | (1 - borrow))
+        close(t, m)
     }
 }
 
@@ -835,6 +917,12 @@ pub fn sqrt_p3mod4<F: Field, const N: usize>(
     }
     pow(x, &exp)
 }
+
+// Bounded proofs for Kani; see the module. They keep a ghost log of the
+// products in `static mut`s, which no ordinary build compiles.
+#[cfg(kani)]
+#[allow(unsafe_code)]
+mod proofs;
 
 #[cfg(test)]
 mod tests {

@@ -13,12 +13,16 @@
 //! no carry logic with the code under test. The domain of each proof is its
 //! assumption.
 //!
-//! What is not here: the word-by-word body of the Montgomery multiplication
-//! (`arith::wide::mont_mul`). P-256's took a decomposition into function
-//! contracts and half an hour of Bitwuzla for one 4-word reduction; the 6-word
-//! loop nest is not attempted. See docs/PROOFS.md.
+//! The Montgomery multiplication, `arith::wide::mont_mul`, which both rings
+//! use on every target but x86-64 and as the fallback on x86-64, is proved in
+//! two halves that meet in docs/PROOFS.md ("P-384 multiplication"): the loops
+//! over arbitrary products in `nist/arith/proofs.rs`, for every modulus; and
+//! here, for these two moduli, the digit lemma (every quotient digit clears
+//! the low word) and the closing step (`close`).
 
 use super::*;
+use crate::nist::arith::wide::{close, quotient_digit, word_mul};
+use crate::nist::arith::{select_ct, MAX_LIMBS};
 
 /// `p = 2^384 - 2^128 - 2^96 + 2^32 - 1`, little-endian words, written out
 /// here independently of [`P`].
@@ -207,4 +211,57 @@ fn p384_canonical_is_value_mod_p() {
 #[kani::unwind(9)]
 fn p384_canonical_is_value_mod_n() {
     canonical_reduces_below_2m(ORDER);
+}
+
+/// The closing step of `mont_mul`, as `mont_mul_raw` uses it: given the
+/// loops' buffer `t`, with `T = t[0..=6]` (seven words) below `2m` and the
+/// rest of the buffer zero, `close` and the selection leave a result below `m`
+/// that is `T` or `T - m`. For both moduli, every `t`.
+fn close_reduces_below_2m(m: [u64; 6]) {
+    let t: [u64; MAX_LIMBS + 2] = kani::any();
+    for i in 7..MAX_LIMBS + 2 {
+        kani::assume(t[i] == 0);
+    }
+    let value = [t[0], t[1], t[2], t[3], t[4], t[5], t[6]];
+    let two_m = add_n(widen(m), widen(m));
+    kani::assume(lt(&value, &two_m));
+    let (reduced, lo, need) = close(t, m);
+    let out = select_ct(need.wrapping_neg(), reduced, lo);
+    assert!(lt(&out, &m));
+    assert!(eq(&value, &widen(out)) || eq(&value, &add_n(widen(out), widen(m))));
+}
+
+#[kani::proof]
+#[kani::unwind(12)]
+fn p384_close_is_value_mod_p() {
+    close_reduces_below_2m(PRIME);
+}
+
+#[kani::proof]
+#[kani::unwind(12)]
+fn p384_close_is_value_mod_n() {
+    close_reduces_below_2m(ORDER);
+}
+
+/// The digit lemma: for every `t0`, the quotient digit `u = t0 * neg_inv`
+/// makes `t0 + u m0` a multiple of `2^64`, so the word the multiplication drops
+/// from the first multiply-add of each row, `l_i`, is zero. With the true
+/// 64-by-64 product, for the ring's own `m0` and `neg_inv`.
+fn digit_clears_the_low_word(m0: u64, neg_inv: u64) {
+    let t0: u64 = kani::any();
+    let u = quotient_digit(t0, neg_inv);
+    let sum = t0 as u128 + word_mul(u, m0);
+    assert!(sum as u64 == 0);
+}
+
+#[kani::proof]
+#[kani::solver(bitwuzla)]
+fn p384_fp_digit_clears_the_low_word() {
+    digit_clears_the_low_word(Fp::MODULUS[0], Fp::NEG_INV);
+}
+
+#[kani::proof]
+#[kani::solver(bitwuzla)]
+fn p384_fn_digit_clears_the_low_word() {
+    digit_clears_the_low_word(Fn::MODULUS[0], Fn::NEG_INV);
 }

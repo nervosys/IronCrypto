@@ -587,6 +587,20 @@ fn the_product_of_residues_is_in_reduce_s_domain() {
     assert!(reduce_pre(square_spec(a)));
 }
 
+/// The abstraction behind the two linear harnesses is sound: `product_abstract`
+/// replaces `u128::wrapping_mul` by an arbitrary value `p <= MAX_WORD_PRODUCT`,
+/// and the real product of two words, which `mac` takes as
+/// `(b as u128).wrapping_mul(c as u128)`, is at most that for every pair. So
+/// every behaviour of the real schoolbook is one of the abstract schoolbook's,
+/// and what the linear harnesses prove of the abstract one holds of it. (Making
+/// the product a function of its own with this bound as its contract and
+/// replacing it by `stub_verified` was tried and not kept; docs/PROOFS.md.)
+#[kani::proof]
+#[kani::solver(bitwuzla)]
+fn the_real_word_product_is_within_the_abstract_bound() {
+    assert!(word_product(kani::any(), kani::any()) <= MAX_WORD_PRODUCT);
+}
+
 // The composition, `mul` and `square` meeting `out < p`, `2^256 out = a b mod
 // p` over `reduce`'s contract with the product replaced by "any eight words
 // equal to `product_spec(a, b)`", was written as a `proof_for_contract`
