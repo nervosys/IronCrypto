@@ -120,6 +120,10 @@ X86_ONLY = (
     # bits, RSA-3072's primes.
     "ct_rsa_adx_mont_sqr_2048", "ct_rsa_adx_mont_mul_1024", "ct_rsa_adx_mont_sqr_1024",
     "ct_rsa_adx_mont_mul_1536", "ct_rsa_adx_mont_sqr_1536",
+    # Four of the 2048-bit pieces on their own, so IronProof can state each on
+    # its arguments: the absolute difference, the Karatsuba middle terms, and
+    # the final conditional subtraction.
+    "ct_rsa_abs_diff_16", "ct_rsa_kara_mid", "ct_rsa_kara_mid_sub", "ct_rsa_finish_2048",
     # RSA's whole exponentiation on AVX-512 IFMA, compiled once per width:
     # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
     # bits, its modulus. Its loops are excused the same way.
@@ -215,6 +219,9 @@ X86_EXCUSE_CEILINGS = {
     # on rcx, stepped by `lea`).
     "ct_rsa_adx_mont_mul_2048": {"counter loop": 6, "unconditional jump": 6},
     "ct_rsa_adx_mont_sqr_2048": {"counter loop": 6, "unconditional jump": 6},
+    # The final subtraction on its own: the same two loops (`jrcxz` on rcx,
+    # stepped by `lea`, and a `jmp` back), counted by the public width.
+    "ct_rsa_finish_2048": {"counter loop": 2, "unconditional jump": 2},
     # MULX/ADX at 1536 bits, on the eight-word blocks: three product blocks
     # and three reduction blocks, each looping over its groups as above, and
     # the final subtraction's two loops.

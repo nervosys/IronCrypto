@@ -202,6 +202,52 @@ pub mod x86 {
         unsafe { x86::mont_sqr_2048(&mut t, a, n, n0inv, out) };
     }
 
+    /// The absolute difference of the 2048-bit Karatsuba: `z = |x - y|` over
+    /// 16 words, returning all ones if `x < y`, else zero.
+    pub fn abs_diff_16(z: &mut [u64; 16], x: &[u64; 16], y: &[u64; 16]) -> u64 {
+        // SAFETY: `x` and `y` are 16 words to read and `z` 16 to write, and a
+        // `&mut` cannot overlap either shared borrow.
+        unsafe { x86::abs_diff_16(z.as_mut_ptr(), x.as_ptr(), y.as_ptr()) }
+    }
+
+    /// The middle term of the 2048-bit Karatsuba product, added into
+    /// `t[16..64]`: `L + H - p` when `m` is all ones, `L + H + p` when it is
+    /// zero, where `L` and `H` are `t`'s halves. Any other `m` is taken as
+    /// all ones.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX.
+    pub unsafe fn kara_mid(t: &mut [u64; 64], p: &mut [u64; 32], m: u64) {
+        let m = 0u64.wrapping_sub((m != 0) as u64);
+        // SAFETY: `t` is 64 words and `p` 32, both writable and, as two `&mut`,
+        // not overlapping; `m` is zero or all ones; the caller guarantees
+        // BMI2 and ADX.
+        unsafe { x86::kara_mid(t.as_mut_ptr(), p.as_mut_ptr(), m) }
+    }
+
+    /// The middle term of the 2048-bit Karatsuba square, always subtracted:
+    /// [`kara_mid`] with `m` all ones.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX.
+    pub unsafe fn kara_mid_sub(t: &mut [u64; 64], p: &mut [u64; 32]) {
+        // SAFETY: as in `kara_mid`.
+        unsafe { x86::kara_mid_sub(t.as_mut_ptr(), p.as_mut_ptr()) }
+    }
+
+    /// The final conditional subtraction of a 2048-bit product: `out = R - n`
+    /// if `R >= n`, else `R`, where `R = top * 2^2048 + r`. Any `top` other
+    /// than zero is taken as one.
+    pub fn finish_2048(out: &mut [u64; 32], r: &[u64; 32], top: u64, n: &[u64; 32]) {
+        let top = (top != 0) as u64;
+        // SAFETY: `out` is 32 words to write and `r` and `n` 32 to read, and a
+        // `&mut` cannot overlap either; `top` is zero or one; 32 is a non-zero
+        // multiple of four; SSE2 is part of x86-64.
+        unsafe { x86::finish(out.as_mut_ptr(), r.as_ptr(), top, n.as_ptr(), 32) }
+    }
+
     /// One almost-Montgomery product on AVX-512 IFMA at 2048 bits, 40 limbs
     /// of 52 bits: the kernel and the carry of its columns into limbs.
     pub fn ifma_amm_2048(ctx: &mut IfmaCtx, a: &[u64; 40], b: &[u64; 40], out: &mut [u64; 40]) {

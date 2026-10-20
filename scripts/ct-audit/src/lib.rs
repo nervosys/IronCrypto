@@ -1037,6 +1037,38 @@ mod x86_rsa {
         unsafe { p::adx_mont_sqr_2048(a, n, n0inv, out) }
     }
 
+    // The four straight-line pieces of the 2048-bit MULX/ADX Karatsuba and
+    // reduction, each on its own, so each can be stated on its arguments: the
+    // absolute difference, the middle term added or subtracted, the middle
+    // term of the square, and the final conditional subtraction.
+    #[no_mangle]
+    pub fn ct_rsa_abs_diff_16(z: &mut [u64; 16], x: &[u64; 16], y: &[u64; 16]) -> u64 {
+        p::abs_diff_16(z, x, y)
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_kara_mid(t: &mut [u64; 64], q: &mut [u64; 32], m: u64) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
+        unsafe { p::kara_mid(t, q, m) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_kara_mid_sub(t: &mut [u64; 64], q: &mut [u64; 32]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires BMI2 and ADX.
+        unsafe { p::kara_mid_sub(t, q) }
+    }
+
+    #[no_mangle]
+    pub fn ct_rsa_finish_2048(out: &mut [u64; 32], r: &[u64; 32], top: u64, n: &[u64; 32]) {
+        p::finish_2048(out, r, top, n)
+    }
+
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]

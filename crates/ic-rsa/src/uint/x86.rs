@@ -931,7 +931,7 @@ unsafe fn select32(table: *const u64, lanes: *const u64, out: *mut u64, count: u
 /// `out` must be valid for writing `l` words, `r` and `n` for reading `l`,
 /// `out` overlapping neither; `top` zero or one; `l` a non-zero multiple of
 /// four. Uses SSE2, which every x86-64 CPU has.
-unsafe fn finish(out: *mut u64, r: *const u64, top: u64, n: *const u64, l: usize) {
+pub(crate) unsafe fn finish(out: *mut u64, r: *const u64, top: u64, n: *const u64, l: usize) {
     let count = (l / 4).wrapping_neg();
     // SAFETY: the first loop reads `r[0..l]` and `n[0..l]` and writes
     // `out[0..l]`, four words an iteration; the second reads `r[0..l]` and
@@ -2820,7 +2820,7 @@ macro_rules! kadc_store8 {
 ///
 /// `x` and `y` valid for reading 16 words, `z` for writing 16; `z` may
 /// overlap neither.
-unsafe fn abs_diff_16(z: *mut u64, x: *const u64, y: *const u64) -> u64 {
+pub(crate) unsafe fn abs_diff_16(z: *mut u64, x: *const u64, y: *const u64) -> u64 {
     let mask: u64;
     // SAFETY: reads `x[0..16]` and `y[0..16]`, writes and then reads and
     // writes `z[0..16]`; nothing else.
@@ -3067,7 +3067,7 @@ macro_rules! kmid_tail {
 /// BMI2 and ADX; `t` valid for reading and writing 64 words, `p` for 32,
 /// not overlapping; `m` zero or all ones.
 #[target_feature(enable = "bmi2,adx")]
-unsafe fn kara_mid(t: *mut u64, p: *mut u64, m: u64) {
+pub(crate) unsafe fn kara_mid(t: *mut u64, p: *mut u64, m: u64) {
     // SAFETY: the XOR pass reads and writes `p[0..32]`; the middle sum reads
     // `t[0..64]` and reads and writes `p[0..32]`; the last pass reads
     // `p[0..32]` and reads and writes `t[16..64]`.
@@ -3108,7 +3108,7 @@ unsafe fn kara_mid(t: *mut u64, p: *mut u64, m: u64) {
 ///
 /// As for [`kara_mid`].
 #[target_feature(enable = "bmi2,adx")]
-unsafe fn kara_mid_sub(t: *mut u64, p: *mut u64) {
+pub(crate) unsafe fn kara_mid_sub(t: *mut u64, p: *mut u64) {
     // SAFETY: as in `kara_mid`, without the XOR pass.
     unsafe {
         asm!(
