@@ -138,7 +138,24 @@ pub unsafe fn eight_blocks(
 
     // The starting state, one register per word. Everything is the same across
     // lanes except word 12, the counter.
-    let splat = |v: u32| _mm256_set1_epi32(v as i32);
+    //
+    // Each splat is xored with an all-zero register the compiler cannot see
+    // through. A broadcast load that only reaches spill slots was left in the
+    // float domain, `vbroadcastss` and `vmovups`: instructions on the key that
+    // Intel's Data Operand Independent Timing list does not cover. An integer
+    // instruction consuming the value pins it, and its spills, to the integer
+    // domain. Sixteen `vpxor`s per eight blocks.
+    let zero: __m256i;
+    // SAFETY: `vpxor` of a register with itself touches no memory and no flags
+    // beyond what `preserves_flags` allows; AVX2 is enabled for this function.
+    unsafe {
+        core::arch::asm!(
+            "vpxor {z}, {z}, {z}",
+            z = lateout(ymm_reg) zero,
+            options(pure, nomem, nostack, preserves_flags),
+        )
+    };
+    let splat = |v: u32| _mm256_xor_si256(_mm256_set1_epi32(v as i32), zero);
     let start: [__m256i; 16] = [
         splat(0x6170_7865),
         splat(0x3320_646e),
@@ -168,6 +185,16 @@ pub unsafe fn eight_blocks(
         splat(n(1)),
         splat(n(2)),
     ];
+
+    // Make each xor happen here, rather than where its value is next used: an
+    // empty assembly block that reads it. Without this LLVM spilled a raw
+    // broadcast and xored after the reload, and the spill was `vmovups`.
+    for x in start.iter() {
+        // SAFETY: a comment-only template; it reads a register and does nothing.
+        unsafe {
+            core::arch::asm!("/* {0} */", in(ymm_reg) *x, options(nomem, nostack, preserves_flags))
+        };
+    }
 
     let mut v = start;
 
