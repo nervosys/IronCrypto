@@ -150,8 +150,24 @@ macro_rules! xor5 {
 ///
 /// The rho-and-pi listing is the scalar permutation's, regrouped so that the
 /// five words each output row needs are gathered together.
+/// Store a round's word `$i` into the array `$o`.
+macro_rules! put_array {
+    ($o:ident, $i:literal, $v:expr) => {
+        $o[$i] = $v
+    };
+}
+
+/// Store a round's word `$i` straight to `$o[$i]`, the caller's state.
+macro_rules! put_state {
+    ($o:ident, $i:literal, $v:expr) => {{
+        let v = $v;
+        // SAFETY: `$o[$i]` is 32 writable bytes; the store is unaligned.
+        unsafe { _mm256_storeu_si256($o[$i].as_mut_ptr().cast(), v) }
+    }};
+}
+
 macro_rules! round_rows {
-    ($s:ident, $o:ident, $rc:expr, $rol:ident, $chi:ident) => {{
+    ($s:ident, $o:ident, $put:ident, $rc:expr, $rol:ident, $chi:ident) => {{
         let c0 = xor5!($s[0], $s[5], $s[10], $s[15], $s[20]);
         let c1 = xor5!($s[1], $s[6], $s[11], $s[16], $s[21]);
         let c2 = xor5!($s[2], $s[7], $s[12], $s[17], $s[22]);
@@ -168,76 +184,89 @@ macro_rules! round_rows {
         let b2 = $rol!(xor2!($s[12], d2), 43);
         let b3 = $rol!(xor2!($s[18], d3), 21);
         let b4 = $rol!(xor2!($s[24], d4), 14);
-        $o[0] = xor2!($chi!(b0, b1, b2), _mm256_set1_epi64x($rc as i64));
-        $o[1] = $chi!(b1, b2, b3);
-        $o[2] = $chi!(b2, b3, b4);
-        $o[3] = $chi!(b3, b4, b0);
-        $o[4] = $chi!(b4, b0, b1);
+        $put!(
+            $o,
+            0,
+            xor2!($chi!(b0, b1, b2), _mm256_set1_epi64x($rc as i64))
+        );
+        $put!($o, 1, $chi!(b1, b2, b3));
+        $put!($o, 2, $chi!(b2, b3, b4));
+        $put!($o, 3, $chi!(b3, b4, b0));
+        $put!($o, 4, $chi!(b4, b0, b1));
 
         let b0 = $rol!(xor2!($s[3], d3), 28);
         let b1 = $rol!(xor2!($s[9], d4), 20);
         let b2 = $rol!(xor2!($s[10], d0), 3);
         let b3 = $rol!(xor2!($s[16], d1), 45);
         let b4 = $rol!(xor2!($s[22], d2), 61);
-        $o[5] = $chi!(b0, b1, b2);
-        $o[6] = $chi!(b1, b2, b3);
-        $o[7] = $chi!(b2, b3, b4);
-        $o[8] = $chi!(b3, b4, b0);
-        $o[9] = $chi!(b4, b0, b1);
+        $put!($o, 5, $chi!(b0, b1, b2));
+        $put!($o, 6, $chi!(b1, b2, b3));
+        $put!($o, 7, $chi!(b2, b3, b4));
+        $put!($o, 8, $chi!(b3, b4, b0));
+        $put!($o, 9, $chi!(b4, b0, b1));
 
         let b0 = $rol!(xor2!($s[1], d1), 1);
         let b1 = $rol!(xor2!($s[7], d2), 6);
         let b2 = $rol!(xor2!($s[13], d3), 25);
         let b3 = $rol!(xor2!($s[19], d4), 8);
         let b4 = $rol!(xor2!($s[20], d0), 18);
-        $o[10] = $chi!(b0, b1, b2);
-        $o[11] = $chi!(b1, b2, b3);
-        $o[12] = $chi!(b2, b3, b4);
-        $o[13] = $chi!(b3, b4, b0);
-        $o[14] = $chi!(b4, b0, b1);
+        $put!($o, 10, $chi!(b0, b1, b2));
+        $put!($o, 11, $chi!(b1, b2, b3));
+        $put!($o, 12, $chi!(b2, b3, b4));
+        $put!($o, 13, $chi!(b3, b4, b0));
+        $put!($o, 14, $chi!(b4, b0, b1));
 
         let b0 = $rol!(xor2!($s[4], d4), 27);
         let b1 = $rol!(xor2!($s[5], d0), 36);
         let b2 = $rol!(xor2!($s[11], d1), 10);
         let b3 = $rol!(xor2!($s[17], d2), 15);
         let b4 = $rol!(xor2!($s[23], d3), 56);
-        $o[15] = $chi!(b0, b1, b2);
-        $o[16] = $chi!(b1, b2, b3);
-        $o[17] = $chi!(b2, b3, b4);
-        $o[18] = $chi!(b3, b4, b0);
-        $o[19] = $chi!(b4, b0, b1);
+        $put!($o, 15, $chi!(b0, b1, b2));
+        $put!($o, 16, $chi!(b1, b2, b3));
+        $put!($o, 17, $chi!(b2, b3, b4));
+        $put!($o, 18, $chi!(b3, b4, b0));
+        $put!($o, 19, $chi!(b4, b0, b1));
 
         let b0 = $rol!(xor2!($s[2], d2), 62);
         let b1 = $rol!(xor2!($s[8], d3), 55);
         let b2 = $rol!(xor2!($s[14], d4), 39);
         let b3 = $rol!(xor2!($s[15], d0), 41);
         let b4 = $rol!(xor2!($s[21], d1), 2);
-        $o[20] = $chi!(b0, b1, b2);
-        $o[21] = $chi!(b1, b2, b3);
-        $o[22] = $chi!(b2, b3, b4);
-        $o[23] = $chi!(b3, b4, b0);
-        $o[24] = $chi!(b4, b0, b1);
+        $put!($o, 20, $chi!(b0, b1, b2));
+        $put!($o, 21, $chi!(b1, b2, b3));
+        $put!($o, 22, $chi!(b2, b3, b4));
+        $put!($o, 23, $chi!(b3, b4, b0));
+        $put!($o, 24, $chi!(b4, b0, b1));
     }};
 }
 
-/// Load the four interleaved states, run the 24 rounds two at a time
-/// between `a` and `e`, and store them back.
+/// Load the four interleaved states, run the 24 rounds, and store them back.
+///
+/// The first round reads the state, and the last writes it, directly; only
+/// the 22 rounds between them, run two at a time between `a` and `e`, work on
+/// arrays the loop carries. Loading the state into such an array first, and
+/// storing the array back after, made LLVM copy all 25 words through
+/// `vmovups`, applied to secret state, a float-domain instruction Intel's
+/// Data Operand Independent Timing list does not cover. A word that a
+/// vector-integer instruction consumes straight from the state is kept in
+/// the integer domain.
 macro_rules! permute_with {
     ($state:ident, $rol:ident, $chi:ident) => {{
         let mut a = [_mm256_setzero_si256(); 25];
         let mut e = [_mm256_setzero_si256(); 25];
-        for (v, words) in a.iter_mut().zip($state.iter()) {
-            // SAFETY: `words` is 32 readable bytes; the load is unaligned.
-            *v = unsafe { _mm256_loadu_si256(words.as_ptr().cast()) };
+        {
+            let mut first = [_mm256_setzero_si256(); 25];
+            for (v, words) in first.iter_mut().zip($state.iter()) {
+                // SAFETY: `words` is 32 readable bytes; the load is unaligned.
+                *v = unsafe { _mm256_loadu_si256(words.as_ptr().cast()) };
+            }
+            round_rows!(first, e, put_array, RC[0], $rol, $chi);
         }
-        for pair in RC.chunks_exact(2) {
-            round_rows!(a, e, pair[0], $rol, $chi);
-            round_rows!(e, a, pair[1], $rol, $chi);
+        for pair in RC[1..23].chunks_exact(2) {
+            round_rows!(e, a, put_array, pair[0], $rol, $chi);
+            round_rows!(a, e, put_array, pair[1], $rol, $chi);
         }
-        for (words, v) in $state.iter_mut().zip(a.iter()) {
-            // SAFETY: `words` is 32 writable bytes; the store is unaligned.
-            unsafe { _mm256_storeu_si256(words.as_mut_ptr().cast(), *v) };
-        }
+        round_rows!(e, $state, put_state, RC[23], $rol, $chi);
     }};
 }
 
