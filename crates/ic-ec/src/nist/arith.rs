@@ -859,8 +859,10 @@ macro_rules! mont_field {
 
             #[inline]
             fn cmov(a: &mut Self, b: &Self, choice: ic_core::ct::Choice) {
-                let mask = (choice.unwrap_u8() as u64).wrapping_neg();
-                a.0 = $crate::nist::arith::select_ct(mask, b.0, a.0);
+                let mask = core::hint::black_box((choice.unwrap_u8() as u64).wrapping_neg());
+                for (x, y) in a.0.iter_mut().zip(b.0.iter()) {
+                    *x ^= mask & (*x ^ core::hint::black_box(*y));
+                }
             }
 
             #[inline]
