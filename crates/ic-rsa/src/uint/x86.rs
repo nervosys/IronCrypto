@@ -398,7 +398,9 @@ pub(crate) fn select<const N: usize>(
     // SAFETY: SSE2 is part of x86-64. Iteration `j` of the loop reads words
     // `2j..2j + 2` of each entry, at `table + 512k + 16j` for entry `k`, and
     // writes the same two words of `out`, for `j < limbs / 2 <= 32`: all in
-    // bounds. The masks are read from `lanes`, 16-byte aligned.
+    // bounds. The masks are read from `lanes`, 16-byte aligned. All sixteen
+    // xmm registers are declared clobbered, and the block zeroes each, so no
+    // value the compiler holds in one is expected to survive it.
     unsafe {
         asm!(
             ".p2align 6",
@@ -459,15 +461,46 @@ pub(crate) fn select<const N: usize>(
             "jrcxz 3f",
             "jmp 2b",
             "3:",
-            // The entry and its mask, cleared (hardening).
+            // Every vector register, cleared (hardening): the entry and its
+            // mask in xmm0 and xmm1, and whatever the compiler built the
+            // masks in before the block, which is declared clobbered below
+            // and so is gone when it ends.
             "pxor xmm0, xmm0",
             "pxor xmm1, xmm1",
+            "pxor xmm2, xmm2",
+            "pxor xmm3, xmm3",
+            "pxor xmm4, xmm4",
+            "pxor xmm5, xmm5",
+            "pxor xmm6, xmm6",
+            "pxor xmm7, xmm7",
+            "pxor xmm8, xmm8",
+            "pxor xmm9, xmm9",
+            "pxor xmm10, xmm10",
+            "pxor xmm11, xmm11",
+            "pxor xmm12, xmm12",
+            "pxor xmm13, xmm13",
+            "pxor xmm14, xmm14",
+            "pxor xmm15, xmm15",
             inout("rdi") table.as_ptr() => _,
             in("rsi") lanes.0.as_ptr(),
             inout("rdx") out.as_mut_ptr() => _,
             inout("rcx") count => _,
             out("xmm0") _,
             out("xmm1") _,
+            out("xmm2") _,
+            out("xmm3") _,
+            out("xmm4") _,
+            out("xmm5") _,
+            out("xmm6") _,
+            out("xmm7") _,
+            out("xmm8") _,
+            out("xmm9") _,
+            out("xmm10") _,
+            out("xmm11") _,
+            out("xmm12") _,
+            out("xmm13") _,
+            out("xmm14") _,
+            out("xmm15") _,
             options(nostack),
         );
     }
@@ -821,7 +854,8 @@ macro_rules! sel_16 {
 /// `lanes` 64 words and 16-byte aligned, `out` for writing `-count * 2`
 /// words; `count` the negated number of pairs of words.
 unsafe fn select32(table: *const u64, lanes: *const u64, out: *mut u64, count: usize) {
-    // SAFETY: as the caller guarantees.
+    // SAFETY: as the caller guarantees. All sixteen xmm registers are
+    // declared clobbered and zeroed at the end, as in `select`.
     unsafe {
         asm!(
             ".p2align 6",
@@ -837,9 +871,26 @@ unsafe fn select32(table: *const u64, lanes: *const u64, out: *mut u64, count: u
             "jrcxz 3f",
             "jmp 2b",
             "3:",
-            // The entry and its mask, cleared (hardening).
+            // Every vector register, cleared (hardening): the entry and its
+            // mask in xmm0 and xmm1, and whatever the compiler built the
+            // masks in before the block, which is declared clobbered below
+            // and so is gone when it ends.
             "pxor xmm0, xmm0",
             "pxor xmm1, xmm1",
+            "pxor xmm2, xmm2",
+            "pxor xmm3, xmm3",
+            "pxor xmm4, xmm4",
+            "pxor xmm5, xmm5",
+            "pxor xmm6, xmm6",
+            "pxor xmm7, xmm7",
+            "pxor xmm8, xmm8",
+            "pxor xmm9, xmm9",
+            "pxor xmm10, xmm10",
+            "pxor xmm11, xmm11",
+            "pxor xmm12, xmm12",
+            "pxor xmm13, xmm13",
+            "pxor xmm14, xmm14",
+            "pxor xmm15, xmm15",
             inout("rdi") table => _,
             in("rsi") lanes,
             inout("rdx") out => _,
@@ -847,6 +898,20 @@ unsafe fn select32(table: *const u64, lanes: *const u64, out: *mut u64, count: u
             out("r8") _,
             out("xmm0") _,
             out("xmm1") _,
+            out("xmm2") _,
+            out("xmm3") _,
+            out("xmm4") _,
+            out("xmm5") _,
+            out("xmm6") _,
+            out("xmm7") _,
+            out("xmm8") _,
+            out("xmm9") _,
+            out("xmm10") _,
+            out("xmm11") _,
+            out("xmm12") _,
+            out("xmm13") _,
+            out("xmm14") _,
+            out("xmm15") _,
             options(nostack),
         );
     }

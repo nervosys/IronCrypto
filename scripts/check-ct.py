@@ -1355,8 +1355,9 @@ def inspect(assembly, target, excused=None):
 # xmm0-15 and their ymm/zmm extensions, or a zeroing idiom (`pxor x, x` and
 # its VEX/EVEX forms) per register. Hardening, not constant time: a register
 # left holding a round key or a selected entry is not a timing leak. The
-# check reads only the assembly blocks; whatever the compiler does with
-# vector registers after them (copying a result out) is outside it.
+# vector registers the compiler's own code writes before that block (building
+# a mask, say) count as named, since the block must wipe them too; what it
+# does after the block (copying a result out) is outside the check.
 # docs/CONSTANT_TIME.md, "Registers and stack after a kernel".
 X86_WIPED = (
     "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
@@ -1409,6 +1410,9 @@ def wipe_failures(assembly, target):
     failures = []
     for probe in X86_WIPED:
         blocks = []
+        # (blocks completed so far, register) for each vector register the
+        # compiler's own code, outside any block, writes.
+        compiled = []
 
         def walk(lines, seen):
             # Each block in order, a callee's at its call.
@@ -1432,12 +1436,20 @@ def wipe_failures(assembly, target):
                     current = None
                 elif current is not None:
                     current.append(line)
+                elif text and not text.startswith((".", "#")) and not text.endswith(":"):
+                    op, operands = _split(line)
+                    last = _VECTOR_REGISTER.fullmatch(operands[-1]) if operands else None
+                    if last:
+                        compiled.append((len(blocks), int(last[1])))
 
         walk(functions[probe], {probe})
         if not blocks:
             failures.append(f"{probe}: no assembly block names a vector register")
             continue
         used = {int(n) for block in blocks for l in block for n in _VECTOR_REGISTER.findall(l)}
+        # Registers the compiler wrote before the last block are in play too:
+        # the block has to wipe what was built in them, not only what it names.
+        used |= {n for done, n in compiled if done < len(blocks)}
         missing = used - zeroed_at_end(blocks[-1])
         if missing:
             failures.append(f"{probe}: vector registers not zeroed after its last kernel: "

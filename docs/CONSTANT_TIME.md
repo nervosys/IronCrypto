@@ -1639,9 +1639,14 @@ ChaCha20 AVX-512 group ended with `vzeroall`.
 | AES-GCM 256-bit (`gcm_x86_asm::y16_*`) | `vzeroall` for `vzeroupper` | each call |
 | AES-GCM 512-bit (`gcm_x86_asm::zmm_groups`, `zmm32_groups`) | `vzeroall` for `vzeroupper` | each call |
 | Ed25519 signing's table read (`fe64::edwards`, `block_scan!`) | `vzeroall` for `vzeroupper` | each read, 26 a signature |
-| RSA table reads (`uint::x86::select`, `select32`, `select_avx2_*`) | `pxor` of xmm0, xmm1; `vzeroall` | each read |
+| RSA table reads (`uint::x86::select`, `select32`, `select_avx2_*`) | `pxor` of xmm0-15 (`select`, `select32`); `vzeroall` | each read |
 | RSA IFMA exponentiation (`uint::ifma::pow_fixed`) | `vzeroall` | once, at its end |
 | P-256/P-384 IFMA (`nist::ifma`, generated kernels) | `vzeroall` (`Cleared`) | once per multiplication |
+
+The SSE2 scan zeroes all sixteen because the compiler builds the per-entry masks, which
+encode the exponent digit, in xmm2-4 before the block; it declares them clobbered so that
+nothing the compiler left in them survives, and `check-ct.py` counts the vector registers
+the compiler writes before a probe's last block, so a block that names fewer fails.
 
 Every block that now ends with `vzeroall` already declared all sixteen
 vector registers clobbered; each list was read again. None uses `zmm16`-31
