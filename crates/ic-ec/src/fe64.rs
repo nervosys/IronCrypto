@@ -359,9 +359,17 @@ impl Fe64 {
     /// requires. Values from `p` to `2^255 - 1` are accepted unreduced, which
     /// the representation allows.
     pub fn from_bytes(bytes: &[u8; 32]) -> Fe64 {
+        // One volatile eight-byte load per limb. Plain loads let LLVM pair limbs
+        // 0-1 and 2-3 into 128-bit moves and mask the top limb with `andps`,
+        // storing with `movaps`: float-domain instructions that Intel's Data
+        // Operand Independent Timing list does not cover, applied to secret
+        // bytes. A volatile load is neither merged nor vectorised, so the
+        // limbs stay in general registers. It reads memory only; no assembly.
         let load = |i: usize| -> u64 {
-            let mut v = [0u8; 8];
-            v.copy_from_slice(&bytes[i * 8..i * 8 + 8]);
+            // SAFETY: eight bytes at `i * 8` for `i < 4` lie inside `bytes`,
+            // and `[u8; 8]` has alignment 1.
+            let v =
+                unsafe { core::ptr::read_volatile(bytes.as_ptr().add(i * 8).cast::<[u8; 8]>()) };
             u64::from_le_bytes(v)
         };
         Fe64([load(0), load(1), load(2), load(3) & (u64::MAX >> 1)])
