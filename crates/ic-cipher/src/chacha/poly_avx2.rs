@@ -234,7 +234,10 @@ pub unsafe fn step(h: &Limbs, r4: &Mul, blocks: &[u8; 64]) -> Limbs {
 }
 
 /// The last multiplication, by `r^4, r^2, r^3, r` in lanes `0..4`, and the sum
-/// of the lanes, as five 64-bit limbs below `2^28` for the scalar `reduce`.
+/// of the lanes, as five 64-bit limbs of at most `2^28 + 2^12` for the scalar
+/// `reduce`, which takes limbs up to about `2^60`. (Not below `2^28`: four
+/// lanes' limb 1 can sum to 151 above it. IronProof's functional proof of the
+/// compiled `finish` establishes the `2^28 + 2^12` bound.)
 ///
 /// # Safety
 ///
