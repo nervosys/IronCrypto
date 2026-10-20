@@ -121,9 +121,29 @@ pub fn pack8<const D: usize>(v: &[i16; 8]) -> [u8; 16] {
 #[doc(hidden)]
 #[inline]
 pub fn unpack8<const D: usize>(bytes: &[u8; 16]) -> [u16; 8] {
-    let mask = (1u128 << D) - 1;
-    let acc = u128::from_le_bytes(*bytes);
-    core::array::from_fn(|k| ((acc >> (D * k)) & mask) as u16)
+    // Two 64-bit words and scalar shifts, not one `u128`: LLVM lowered the
+    // `u128` form to `movsd`, `andpd` and `movupd` on the secret bytes, which
+    // Intel's Data Operand Independent Timing list does not cover. `D` and
+    // `k` are constants, so each branch below is resolved at compile time.
+    let (head, tail) = bytes.split_at(8);
+    let lo = u64::from_le_bytes([
+        head[0], head[1], head[2], head[3], head[4], head[5], head[6], head[7],
+    ]);
+    let hi = u64::from_le_bytes([
+        tail[0], tail[1], tail[2], tail[3], tail[4], tail[5], tail[6], tail[7],
+    ]);
+    let mask = (1u64 << D) - 1;
+    core::array::from_fn(|k| {
+        let at = D * k;
+        let field = if at + D <= 64 {
+            lo >> at
+        } else if at >= 64 {
+            hi >> (at - 64)
+        } else {
+            (lo >> at) | (hi << (64 - at))
+        };
+        (field & mask) as u16
+    })
 }
 
 /// The width-generic form, for the widths ML-KEM never packs at.
