@@ -179,7 +179,12 @@ unsafe fn scan_avx2<const L: usize>(
         for (a, row) in acc.iter_mut().zip(entry.0.iter()) {
             // SAFETY: `row` is four words of a 32-byte-aligned `Lanes`.
             let x = unsafe { _mm256_load_si256(row.as_ptr().cast()) };
-            *a = _mm256_or_si256(*a, _mm256_and_si256(x, mv));
+            // An add, not an OR: the masks are one-hot or all zero, so at
+            // most one term is non-zero and the two agree. `vpaddq` is an
+            // integer instruction that Intel's Data Operand Independent
+            // Timing list covers; with an OR and an AND alone LLVM chose
+            // `vandps` and `vorps`, which it does not.
+            *a = _mm256_add_epi64(*a, _mm256_and_si256(x, mv));
         }
     }
     for (row, a) in out.0.iter_mut().zip(acc) {
