@@ -1064,6 +1064,24 @@ mod x86_rsa {
         unsafe { p::kara_mid_sub(t, q) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_mul_16(z: &mut [u64; 32], a: &[u64; 16], b: &[u64; 16]) {
+        // SAFETY: forwards the `# Safety` precondition of `mul_16`, which requires
+        // BMI2 and ADX.
+        unsafe { p::mul_16(z, a, b) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_sqr_16(z: &mut [u64; 32], a: &[u64; 16]) {
+        // SAFETY: forwards the `# Safety` precondition of `sqr_16`, which requires
+        // BMI2 and ADX.
+        unsafe { p::sqr_16(z, a) }
+    }
+
     #[no_mangle]
     pub fn ct_rsa_finish_2048(out: &mut [u64; 32], r: &[u64; 32], top: u64, n: &[u64; 32]) {
         p::finish_2048(out, r, top, n)

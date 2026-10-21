@@ -252,6 +252,32 @@ pub mod x86 {
         unsafe { x86::finish(out.as_mut_ptr(), r.as_ptr(), top, n.as_ptr(), 32) }
     }
 
+    /// The schoolbook product of two 16-word halves: `z = a * b`, 32 words,
+    /// with no reduction. This is the product that the 2048-bit Karatsuba
+    /// takes three of.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX.
+    pub unsafe fn mul_16(z: &mut [u64; 32], a: &[u64; 16], b: &[u64; 16]) {
+        // SAFETY: `z` is 32 words to write and `a` and `b` 16 to read, and a
+        // `&mut` cannot overlap either shared borrow; the caller guarantees
+        // BMI2 and ADX.
+        unsafe { x86::mul_16(z.as_mut_ptr(), a.as_ptr(), b.as_ptr()) }
+    }
+
+    /// The schoolbook square of a 16-word half: `z = a^2`, 32 words, with no
+    /// reduction. The cross products are doubled, not computed twice.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX.
+    pub unsafe fn sqr_16(z: &mut [u64; 32], a: &[u64; 16]) {
+        // SAFETY: `z` is 32 words to write and `a` 16 to read, and a `&mut`
+        // cannot overlap a shared borrow; the caller guarantees BMI2 and ADX.
+        unsafe { x86::sqr_16(z.as_mut_ptr(), a.as_ptr()) }
+    }
+
     /// One almost-Montgomery product on AVX-512 IFMA at 2048 bits, 40 limbs
     /// of 52 bits: the kernel and the carry of its columns into limbs.
     pub fn ifma_amm_2048(ctx: &mut IfmaCtx, a: &[u64; 40], b: &[u64; 40], out: &mut [u64; 40]) {

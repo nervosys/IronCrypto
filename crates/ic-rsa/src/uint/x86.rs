@@ -3144,7 +3144,7 @@ pub(crate) unsafe fn kara_mid_sub(t: *mut u64, p: *mut u64) {
 /// 32, overlapping neither.
 #[target_feature(enable = "bmi2,adx")]
 #[inline(never)]
-unsafe fn mul_16(z: *mut u64, a: *const u64, b: *const u64) {
+pub(crate) unsafe fn mul_16(z: *mut u64, a: *const u64, b: *const u64) {
     // SAFETY: every address is `a` or `b` plus 0 to 120 or `z` plus 0 to
     // 248; rbx and rbp are restored.
     unsafe {
@@ -3182,7 +3182,7 @@ unsafe fn mul_16(z: *mut u64, a: *const u64, b: *const u64) {
 /// As for [`mul_16`], with `a` for both operands.
 #[target_feature(enable = "bmi2,adx")]
 #[inline(never)]
-unsafe fn sqr_16(z: *mut u64, a: *const u64) {
+pub(crate) unsafe fn sqr_16(z: *mut u64, a: *const u64) {
     // SAFETY: as in `mul_16`.
     unsafe {
         asm!(

@@ -124,6 +124,9 @@ X86_ONLY = (
     # its arguments: the absolute difference, the Karatsuba middle terms, and
     # the final conditional subtraction.
     "ct_rsa_abs_diff_16", "ct_rsa_kara_mid", "ct_rsa_kara_mid_sub", "ct_rsa_finish_2048",
+    # The two schoolbook kernels at 16 words, the products that Karatsuba's
+    # three sub-products are: straight-line MULX/ADCX/ADOX, with no loop.
+    "ct_rsa_mul_16", "ct_rsa_sqr_16",
     # RSA's whole exponentiation on AVX-512 IFMA, compiled once per width:
     # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
     # bits, its modulus. Its loops are excused the same way.
