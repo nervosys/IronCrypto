@@ -213,7 +213,11 @@ pub mod x86 {
     /// The middle term of the 2048-bit Karatsuba product, added into
     /// `t[16..64]`: `L + H - p` when `m` is all ones, `L + H + p` when it is
     /// zero, where `L` and `H` are `t`'s halves. Any other `m` is taken as
-    /// all ones.
+    /// all ones. The result is that only where the middle term itself,
+    /// `L + H - p` or `L + H + p`, is in `[0, 2^2049)`, as it is in
+    /// `kmul_32`, where it is `a0 b1 + a1 b0` (the identity above `kmul_32` in
+    /// `uint/x86.rs`); outside that range the kernel's top bit is not the
+    /// middle term's.
     ///
     /// # Safety
     ///
@@ -227,7 +231,7 @@ pub mod x86 {
     }
 
     /// The middle term of the 2048-bit Karatsuba square, always subtracted:
-    /// [`kara_mid`] with `m` all ones.
+    /// [`kara_mid`] with `m` all ones, under the same range for `L + H - p`.
     ///
     /// # Safety
     ///
