@@ -1556,7 +1556,7 @@ unsafe fn mont_sqr_8n(t: *mut u64, a: *const u64, n: *const u64, n0inv: u64, l: 
 /// words and `t` for reading and writing `2l + 1`, not overlapping, and `l`
 /// a non-zero multiple of eight.
 #[target_feature(enable = "bmi2,adx")]
-unsafe fn redc_8n(t: *mut u64, n: *const u64, n0inv: u64, l: usize) {
+pub(crate) unsafe fn redc_8n(t: *mut u64, n: *const u64, n0inv: u64, l: usize) {
     let g = l / 8;
     let mut carry = 0u64;
     for k in 0..g {
@@ -1828,7 +1828,13 @@ unsafe fn diag(t: *mut u64, a: *const u64, g: usize) {
 /// BMI2 and ADX; `n` valid for reading `8g + 8` words, `z` for reading and
 /// writing `8g + 16`, not overlapping; `carry` zero or one.
 #[target_feature(enable = "bmi2,adx")]
-unsafe fn redc_block(z: *mut u64, n: *const u64, n0inv: u64, g: usize, carry: u64) -> u64 {
+pub(crate) unsafe fn redc_block(
+    z: *mut u64,
+    n: *const u64,
+    n0inv: u64,
+    g: usize,
+    carry: u64,
+) -> u64 {
     let out: u64;
     // SAFETY: the quotient steps read `n[0..8]` and read and write `z[0..8]`;
     // the groups read `z[0..8]` (the quotients) and `n[8..8g + 8]`, and read

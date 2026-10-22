@@ -127,6 +127,10 @@ X86_ONLY = (
     # The two schoolbook kernels at 16 words, the products that Karatsuba's
     # three sub-products are: straight-line MULX/ADCX/ADOX, with no loop.
     "ct_rsa_mul_16", "ct_rsa_sqr_16",
+    # The 2048-bit Montgomery reduction on its own, one block of eight
+    # quotient words and the four blocks together, looping over the groups as
+    # the reduction in the whole product does.
+    "ct_rsa_redc_block_2048", "ct_rsa_redc_2048",
     # RSA's whole exponentiation on AVX-512 IFMA, compiled once per width:
     # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
     # bits, its modulus. Its loops are excused the same way.
@@ -225,6 +229,10 @@ X86_EXCUSE_CEILINGS = {
     # The final subtraction on its own: the same two loops (`jrcxz` on rcx,
     # stepped by `lea`, and a `jmp` back), counted by the public width.
     "ct_rsa_finish_2048": {"counter loop": 2, "unconditional jump": 2},
+    # The reduction on its own: one block's loop over its groups, and the
+    # four blocks' loops in the whole reduction.
+    "ct_rsa_redc_block_2048": {"counter loop": 1, "unconditional jump": 1},
+    "ct_rsa_redc_2048": {"counter loop": 4, "unconditional jump": 4},
     # MULX/ADX at 1536 bits, on the eight-word blocks: three product blocks
     # and three reduction blocks, each looping over its groups as above, and
     # the final subtraction's two loops.

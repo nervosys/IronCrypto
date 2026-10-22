@@ -252,6 +252,38 @@ pub mod x86 {
         unsafe { x86::finish(out.as_mut_ptr(), r.as_ptr(), top, n.as_ptr(), 32) }
     }
 
+    /// One block of the 2048-bit Montgomery reduction: eight quotient words
+    /// from the columns `z[0..8]`, each zeroing its column, stored in their
+    /// place; then `z[8..32]` plus those words times `n[8..32]`; then the
+    /// window added to `z[32..40]` with `carry` in. Returns the carry out.
+    /// Any `carry` other than zero is taken as one. `n0inv` is
+    /// `-n[0]^-1 mod 2^64` in the reduction; the kernel does not check it.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX.
+    pub unsafe fn redc_block_2048(z: &mut [u64; 40], n: &[u64; 32], n0inv: u64, carry: u64) -> u64 {
+        let carry = (carry != 0) as u64;
+        // SAFETY: with `g` 3, the block reads `n[0..32]` and reads and writes
+        // `z[0..40]`, and a `&mut` cannot overlap a shared borrow; `carry` is
+        // zero or one; the caller guarantees BMI2 and ADX.
+        unsafe { x86::redc_block(z.as_mut_ptr(), n.as_ptr(), n0inv, 3, carry) }
+    }
+
+    /// The whole 2048-bit Montgomery reduction of the 64-word `t` in place:
+    /// four blocks of eight quotient words, the result, below `2n` when
+    /// `t < n * 2^2048`, in `t[32..=64]`. `n0inv` is `-n[0]^-1 mod 2^64`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX.
+    pub unsafe fn redc_2048(t: &mut [u64; 65], n: &[u64; 32], n0inv: u64) {
+        // SAFETY: `t` is 2 * 32 + 1 words to read and write and `n` 32 to
+        // read, not overlapping; 32 is a non-zero multiple of eight; the
+        // caller guarantees BMI2 and ADX.
+        unsafe { x86::redc_8n(t.as_mut_ptr(), n.as_ptr(), n0inv, 32) }
+    }
+
     /// The schoolbook product of two 16-word halves: `z = a * b`, 32 words,
     /// with no reduction. This is the product that the 2048-bit Karatsuba
     /// takes three of.

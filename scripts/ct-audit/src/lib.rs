@@ -1082,6 +1082,29 @@ mod x86_rsa {
         unsafe { p::sqr_16(z, a) }
     }
 
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_redc_block_2048(
+        z: &mut [u64; 40],
+        n: &[u64; 32],
+        n0inv: u64,
+        carry: u64,
+    ) -> u64 {
+        // SAFETY: forwards the `# Safety` precondition of `redc_block_2048`,
+        // which requires BMI2 and ADX.
+        unsafe { p::redc_block_2048(z, n, n0inv, carry) }
+    }
+
+    /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_rsa_redc_2048(t: &mut [u64; 65], n: &[u64; 32], n0inv: u64) {
+        // SAFETY: forwards the `# Safety` precondition of `redc_2048`, which
+        // requires BMI2 and ADX.
+        unsafe { p::redc_2048(t, n, n0inv) }
+    }
+
     #[no_mangle]
     pub fn ct_rsa_finish_2048(out: &mut [u64; 32], r: &[u64; 32], top: u64, n: &[u64; 32]) {
         p::finish_2048(out, r, top, n)
