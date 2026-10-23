@@ -12,7 +12,7 @@ Neither library is CMVP validated.
 
 | | ahead | level | behind |
 |---|---|---|---|
-| Speed, x86-64 | **Default build, ahead:** AES-256-GCM at 4 MiB, 1 KiB and 64 B; ChaCha20-Poly1305 at all three sizes; SHA-512; HMAC-SHA256 at 200 B; X25519; Ed25519 sign, verify and verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH (all three rows) and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation (both rows) and decapsulation with the key parsed once; ML-KEM-768 key generation, like for like (from 2026-10-17, "ML-KEM on eight Keccak lanes"); RSA-2048, -3072 and -4096 sign and verify. **Without AVX-512, ahead:** ChaCha20-Poly1305 at all three sizes; AES-256-GCM at 1 KiB and 64 B; SHA-512; HMAC-SHA256 at 200 B; Ed25519 verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH with the key prepared, and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation and decapsulation with the key parsed once; RSA-3072 sign and verify, RSA-4096 verify, RSA-2048 sign; P-384 ECDH from key bytes and against Graviola's key parsed once in `graviola-p384` only (level in `graviola`); Ed25519 sign in `graviola-25519` only (level in `graviola`); RSA-2048 verify in `graviola-rsa` only (level in `graviola`). Rule and every row: "Consolidated run, 2026-10-16" under Speed. | **Default build, level:** SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB. **Without AVX-512, level:** X25519; Ed25519 sign and verify (sign ahead in `graviola-25519`); SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB; P-384 ECDH and from key bytes in `graviola`; RSA-2048 verify in `graviola`; RSA-4096 sign; ML-KEM-768 key generation, like for like. | **Default build, behind:** P-384 key preparation (not like for like, see the section); ML-KEM-768 key generation with IronCrypto's pairwise test. **Without AVX-512, behind:** AES-256-GCM at 4 MiB, against Graviola's AVX-512 path (see the section); P-384 key preparation; ML-KEM-768 key generation with the pairwise test. |
+| Speed, x86-64 | **Default build, ahead:** AES-256-GCM at 4 MiB, 1 KiB and 64 B; ChaCha20-Poly1305 at all three sizes; SHA-512; HMAC-SHA256 at 200 B; X25519; Ed25519 sign, verify and verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH (all three rows) and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation (both rows) and decapsulation with the key parsed once; ML-KEM-768 key generation, like for like; RSA-2048, -3072 and -4096 sign and verify. **Without AVX-512, ahead:** ChaCha20-Poly1305 at all three sizes; AES-256-GCM at 64 B; SHA-512; Ed25519 verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH with the key prepared, and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation (both rows) and decapsulation with the key parsed once; RSA-2048 sign and verify; RSA-3072 sign and verify; RSA-4096 verify; AES-256-GCM at 1 KiB in `graviola-gcm` only (level in `graviola`); P-384 ECDH from key bytes in `graviola-p384` only (level in `graviola`); Ed25519 sign in `graviola-25519` only (level in `graviola`). Rule and every row: "Consolidated run, 2026-10-23" under Speed. | **Default build, level:** SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB. **Without AVX-512, level:** X25519; Ed25519 verify, and sign in `graviola`; SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB and 200 B; AES-256-GCM at 1 KiB in `graviola`; P-384 ECDH against Graviola's key parsed once (both modes), and from key bytes in `graviola`; RSA-4096 sign; ML-KEM-768 key generation, like for like. | **Default build, behind:** P-384 key preparation (not like for like, see the section); ML-KEM-768 key generation with IronCrypto's pairwise test. **Without AVX-512, behind:** AES-256-GCM at 4 MiB, against Graviola's AVX-512 path (see the section); P-384 key preparation; ML-KEM-768 key generation with the pairwise test. |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
 | Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, ML-KEM's scalar reductions, compression and packing, the portable field additions, carries and reductions of P-256 and Curve25519, P-384's portable addition, subtraction and closing subtraction, P-384's portable Montgomery multiplication and squaring in pieces joined by four argued steps, P-256's portable field multiplication and squaring, end to end except for two argued steps, and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
@@ -22,6 +22,105 @@ Neither library is CMVP validated.
 | Breadth | post-quantum signatures, password hashing, HPKE and more; `no_std`, 32-bit and bare-metal targets | | |
 
 ## Speed
+
+### Consolidated run, 2026-10-23, master c04c63f
+
+The run of 2026-10-16, below, repeated the same way on master c04c63f. Every
+comparison mode ran five rounds in each of two configurations (`graviola`,
+`graviola-p384`, `graviola-chacha`, `graviola-gcm`, `graviola-25519`,
+`graviola-rsa`), against Graviola 0.4.1 from crates.io, unpatched. The default
+build and `RUSTFLAGS="--cfg ic_no_avx512"` were built from c04c63f with rustc
+1.99.1 and copied aside (SHA-256 `bb3fcecb...` and `4a1b778c...`). Round r ran
+the six modes with one build, then the six with the other, 30 seconds between
+modes; odd rounds started with the default build, even rounds with the other.
+The 60 runs took 35 minutes, from 07:30 to 08:05.
+
+The ratios, rule and classification are as for 2026-10-16: IronCrypto's rate
+over Graviola's from the bench's own verdict line, minimum, median and maximum
+over the five rounds. The host was not quiet: another session's `cargo test`
+ran throughout, and the load at the start of each mode read 9 to 100 percent,
+median 75. Read the ratios within this run only.
+
+| operation (bench mode) | default, min-median-max | without AVX-512, min-median-max |
+|---|---|---|
+| aes-256-gcm, 4 MiB (`graviola`) | 1.19-1.54-1.55 ahead | 0.58-0.91-0.92 behind |
+| chacha20-poly1305, 4 MiB (`graviola`) | 2.53-2.77-3.22 ahead | 1.40-1.43-1.61 ahead |
+| aes-256-gcm, 1 KiB (`graviola`) | 1.38-1.61-1.72 ahead | 0.99-1.19-1.63 level |
+| chacha20-poly1305, 1 KiB (`graviola`) | 1.96-2.09-2.18 ahead | 1.29-1.34-1.42 ahead |
+| aes-256-gcm, 64 B (`graviola`) | 1.80-2.28-2.88 ahead | 2.83-2.85-3.21 ahead |
+| chacha20-poly1305, 64 B (`graviola`) | 2.53-2.57-2.69 ahead | 2.36-2.54-2.57 ahead |
+| sha-256 (`graviola`) | 1.00-1.00-1.02 level | 1.00-1.00-1.00 level |
+| sha-512 (`graviola`) | 1.12-1.16-1.37 ahead | 1.02-1.18-1.30 ahead |
+| sha3-256 (`graviola`) | 0.97-0.98-1.00 level | 0.85-0.97-1.00 level |
+| hmac-sha256, 4 MiB (`graviola`) | 0.99-0.99-1.00 level | 0.99-1.00-1.00 level |
+| hmac-sha256, 200 B (`graviola`) | 1.12-1.15-1.34 ahead | 0.99-1.12-1.55 level |
+| sha-256, 64 B (`graviola`) | 0.97-1.36-1.38 level | 0.92-1.30-1.37 level |
+| x25519 agree (`graviola`) | 1.10-1.16-1.42 ahead | 0.87-0.99-1.21 level |
+| p-256 ecdh (`graviola`) | 1.16-1.22-1.35 ahead | 1.15-1.19-1.30 ahead |
+| p-256 ecdh, from bytes (`graviola`) | 1.23-1.27-1.41 ahead | 1.22-1.26-1.28 ahead |
+| p-256 ecdh, key prepared (`graviola`) | 2.61-2.67-3.04 ahead | 2.54-2.67-3.10 ahead |
+| ecdsa p-256 sign (`graviola`) | 1.08-1.31-1.38 ahead | 1.07-1.09-1.13 ahead |
+| ecdsa p-256 verify (`graviola`) | 1.20-1.42-1.61 ahead | 1.36-1.40-1.42 ahead |
+| p-384 ecdh (`graviola`) | 1.23-1.46-1.56 ahead | 0.98-1.04-1.09 level |
+| p-384 ecdh, from bytes (`graviola`) | 1.37-1.51-1.67 ahead | 0.96-1.06-1.15 level |
+| p-384 ecdh, key prepared (`graviola`) | 2.56-3.12-3.24 ahead | 1.89-2.25-2.36 ahead |
+| p-384 key preparation (`graviola`) | 0.04-0.04-0.06 behind | 0.04-0.05-0.06 behind |
+| ecdsa p-384 sign (`graviola`) | 2.52-2.88-3.28 ahead | 2.24-2.51-3.20 ahead |
+| ecdsa p-384 verify (`graviola`) | 1.80-1.97-2.25 ahead | 1.92-2.04-2.22 ahead |
+| ed25519 sign (`graviola`) | 1.00-1.39-1.52 ahead | 0.97-1.07-1.09 level |
+| ed25519 verify (`graviola`) | 1.23-1.47-2.01 ahead | 0.99-1.05-1.17 level |
+| ed25519 verify, key held (`graviola`) | 1.49-1.68-2.37 ahead | 1.13-1.17-1.21 ahead |
+| keygen (ironcrypto with pairwise test) (`graviola`) | 0.52-0.55-0.63 behind | 0.41-0.45-0.49 behind |
+| keygen (like for like, no pairwise test) (`graviola`) | 1.16-1.22-1.49 ahead | 0.98-1.01-1.35 level |
+| ml-kem-768 encaps, from bytes, both (`graviola`) | 1.68-1.72-1.95 ahead | 1.41-1.47-1.59 ahead |
+| ml-kem-768 encaps, parsed once, both (`graviola`) | 2.13-2.25-2.76 ahead | 1.63-1.91-2.28 ahead |
+| ml-kem-768 decaps, parsed once, both (`graviola`) | 1.09-1.22-1.31 ahead | 1.13-1.20-1.24 ahead |
+| rsa-2048 sign (`graviola`) | 1.28-1.45-1.51 ahead | 1.08-1.13-1.32 ahead |
+| rsa-2048 verify (`graviola`) | 1.68-1.77-1.88 ahead | 1.06-1.14-1.29 ahead |
+| p-384 ecdh (`graviola-p384`) | 1.25-1.42-1.47 ahead | 1.02-1.04-1.05 level |
+| p-384 ecdh, from bytes (`graviola-p384`) | 1.30-1.46-1.55 ahead | 1.06-1.10-1.12 ahead |
+| p-384 ecdh, key prepared (`graviola-p384`) | 2.74-3.18-3.24 ahead | 2.10-2.33-2.45 ahead |
+| p-384 key preparation (`graviola-p384`) | 0.05-0.05-0.05 behind | 0.05-0.05-0.05 behind |
+| ecdsa p-384 sign (`graviola-p384`) | 2.76-3.07-3.20 ahead | 2.38-2.43-2.53 ahead |
+| ecdsa p-384 verify (`graviola-p384`) | 1.87-2.01-2.28 ahead | 1.91-2.23-2.31 ahead |
+| chacha20-poly1305, 4 MiB (`graviola-chacha`) | 2.74-2.77-3.26 ahead | 1.39-1.41-1.41 ahead |
+| chacha20-poly1305, 1 KiB (`graviola-chacha`) | 2.07-2.09-2.25 ahead | 1.34-1.35-1.38 ahead |
+| chacha20-poly1305, 64 B (`graviola-chacha`) | 2.51-2.57-2.59 ahead | 2.46-2.55-2.62 ahead |
+| aes-256-gcm, 4 MiB (`graviola-gcm`) | 1.22-1.59-1.60 ahead | 0.90-0.90-0.92 behind |
+| aes-256-gcm, 1 KiB (`graviola-gcm`) | 1.58-1.72-1.82 ahead | 1.11-1.16-1.19 ahead |
+| aes-256-gcm, 64 B (`graviola-gcm`) | 2.35-2.82-2.88 ahead | 2.77-2.86-2.93 ahead |
+| x25519 agree (`graviola-25519`) | 1.14-1.15-1.15 ahead | 0.99-0.99-1.05 level |
+| ed25519 sign (`graviola-25519`) | 1.21-1.22-1.22 ahead | 1.08-1.09-1.09 ahead |
+| ed25519 verify (`graviola-25519`) | 1.14-1.14-1.16 ahead | 0.99-0.99-1.05 level |
+| ed25519 verify, key held (`graviola-25519`) | 1.27-1.32-1.35 ahead | 1.12-1.13-1.24 ahead |
+| rsa-2048 sign (`graviola-rsa`) | 1.43-1.44-1.49 ahead | 1.08-1.12-1.13 ahead |
+| rsa-2048 verify (`graviola-rsa`) | 1.37-1.68-1.75 ahead | 1.13-1.26-1.41 ahead |
+| rsa-3072 sign (`graviola-rsa`) | 3.73-3.81-3.97 ahead | 2.48-2.52-2.55 ahead |
+| rsa-3072 verify (`graviola-rsa`) | 3.00-3.04-3.39 ahead | 2.96-3.02-3.49 ahead |
+| rsa-4096 sign (`graviola-rsa`) | 1.49-1.82-2.20 ahead | 0.98-1.15-1.39 level |
+| rsa-4096 verify (`graviola-rsa`) | 2.75-3.01-3.10 ahead | 2.79-3.15-3.48 ahead |
+
+Against 2026-10-16, no row changed between ahead and behind, and the three
+rows behind are the same three, for the reasons given there: AES-256-GCM at
+4 MiB without AVX-512 against Graviola's own AVX-512 path, P-384 key
+preparation, and key generation with the pairwise test (0.55 by median in the
+default build here, 0.42 then). Five rows moved between ahead and level. All
+five were near the boundary in both runs:
+
+- Without AVX-512, now level: HMAC-SHA256 at 200 B (minimum 0.99, median
+  1.12), AES-256-GCM at 1 KiB in `graviola` (minimum 0.99; ahead in
+  `graviola-gcm`), and P-384 ECDH against Graviola's key parsed once in
+  `graviola-p384` (median 1.04).
+- Without AVX-512, now ahead: RSA-2048 verify in `graviola` (1.06-1.14-1.29;
+  0.93-1.15-1.41 then).
+- Default build, now ahead: ML-KEM-768 key generation like for like
+  (1.16-1.22-1.49), which the summary already counted as ahead from
+  2026-10-17's "ML-KEM on eight Keccak lanes".
+
+This run cannot say whether any of these is a change in the library. The
+code changed between 706bb35 and c04c63f, but each shift is inside the spread
+of the earlier run's rows. Telling them apart would take an alternated A/B of
+the two commits under the same load, as AGENTS.md describes.
 
 ### Consolidated run, 2026-10-16, master 706bb35
 
