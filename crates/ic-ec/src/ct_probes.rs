@@ -233,6 +233,22 @@ pub mod x86 {
         edwards::nadd(ws);
         edwards::to_ext(ws);
     }
+    /// Verification's other additions: the subtraction of a Niels point, and
+    /// the mixed addition and subtraction of an affine one.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support BMI2 and ADX; nothing may call this unless
+    /// `crate::fe64::available` returned `true`.
+    #[inline(always)]
+    pub unsafe fn ed25519_nsub_madd_msub(ws: &mut Ws) {
+        edwards::nsub(ws);
+        edwards::to_ext(ws);
+        edwards::madd(ws);
+        edwards::to_ext(ws);
+        edwards::msub(ws);
+        edwards::to_ext(ws);
+    }
 }
 
 // x86-64 only: the MULX/ADX field sequences and the point formulas built on

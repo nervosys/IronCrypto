@@ -317,6 +317,14 @@ mod x86 {
     }
 
     /// # Safety
+    /// Requires BMI2 and ADX.
+    #[no_mangle]
+    pub unsafe fn ct_ed25519_fe64_nsub_madd_msub(ws: &mut p::Ws) {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ed25519_nsub_madd_msub(ws) }
+    }
+
+    /// # Safety
     /// Requires AVX-512 IFMA.
     #[no_mangle]
     pub unsafe fn ct_x25519_ifma_step(

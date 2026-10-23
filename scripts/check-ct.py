@@ -50,6 +50,7 @@ X86_ONLY = (
     "ct_fe64_mul121666", "ct_fe64_invert", "ct_x25519_fe64_step",
     "ct_x25519_fe64_double", "ct_ed25519_fe64_select",
     "ct_ed25519_fe64_madd_ext2", "ct_ed25519_fe64_dbl_nadd",
+    "ct_ed25519_fe64_nsub_madd_msub",
     # Signing's radix-32 path on AVX2: the sixteen-entry table read, the step
     # with the next read inside its additions, and the digits themselves.
     "ct_ed25519_fe64_scan", "ct_ed25519_fe64_madd_ext2_scan", "ct_ed25519_digits32",
