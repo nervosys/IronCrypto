@@ -14,7 +14,7 @@ Neither library is CMVP validated.
 |---|---|---|---|
 | Speed, x86-64 | **Default build, ahead:** AES-256-GCM at 4 MiB, 1 KiB and 64 B; ChaCha20-Poly1305 at all three sizes; SHA-512; HMAC-SHA256 at 200 B; X25519; Ed25519 sign, verify and verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH (all three rows) and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation (both rows) and decapsulation with the key parsed once; ML-KEM-768 key generation, like for like; RSA-2048, -3072 and -4096 sign and verify. **Without AVX-512, ahead:** ChaCha20-Poly1305 at all three sizes; AES-256-GCM at 64 B; SHA-512; Ed25519 verify with the key held; P-256 ECDH (all three rows) and ECDSA P-256 sign and verify; P-384 ECDH with the key prepared, and ECDSA P-384 sign and verify; ML-KEM-768 encapsulation (both rows) and decapsulation with the key parsed once; RSA-2048 sign and verify; RSA-3072 sign and verify; RSA-4096 verify; AES-256-GCM at 1 KiB in `graviola-gcm` only (level in `graviola`); P-384 ECDH from key bytes in `graviola-p384` only (level in `graviola`); Ed25519 sign in `graviola-25519` only (level in `graviola`). Rule and every row: "Consolidated run, 2026-10-23" under Speed. | **Default build, level:** SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB. **Without AVX-512, level:** X25519; Ed25519 verify, and sign in `graviola`; SHA-256 at 4 MiB and 64 B; SHA3-256; HMAC-SHA256 at 4 MiB and 200 B; AES-256-GCM at 1 KiB in `graviola`; P-384 ECDH against Graviola's key parsed once (both modes), and from key bytes in `graviola`; RSA-4096 sign; ML-KEM-768 key generation, like for like. | **Default build, behind:** P-384 key preparation (not like for like, see the section); ML-KEM-768 key generation with IronCrypto's pairwise test. **Without AVX-512, behind:** AES-256-GCM at 4 MiB, against Graviola's AVX-512 path (see the section); P-384 key preparation; ML-KEM-768 key generation with the pairwise test. |
 | Speed, aarch64 | | | unmeasured. AES, SHA-256, SHA-512 and GHASH have ARMv8 backends behind the off-by-default `aarch64-crypto` feature, run under QEMU only and read by the compiled-code gate, never on hardware; everything else is portable |
-| Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, ML-KEM's scalar reductions, compression and packing, the portable field additions, carries and reductions of P-256 and Curve25519, P-384's portable addition, subtraction and closing subtraction, P-384's portable Montgomery multiplication and squaring in pieces joined by four argued steps, P-256's portable field multiplication and squaring, end to end except for two argued steps, and Curve25519's multiplication column sums; the x86-64 assembly is not proved |
+| Proved arithmetic | | | Graviola: s2n-bignum's routines are proved to the instruction in HOL Light; here, bounded proofs of the constant-time helpers, ML-DSA's rounding, ML-KEM's scalar reductions, compression and packing, the portable field additions, carries and reductions of P-256 and Curve25519, P-384's portable addition, subtraction and closing subtraction, P-384's portable Montgomery multiplication and squaring in pieces joined by four argued steps, P-256's portable field multiplication and squaring, end to end except for two argued steps, and Curve25519's multiplication column sums; and, by the separate IronProof project, functional proofs of many of the compiled x86-64 kernels (the field arithmetic of P-256, P-384 and Curve25519, the P-256 and P-384 point formulas, the X25519 ladder doubling, the AES-GCM, ChaCha20, Poly1305 and Keccak vector kernels, and RSA-2048's multiplication pieces and Montgomery reduction), solved by SMT solvers over a CPU-tested model of the instructions, not proof-checked as HOL Light is, and not of every kernel |
 | Side-channel evidence | compiled-code gate on five targets, aarch64's ARMv8 backends among them; Valgrind clean on ML-KEM decapsulation | Valgrind, every operation both libraries offer and the harness drives | RSA's MULX/ADX path is checked under Valgrind and by the compiled-code gate; its IFMA exponentiation, as a whole at 1024 and 2048 bits, by the gate alone |
 | Misuse resistance | nonces drawn and replays refused; self-tests before first use; approved-only build; error state refuses | | |
 | Test vectors | every suite Graviola runs, plus ACVP for ML-KEM, ML-DSA, SLH-DSA | | |
@@ -1255,19 +1255,85 @@ seventy-two-product identity, the telescoping of the six rows and the bound
 `T < 2m`; four steps that join the pieces are argued (PROOFS.md lists them). Curve25519's columns
 are proved equal to the schoolbook as the code writes it, `a_i (19 b_j)`; that
 this is `a b` mod `p` rests on integer associativity, argued and not
-machine-checked. The x86-64 assembly, which is what P-256 runs on x86-64,
-and the RSA arithmetic are tested -- against the portable code over millions
-of random and edge values, and against published vectors -- and not proved.
+machine-checked. The x86-64 assembly and the RSA arithmetic are tested
+against the portable code over millions of random and edge values, and
+against published vectors. Many of the x86-64 kernels are now also proved,
+by the separate project below.
+
+### The x86-64 assembly, through IronProof
+
+[IronProof](https://github.com/nervosys/IronProof) proves properties of the
+machine code that rustc emits for this library's `asm!` kernels. It works
+on the compiled probe functions of `scripts/ct-audit` (rustc 1.99.1,
+release profile, `x86_64-unknown-linux-gnu`), not on the Rust source. Each
+proof is symbolic execution of the instructions, then queries to Bitwuzla
+(bit vectors) and Z3 (integers). A long kernel is split into stages, and an
+integer composition joins them. Its `docs/RESULTS.md` records every result
+below, with its times, mutants and assumptions. The functional proofs, for
+every input inside the kernel's documented contract:
+
+- Curve25519 (`fe64`): addition, subtraction, multiplication, squaring and
+  the multiplication by 121666, as their `asm!` blocks and as the whole
+  probe functions; and the X25519 ladder doubling block, the RFC 7748
+  doubling formula with every intermediate reduced modulo p.
+- P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
+  (`2^k out == a b mod p`, canonical), the P-384 scalar-field
+  multiplication, and the Jacobian doubling, in-place doubling, addition
+  and mixed addition of both curves. The point results are the formulas'
+  chains of field operations, each congruent modulo p. The group law's
+  exceptional cases are the caller's.
+- AES-GCM at AES-256: the counter-mode and GHASH kernels at 128, 256 and
+  512 bits, and the stitched seal and open, for the group counts the probes
+  pass. Counter mode is checked against FIPS 197 `Cipher()`, GHASH against
+  SP 800-38D multiplication.
+- ChaCha20: the AVX2 two- and four-block kernels and the AVX-512
+  sixteen-block group, against the RFC 8439 block function.
+- Poly1305: the AVX2 `step` and `finish`.
+- Keccak-f[1600]: the AVX-512 permutation of eight states.
+- RSA-2048 (MULX/ADX): the 16-word schoolbook multiplication and squaring,
+  the Karatsuba middle terms, the 16-word absolute difference, the final
+  conditional subtraction, and the 2048-bit Montgomery reduction (one
+  32-word block, and `redc_8n` over four of them, `T + O N = out 2^2048`).
+- The masked table selects of RSA's exponentiation and Ed25519's signing.
+
+The same tool also proves constant time, register hygiene and memory
+safety for these kernels. That is a separate claim from the arithmetic and
+belongs under "Side-channel evidence".
+
+Where this stops, and where Graviola remains ahead:
+
+- **Trust.** An `unsat` answer is the solver's. No proof object is checked.
+  IronProof's instruction semantics, its term simplifier and its SMT emitter
+  are trusted. Every rule these kernels use is compared with the CPU by a
+  differential test; the rules are not derived from a formal ISA model. s2n-bignum's
+  proofs are checked by HOL Light's kernel, against a formal model of the
+  instructions.
+- **Argued steps.** A product abstracted in a stage holds for every value
+  in its range, and the real product is one of them. Unrolled loops are
+  proved for the counts the probes pass, with the induction over other
+  counts argued. The AES key schedule and the algebra that joins GHASH's
+  aggregated sum to the one-block recurrence are outside the kernels.
+- **Coverage.** Not proved: the X25519 ladder step and field inversion,
+  the Ed25519 point formulas, the IFMA kernels (P-256, P-384, X25519 and
+  RSA), RSA at 3072 and 4096 bits and the whole exponentiation, the
+  scalar-multiplication loops, ML-KEM's and ML-DSA's AVX2 code, and every
+  aarch64 path. Graviola's s2n-bignum covers the arithmetic of P-256,
+  P-384, P-521, X25519 and ML-KEM to the instruction.
+- **Build.** A proof is of the instructions one compiler emitted from one
+  revision. Another compiler or revision gives other text and needs the
+  proof run again.
 
 What remains behind Graviola, stated plainly: the proofs here are of the
 portable Rust, bounded to the stated domains, checked at the level of Rust
 semantics and not of the instructions that run; P-384's multiplication is
-proved only in the pieces above, with argued joins, and its x86-64 assembly not
-at all; ML-KEM's whole NTT and inverse NTT, basemul, sampling and the AVX2 code
+proved only in the pieces above, with argued joins (its x86-64 Montgomery
+multiplication and squaring are proved by the tool above); ML-KEM's whole NTT and inverse NTT, basemul, sampling and the AVX2 code
 are tested and not proved (layer-by-layer contracts were tried and did not reach
 a verdict here); and the induction over the NTT's seven layers is argued from a
-proved single step. Graviola's s2n-bignum covers the arithmetic of
-P-256, P-384, P-521, X25519 and ML-KEM to the instruction, for every input.
+proved single step. The x86-64 assembly is proved only in part, by the
+separate tool above, with the trust and coverage limits it states.
+Graviola's s2n-bignum covers the arithmetic of P-256, P-384, P-521, X25519
+and ML-KEM to the instruction, for every input.
 
 ## Side-channel evidence
 
