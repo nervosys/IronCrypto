@@ -1282,10 +1282,12 @@ every input inside the kernel's documented contract:
   of an affine point, and the two conversions from the completed point
   (the `fe64::edwards` blocks `dbl`, `nadd`, `nsub`, `madd`, `msub`,
   `to_ext` and `to_proj`), each its chain of field operations modulo p;
-  and the inversion's packed divsteps block, in all three of its inlined
-  copies, twenty of Bernstein and Yang's divsteps on the low bits and on
-  both rows of the transition matrix, three signed fields to a register,
-  with the bounds that keep that packing exact.
+  and the inversion's `divsteps_60` as compiled inside its round, three
+  batches of twenty of Bernstein and Yang's divsteps on the low bits and
+  on both rows of the transition matrix, three signed fields to a
+  register, with the bounds that keep that packing exact, chained through
+  the next batch's low words, and the product of the three matrices,
+  modulo 2^64.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
   (`2^k out == a b mod p`, canonical), the P-384 scalar-field
   multiplication, and the Jacobian doubling, in-place doubling, addition
@@ -1324,8 +1326,8 @@ Where this stops, and where Graviola remains ahead:
   counts argued. The AES key schedule and the algebra that joins GHASH's
   aggregated sum to the one-block recurrence are outside the kernels.
 - **Coverage.** Not proved: the X25519 ladder loop; the rest of the field
-  inversion (the unpacking and matrix products after the divsteps block,
-  the updates of f, g, d and e, the normalisation) and the bound of 590
+  inversion (the exactness of the matrix product, the updates of f, g, d
+  and e, the loop of rounds, the normalisation) and the bound of 590
   divsteps that makes its 600 enough, which is Bernstein and Yang's, argued;
   the IFMA kernels (P-256, P-384, X25519 and RSA), RSA at 3072 and 4096
   bits and the whole exponentiation, the
