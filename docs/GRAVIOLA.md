@@ -1282,10 +1282,10 @@ every input inside the kernel's documented contract:
   of an affine point, and the two conversions from the completed point
   (the `fe64::edwards` blocks `dbl`, `nadd`, `nsub`, `madd`, `msub`,
   `to_ext` and `to_proj`), each its chain of field operations modulo p;
-  and the inversion's packed divsteps block, twenty of Bernstein and
-  Yang's divsteps on the low bits and on both rows of the transition
-  matrix, three signed fields to a register, with the bounds that keep
-  that packing exact.
+  and the inversion's packed divsteps block, in all three of its inlined
+  copies, twenty of Bernstein and Yang's divsteps on the low bits and on
+  both rows of the transition matrix, three signed fields to a register,
+  with the bounds that keep that packing exact.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
   (`2^k out == a b mod p`, canonical), the P-384 scalar-field
   multiplication, and the Jacobian doubling, in-place doubling, addition
