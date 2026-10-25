@@ -1287,9 +1287,12 @@ every input inside the kernel's documented contract:
   on both rows of the transition matrix, three signed fields to a
   register, with the bounds that keep that packing exact, chained through
   the next batch's low words, and the product of the three matrices,
-  exact (the row sums keep every entry below 2^62); after it, the
-  updates of f and g and of d and e, and the normalisation of d, each
-  against the source's wrapping arithmetic.
+  exact (the row sums keep every entry below 2^62), and taking f[0] and
+  g[0] to multiples of 2^62, so the update of f and g divides by 2^62
+  exactly; after it, the updates of f and g and of d and e (the latter's
+  division by 2^62 also exact), and the normalisation of d with the
+  packing into the four result words, each against the source's
+  wrapping arithmetic.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
   (`2^k out == a b mod p`, canonical), the P-384 scalar-field
   multiplication, and the Jacobian doubling, in-place doubling, addition
@@ -1329,8 +1332,8 @@ Where this stops, and where Graviola remains ahead:
   aggregated sum to the one-block recurrence are outside the kernels.
 - **Coverage.** Not proved: the X25519 ladder loop; the rest of the field
   inversion (the joins between the round's separately proved parts, that
-  the updates divide by 2^62 exactly and stay in range, the loop of
-  rounds, the normalisation's range and the final packing) and the bound of 590
+  the updates keep f, g, d and e in range, the loop of rounds, and the
+  normalisation's range) and the bound of 590
   divsteps that makes its 600 enough, which is Bernstein and Yang's, argued;
   the IFMA kernels (P-256, P-384, X25519 and RSA), RSA at 3072 and 4096
   bits and the whole exponentiation, the
