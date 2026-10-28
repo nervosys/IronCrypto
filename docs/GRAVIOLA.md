@@ -1292,7 +1292,18 @@ every input inside the kernel's documented contract:
   exactly; after it, the updates of f and g and of d and e (the latter's
   division by 2^62 also exact), and the normalisation of d with the
   packing into the four result words, each against the source's
-  wrapping arithmetic.
+  wrapping arithmetic. The d and e ranges of one round are proved by the
+  target `ironcrypto.ic-ec.fe64.inv.round_de_range`: `inv::round` from its
+  entry through `update_de`, 72 stages and 204 composition goals, for every
+  input. It joins the two earlier targets, the matrix of `divsteps_60` and
+  `update_de`, inside one target, so the join from the matrix's registers
+  and stack words to `update_de`'s operands is proved, not assumed. Given
+  limbs 0-3 of d and e below 2^62 and -2P < D < P (P = 2^255 - 19) at
+  entry, and the round's own preconditions (f[0] odd, |zeta| <= 2^60), the
+  outputs satisfy the same bounds, and 2^62 D' = u Dt + v Et - P k with
+  k in [0, 2^62), where Dt = D + P when D < 0.
+  Raising the entry bound from P to 2P is refuted. Claiming D' > -P, which
+  is false, is not proved.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
   (`2^k out == a b mod p`, canonical), the P-384 scalar-field
   multiplication, and the Jacobian doubling, in-place doubling, addition
@@ -1320,6 +1331,12 @@ belongs under "Side-channel evidence".
 Where this stops, and where Graviola remains ahead:
 
 - **Trust.** An `unsat` answer is the solver's. No proof object is checked.
+  Solvers are not infallible here. Z3 5.1.0, under the faster
+  nonlinear-arithmetic option two of the inversion targets set, answered
+  `unsat` on a false claim, the one in the break-it above. The query has a
+  model that both Z3 and cvc5 accept. Such an answer now counts only if Z3
+  gives it again on its defaults. Both targets were proved again under that
+  check. Two configurations of one solver can still share a bug.
   IronProof's instruction semantics, its term simplifier and its SMT emitter
   are trusted. Every rule these kernels use is compared with the CPU by a
   differential test; the rules are not derived from a formal ISA model. s2n-bignum's
@@ -1331,8 +1348,9 @@ Where this stops, and where Graviola remains ahead:
   counts argued. The AES key schedule and the algebra that joins GHASH's
   aggregated sum to the one-block recurrence are outside the kernels.
 - **Coverage.** Not proved: the X25519 ladder loop; the rest of the field
-  inversion (the joins between the round's separately proved parts, that
-  the updates keep f, g, d and e in range, the loop of rounds, and the
+  inversion (that the update keeps f and g in range; that the d and e
+  bounds hold at every round's entry, since each round's own preconditions
+  are not carried across the loop; the loop of rounds; and the
   normalisation's range) and the bound of 590
   divsteps that makes its 600 enough, which is Bernstein and Yang's, argued;
   the IFMA kernels (P-256, P-384, X25519 and RSA), RSA at 3072 and 4096
