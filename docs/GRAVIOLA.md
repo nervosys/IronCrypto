@@ -1304,6 +1304,13 @@ every input inside the kernel's documented contract:
   k in [0, 2^62), where Dt = D + P when D < 0.
   Raising the entry bound from P to 2P is refuted. Claiming D' > -P, which
   is false, is not proved.
+  The f and g ranges of one round are proved by the target
+  `ironcrypto.ic-ec.fe64.inv.round_fg_range`: `inv::round` from its entry
+  through `update_fg`, 70 stages and 283 composition goals, for every
+  input, joined the same way. Given limbs 0-3 of f and g below 2^62 and
+  both values in [-P, P] at entry, with the round's own preconditions, the
+  outputs are update_fg's specification and satisfy the same bounds. Raising f's entry bound to 2P is refuted. The check that
+  a false lower bound is not proved has not yet run to completion.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
   (`2^k out == a b mod p`, canonical), the P-384 scalar-field
   multiplication, and the Jacobian doubling, in-place doubling, addition
@@ -1348,7 +1355,7 @@ Where this stops, and where Graviola remains ahead:
   counts argued. The AES key schedule and the algebra that joins GHASH's
   aggregated sum to the one-block recurrence are outside the kernels.
 - **Coverage.** Not proved: the X25519 ladder loop; the rest of the field
-  inversion (that the update keeps f and g in range; that the d and e
+  inversion (that the f and g, and the d and e,
   bounds hold at every round's entry, since each round's own preconditions
   are not carried across the loop; the loop of rounds; and the
   normalisation's range) and the bound of 590
