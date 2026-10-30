@@ -43,12 +43,14 @@ impl<M: Mac> HmacDrbg<M> {
         for p in provided {
             m.update(p);
         }
-        let k = m.finalize();
+        let mut k = m.finalize();
         self.key[..n].copy_from_slice(k.as_ref());
+        k.as_mut().zeroize();
 
         // V = HMAC(K, V)
-        let v = M::mac(&self.key[..n], &self.value[..n])?;
+        let mut v = M::mac(&self.key[..n], &self.value[..n])?;
         self.value[..n].copy_from_slice(v.as_ref());
+        v.as_mut().zeroize();
 
         if !has_data {
             return Ok(());
@@ -61,12 +63,14 @@ impl<M: Mac> HmacDrbg<M> {
         for p in provided {
             m.update(p);
         }
-        let k = m.finalize();
+        let mut k = m.finalize();
         self.key[..n].copy_from_slice(k.as_ref());
+        k.as_mut().zeroize();
 
         // V = HMAC(K, V)
-        let v = M::mac(&self.key[..n], &self.value[..n])?;
+        let mut v = M::mac(&self.key[..n], &self.value[..n])?;
         self.value[..n].copy_from_slice(v.as_ref());
+        v.as_mut().zeroize();
         Ok(())
     }
 
@@ -131,8 +135,9 @@ impl<M: Mac> Drbg for HmacDrbg<M> {
         let n = self.len;
         for chunk in out.chunks_mut(n) {
             // V = HMAC(K, V); emit V.
-            let v = M::mac(&self.key[..n], &self.value[..n])?;
+            let mut v = M::mac(&self.key[..n], &self.value[..n])?;
             self.value[..n].copy_from_slice(v.as_ref());
+            v.as_mut().zeroize();
             chunk.copy_from_slice(&self.value[..chunk.len()]);
         }
 

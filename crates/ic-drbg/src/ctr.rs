@@ -9,7 +9,7 @@
 
 use ic_cipher::aes::{Aes256, BLOCK_LEN};
 use ic_core::traits::{Algorithm, BlockCipher, Drbg, SelfTest};
-use ic_core::{ensure, Result, Zeroize};
+use ic_core::{ensure, Result, Zeroize, Zeroizing};
 
 /// AES-256 key length in bytes.
 const KEY_LEN: usize = 32;
@@ -34,13 +34,16 @@ impl Drop for CtrDrbg {
 impl CtrDrbg {
     /// The SP 800-90A `CTR_DRBG_Update` process.
     fn update(&mut self, provided: &[u8; SEED_LEN]) -> Result<()> {
+        // The new K and V, and the keystream blocks they come from, are wiped
+        // on every return, the early ones included.
         let cipher = Aes256::new(&self.key)?;
-        let mut temp = [0u8; SEED_LEN];
+        let mut temp = Zeroizing::new([0u8; SEED_LEN]);
+        let mut block = Zeroizing::new([0u8; BLOCK_LEN]);
 
         for chunk in temp.chunks_mut(BLOCK_LEN) {
             increment(&mut self.v);
-            let mut block = self.v;
-            cipher.encrypt_block(&mut block)?;
+            block.copy_from_slice(&self.v);
+            cipher.encrypt_block(&mut block[..])?;
             chunk.copy_from_slice(&block[..chunk.len()]);
         }
         for i in 0..SEED_LEN {
@@ -49,7 +52,6 @@ impl CtrDrbg {
 
         self.key.copy_from_slice(&temp[..KEY_LEN]);
         self.v.copy_from_slice(&temp[KEY_LEN..]);
-        temp.zeroize();
         Ok(())
     }
 
@@ -112,7 +114,7 @@ impl Drbg for CtrDrbg {
         } else {
             personalization
         };
-        let mut material = Self::seed_material(entropy, extra)?;
+        let material = Zeroizing::new(Self::seed_material(entropy, extra)?);
 
         let mut state = Self {
             key: [0u8; KEY_LEN],
@@ -120,15 +122,13 @@ impl Drbg for CtrDrbg {
             reseed_counter: 1,
         };
         state.update(&material)?;
-        material.zeroize();
         Ok(state)
     }
 
     fn reseed(&mut self, entropy: &[u8], additional: &[u8]) -> Result<()> {
         ic_core::module::operational()?;
-        let mut material = Self::seed_material(entropy, additional)?;
+        let material = Zeroizing::new(Self::seed_material(entropy, additional)?);
         self.update(&material)?;
-        material.zeroize();
         self.reseed_counter = 1;
         Ok(())
     }
@@ -146,23 +146,22 @@ impl Drbg for CtrDrbg {
             "ctr_drbg additional input exceeds the seed length"
         );
 
-        let mut extra = [0u8; SEED_LEN];
+        let mut extra = Zeroizing::new([0u8; SEED_LEN]);
         extra[..additional.len()].copy_from_slice(additional);
         if !additional.is_empty() {
             self.update(&extra)?;
         }
 
         let cipher = Aes256::new(&self.key)?;
+        let mut block = Zeroizing::new([0u8; BLOCK_LEN]);
         for chunk in out.chunks_mut(BLOCK_LEN) {
             increment(&mut self.v);
-            let mut block = self.v;
-            cipher.encrypt_block(&mut block)?;
+            block.copy_from_slice(&self.v);
+            cipher.encrypt_block(&mut block[..])?;
             chunk.copy_from_slice(&block[..chunk.len()]);
-            block.zeroize();
         }
 
         self.update(&extra)?;
-        extra.zeroize();
         self.reseed_counter = self.reseed_counter.saturating_add(1);
         Ok(())
     }

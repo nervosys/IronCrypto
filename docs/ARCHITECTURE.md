@@ -116,8 +116,12 @@ you which case you are in rather than assuming.
 ### Secrets are erased
 
 `Zeroizing<T>` wipes on drop via `write_volatile` plus a `compiler_fence`.
-Round-key schedules, DRBG state, sponge state, Poly1305 accumulators, and
-intermediate buffers all zeroize. AEAD `open_detached` wipes `in_out` before
+Round-key schedules (the AES-NI and ARMv8 ones as well as the portable one),
+DRBG state and the copies of it each step makes, sponge state, SHA-2 chaining
+state and SHA-512's message schedule, Poly1305 accumulators, and intermediate
+buffers all zeroize, on error returns too. What no `Drop` reaches: digests and
+MAC tags are `Copy` values the caller owns, and a value moved by the compiler
+can leave a copy behind it. AEAD `open_detached` wipes `in_out` before
 returning an authentication error, so a caller that ignores the `Result` still
 cannot read unauthenticated plaintext.
 

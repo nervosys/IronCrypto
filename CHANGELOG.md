@@ -71,6 +71,22 @@ all of them.
   `byte_decode` round trips were tried and did not reach a verdict in the time
   each run was allowed; they are not in the tree (`docs/PROOFS.md`).
 
+### Fixed
+
+- **Key material that outlived its owner.** The AES-NI and ARMv8 round keys
+  were `Copy` with no `Drop`, so every hardware AES key schedule stayed in
+  memory after its cipher was dropped; the portable schedule was wiped, and
+  docs/ARCHITECTURE.md said all of them were. They are no longer `Copy`, and
+  are wiped on drop. A SHA-512 state dropped unfinalized kept its message
+  schedule, which for a keyed HMAC-SHA-384/512 begins with the key XOR the
+  pad; the schedule is now wiped on drop rather than in `finalize`, so a
+  finalized state is still wiped once. HMAC_DRBG left its new K and V in
+  `Copy` tags on the stack; CTR_DRBG wiped its new K and V, keystream blocks
+  and seed material only on success; `Rng::from_os` wiped its OS entropy only
+  on success. Each is wiped on every path now. Tests observe the AES and
+  SHA-512 wipes at drop, and fail with either wipe removed. Found by an audit
+  for a consumer asking what is wiped (AirCom's O12).
+
 ## 0.3.2
 
 A compatible release: no API is removed or changed in signature, and no

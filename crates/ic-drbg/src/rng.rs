@@ -18,7 +18,7 @@
 
 use crate::{HmacDrbgSha256, MIN_ENTROPY_LEN};
 use ic_core::traits::{Drbg, RandomSource};
-use ic_core::{ensure, Result, Zeroize};
+use ic_core::{ensure, Result, Zeroize, Zeroizing};
 
 /// The run of equal bytes at which a seed is taken to come from a source that
 /// has stopped.
@@ -68,12 +68,13 @@ impl Rng {
     /// a 256-bit instantiation.
     pub fn from_os() -> Result<Self> {
         ic_core::module::operational()?;
-        let mut seed = [0u8; 48];
-        let mut nonce = [0u8; 16];
-        os_entropy(&mut seed)?;
-        os_entropy(&mut nonce)?;
+        // Held so that every return wipes them, the early ones included.
+        let mut seed = Zeroizing::new([0u8; 48]);
+        let mut nonce = Zeroizing::new([0u8; 16]);
+        os_entropy(&mut seed[..])?;
+        os_entropy(&mut nonce[..])?;
         // Two draws that begin alike are one draw made twice.
-        ic_core::module::conditional_self_test(if ic_core::ct::verify(&seed[..16], &nonce) {
+        ic_core::module::conditional_self_test(if ic_core::ct::verify(&seed[..16], &nonce[..]) {
             Err(ic_core::err!(
                 EntropyFailure,
                 "the entropy source returned the same bytes twice"
@@ -81,9 +82,7 @@ impl Rng {
         } else {
             Ok(())
         })?;
-        let drbg = HmacDrbgSha256::instantiate(&seed, &nonce, b"IronCrypto/Rng")?;
-        seed.zeroize();
-        nonce.zeroize();
+        let drbg = HmacDrbgSha256::instantiate(&seed[..], &nonce[..], b"IronCrypto/Rng")?;
         Ok(Self {
             drbg,
             calls_since_reseed: 0,

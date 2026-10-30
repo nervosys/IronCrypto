@@ -44,11 +44,26 @@ use core::arch::x86_64::*;
 pub const PARALLEL_BLOCKS: usize = 8;
 
 /// AES round keys held in SIMD registers.
-#[derive(Clone, Copy)]
+///
+/// Not `Copy`, and wiped on drop, as the portable schedule is: a copy made
+/// implicitly would be a copy of the expanded key that nothing wipes.
+#[derive(Clone)]
 pub struct Keys {
     enc: [__m128i; 15],
     dec: [__m128i; 15],
     rounds: usize,
+}
+
+impl Drop for Keys {
+    fn drop(&mut self) {
+        for k in self.enc.iter_mut().chain(self.dec.iter_mut()) {
+            // SAFETY: `k` is a valid, aligned and exclusive reference to an
+            // initialised __m128i, and all-zero bits are a valid one. The write
+            // is volatile so that it is not removed as a dead store.
+            unsafe { core::ptr::write_volatile(k, core::mem::zeroed()) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl Keys {
@@ -301,6 +316,39 @@ mod tests {
 
     fn available() -> bool {
         std::arch::is_x86_feature_detected!("aes")
+    }
+
+    fn round_key_bytes(keys: &Keys) -> Vec<u8> {
+        let mut out = vec![0u8; 2 * 15 * BLOCK_LEN];
+        for (k, chunk) in keys
+            .enc
+            .iter()
+            .chain(keys.dec.iter())
+            .zip(out.chunks_exact_mut(BLOCK_LEN))
+        {
+            // SAFETY: `chunk` is exactly BLOCK_LEN bytes, and the unaligned
+            // store has no alignment requirement.
+            unsafe { _mm_storeu_si128(chunk.as_mut_ptr() as *mut __m128i, *k) };
+        }
+        out
+    }
+
+    /// Dropping the keys wipes them. They were `Copy` with no `Drop`, so the
+    /// AES-NI round keys outlived every cipher, while the portable schedule
+    /// beside them was wiped.
+    #[test]
+    fn dropping_the_keys_wipes_them() {
+        if !available() {
+            return;
+        }
+        let sched = portable::Schedule::expand(&[0x42u8; 32]).unwrap();
+        // SAFETY: guarded by the runtime feature check above.
+        let mut keys = core::mem::ManuallyDrop::new(unsafe { Keys::load(&sched) });
+        assert!(round_key_bytes(&keys).iter().any(|b| *b != 0));
+        // SAFETY: `keys` is dropped exactly once, here, and only its plain
+        // vector fields are read afterwards, which drop leaves in place.
+        unsafe { core::mem::ManuallyDrop::drop(&mut keys) };
+        assert!(round_key_bytes(&keys).iter().all(|b| *b == 0));
     }
 
     /// The whole point of this backend is that it agrees with the portable one

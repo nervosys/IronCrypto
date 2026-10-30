@@ -585,7 +585,7 @@ struct Core512 {
     /// rather than computing it. `what_the_schedule_wipe_costs` is that
     /// measurement.
     ///
-    /// The schedule is still wiped, in `finalize`, beside `h` and `buf`. What
+    /// The schedule is still wiped, on drop, beside `h` and `buf`. What
     /// changes is how often. Wiping after every block bought nothing that
     /// survived the block anyway: the next block immediately overwrites the
     /// whole array, and the material it is derived from is in the caller's
@@ -594,10 +594,20 @@ struct Core512 {
 }
 
 impl Drop for Core512 {
-    /// Wipe the chaining state and the buffered block. See [`Core256`].
+    /// Wipe the chaining state, the buffered block and the schedule. See
+    /// [`Core256`].
+    ///
+    /// The schedule is wiped here rather than in `finalize`, which consumes
+    /// the state and so runs this anyway: a finalized state is wiped once, as
+    /// before, and one dropped unfinalized is wiped at all. That case matters
+    /// for HMAC, whose keyed states compress the padded key on construction,
+    /// leaving its first sixteen words, the key XOR ipad or opad, in `w`.
     fn drop(&mut self) {
         self.h.zeroize();
         self.buf.zeroize();
+        self.w.zeroize();
+        #[cfg(all(test, feature = "std"))]
+        tests::SCHEDULE_AT_DROP.with(|c| c.set(Some(self.w.iter().all(|x| *x == 0))));
         self.buffered = 0;
         self.len = 0;
     }
@@ -780,7 +790,6 @@ impl Core512 {
         let out = self.h;
         self.buf.zeroize();
         self.h.zeroize();
-        self.w.zeroize();
         out
     }
 }
@@ -997,6 +1006,33 @@ sha2_64!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "std")]
+    std::thread_local! {
+        /// Whether the last `Core512` dropped on this thread left its schedule
+        /// all zero, as its `Drop` saw it after wiping.
+        pub(super) static SCHEDULE_AT_DROP: core::cell::Cell<Option<bool>> =
+            const { core::cell::Cell::new(None) };
+    }
+
+    /// A SHA-512 state dropped unfinalized wipes its schedule. HMAC's keyed
+    /// states are that case: they compress the padded key on construction
+    /// and may never finalize, and the schedule's first sixteen words are
+    /// then the key XOR the pad. Checked: with the wipe removed from `Drop`,
+    /// this fails.
+    #[cfg(feature = "std")]
+    #[test]
+    fn an_unfinalized_sha512_state_wipes_its_schedule_on_drop() {
+        let mut core = Core512::new([1, 2, 3, 4, 5, 6, 7, 8]);
+        core.update(&[0x5cu8; 128]);
+        if core.w.iter().all(|x| *x == 0) {
+            println!("this backend does not use the schedule array; nothing to wipe");
+            return;
+        }
+        SCHEDULE_AT_DROP.with(|c| c.set(None));
+        drop(core);
+        assert_eq!(SCHEDULE_AT_DROP.with(|c| c.get()), Some(true));
+    }
 
     /// Bytes that vary in every position: a counter through a multiply and a
     /// rotate, seeded so two calls need not agree.

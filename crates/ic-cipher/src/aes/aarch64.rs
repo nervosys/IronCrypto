@@ -75,11 +75,26 @@ use ic_core::{ensure, Result};
 pub const PARALLEL_BLOCKS: usize = 4;
 
 /// AES round keys held in vector registers.
-#[derive(Clone, Copy)]
+///
+/// Not `Copy`, and wiped on drop, as the portable schedule is: a copy made
+/// implicitly would be a copy of the expanded key that nothing wipes.
+#[derive(Clone)]
 pub struct Keys {
     enc: [uint8x16_t; 15],
     dec: [uint8x16_t; 15],
     rounds: usize,
+}
+
+impl Drop for Keys {
+    fn drop(&mut self) {
+        for k in self.enc.iter_mut().chain(self.dec.iter_mut()) {
+            // SAFETY: `k` is a valid, aligned and exclusive reference to an
+            // initialised uint8x16_t, and all-zero bits are a valid one. The write
+            // is volatile so that it is not removed as a dead store.
+            unsafe { core::ptr::write_volatile(k, core::mem::zeroed()) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl Keys {
