@@ -87,11 +87,15 @@ pub struct Keys {
 
 impl Drop for Keys {
     fn drop(&mut self) {
-        for k in self.enc.iter_mut().chain(self.dec.iter_mut()) {
-            // SAFETY: `k` is a valid, aligned and exclusive reference to an
-            // initialised uint8x16_t, and all-zero bits are a valid one. The write
-            // is volatile so that it is not removed as a dead store.
-            unsafe { core::ptr::write_volatile(k, core::mem::zeroed()) };
+        // One store of each whole array, not a loop: straight-line code, which
+        // the constant-time audit of the probes that drop these reads as such.
+        // SAFETY: both are valid, aligned and exclusive references to
+        // initialised arrays of uint8x16_t, and all-zero bits are a valid value of
+        // that type. The writes are volatile so that they are not removed as
+        // dead stores.
+        unsafe {
+            core::ptr::write_volatile(&mut self.enc, core::mem::zeroed());
+            core::ptr::write_volatile(&mut self.dec, core::mem::zeroed());
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
