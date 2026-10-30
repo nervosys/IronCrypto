@@ -42,7 +42,58 @@ pub fn entry_detail_json(e: &Entry) -> Json {
         unreachable!("entry_json always returns an object")
     };
     fields.insert("relatedBy".to_string(), Json::Array(inbound));
+    fields.insert(
+        "restsOn".to_string(),
+        Json::Array(
+            ic_ontology::rests_on(e.id)
+                .unwrap_or_default()
+                .iter()
+                .map(|a| Json::str(a.id()))
+                .collect(),
+        ),
+    );
     Json::Object(fields)
+}
+
+/// The hardness assumptions, each with the entries resting on it; or, given
+/// one, only that one. An unknown name is an error listing the known ones.
+pub fn assumptions_json(only: Option<&str>) -> Result<Json, String> {
+    use ic_ontology::Assumption;
+    let pick: Vec<Assumption> = match only {
+        None => Assumption::ALL.to_vec(),
+        Some(id) => vec![Assumption::from_id(id).ok_or_else(|| {
+            let known: Vec<&str> = Assumption::ALL.iter().map(|a| a.id()).collect();
+            format!("unknown assumption '{id}'; known: {}", known.join(", "))
+        })?],
+    };
+    let unconditional = ic_ontology::assumptions::UNCONDITIONAL;
+    Ok(Json::object([
+        (
+            "assumptions",
+            Json::Array(
+                pick.iter()
+                    .map(|a| {
+                        Json::object([
+                            ("id", Json::str(a.id())),
+                            ("summary", Json::str(a.summary())),
+                            (
+                                "affected",
+                                Json::Array(
+                                    ic_ontology::affected_by(*a)
+                                        .map(|e| Json::str(e.id))
+                                        .collect(),
+                                ),
+                            ),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "unconditional",
+            Json::Array(unconditional.iter().map(|id| Json::str(*id)).collect()),
+        ),
+    ]))
 }
 
 /// Render an ontology entry as JSON.

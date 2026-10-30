@@ -7,6 +7,17 @@ all of them.
 
 ### Added
 
+- **Hardness assumptions in the ontology** (`ic_ontology::assumptions`):
+  which problem each algorithm's security rests on (`module-lwe`,
+  `module-sis`, `ec-discrete-log`, `rsa`, `aes`, `chacha`, `sha-2`, `keccak`,
+  and the rest), and `affected_by` for the reverse question, what a break of
+  one would touch. Primitives declare theirs; composites inherit through their
+  `built-on` and `specializes` edges, so HPKE, PBES2, the DRBGs and the KDFs
+  follow from what the registry already says they are built on. Poly1305 and
+  Shamir's scheme are listed as unconditional. A test fails if any entry rests
+  on nothing. `ic ontology assumptions [<id>]`, the `crypto_assumptions` MCP
+  tool, and a `restsOn` field on `ic ontology show --json`. Additive: `Entry`
+  is unchanged.
 - **Encrypted PKCS#8** (`ic_pkix::pbes2`, ontology `pkcs8-pbes2`):
   `EncryptedPrivateKeyInfo` under PBES2 with PBKDF2-HMAC-SHA-256 and
   AES-256-CBC, read and written, PEM label `ENCRYPTED PRIVATE KEY`.

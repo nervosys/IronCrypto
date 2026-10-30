@@ -56,6 +56,7 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod assumptions;
 pub mod profile;
 pub mod query;
 pub mod registry;
@@ -70,6 +71,7 @@ pub mod frameworks;
 
 pub mod runtime;
 
+pub use assumptions::{affected_by, rests_on, Assumption, Assumptions};
 pub use query::{all, get, related, Query};
 pub use registry::REGISTRY;
 pub use rules::{Rule, RULES};

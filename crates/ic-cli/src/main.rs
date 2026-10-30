@@ -33,6 +33,7 @@ DISCOVERY
         --fips                      Only approved-mode algorithms
         --available                 Only algorithms built in
     ontology show <algorithm>   Full record for one algorithm
+    ontology assumptions [<id>] Hardness assumptions and what a break would affect
     ontology export <format>    json | jsonld | turtle | schema | markdown
     ontology errors             The error vocabulary
     rules                       Rules that hold for every algorithm
@@ -268,6 +269,30 @@ pub fn run(args: &[&str]) -> Result<String, String> {
                 } else {
                     render_entry(e)
                 })
+            }
+            "assumptions" => {
+                let json = ops::assumptions_json(pos.get(2).copied())?;
+                if want_json {
+                    return Ok(json.to_string());
+                }
+                let mut out = String::new();
+                for a in json.get("assumptions").and_then(|v| v.as_array()).unwrap() {
+                    let g = |k: &str| a.get(k).and_then(|v| v.as_str()).unwrap_or("");
+                    let hit: Vec<&str> = a
+                        .get("affected")
+                        .and_then(|v| v.as_array())
+                        .unwrap()
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect();
+                    out.push_str(&format!("{:<16} {}\n", g("id"), g("summary")));
+                    out.push_str(&format!("{:<16} {}\n\n", "", hit.join(", ")));
+                }
+                out.push_str(&format!(
+                    "Unconditional (no hardness assumption): {}",
+                    ic_ontology::assumptions::UNCONDITIONAL.join(", ")
+                ));
+                Ok(out)
             }
             "controls" => {
                 let json = ops::controls_json(
@@ -994,6 +1019,43 @@ mod tests {
         assert!(!approved.contains("chacha20-poly1305"));
 
         assert!(run(&["ontology", "list", "--class", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn ontology_assumptions_name_what_a_break_affects() {
+        let out = run(&["ontology", "assumptions"]).unwrap();
+        assert!(out.contains("module-lwe"));
+        assert!(out.contains("Unconditional (no hardness assumption): poly1305"));
+
+        let one = run(&["ontology", "assumptions", "module-lwe", "--json"]).unwrap();
+        let parsed = ic_json::parse(&one).unwrap();
+        let list = parsed.get("assumptions").unwrap().as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        let hit: Vec<&str> = list[0]
+            .get("affected")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(hit.contains(&"ml-kem-768") && hit.contains(&"ml-dsa-65"));
+        assert!(!hit.contains(&"slh-dsa"));
+
+        // show carries the same answer for one entry
+        let show = run(&["ontology", "show", "pkcs8-pbes2", "--json"]).unwrap();
+        let rests = ic_json::parse(&show).unwrap();
+        let rests: Vec<&str> = rests
+            .get("restsOn")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(rests, ["aes", "sha-2"]);
+
+        assert!(run(&["ontology", "assumptions", "eth"]).is_err());
     }
 
     #[test]

@@ -65,7 +65,7 @@ notes:
   Also the choice when a single key must protect data for a long time, since the 256-bit key retains 128-bit strength against Grover.
 ```
 
-## Three levels of query
+## Four levels of query
 
 ### 1. Filter — "what matches these predicates?"
 
@@ -126,6 +126,28 @@ assert!(related.iter().any(|e| e.id == "hmac-sha2-256"));
 Edges are traversed in both directions. `sha2-256` does not record that HMAC is
 built on it, but an agent asking "what depends on SHA-256?" still gets the
 answer.
+
+### 4. Assumptions — "what would a break of this affect?"
+
+```rust
+use ic_ontology::{affected_by, rests_on, Assumption};
+// ML-KEM and ML-DSA, and nothing hash-based
+let hit: Vec<_> = affected_by(Assumption::ModuleLwe).map(|e| e.id).collect();
+assert!(hit.contains(&"ml-kem-768") && !hit.contains(&"slh-dsa"));
+// PBES2 inherits AES and SHA-2 from what it is built on
+assert!(rests_on("pkcs8-pbes2").unwrap().contains(Assumption::Aes));
+```
+
+`Strength` says how much work the best known attack needs; this says what that
+figure is a claim about. Primitives declare their assumptions in
+`assumptions::DIRECT`, and everything else inherits through its `built-on` and
+`specializes` edges, so a composite's list follows from what the registry
+already says it is built from. The reading is conservative: an entry rests on
+an assumption if a break would affect any parameter set or suite it offers.
+Poly1305 and Shamir's scheme assume no hard problem and are listed as
+unconditional; `rests_on` returns `None` for a name it does not know, so an
+unknown name is never read as one of them. `ic ontology assumptions [<id>]`, the `crypto_assumptions` MCP
+tool, and the `restsOn` field of `ic ontology show --json` give the same answer.
 
 ## Exports
 
@@ -223,7 +245,10 @@ carries the "needs a MAC" constraint, and every broken algorithm is marked
 1. Add the `Entry` to `crates/ic-ontology/src/registry.rs`.
 2. If it is implemented, implement `SelfTest` and register it in
    `crates/ic-fips/src/selftest.rs`, bumping `TEST_COUNT` and the integrity tag.
-3. Run `cargo test --workspace`. The invariant tests will tell you what you
+3. If it is a primitive, declare its hardness assumptions in `DIRECT` in
+   `crates/ic-ontology/src/assumptions.rs`; if it is built from others, give it
+   `BuiltOn` edges and it inherits theirs.
+4. Run `cargo test --workspace`. The invariant tests will tell you what you
    missed.
 
 If it is *not* implemented, set `status: Planned`, leave `rust_path` and

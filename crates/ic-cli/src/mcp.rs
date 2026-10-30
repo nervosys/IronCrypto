@@ -269,6 +269,24 @@ fn tools() -> Vec<Tool> {
             },
         },
         Tool {
+            name: "crypto_assumptions",
+            description:
+                "The hardness assumptions the algorithms rest on (module-lwe, ec-discrete-log, \
+                 rsa, aes, sha-2, ...), each with every algorithm a break of it would affect, \
+                 composites included through what they are built on. Ask this when a result \
+                 against one assumption is reported, to learn what to move off.",
+            schema: || {
+                schema(
+                    vec![(
+                        "assumption",
+                        string_prop("Assumption id; every assumption if omitted."),
+                    )],
+                    &[],
+                )
+            },
+            call: |args| ops::assumptions_json(arg(args, "assumption")),
+        },
+        Tool {
             name: "crypto_profile",
             description:
                 "A named algorithm suite: what it permits, each member's role and whether this \
