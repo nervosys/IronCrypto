@@ -384,7 +384,7 @@ fn parse(input: &[u8], floor: u32) -> Result<Params<'_>> {
 /// decryption.
 ///
 /// The plaintext is RFC 8410 §10.3's example Ed25519 key. The expected
-/// encoding was not produced by this code; see [`SELF_TEST_ANSWER`], and
+/// encoding was not produced by this code; see `SELF_TEST_ANSWER` below, and
 /// docs/FIPS.md for the record. It runs at 1000 iterations, PBKDF2's floor,
 /// to keep start-up short; the public functions refuse under
 /// [`MIN_ITERATIONS`].
