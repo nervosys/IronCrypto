@@ -1309,8 +1309,9 @@ every input inside the kernel's documented contract:
   through `update_fg`, 70 stages and 283 composition goals, for every
   input, joined the same way. Given limbs 0-3 of f and g below 2^62 and
   both values in [-P, P] at entry, with the round's own preconditions, the
-  outputs are update_fg's specification and satisfy the same bounds. Raising f's entry bound to 2P is refuted. The check that
-  a false lower bound is not proved has not yet run to completion.
+  outputs are update_fg's specification and satisfy the same bounds.
+  Raising f's entry bound to 2P is refuted. Claiming F' >= -2^254, which
+  is false, is not proved.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
   (`2^k out == a b mod p`, canonical), the P-384 scalar-field
   multiplication, and the Jacobian doubling, in-place doubling, addition
