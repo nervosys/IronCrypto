@@ -14,10 +14,14 @@ publish.workspace = true
 
 [features]
 default = ["std"]
-std = ["ic-core/std"]
+std = ["ic-core/std", "ic-kdf/std", "ic-cipher/std", "ic-mac/std"]
 
 [dependencies]
 ic-core = { workspace = true }
+# For `pbes2` only: the rest of the crate performs no cryptography.
+ic-kdf = { workspace = true }
+ic-cipher = { workspace = true }
+ic-mac = { workspace = true }
 
 # The fuzz harness base64-encodes its own PEM inputs.
 [dev-dependencies]

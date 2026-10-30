@@ -7,6 +7,18 @@ all of them.
 
 ### Added
 
+- **Encrypted PKCS#8** (`ic_pkix::pbes2`, ontology `pkcs8-pbes2`):
+  `EncryptedPrivateKeyInfo` under PBES2 with PBKDF2-HMAC-SHA-256 and
+  AES-256-CBC, read and written, PEM label `ENCRYPTED PRIVATE KEY`.
+  `PrivateKeyInfo::to_encrypted_der` and `from_encrypted_der`, and `encrypt`
+  and `decrypt` on DER. Both sides refuse fewer than 600 000 iterations or more
+  than 10 000 000, and any PRF or cipher but those two. Writing matches
+  OpenSSL 3.5's output byte for byte for the same salt and IV, and keys OpenSSL
+  encrypted decrypt (`testvectors/openssl-pkcs8-pbes2.json`). CBC because the
+  format admits no AEAD and OpenSSL refuses one; the format is not
+  authenticated, which the entry's constraints say. A new CAST, so
+  `TEST_COUNT` is 86 (65 approved-only). ic-pkix now depends on ic-kdf,
+  ic-cipher and ic-mac, and performs cryptography in this one module.
 - **P-384 portable Montgomery multiplication is proved, in pieces**
   (`docs/PROOFS.md`, "P-384 multiplication"). `arith::wide::mont_mul`, which
   `Fp` and `Fn` `mul` and `square` run off x86-64, now has Kani proofs of the

@@ -597,6 +597,7 @@ fn hammered_here() -> Vec<&'static str> {
         "hss-lms",
         "slh-dsa",
         "passphrase-seal",
+        "pkcs8-pbes2",
         "oprf-p256-sha256",
         "opaque-3dh-p256",
     ]);
@@ -776,6 +777,56 @@ fn passphrase_opening_is_total_and_sound() {
         );
         assert_eq!(back, [0u8; 32], "byte {at}: released");
     }
+}
+
+/// An encrypted key file is read from storage someone else may have written.
+/// Whatever it holds, decryption returns an error rather than panicking,
+/// refuses a malformed structure or an iteration count out of range before
+/// deriving anything, and leaves no plaintext behind when it refuses.
+///
+/// A derivation costs 600 000 HMAC iterations, so the random inputs are shaped
+/// to be refused before it, and one tampering pays for one.
+#[test]
+fn pkcs8_pbes2_decryption_is_total_and_sound() {
+    use pkix::{pbes2, PrivateKeyInfo};
+    let mut rng = Rng::new(0x9b2e);
+    let mut draw = ironcrypto::drbg::Rng::from_entropy(&[0x78u8; 32], b"hostile").unwrap();
+    let key = PrivateKeyInfo::Ed25519(&[0x42u8; 32]);
+    let mut enc = [0u8; pbes2::encrypted_len(48)];
+    let len = key
+        .to_encrypted_der(b"pw", pbes2::MIN_ITERATIONS, &mut draw, &mut enc)
+        .unwrap();
+    let enc = &enc[..len];
+    let mut out = [0u8; 256];
+
+    for _ in 0..500 {
+        let n = rng.below(200);
+        let junk: Vec<u8> = (0..n).map(|_| rng.byte()).collect();
+        assert!(pbes2::decrypt(&junk, b"pw", &mut out).is_err());
+    }
+    // Every truncation breaks the outer length, and is refused unread.
+    for n in 0..len {
+        let err = pbes2::decrypt(&enc[..n], b"pw", &mut out).unwrap_err();
+        assert_eq!(err.kind(), ic_core::ErrorKind::MalformedEncoding, "{n}");
+    }
+    // The iteration count, at bytes 53..56 for a three-byte INTEGER, dropped
+    // under the floor: refused before deriving, or this loop would take most
+    // of an hour.
+    assert_eq!(&enc[51..53], &[0x02, 0x03]);
+    for _ in 0..100 {
+        let mut c = enc.to_vec();
+        c[53] = 1 + rng.byte() % 8; // at most 0x08ffff, under 600 000
+        c[54] = rng.byte();
+        let err = pbes2::decrypt(&c, b"pw", &mut out).unwrap_err();
+        assert_eq!(err.kind(), ic_core::ErrorKind::InvalidParameter);
+    }
+    // One changed byte in the padding block's predecessor: it derives, fails,
+    // and releases nothing.
+    let mut c = enc.to_vec();
+    c[len - 17] ^= 1;
+    let mut back = [0xaau8; 64];
+    assert!(PrivateKeyInfo::from_encrypted_der(&c, b"pw", &mut back).is_err());
+    assert_eq!(back, [0u8; 64], "released");
 }
 
 /// Every implemented algorithm that parses attacker-chosen bytes must be

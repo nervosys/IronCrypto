@@ -29,6 +29,8 @@ use ic_core::{codec, ensure, Result};
 pub const PUBLIC_KEY: &str = "PUBLIC KEY";
 /// Label for a PKCS#8 `PrivateKeyInfo`.
 pub const PRIVATE_KEY: &str = "PRIVATE KEY";
+/// PKCS#8 `EncryptedPrivateKeyInfo` (RFC 5958 §3), as [`crate::pbes2`] writes.
+pub const ENCRYPTED_PRIVATE_KEY: &str = "ENCRYPTED PRIVATE KEY";
 /// Label for a bare PKCS#1 `RSAPublicKey`.
 pub const RSA_PUBLIC_KEY: &str = "RSA PUBLIC KEY";
 /// Label for a bare PKCS#1 `RSAPrivateKey`.

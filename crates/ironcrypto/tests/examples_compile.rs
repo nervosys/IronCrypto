@@ -1074,6 +1074,30 @@ fn passphrase_seal_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// Encrypted PKCS#8, in the form OpenSSL reads.
+#[test]
+fn pkcs8_pbes2_example_compiles_and_matches() -> Result<()> {
+    let passphrase: &[u8] = b"correct horse battery staple";
+    let key = ic_pkix::PrivateKeyInfo::Ed25519(&[0x42u8; 32]);
+    let mut rng = drbg::Rng::from_entropy(&[0x3eu8; 32], b"examples/pkcs8-pbes2")?;
+    let mut out = [0u8; ic_pkix::pbes2::encrypted_len(48)];
+    let mut buf = [0u8; 64];
+    let n = key.to_encrypted_der(
+        passphrase,
+        ic_pkix::pbes2::DEFAULT_ITERATIONS,
+        &mut rng,
+        &mut out,
+    )?;
+    let back = ic_pkix::PrivateKeyInfo::from_encrypted_der(&out[..n], passphrase, &mut buf)?;
+    assert_eq!(back, key);
+    check_example(
+        "pkcs8-pbes2",
+        "let n = key.to_encrypted_der(passphrase, ic_pkix::pbes2::DEFAULT_ITERATIONS, &mut rng, &mut out)?;
+let back = ic_pkix::PrivateKeyInfo::from_encrypted_der(&out[..n], passphrase, &mut buf)?;",
+    );
+    Ok(())
+}
+
 /// XChaCha20-Poly1305, which draws its own nonce rather than counting.
 #[test]
 fn xchacha20_poly1305_example_compiles_and_matches() -> Result<()> {

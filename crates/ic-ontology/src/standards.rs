@@ -1137,6 +1137,19 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "RFC 5958",
+        title: "Asymmetric Key Packages",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2010,
+        status: StandardStatus::Current,
+        superseded_by: &[],
+        url: "https://www.rfc-editor.org/rfc/rfc5958",
+        summary: "PKCS#8 as the IETF now states it, including EncryptedPrivateKeyInfo: the \
+                  key file that a passphrase protects.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "RFC 6979",
         title: "Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic \
                 Curve Digital Signature Algorithm (ECDSA)",

@@ -2279,6 +2279,56 @@ pub static REGISTRY: &[Entry] = &[
                 parts, and this format does not offer them.",
     },
     Entry {
+        id: "pkcs8-pbes2",
+        name: "Encrypted PKCS#8 (PBES2: PBKDF2-HMAC-SHA-256, AES-256-CBC)",
+        aliases: &["encrypted-private-key", "pbes2", "encrypted-pkcs8"],
+        summary: "A private key file under a passphrase, as OpenSSL writes and reads it: \
+                  PBKDF2-HMAC-SHA-256 derives the key, AES-256-CBC encrypts the PKCS#8.",
+        class: Class::PasswordEncryption,
+        family: "PKCS#8",
+        purposes: &[Purpose::Confidentiality],
+        strength: Strength::symmetric(256),
+        fips: FipsStatus::Approved,
+        status: ImplStatus::Available,
+        standards: &["RFC 5958", "RFC 8018", "SP 800-132", "SP 800-38A"],
+        params: &NO_PARAMS,
+        constraints: &[
+            Constraint {
+                id: "pbes2-unauthenticated",
+                requirement: "Keep the encrypted key where only its owner can write it; the \
+                              format has no authentication tag.",
+                consequence: "Someone who can change the file can change the key it decrypts \
+                              to, and a wrong passphrase gets past the padding check about one \
+                              time in 256.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "passphrase-strength",
+                requirement: "Use a passphrase with real entropy; the iterations slow guessing, \
+                              they do not make a short password safe.",
+                consequence: "PBKDF2 is not memory-hard: a GPU tries a 600 000-iteration guess \
+                              far faster than a CPU checks one, and a dictionary word falls.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "pbkdf2-hmac-sha2-256" },
+            Edge { relation: Relation::BuiltOn, target: "aes-cbc" },
+        ],
+        performance: Performance::DeliberatelySlow,
+        rust_path: "ic_pkix::pbes2",
+        example: "let n = key.to_encrypted_der(passphrase, ic_pkix::pbes2::DEFAULT_ITERATIONS, &mut rng, &mut out)?;\n\
+                  let back = ic_pkix::PrivateKeyInfo::from_encrypted_der(&out[..n], passphrase, &mut buf)?;",
+        notes: "For a key file another tool must open, such as a CA key that OpenSSL or a \
+                hardware module's import reads; PEM label ENCRYPTED PRIVATE KEY. Both sides \
+                refuse fewer than 600 000 iterations (OpenSSL's default of 2048 included) or \
+                more than 10 000 000, and read only HMAC-SHA-256 and AES-256-CBC. Writing is \
+                checked byte for byte against OpenSSL 3.5. CBC because the format allows no \
+                AEAD and OpenSSL refuses one; where no other tool needs to read the file, \
+                passphrase-seal authenticates. Built from approved parts; this module is not \
+                CMVP validated.",
+    },
+    Entry {
         id: "hash-to-curve-p256",
         name: "Hash to P-256 (P256_XMD:SHA-256_SSWU_RO_)",
         aliases: &["p256-xmd-sha256-sswu-ro", "hash-to-curve"],

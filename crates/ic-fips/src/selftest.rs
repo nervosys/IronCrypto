@@ -134,6 +134,7 @@ static CASTS: &[Cast] = &[
     #[cfg(not(ic_approved_only))]
     ("passphrase-seal", ic_kdf::passphrase::self_test),
     ("pbkdf2-hmac-sha2-256", pbkdf2_hmac_sha2_256_self_test),
+    ("pkcs8-pbes2", ic_pkix::pbes2::self_test),
     (
         "sp800-108-counter-hmac-sha2-256",
         sp800_108_counter_hmac_sha2_256_self_test,
@@ -744,13 +745,13 @@ fn argon2id_self_test() -> Result<()> {
 /// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
 /// algorithms approved mode does not permit and their tests with them.
 #[cfg(not(ic_approved_only))]
-pub const TEST_COUNT: usize = 85;
+pub const TEST_COUNT: usize = 86;
 /// The number of known-answer tests in the suite.
 ///
 /// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
 /// algorithms approved mode does not permit and their tests with them.
 #[cfg(ic_approved_only)]
-pub const TEST_COUNT: usize = 64;
+pub const TEST_COUNT: usize = 65;
 
 /// Run every known-answer test and summarize the results.
 ///
@@ -849,11 +850,11 @@ const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
 #[cfg(not(ic_approved_only))]
-const INTEGRITY_TAG: &str = "c9ee7b277499134385238fa0d406a4458a7b267d0cc07d0807c7b423e88f53ee";
+const INTEGRITY_TAG: &str = "038261a7f7bf8f5a915b3987289941f08a6e7eeb03aaefc88f632d0bd7ec475b";
 /// The expected integrity tag over the CAST table of an `ic_approved_only` build,
 /// which is a different table.
 #[cfg(ic_approved_only)]
-const INTEGRITY_TAG: &str = "3c506ce68b33d48abd41bfcd4c043c3775bbac73c1df3add5610c59be4beebed";
+const INTEGRITY_TAG: &str = "746abd90be71ddef833252f53c27ad849c462d54319a2d98a23204422424a6ac";
 
 #[cfg(test)]
 mod tests {

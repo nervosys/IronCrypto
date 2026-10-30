@@ -684,6 +684,36 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         assert_eq!(back, [0xaau8; 8], "{id}: a refused open wrote nothing");
     }
     {
+        use ironcrypto::pkix::{pbes2, PrivateKeyInfo};
+        let id = "pkcs8-pbes2";
+        // Refused before a salt is drawn: the source is never asked.
+        struct Untouched;
+        impl ic_core::traits::RandomSource for Untouched {
+            fn fill(&mut self, _: &mut [u8]) -> ic_core::Result<()> {
+                panic!("a salt was drawn in the error state")
+            }
+        }
+        let key = PrivateKeyInfo::Ed25519(&[0x42u8; 32]);
+        let mut out = [0u8; pbes2::encrypted_len(48)];
+        seen.refused(
+            id,
+            "encrypt",
+            key.to_encrypted_der(b"pw", pbes2::DEFAULT_ITERATIONS, &mut Untouched, &mut out),
+        );
+        assert_eq!(out, [0u8; pbes2::encrypted_len(48)], "{id}: plaintext left");
+        // Refused before the input is even parsed.
+        let mut back = [0xaau8; 64];
+        seen.refused(
+            id,
+            "decrypt",
+            pbes2::decrypt(&[0x30, 0x00], b"pw", &mut back),
+        );
+        assert_eq!(
+            back, [0xaau8; 64],
+            "{id}: a refused decrypt wrote something"
+        );
+    }
+    {
         use hpke::opaque;
         seen.refused(
             "opaque-3dh-p256",

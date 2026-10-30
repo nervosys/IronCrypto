@@ -5,7 +5,8 @@
 //! right interface for the algorithms and the wrong one for the world, where
 //! keys arrive as `-----BEGIN PUBLIC KEY-----` and signatures arrive inside
 //! X.509 certificates. This crate is the translation layer, and nothing more:
-//! it parses and serializes, and performs no cryptography.
+//! it parses and serializes, and performs no cryptography, except in
+//! [`pbes2`], where reading a key file means decrypting it.
 //!
 //! # Scope
 //!
@@ -16,6 +17,8 @@
 //! - [`PrivateKeyInfo`]: PKCS#8 `PrivateKeyInfo`, and SEC1 `ECPrivateKey`.
 //! - [`ecdsa_signature`]: conversion between fixed-width `r || s` and the
 //!   `Ecdsa-Sig-Value` DER that X.509 and TLS carry.
+//! - [`pbes2`]: encrypted PKCS#8, `EncryptedPrivateKeyInfo` under PBES2 with
+//!   PBKDF2-HMAC-SHA-256 and AES-256-CBC, as OpenSSL writes and reads it.
 //! - [`pem`]: RFC 7468 textual encoding.
 //! - [`cert`]: X.509 certificate *issuance*, for one fixed profile: a CA and
 //!   the leaves it signs, under ECDSA, Ed25519 or ML-DSA. Certificates it
@@ -33,8 +36,9 @@
 //!   whether that is correct rather than whether every input can be handled. Hand the
 //!   `SubjectPublicKeyInfo` bytes from an existing X.509 parser to
 //!   [`PublicKeyInfo::from_der`].
-//! - **No encrypted PKCS#8.** `EncryptedPrivateKeyInfo` needs PBES2 and a
-//!   password. Decrypt it elsewhere and pass the plaintext here.
+//! - **One encrypted PKCS#8 form.** [`pbes2`] reads and writes PBES2 with
+//!   PBKDF2-HMAC-SHA-256 and AES-256-CBC only. PBES1, other PRFs and other
+//!   ciphers are refused, not decrypted.
 //! - **No PKCS#8 attributes.** The optional `[0] attributes` field is refused
 //!   rather than skipped, because skipping it would mean accepting a document
 //!   this crate cannot re-emit unchanged. Key-file tooling does not produce
@@ -80,6 +84,7 @@ pub mod der;
 pub mod ecdsa_signature;
 pub mod ml_dsa;
 pub mod oid;
+pub mod pbes2;
 pub mod pem;
 pub mod private_key;
 pub mod public_key;

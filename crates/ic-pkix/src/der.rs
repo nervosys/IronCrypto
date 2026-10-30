@@ -326,6 +326,21 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// Claim the `n` bytes in front of what has been written, as they stand,
+    /// and return them for the caller to fill or transform in place.
+    ///
+    /// For content that is produced where it will sit, such as a ciphertext
+    /// encrypted in place: the bytes already there are kept, not cleared.
+    pub fn claim(&mut self, n: usize) -> Result<&mut [u8]> {
+        ensure!(
+            self.pos >= n,
+            InvalidLength,
+            "der output buffer is too small"
+        );
+        self.pos -= n;
+        Ok(&mut self.buf[self.pos..self.pos + n])
+    }
+
     fn push_u8(&mut self, byte: u8) -> Result<()> {
         self.push(&[byte])
     }

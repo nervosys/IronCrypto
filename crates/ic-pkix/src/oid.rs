@@ -33,6 +33,18 @@ pub const ED25519: &[u8] = &[0x2b, 0x65, 0x70];
 /// `id-X25519`, 1.3.101.110 (RFC 8410).
 pub const X25519: &[u8] = &[0x2b, 0x65, 0x6e];
 
+/// `id-PBES2`, 1.2.840.113549.1.5.13 (RFC 8018).
+pub const PBES2: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0d];
+
+/// `id-PBKDF2`, 1.2.840.113549.1.5.12 (RFC 8018).
+pub const PBKDF2: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0c];
+
+/// `id-hmacWithSHA256`, 1.2.840.113549.2.9 (RFC 8018).
+pub const HMAC_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x09];
+
+/// `id-aes256-CBC`, 2.16.840.1.101.3.4.1.42 (RFC 3565).
+pub const AES256_CBC: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x2a];
+
 /// `ecdsa-with-SHA256`, 1.2.840.10045.4.3.2.
 pub const ECDSA_WITH_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
 /// `ecdsa-with-SHA384`, 1.2.840.10045.4.3.3.
@@ -233,6 +245,18 @@ mod tests {
             ),
             (RSASSA_PSS, &[1, 2, 840, 113549, 1, 1, 10], "id-RSASSA-PSS"),
             (EC_PUBLIC_KEY, &[1, 2, 840, 10045, 2, 1], "id-ecPublicKey"),
+            (PBES2, &[1, 2, 840, 113549, 1, 5, 13], "id-PBES2"),
+            (PBKDF2, &[1, 2, 840, 113549, 1, 5, 12], "id-PBKDF2"),
+            (
+                HMAC_WITH_SHA256,
+                &[1, 2, 840, 113549, 2, 9],
+                "id-hmacWithSHA256",
+            ),
+            (
+                AES256_CBC,
+                &[2, 16, 840, 1, 101, 3, 4, 1, 42],
+                "id-aes256-CBC",
+            ),
             (P256, &[1, 2, 840, 10045, 3, 1, 7], "prime256v1"),
             (P384, &[1, 3, 132, 0, 34], "secp384r1"),
             (P521, &[1, 3, 132, 0, 35], "secp521r1"),
