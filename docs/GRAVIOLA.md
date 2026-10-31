@@ -1306,10 +1306,11 @@ every input inside the kernel's documented contract:
   is false, is not proved.
   The f and g ranges of one round are proved by the target
   `ironcrypto.ic-ec.fe64.inv.round_fg_range`: `inv::round` from its entry
-  through `update_fg`, 70 stages and 283 composition goals, for every
+  through `update_fg`, 70 stages and 297 composition goals, for every
   input, joined the same way. Given limbs 0-3 of f and g below 2^62 and
   both values in [-P, P] at entry, with the round's own preconditions, the
-  outputs are update_fg's specification and satisfy the same bounds.
+  outputs are update_fg's specification and satisfy the same bounds, and
+  f[0] is odd at the exit, as the next round's precondition needs.
   Raising f's entry bound to 2P is refuted. Claiming F' >= -2^254, which
   is false, is not proved.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
@@ -1357,9 +1358,10 @@ Where this stops, and where Graviola remains ahead:
   aggregated sum to the one-block recurrence are outside the kernels.
 - **Coverage.** Not proved: the X25519 ladder loop; the rest of the field
   inversion (that the f and g, and the d and e,
-  bounds hold at every round's entry, since each round's own preconditions
-  are not carried across the loop; the loop of rounds; and the
-  normalisation's range) and the bound of 590
+  bounds hold at every round's entry, since the targets prove one round
+  and not the loop of rounds; zeta's bound at each entry, argued, as
+  zeta moves by at most 2 a divstep, so |zeta| <= 1201 over 600 of them;
+  and the normalisation's range) and the bound of 590
   divsteps that makes its 600 enough, which is Bernstein and Yang's, argued;
   the IFMA kernels (P-256, P-384, X25519 and RSA), RSA at 3072 and 4096
   bits and the whole exponentiation, the
