@@ -38,9 +38,17 @@ all of them.
   from the draft's. This is an Internet-Draft, and its labels and object
   identifiers may change before it becomes an RFC. Not approved-mode, and
   compiled out with `ic_approved_only`. Three new CASTs, so `TEST_COUNT` is
-  90 (still 65 approved-only). These are free functions for now: they are
-  not yet in `SignatureAlgorithm`, `ic_sig::verify`, SubjectPublicKeyInfo or
-  PKCS#8.
+  90 (still 65 approved-only).
+- **Composites through `ic_sig`**: `SignatureAlgorithm::MlDsa44Ed25519Sha512`,
+  `MlDsa65Ed25519Sha512` and `MlDsa87Ed448Shake256`, `PublicKey::Composite`
+  from a SubjectPublicKeyInfo, verification through `ic_sig::verify`, and
+  `SoftwareSigner` reading the draft's PKCS#8 key. All of these use the empty
+  context, as the draft's certificates do. The SubjectPublicKeyInfo of each
+  Appendix E certificate is read, and its self-signature verifies. The
+  draft's PKCS#8 keys sign, and report the certificate's SubjectPublicKeyInfo
+  byte for byte. An approved-only build still reads composite keys, but
+  refuses to verify or sign with them, as it does for Ed25519.
+  `PublicKey` and `SignatureAlgorithm` are `non_exhaustive`.
 - **Hardness assumptions in the ontology** (`ic_ontology::assumptions`):
   which problem each algorithm's security rests on (`module-lwe`,
   `module-sis`, `ec-discrete-log`, `rsa`, `aes`, `chacha`, `sha-2`, `keccak`,

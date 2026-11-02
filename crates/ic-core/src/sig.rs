@@ -17,9 +17,8 @@
 //!
 //! Public keys are DER `SubjectPublicKeyInfo`. Signatures are in the form
 //! X.509 and TLS 1.3 both carry: an ASN.1 `Ecdsa-Sig-Value` for ECDSA, and the
-//! algorithm's own bytes for Ed25519, Ed448, RSA, ML-DSA, SLH-DSA and HSS/LMS. One
-//! encoding at the
-//! interface means a signer written for certificates serves a handshake
+//! algorithm's own bytes for Ed25519, Ed448, RSA, ML-DSA, composite ML-DSA,
+//! SLH-DSA and HSS/LMS. One encoding at the interface means a signer written for certificates serves a handshake
 //! unchanged.
 
 use crate::traits::RandomSource;
@@ -63,6 +62,13 @@ pub enum SignatureAlgorithm {
     MlDsa65,
     /// ML-DSA-87 (FIPS 204), pure, with an empty context.
     MlDsa87,
+    /// Composite ML-DSA-44 and Ed25519 with SHA-512
+    /// (draft-ietf-lamps-pq-composite-sigs-19), with an empty context.
+    MlDsa44Ed25519Sha512,
+    /// Composite ML-DSA-65 and Ed25519 with SHA-512, with an empty context.
+    MlDsa65Ed25519Sha512,
+    /// Composite ML-DSA-87 and Ed448 with SHAKE256, with an empty context.
+    MlDsa87Ed448Shake256,
     /// HSS/LMS (RFC 8554, SP 800-208). The key names its own parameters, and
     /// the hash function with them.
     HssLms,
@@ -109,6 +115,9 @@ impl SignatureAlgorithm {
         Self::MlDsa44,
         Self::MlDsa65,
         Self::MlDsa87,
+        Self::MlDsa44Ed25519Sha512,
+        Self::MlDsa65Ed25519Sha512,
+        Self::MlDsa87Ed448Shake256,
         Self::HssLms,
         Self::SlhDsaSha2_128s,
         Self::SlhDsaSha2_128f,
@@ -141,6 +150,9 @@ impl SignatureAlgorithm {
             Self::MlDsa44 => "ml-dsa-44",
             Self::MlDsa65 => "ml-dsa-65",
             Self::MlDsa87 => "ml-dsa-87",
+            Self::MlDsa44Ed25519Sha512 => "mldsa44-ed25519-sha512",
+            Self::MlDsa65Ed25519Sha512 => "mldsa65-ed25519-sha512",
+            Self::MlDsa87Ed448Shake256 => "mldsa87-ed448-shake256",
             Self::HssLms => "hss-lms",
             Self::SlhDsaSha2_128s => "slh-dsa-sha2-128s",
             Self::SlhDsaSha2_128f => "slh-dsa-sha2-128f",
@@ -189,6 +201,10 @@ impl SignatureAlgorithm {
             Self::MlDsa44 => 2420,
             Self::MlDsa65 => 3309,
             Self::MlDsa87 => 4627,
+            // The ML-DSA signature, then the EdDSA one.
+            Self::MlDsa44Ed25519Sha512 => 2420 + 64,
+            Self::MlDsa65Ed25519Sha512 => 3309 + 64,
+            Self::MlDsa87Ed448Shake256 => 4627 + 114,
             // u32(L - 1), then seven signed public keys of 56 bytes, then
             // eight LMS signatures of 12 + 32 + 265 * 32 + 25 * 32 bytes.
             Self::HssLms => 74988,

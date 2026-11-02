@@ -26,6 +26,62 @@ DRAFT_SHA256 = "b4ee04416efc26e7d8de7c740dc3848ffe8b8cc9dcd035ad9d4e33e18844ec83
 KEEP = ["id-MLDSA44-Ed25519-SHA512", "id-MLDSA65-Ed25519-SHA512", "id-MLDSA87-Ed448-SHAKE256"]
 
 
+def tlv(der, at):
+    """The tag, and the start and end of the contents, of the DER element at
+    `at`; and where the element ends."""
+    tag = der[at]
+    n = der[at + 1]
+    at += 2
+    if n & 0x80:
+        k = n & 0x7F
+        n = int.from_bytes(der[at : at + k], "big")
+        at += k
+    return tag, at, at + n
+
+
+def certificate_parts(der):
+    """From an X.509 certificate: the DER of its TBSCertificate and of its
+    SubjectPublicKeyInfo, its signature algorithm's OID content bytes, and
+    the signature."""
+    tag, start, end = tlv(der, 0)
+    assert tag == 0x30 and end == len(der)
+    tag, tbs_start, tbs_end = tlv(der, start)
+    assert tag == 0x30
+    tbs = der[start:tbs_end]
+    # version [0], serialNumber, signature, issuer, validity, subject, then
+    # subjectPublicKeyInfo.
+    at = tbs_start
+    fields = []
+    while at < tbs_end:
+        tag, _, after = tlv(der, at)
+        fields.append((tag, at, after))
+        at = after
+    assert fields[0][0] == 0xA0
+    _, spki_at, spki_end = fields[6]
+    spki = der[spki_at:spki_end]
+    tag, alg_start, alg_end = tlv(der, tbs_end)
+    assert tag == 0x30
+    tag, oid_start, oid_end = tlv(der, alg_start)
+    assert tag == 0x06 and oid_end == alg_end, "signature algorithm with parameters"
+    oid = der[oid_start:oid_end]
+    tag, bits_start, bits_end = tlv(der, alg_end)
+    assert tag == 0x03 and bits_end == end and der[bits_start] == 0
+    return tbs, spki, oid, der[bits_start + 1 : bits_end]
+
+
+def spki_key(spki):
+    """The algorithm OID's content bytes, whether parameters follow it, and
+    the key."""
+    _, start, end = tlv(spki, 0)
+    tag, alg_start, alg_end = tlv(spki, start)
+    assert tag == 0x30
+    tag, oid_start, oid_end = tlv(spki, alg_start)
+    assert tag == 0x06
+    tag, bits_start, bits_end = tlv(spki, alg_end)
+    assert tag == 0x03 and bits_end == end and spki[bits_start] == 0
+    return spki[oid_start:oid_end], oid_end != alg_end, spki[bits_start + 1 : bits_end]
+
+
 def main():
     raw = open(sys.argv[1], "rb").read()
     digest = hashlib.sha256(raw).hexdigest()
@@ -47,6 +103,15 @@ def main():
         case = {"tcId": tc, "m": m, "ctx": ctx}
         for k in ("pk", "sk", "sk_pkcs8", "s", "sWithContext"):
             case[k] = base64.b64decode(t[k]).hex()
+        # The self-signed certificate: its key must be `pk`, under the
+        # algorithm it is signed with, with no parameters.
+        tbs, spki, oid, signature = certificate_parts(base64.b64decode(t["x5c"]))
+        key_oid, parameters, key = spki_key(spki)
+        assert key_oid == oid and not parameters and key.hex() == case["pk"], tc
+        case["oid"] = oid.hex()
+        case["spki"] = spki.hex()
+        case["tbs"] = tbs.hex()
+        case["certSignature"] = signature.hex()
         cases.append(case)
     json.dump({
         "algorithm": "Composite ML-DSA: id-MLDSA44-Ed25519-SHA512, id-MLDSA65-Ed25519-SHA512, "
@@ -54,6 +119,9 @@ def main():
         "source": "draft-ietf-lamps-pq-composite-sigs-19, Appendix E (text SHA-256 "
                   f"{DRAFT_SHA256}), converted by scripts/gen_composite_sig_vectors.py. "
                   "`s` is over `m` with the empty context, `sWithContext` over `m` with `ctx`. "
+                  "`spki`, `tbs` and `certSignature` are from the case's self-signed "
+                  "certificate `x5c`: its SubjectPublicKeyInfo, its TBSCertificate, and its "
+                  "signature, over `tbs` with the empty context; `oid` is the algorithm's. "
                   "The authors' reference implementation's values, from an Internet-Draft "
                   "rather than a standard.",
         "cases": cases,

@@ -141,3 +141,161 @@ fn both_halves_are_checked() {
         }
     }
 }
+
+/// DER: `tag`, its length, `content`.
+fn der(tag: u8, content: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    match content.len() {
+        n @ 0..=127 => out.push(n as u8),
+        n @ 128..=255 => out.extend([0x81, n as u8]),
+        n => out.extend([0x82, (n >> 8) as u8, n as u8]),
+    }
+    out.extend_from_slice(content);
+    out
+}
+
+/// A `SubjectPublicKeyInfo`, with NULL parameters if asked.
+fn spki_of(oid: &[u8], parameters: bool, key: &[u8]) -> Vec<u8> {
+    let mut alg = der(0x06, oid);
+    if parameters {
+        alg.extend([0x05, 0x00]);
+    }
+    let mut bits = vec![0u8];
+    bits.extend_from_slice(key);
+    der(0x30, &[der(0x30, &alg), der(0x03, &bits)].concat())
+}
+
+/// A version 0 PKCS#8 key, with NULL parameters if asked, and anything after
+/// the private key octet string.
+fn pkcs8_of(oid: &[u8], parameters: bool, key: &[u8], after: &[u8]) -> Vec<u8> {
+    let mut alg = der(0x06, oid);
+    if parameters {
+        alg.extend([0x05, 0x00]);
+    }
+    der(
+        0x30,
+        &[&[2, 1, 0][..], &der(0x30, &alg), &der(0x04, key), after].concat(),
+    )
+}
+
+/// The composites through `SubjectPublicKeyInfo`, PKCS#8, `ic_sig::verify`
+/// and `SoftwareSigner`, against the draft's keys and the self-signed
+/// certificate each case carries.
+#[test]
+fn composites_through_spki_pkcs8_and_certificates() {
+    use ironcrypto::core_types::sig::{SignatureAlgorithm, Signer};
+    use ironcrypto::sig::{verify_spki, PublicKey, SoftwareSigner};
+    let Some(file) = VectorFile::load_or_report("composite-mldsa-draft19") else {
+        return;
+    };
+    let kind = |r: ironcrypto::core_types::Result<()>| r.unwrap_err().kind();
+    let mut rng = ironcrypto::drbg::Rng::from_entropy(&[0x78; 48], b"composite pkix").unwrap();
+    for case in &file.cases {
+        let name = case["tcId"].as_str();
+        let c = algorithm(name);
+        let alg = SignatureAlgorithm::from_id(c.id()).unwrap();
+        let (pk, sk_pkcs8, sk, m, s, s_ctx, oid, spki, tbs, cert_sig) = (
+            hex_field(case, "pk"),
+            hex_field(case, "sk_pkcs8"),
+            hex_field(case, "sk"),
+            hex_field(case, "m"),
+            hex_field(case, "s"),
+            hex_field(case, "sWithContext"),
+            hex_field(case, "oid"),
+            hex_field(case, "spki"),
+            hex_field(case, "tbs"),
+            hex_field(case, "certSignature"),
+        );
+        assert_eq!(oid, c.oid(), "{name}");
+
+        // The certificate's key is read as the composite, and the
+        // certificate's own signature verifies.
+        assert_eq!(
+            PublicKey::from_spki(&spki).unwrap(),
+            PublicKey::Composite(c, &pk),
+            "{name}"
+        );
+        verify_spki(alg, &spki, &tbs, &cert_sig).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        verify_spki(alg, &spki, &m, &s).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        // `verify` is the empty context: the signature over `ctx` is refused.
+        assert_eq!(
+            kind(verify_spki(alg, &spki, &m, &s_ctx)),
+            ErrorKind::AuthenticationFailed,
+            "{name}"
+        );
+        let mut tbs_altered = tbs.clone();
+        tbs_altered[10] ^= 1;
+        assert_eq!(
+            kind(verify_spki(alg, &spki, &tbs_altered, &cert_sig)),
+            ErrorKind::AuthenticationFailed,
+            "{name}"
+        );
+        for &other in SignatureAlgorithm::ALL.iter().filter(|a| **a != alg) {
+            assert_eq!(
+                kind(verify_spki(other, &spki, &tbs, &cert_sig)),
+                ErrorKind::InvalidParameter,
+                "{name} as {}",
+                other.id()
+            );
+        }
+
+        // The draft's PKCS#8 key signs, and reports the certificate's key.
+        let signer =
+            SoftwareSigner::from_pkcs8(&sk_pkcs8).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert_eq!(signer.algorithms(), [alg], "{name}");
+        assert!(signer.public_key() == spki.as_slice(), "{name}: public key");
+        let mut out = vec![0u8; alg.max_signature_len()];
+        let n = signer.sign(alg, &m, &mut rng, &mut out).unwrap();
+        assert_eq!(n, c.signature_len());
+        verify_spki(alg, &spki, &m, &out[..n]).unwrap();
+        assert_eq!(
+            kind(
+                signer
+                    .sign(alg, &m, &mut rng, &mut out[..n - 1])
+                    .map(|_| ())
+            ),
+            ErrorKind::InvalidLength,
+            "{name}"
+        );
+
+        // Against the rule rather than a value. These builders reproduce the
+        // draft's encodings first, so each refusal below is for the one thing
+        // changed.
+        assert_eq!(spki_of(&oid, false, &pk), spki, "{name}");
+        assert_eq!(pkcs8_of(&oid, false, &sk, &[]), sk_pkcs8, "{name}");
+        let spki_err = |bytes: Vec<u8>| PublicKey::from_spki(&bytes).unwrap_err().kind();
+        assert_eq!(
+            spki_err(spki_of(&oid, true, &pk)),
+            ErrorKind::MalformedEncoding
+        );
+        assert_eq!(
+            spki_err(spki_of(&oid, false, &pk[1..])),
+            ErrorKind::MalformedEncoding
+        );
+        assert_eq!(
+            spki_err(spki_of(&oid, false, &[&pk[..], &[0]].concat())),
+            ErrorKind::MalformedEncoding
+        );
+        let pkcs8_err = |bytes: Vec<u8>| SoftwareSigner::from_pkcs8(&bytes).unwrap_err().kind();
+        assert_eq!(
+            pkcs8_err(pkcs8_of(&oid, true, &sk, &[])),
+            ErrorKind::MalformedEncoding
+        );
+        assert_eq!(
+            pkcs8_err(pkcs8_of(&oid, false, &sk[1..], &[])),
+            ErrorKind::MalformedEncoding
+        );
+        assert_eq!(
+            pkcs8_err(pkcs8_of(&oid, false, &[&sk[..], &[0]].concat(), &[])),
+            ErrorKind::MalformedEncoding
+        );
+        // A stated public key is refused, as `ic_pkix` refuses one for every
+        // algorithm. RFC 5958 puts one only in a version 1 key.
+        let mut stated = vec![0u8];
+        stated.extend_from_slice(&pk);
+        let mut with_public = pkcs8_of(&oid, false, &sk, &der(0x81, &stated));
+        assert_eq!(with_public[4..7], [2, 1, 0]);
+        with_public[6] = 1;
+        assert_eq!(pkcs8_err(with_public), ErrorKind::Unsupported);
+    }
+}

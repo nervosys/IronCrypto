@@ -77,8 +77,8 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
-// ML-DSA beside EdDSA, which approved mode does not permit.
-#[cfg(not(ic_approved_only))]
+// ML-DSA beside EdDSA. Approved mode does not permit EdDSA, so an approved-only
+// build keeps the names and refuses the operations.
 pub mod composite;
 pub mod signer;
 
@@ -124,6 +124,9 @@ pub enum PublicKey<'a> {
     MlDsa65(&'a [u8]),
     /// ML-DSA-87, 2592 bytes.
     MlDsa87(&'a [u8]),
+    /// A composite ML-DSA key: the ML-DSA key, then the EdDSA key, exactly
+    /// the composite's length.
+    Composite(composite::Composite, &'a [u8]),
     /// HSS/LMS: `u32(L) || lms_public_key`, 52 or 60 bytes.
     HssLms(&'a [u8]),
     /// SLH-DSA: the parameter set, and `PK.seed || PK.root`, 32 to 64 bytes.
@@ -147,6 +150,18 @@ const fn slh_dsa_set(algorithm: SignatureAlgorithm) -> Option<ic_slhdsa::Paramet
         A::SlhDsaShake_192f => P::Shake_192f,
         A::SlhDsaShake_256s => P::Shake_256s,
         A::SlhDsaShake_256f => P::Shake_256f,
+        _ => return None,
+    })
+}
+
+/// The composite an algorithm names, if it names one.
+const fn composite_of(algorithm: SignatureAlgorithm) -> Option<composite::Composite> {
+    use composite::Composite as C;
+    use SignatureAlgorithm as A;
+    Some(match algorithm {
+        A::MlDsa44Ed25519Sha512 => C::MlDsa44Ed25519Sha512,
+        A::MlDsa65Ed25519Sha512 => C::MlDsa65Ed25519Sha512,
+        A::MlDsa87Ed448Shake256 => C::MlDsa87Ed448Shake256,
         _ => return None,
     })
 }
@@ -203,7 +218,7 @@ impl<'a> PublicKey<'a> {
         }
     }
 
-    /// The ML-DSA, SLH-DSA or HSS/LMS reading of a `SubjectPublicKeyInfo`
+    /// The ML-DSA, composite, SLH-DSA or HSS/LMS reading of a `SubjectPublicKeyInfo`
     /// `ic_pkix` did not name.
     fn post_quantum_from_spki(spki: &'a [u8]) -> Result<Self> {
         let mut outer = Reader::new(spki);
@@ -241,6 +256,21 @@ impl<'a> PublicKey<'a> {
             ic_lms::parameters(key)?;
             return Ok(Self::HssLms(key));
         }
+        if let Some(c) = composite::Composite::from_oid(id) {
+            // draft-ietf-lamps-pq-composite-sigs-19 section 5: parameters
+            // absent, and the key the two components' concatenated.
+            ensure!(
+                parameters_absent,
+                MalformedEncoding,
+                "composite public key with parameters"
+            );
+            ensure!(
+                key.len() == c.public_key_len(),
+                MalformedEncoding,
+                "composite public key length"
+            );
+            return Ok(Self::Composite(c, key));
+        }
 
         let (len, make): (usize, fn(&'a [u8]) -> Self) = if id == oid::ML_DSA_44 {
             (ic_mldsa::sign44::PUBLIC_KEY_LEN, Self::MlDsa44)
@@ -265,8 +295,9 @@ impl<'a> PublicKey<'a> {
     }
 
     /// The kind of key: `ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`, `ed25519`,
-    /// `rsa`, `ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87`, `hss-lms`, or an SLH-DSA
-    /// parameter set such as `slh-dsa-sha2-128s`. For reports.
+    /// `rsa`, `ml-dsa-44`, `ml-dsa-65`, `ml-dsa-87`, `hss-lms`, a composite
+    /// such as `mldsa65-ed25519-sha512`, or an SLH-DSA parameter set such as
+    /// `slh-dsa-sha2-128s`. For reports.
     #[must_use = "the key's kind; discarding it reports nothing"]
     pub const fn kind_id(&self) -> &'static str {
         match self {
@@ -279,6 +310,7 @@ impl<'a> PublicKey<'a> {
             Self::MlDsa44(_) => "ml-dsa-44",
             Self::MlDsa65(_) => "ml-dsa-65",
             Self::MlDsa87(_) => "ml-dsa-87",
+            Self::Composite(c, _) => c.id(),
             Self::HssLms(_) => "hss-lms",
             Self::SlhDsa(set, _) => set.id(),
         }
@@ -311,6 +343,12 @@ impl<'a> PublicKey<'a> {
             Self::EcP384(_) | Self::MlDsa65(_) => 192,
             Self::EcP521(_) | Self::MlDsa87(_) => 256,
             Self::Ed448(_) => 224,
+            // Its ML-DSA half's: both halves must be broken.
+            Self::Composite(c, _) => match c {
+                composite::Composite::MlDsa44Ed25519Sha512 => 128,
+                composite::Composite::MlDsa65Ed25519Sha512 => 192,
+                _ => 256,
+            },
             Self::SlhDsa(set, _) => match set.category() {
                 1 => 128,
                 3 => 192,
@@ -340,6 +378,9 @@ impl<'a> PublicKey<'a> {
         use SignatureAlgorithm as A;
         if let Self::SlhDsa(set, _) = self {
             return slh_dsa_set(algorithm) == Some(*set);
+        }
+        if let Self::Composite(c, _) = self {
+            return composite_of(algorithm) == Some(*c);
         }
         matches!(
             (self, algorithm),
@@ -398,6 +439,7 @@ pub fn verify(
         (PublicKey::MlDsa44(pk), _) => verify_ml_dsa_44(pk, message, signature),
         (PublicKey::MlDsa65(pk), _) => verify_ml_dsa_65(pk, message, signature),
         (PublicKey::MlDsa87(pk), _) => verify_ml_dsa_87(pk, message, signature),
+        (PublicKey::Composite(c, pk), _) => verify_composite(c, pk, message, signature),
         (PublicKey::HssLms(pk), _) => verify_hss_lms(pk, message, signature),
         (PublicKey::SlhDsa(set, pk), _) => verify_slh_dsa(set, pk, message, signature),
         (PublicKey::Rsa { modulus, exponent }, a) => {
@@ -480,6 +522,32 @@ fn verify_ed448(_pk: &[u8], _message: &[u8], _signature: &[u8]) -> Result<()> {
     Err(err!(
         NotApprovedInFipsMode,
         "Ed448 is not in this build: it was compiled with ic_approved_only"
+    ))
+}
+
+/// A composite with the empty context, as a certificate's signature is made.
+#[cfg(not(ic_approved_only))]
+#[inline(never)]
+fn verify_composite(
+    algorithm: composite::Composite,
+    pk: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<()> {
+    rejected(composite::verify(algorithm, pk, message, b"", signature))
+}
+
+/// Refused by name in an approved-only build: its EdDSA half is not approved.
+#[cfg(ic_approved_only)]
+fn verify_composite(
+    _algorithm: composite::Composite,
+    _pk: &[u8],
+    _message: &[u8],
+    _signature: &[u8],
+) -> Result<()> {
+    Err(err!(
+        NotApprovedInFipsMode,
+        "composite ML-DSA is not in this build: it was compiled with ic_approved_only"
     ))
 }
 
@@ -856,6 +924,15 @@ mod tests {
         ] {
             assert_eq!(served(&key), 1, "{key:?}");
         }
+        // Each composite serves its own algorithm, of the same name.
+        for c in composite::Composite::ALL {
+            let key = PublicKey::Composite(c, &[]);
+            assert_eq!(served(&key), 1, "{key:?}");
+            let alg = SignatureAlgorithm::from_id(c.id()).expect("an algorithm per composite");
+            assert!(key.supports(alg));
+            assert_eq!(composite_of(alg), Some(c));
+            assert_eq!(alg.max_signature_len(), c.signature_len());
+        }
         // Each SLH-DSA set serves its own algorithm and no other set's, and
         // every SLH-DSA algorithm is some set's.
         for &set in ic_slhdsa::ParameterSet::ALL {
@@ -888,7 +965,8 @@ mod tests {
     /// its algorithm, and RSA's strength follows its modulus.
     #[test]
     fn key_metadata_agrees_with_the_ontology() {
-        let cases: [(PublicKey, &str, &str); 7] = [
+        use composite::Composite as C;
+        let cases: [(PublicKey, &str, &str); 10] = [
             (PublicKey::EcP256(&[]), "ecdsa-p256", "ecdsa-p256-sha256"),
             (PublicKey::EcP384(&[]), "ecdsa-p384", "ecdsa-p384-sha384"),
             (PublicKey::EcP521(&[]), "ecdsa-p521", "ecdsa-p521-sha512"),
@@ -896,6 +974,21 @@ mod tests {
             (PublicKey::MlDsa44(&[]), "ml-dsa-44", "ml-dsa-44"),
             (PublicKey::MlDsa65(&[]), "ml-dsa-65", "ml-dsa-65"),
             (PublicKey::MlDsa87(&[]), "ml-dsa-87", "ml-dsa-87"),
+            (
+                PublicKey::Composite(C::MlDsa44Ed25519Sha512, &[]),
+                "mldsa44-ed25519-sha512",
+                "mldsa44-ed25519-sha512",
+            ),
+            (
+                PublicKey::Composite(C::MlDsa65Ed25519Sha512, &[]),
+                "mldsa65-ed25519-sha512",
+                "mldsa65-ed25519-sha512",
+            ),
+            (
+                PublicKey::Composite(C::MlDsa87Ed448Shake256, &[]),
+                "mldsa87-ed448-shake256",
+                "mldsa87-ed448-shake256",
+            ),
         ];
         for (key, kind_id, entry) in cases {
             assert_eq!(key.kind_id(), kind_id);

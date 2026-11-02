@@ -33,7 +33,7 @@
 //! # What it reads
 //!
 //! PKCS#8 (`OneAsymmetricKey`) for RSA, ECDSA over P-256, P-384 and P-521,
-//! Ed25519, Ed448, ML-DSA and SLH-DSA. Three limits:
+//! Ed25519, Ed448, ML-DSA, composite ML-DSA and SLH-DSA. Three limits:
 //!
 //! - **An ML-DSA key must carry its seed.** RFC 9881 allows a key to be the
 //!   seed, the expanded key, or both. The public key is derived from the
@@ -79,9 +79,9 @@ use ic_pkix::der::{Reader, Writer, SEQUENCE};
 use ic_pkix::{KeyAlgorithm, MlDsaParameterSet, MlDsaPrivateKey, PrivateKeyInfo, PublicKeyInfo};
 use ic_slhdsa::ParameterSet;
 
-/// The longest `SubjectPublicKeyInfo` held: ML-DSA-87's 2592-byte key and its
-/// header.
-const MAX_SPKI: usize = 2620;
+/// The longest `SubjectPublicKeyInfo` held: composite ML-DSA-87 with Ed448's
+/// 2649-byte key and its header.
+const MAX_SPKI: usize = 2670;
 
 /// The algorithms an RSA key signs with, PSS first: a protocol that takes the
 /// first one its peer allows gets the padding with a security proof.
@@ -109,6 +109,9 @@ enum Key {
     MlDsa44(Zeroizing<[u8; ic_mldsa::sign44::SECRET_KEY_LEN]>),
     MlDsa65(Zeroizing<[u8; ic_mldsa::sign::SECRET_KEY_LEN]>),
     MlDsa87(Zeroizing<[u8; ic_mldsa::sign87::SECRET_KEY_LEN]>),
+    // The composite's private key at the front of the buffer: 64 or 89 bytes.
+    #[cfg(not(ic_approved_only))]
+    Composite(crate::composite::Composite, Zeroizing<[u8; 89]>),
     // `4n` bytes at the front of the buffer.
     SlhDsa(ParameterSet, Zeroizing<[u8; 128]>),
 }
@@ -318,7 +321,7 @@ impl SoftwareSigner {
         ))
     }
 
-    /// The ML-DSA or SLH-DSA reading of a key `ic_pkix::PrivateKeyInfo` did
+    /// The ML-DSA, composite or SLH-DSA reading of a key `ic_pkix::PrivateKeyInfo` did
     /// not name.
     #[inline(never)]
     fn post_quantum(der: &[u8]) -> Result<Self> {
@@ -342,6 +345,18 @@ impl SoftwareSigner {
         }
         if MlDsaParameterSet::from_oid(id).is_some() {
             return Self::ml_dsa(&MlDsaPrivateKey::from_der(der)?);
+        }
+        if let Some(c) = crate::composite::Composite::from_oid(id) {
+            // draft-ietf-lamps-pq-composite-sigs-19 section 5: parameters
+            // absent, and the private key octet string is the raw key, the
+            // ML-DSA seed then the EdDSA seed.
+            ensure!(
+                algorithm.finish().is_ok(),
+                MalformedEncoding,
+                "composite private key with parameters"
+            );
+            // `ic_pkix` has already refused attributes and a version 1 key.
+            return Self::composite(c, id, body.octet_string()?);
         }
         Err(err!(Unsupported, "private key algorithm not implemented"))
     }
@@ -388,6 +403,42 @@ impl SoftwareSigner {
             MlDsaParameterSet::MlDsa65 => set!(sign, MlDsa65),
             MlDsaParameterSet::MlDsa87 => set!(sign87, MlDsa87),
         }
+    }
+
+    #[cfg(ic_approved_only)]
+    fn composite(_c: crate::composite::Composite, _id: &[u8], _secret: &[u8]) -> Result<Self> {
+        Err(err!(
+            NotApprovedInFipsMode,
+            "composite ML-DSA is not in this build: it was compiled with ic_approved_only"
+        ))
+    }
+
+    #[cfg(not(ic_approved_only))]
+    #[inline(never)]
+    fn composite(c: crate::composite::Composite, id: &[u8], secret: &[u8]) -> Result<Self> {
+        ensure!(
+            secret.len() == c.private_key_len(),
+            MalformedEncoding,
+            "composite private key length"
+        );
+        let mut held = Zeroizing::new([0u8; 89]);
+        held.get_mut()[..secret.len()].copy_from_slice(secret);
+        let mut public = [0u8; 2649];
+        let public = &mut public[..c.public_key_len()];
+        crate::composite::public_key(c, secret, public)?;
+        let algorithm = SignatureAlgorithm::from_id(c.id())
+            .ok_or(err!(Internal, "a composite without an algorithm"))?;
+        let mut spki = [0u8; MAX_SPKI];
+        let len = {
+            let mut w = Writer::new(&mut spki);
+            w.push_bit_string(public)?;
+            let start = w.len();
+            w.push_oid(id)?;
+            w.push_wrapper(SEQUENCE, start)?;
+            w.push_wrapper(SEQUENCE, 0)?;
+            w.finish()
+        };
+        Ok(Self::new(Key::Composite(c, held), algorithm, spki, len))
     }
 
     #[inline(never)]
@@ -507,6 +558,25 @@ impl Signer for SoftwareSigner {
             Key::MlDsa44(sk) => ml_dsa_44(sk.get(), message, rng, out),
             Key::MlDsa65(sk) => ml_dsa_65(sk.get(), message, rng, out),
             Key::MlDsa87(sk) => ml_dsa_87(sk.get(), message, rng, out),
+            #[cfg(not(ic_approved_only))]
+            Key::Composite(c, sk) => {
+                let len = c.signature_len();
+                ensure!(
+                    out.len() >= len,
+                    InvalidLength,
+                    "signature buffer too short"
+                );
+                // The empty context, as a certificate's signature is made.
+                crate::composite::sign(
+                    *c,
+                    &sk.get()[..c.private_key_len()],
+                    message,
+                    b"",
+                    rng,
+                    &mut out[..len],
+                )?;
+                Ok(len)
+            }
             Key::SlhDsa(set, sk) => {
                 let len = set.signature_len();
                 ensure!(
