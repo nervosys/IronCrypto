@@ -1306,7 +1306,7 @@ every input inside the kernel's documented contract:
   is false, is not proved.
   The f and g ranges of one round are proved by the target
   `ironcrypto.ic-ec.fe64.inv.round_fg_range`: `inv::round` from its entry
-  through `update_fg`, 70 stages and 297 composition goals, for every
+  through `update_fg`, 70 stages and 298 composition goals, for every
   input, joined the same way. Given limbs 0-3 of f and g below 2^62 and
   both values in [-P, P] at entry, with the round's own preconditions, the
   outputs are update_fg's specification and satisfy the same bounds, and
