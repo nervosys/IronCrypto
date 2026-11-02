@@ -4679,6 +4679,7 @@ pub(crate) unsafe fn p256_to_fp(
 /// for 96 bytes; `o` must be writable for 3 field vectors of `4 * P256_LIMBS`
 /// words; `t` must be writable for 356 words, within `P256_SPILL_WORDS`. `o`
 /// and `t` must not overlap the inputs or each other.
+#[cfg(any(feature = "std", feature = "ct-probes"))]
 #[inline(never)]
 pub(crate) unsafe fn p256_madd4(
     a: *const u64,
@@ -7249,6 +7250,7 @@ pub(crate) unsafe fn p256_madd4(
 /// must be readable for 3 field vectors of `4 * P256_LIMBS` words; `o` must be
 /// writable for 3 field vectors of `4 * P256_LIMBS` words. `o` must not overlap
 /// the inputs.
+#[cfg(any(feature = "std", feature = "ct-probes"))]
 #[inline(never)]
 pub(crate) unsafe fn p256_to_fp4(
     a: *const u64,
@@ -16734,6 +16736,7 @@ pub(crate) unsafe fn p384_to_fp(
 /// for 96 bytes; `o` must be writable for 3 field vectors of `4 * P384_LIMBS`
 /// words; `t` must be writable for 1428 words, within `P384_SPILL_WORDS`. `o`
 /// and `t` must not overlap the inputs or each other.
+#[cfg(any(feature = "std", feature = "ct-probes"))]
 #[inline(never)]
 pub(crate) unsafe fn p384_madd4(
     a: *const u64,
@@ -22222,6 +22225,7 @@ pub(crate) unsafe fn p384_madd4(
 /// writable for 3 field vectors of `4 * P384_LIMBS` words; `t` must be writable
 /// for 204 words, within `P384_SPILL_WORDS`. `o` and `t` must not overlap the
 /// inputs or each other.
+#[cfg(any(feature = "std", feature = "ct-probes"))]
 #[inline(never)]
 pub(crate) unsafe fn p384_to_fp4(
     a: *const u64,

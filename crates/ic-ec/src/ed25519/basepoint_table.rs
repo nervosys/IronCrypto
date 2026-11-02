@@ -72,7 +72,10 @@ pub(crate) struct Window<F>([AffineNiels<F>; ENTRIES]);
 
 impl<F: EdField> Window<F> {
     /// The multiples `1..=8`, for building the four-lane copy.
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     pub(super) fn entries(&self) -> &[AffineNiels<F>; ENTRIES] {
         &self.0
     }
@@ -162,7 +165,10 @@ macro_rules! tables {
 }
 
 tables!(crate::field::Fe);
-#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+))]
 tables!(
     crate::fe64::Fe64,
     // Four lanes at once where the CPU has IFMA; one group operation per

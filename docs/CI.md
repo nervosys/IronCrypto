@@ -7,7 +7,7 @@ Four things gate this project, and they run the same script on purpose.
 | `.githooks/pre-commit` | `scripts/check.sh --quick` | every commit |
 | `.githooks/pre-push` | `scripts/check.sh` (adds cross-compilation) | every push |
 | `.github/workflows/self-hosted.yml` | `scripts/check.sh` | every push, on a runner you provide |
-| `.github/workflows/ci.yml` | the same gates, across three OSes, four no_std targets and five
+| `.github/workflows/ci.yml` | the same gates, across three OSes, five no_std targets and five
 compiled-code targets | every push, on GitHub-hosted runners |
 
 Enable the hooks once per clone:

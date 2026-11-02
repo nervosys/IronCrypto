@@ -100,7 +100,7 @@ pub fn ed25519_mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
 #[cfg(all(
     not(ic_approved_only),
     target_arch = "x86_64",
-    not(any(ic_limb32, ic_ec_portable))
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
 ))]
 #[allow(unsafe_code)]
 pub mod x86 {

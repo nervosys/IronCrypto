@@ -84,6 +84,18 @@ all of them.
 
 ### Fixed
 
+- **No build for bare-metal x86-64.** `ironcrypto --no-default-features`
+  did not compile for `x86_64-unknown-none`: that target has no SSE, and
+  LLVM cannot lower the AVX-512 IFMA assembly of Curve25519's four-lane
+  field there (`ic-ec/src/f51x4.rs`, "scalar-to-vector conversion
+  failed"). On an x86-64 target without SSE2, `ic-ec` now takes the
+  portable field, as under `--cfg ic_ec_portable`. Nothing is lost: without
+  `std`, CPU features are detected at compile time only, and such a target
+  enables none, so the MULX and IFMA paths could never have run there. The
+  P-256 and P-384 four-lane kernels used only under `std` or `ct-probes`
+  are no longer compiled without them, which no_std x86-64 builds reported
+  as never used. CI and `scripts/check.sh` now cross-compile to
+  `x86_64-unknown-none`.
 - **Key material that outlived its owner.** The AES-NI and ARMv8 round keys
   were `Copy` with no `Drop`, so every hardware AES key schedule stayed in
   memory after its cipher was dropped; the portable schedule was wiped, and

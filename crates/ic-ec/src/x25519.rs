@@ -37,7 +37,10 @@ fn ladder(scalar: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
     // On the four-limb field each step is one assembly block, which is what
     // makes that field pay; see `fe64::ladder_step`. It computes what
     // `ladder_in` does, and the tests hold the two to the same answers.
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     {
         // Four lanes at a time on AVX-512 IFMA; see `f51x4`.
         if let Some(t) = crate::f51x4::Ifma::get() {
@@ -378,7 +381,10 @@ mod tests {
                 false,
             ),
         ];
-        #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+        ))]
         if crate::fe64::available() {
             v.push(("block, four-limb field", crate::fe64::x25519_ladder, true));
             v.push((
@@ -387,7 +393,10 @@ mod tests {
                 false,
             ));
         }
-        #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+        ))]
         if crate::f51x4::Ifma::get().is_some() {
             fn four_lane(s: &[u8; 32], u: &[u8; 32]) -> [u8; 32] {
                 match crate::f51x4::Ifma::get() {
@@ -488,7 +497,10 @@ mod tests {
     /// On a CPU with BMI2 and ADX the dispatch must pick the four-limb
     /// field, or every vector above would be testing the fallback twice.
     #[test]
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     fn this_cpu_takes_the_fast_path() {
         use crate::Curve25519Backend as B;
         let backend = crate::curve25519_backend();

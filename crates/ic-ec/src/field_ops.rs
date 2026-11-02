@@ -21,7 +21,7 @@ use ic_core::ct::Choice;
 /// reached only through here.
 macro_rules! dispatch {
     ($f:ident ( $($arg:expr),* $(,)? )) => {{
-        #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+        #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))))]
         {
             if crate::fe64::available() {
                 $f::<crate::fe64::Fe64>($($arg),*)
@@ -29,7 +29,7 @@ macro_rules! dispatch {
                 $f::<crate::field::Fe>($($arg),*)
             }
         }
-        #[cfg(not(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable)))))]
+        #[cfg(not(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2"))))))]
         {
             $f::<crate::field::Fe>($($arg),*)
         }
@@ -275,7 +275,10 @@ impl Field for crate::field::Fe {
 
 /// The four-limb field. Only reachable through [`dispatch!`], which has
 /// checked [`crate::fe64::available`].
-#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+))]
 impl Field for crate::fe64::Fe64 {
     const ZERO: Self = crate::fe64::Fe64::ZERO;
     const ONE: Self = crate::fe64::Fe64::ONE;

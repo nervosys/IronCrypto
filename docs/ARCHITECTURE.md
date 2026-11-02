@@ -49,7 +49,7 @@ lines and each one is directly tested.
 Every crate is `#![no_std]` unless the `std` feature is on, and `std` only ever
 buys `String`-returning conveniences and the OS entropy backend. CI
 cross-compiles `ironcrypto` to `thumbv7em-none-eabihf`, `thumbv6m-none-eabi`,
-`riscv32imac-unknown-none-elf`, and `wasm32-unknown-unknown`, because a
+`riscv32imac-unknown-none-elf`, `wasm32-unknown-unknown`, and `x86_64-unknown-none`, because a
 `--no-default-features` build on a host with `std` available does not actually
 prove anything.
 

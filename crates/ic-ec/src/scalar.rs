@@ -16,7 +16,10 @@
 
 // On x86-64 the portable functions are the tests' oracle, not the path.
 #![cfg_attr(
-    all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))),
+    all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ),
     allow(dead_code)
 )]
 
@@ -145,11 +148,17 @@ fn fold_round(limbs: &mut [i64; LIMBS]) {
 /// the final subtractions are masked. The scalar being reduced is secret when
 /// signing.
 pub fn reduce_wide(input: &[u8; 64]) -> [u8; 32] {
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     {
         w64::reduce_wide(input)
     }
-    #[cfg(not(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable)))))]
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    )))]
     {
         reduce_wide_portable(input)
     }
@@ -273,11 +282,17 @@ pub fn reduce(input: &[u8; 32]) -> [u8; 32] {
 
 /// Compute `(a * b + c) mod L` for little-endian 32-byte scalars.
 pub fn mul_add(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     {
         w64::mul_add(a, b, c)
     }
-    #[cfg(not(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable)))))]
+    #[cfg(not(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    )))]
     {
         mul_add_portable(a, b, c)
     }
@@ -353,7 +368,10 @@ fn mul_add_portable(a: &[u8; 32], b: &[u8; 32], c: &[u8; 32]) -> [u8; 32] {
 /// optimiser cannot see is one of two values; `ct_ed25519_reduce_wide` and
 /// `ct_ed25519_mul_add` in `scripts/check-ct.py` hold the compiled code to
 /// having no branch.
-#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+))]
 mod w64 {
     /// `L`, little-endian 64-bit limbs.
     pub(super) const L64: [u64; 4] = [0x5812_631a_5cf5_d3ed, 0x14de_f9de_a2f7_9cd6, 0, 1 << 60];
@@ -768,7 +786,10 @@ mod tests {
 
     /// `floor(2^512 / L)` by long division, one bit at a time, against the
     /// Barrett constant.
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     #[test]
     fn barrett_constant_is_the_quotient() {
         let l = w64::L64;

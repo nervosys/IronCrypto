@@ -65,7 +65,7 @@ with a `cargo tree` check.
 Every crate must build without the standard library. Gate anything needing
 allocation behind `#[cfg(feature = "std")]`. CI cross-compiles to
 `thumbv7em-none-eabihf`, `thumbv6m-none-eabi`, `riscv32imac-unknown-none-elf`,
-and `wasm32-unknown-unknown`, because `--no-default-features` on a host that has
+`wasm32-unknown-unknown` and `x86_64-unknown-none`, because `--no-default-features` on a host that has
 `std` available proves nothing.
 
 ### Nothing panics on caller input

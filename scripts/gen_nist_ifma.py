@@ -1352,6 +1352,10 @@ KERNELS = [
     ("lin", k_lin, ["a4", "b4"]),
 ]
 TEST_ONLY = ("mul", "lin")
+# Kernels whose only callers are under `std` (the generator tables `super::ifma`
+# builds) or the compiled-code probes; without either, a no_std x86-64 build
+# would warn that they are never used.
+STD_ONLY = ("madd4", "to_fp4")
 # Kernels scheduled in the order their instructions were built rather than
 # by critical path, which spills far less. The four-lane ones, whose four
 # independent computations keep the core busy whatever the order: P-256's
@@ -2208,6 +2212,8 @@ def write_rust(path, fields, results):
                 w(f"/// {line}")
             if name in TEST_ONLY:
                 w("#[cfg(test)]")
+            if name in STD_ONLY:
+                w('#[cfg(any(feature = "std", feature = "ct-probes"))]')
             w("#[inline(never)]")
             params = []
             for r in ("a", "b", "m"):

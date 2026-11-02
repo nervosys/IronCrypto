@@ -82,11 +82,14 @@ mod field32;
 // GF(2^255 - 19) in four 64-bit limbs, for x86-64 CPUs with BMI2 and ADX,
 // selected at run time; see `field_ops::dispatch!`. Not under `ic_limb32`,
 // whose purpose is to run the curve vectors against the ten-limb field, nor
-// under `ic_ec_portable`, which runs everything on the portable field.
+// under `ic_ec_portable`, which runs everything on the portable field, nor on
+// an x86-64 target without SSE2 (`x86_64-unknown-none`), where LLVM cannot
+// lower `f51x4`'s vector assembly and no_std detection would never select
+// these anyway. Every gate below on `ic_ec_portable` carries the same term.
 #[cfg(all(
     not(ic_approved_only),
     target_arch = "x86_64",
-    not(any(ic_limb32, ic_ec_portable))
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
 ))]
 #[allow(unsafe_code)]
 pub(crate) mod fe64;
@@ -96,7 +99,7 @@ pub(crate) mod fe64;
 #[cfg(all(
     not(ic_approved_only),
     target_arch = "x86_64",
-    not(any(ic_limb32, ic_ec_portable))
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
 ))]
 #[allow(unsafe_code)]
 // Its unsafe functions are `#[target_feature]` leaves, each a few lines of
@@ -190,7 +193,10 @@ pub enum Curve25519Backend {
 #[cfg(not(ic_approved_only))]
 #[must_use]
 pub fn curve25519_backend() -> Curve25519Backend {
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     {
         if f51x4::Ifma::get().is_some() {
             return Curve25519Backend::Ifma;

@@ -907,7 +907,7 @@ The full gate also checks formatting, dependencies, advisory floors and
 cross-target builds. Install its targets first:
 
 ```console
-$ rustup target add x86_64-unknown-linux-gnu thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf wasm32-unknown-unknown aarch64-apple-darwin aarch64-unknown-linux-gnu
+$ rustup target add x86_64-unknown-linux-gnu thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf wasm32-unknown-unknown x86_64-unknown-none aarch64-apple-darwin aarch64-unknown-linux-gnu
 ```
 
 The compiled-code checker requires Python 3. `bash scripts/check.sh --quick`

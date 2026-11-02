@@ -127,15 +127,17 @@ python scripts/test-check-ct.py
 python scripts/check-ct.py
 
 step "no_std cross-compilation"
-# The same four CI builds. `wasm32-unknown-unknown` used to be in CI's list and
+# The same five CI builds. `wasm32-unknown-unknown` used to be in CI's list and
 # not here, so it was never cross-compiled locally -- which mattered the moment
-# CI stopped running.
+# CI stopped running. `x86_64-unknown-none` is bare-metal x86-64 (Botnix's
+# kernel builds IronCrypto for it): it has no SSE, so the vector assembly
+# cannot be lowered there, and ic-ec takes the portable field.
 #
 # A --no-default-features build on a host with std proves nothing; these targets
 # have no std at all, so they are the real check.
 skipped=""
 built=0
-for target in thumbv7em-none-eabihf thumbv6m-none-eabi riscv32imac-unknown-none-elf wasm32-unknown-unknown; do
+for target in thumbv7em-none-eabihf thumbv6m-none-eabi riscv32imac-unknown-none-elf wasm32-unknown-unknown x86_64-unknown-none; do
     if rustup target list --installed 2>/dev/null | grep -qx "$target"; then
         echo "-- $target"
         cargo build -p ironcrypto --no-default-features --target "$target"
@@ -150,7 +152,7 @@ if [ -n "$skipped" ]; then
     # Said plainly rather than buried, because "checks passed" after building
     # none of them is the kind of pass that teaches people to trust a gate that
     # did nothing. Install with: rustup target add <target>
-    printf '\nno_std: built %d of 4. NOT CHECKED:%s\n' "$built" "$skipped"
+    printf '\nno_std: built %d of 5. NOT CHECKED:%s\n' "$built" "$skipped"
     printf 'no_std: install with `rustup target add%s`\n' "$skipped"
 fi
 

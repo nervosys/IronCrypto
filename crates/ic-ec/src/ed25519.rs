@@ -20,14 +20,14 @@ mod basepoint_table;
 #[cfg(all(
     feature = "std",
     target_arch = "x86_64",
-    not(any(ic_limb32, ic_ec_portable))
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
 ))]
 mod fast;
 // The same, four lanes at a time on AVX-512 IFMA; see the module.
 #[cfg(all(
     feature = "std",
     target_arch = "x86_64",
-    not(any(ic_limb32, ic_ec_portable))
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
 ))]
 mod vector;
 use ic_core::traits::internal::Digest;
@@ -124,7 +124,10 @@ impl EdField for Fe {
     }
 }
 
-#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+))]
 impl EdField for crate::fe64::Fe64 {
     const D: Self = crate::fe64::Fe64::from_limbs51(D_LIMBS);
     const D2: Self = crate::fe64::Fe64::from_limbs51(D2_LIMBS);
@@ -793,7 +796,10 @@ pub(crate) fn prepare_tables() {
     dispatch!(prepare());
     // The radix-32 windows, where signing will read them: the four-limb
     // field without IFMA, with AVX2.
-    #[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+    #[cfg(all(
+        target_arch = "x86_64",
+        not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+    ))]
     if crate::fe64::available()
         && crate::f51x4::Ifma::get().is_none()
         && crate::fe64::edwards::Avx2::get().is_some()
@@ -921,10 +927,16 @@ fn odd_multiples<F: EdField>(p: &Ext<F>) -> [Niels<F>; 8] {
 
 /// Signed radix-32 digits per scalar: 51 cover 255 bits, and the 52nd takes
 /// the last carry.
-#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+))]
 pub(crate) const DIGITS32: usize = 52;
 
-#[cfg(all(target_arch = "x86_64", not(any(ic_limb32, ic_ec_portable))))]
+#[cfg(all(
+    target_arch = "x86_64",
+    not(any(ic_limb32, ic_ec_portable, not(target_feature = "sse2")))
+))]
 #[cfg_attr(not(feature = "std"), allow(dead_code))]
 /// A scalar below `2^256` as 52 signed radix-32 digits, each in `[-16, 16]`,
 /// `sum d_i 32^i`; the last is the final carry, 0 or 1 for a scalar below
