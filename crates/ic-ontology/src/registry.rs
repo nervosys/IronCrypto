@@ -524,6 +524,67 @@ const ED448_P: [Param; 4] = [
     },
 ];
 
+const COMPOSITE_44_ED25519_P: [Param; 4] = composite_params(1344, 64, 2484);
+const COMPOSITE_65_ED25519_P: [Param; 4] = composite_params(1984, 64, 3373);
+const COMPOSITE_87_ED448_P: [Param; 4] = composite_params(2649, 89, 4741);
+
+/// A composite's lengths: each the ML-DSA component's then the EdDSA one's.
+const fn composite_params(public: u64, private: u64, signature: u64) -> [Param; 4] {
+    [
+        Param {
+            name: "private-key",
+            unit: Unit::Bytes,
+            min: private,
+            max: private,
+            recommended: private,
+            note: "The 32-byte ML-DSA seed, then the EdDSA seed.",
+        },
+        Param {
+            name: "public-key",
+            unit: Unit::Bytes,
+            min: public,
+            max: public,
+            recommended: public,
+            note: "The ML-DSA public key, then the EdDSA one.",
+        },
+        Param {
+            name: "signature",
+            unit: Unit::Bytes,
+            min: signature,
+            max: signature,
+            recommended: signature,
+            note: "The ML-DSA signature, then the EdDSA one.",
+        },
+        Param {
+            name: "context",
+            unit: Unit::Bytes,
+            min: 0,
+            max: 255,
+            recommended: 0,
+            note: "Bound into the message both halves sign; the verifier must give the same bytes.",
+        },
+    ]
+}
+
+const COMPOSITE_CONSTRAINTS: [Constraint; 2] = [
+    Constraint {
+        id: "fresh-component-keys",
+        requirement: "Generate both component keys for the composite, and use them nowhere else: \
+                      not alone, not in another composite.",
+        consequence: "The draft's non-separability argument assumes it. A component key also \
+                      used alone lets a signature made by that key alone be offered where the \
+                      composite was expected to be needed.",
+        severity: Severity::Critical,
+    },
+    Constraint {
+        id: "context-must-match",
+        requirement: "Verify with exactly the context the signer used, at most 255 bytes.",
+        consequence: "The context is hashed into the message both halves sign: a different one \
+                      fails verification.",
+        severity: Severity::Serious,
+    },
+];
+
 const P256_KA_P: [Param; 3] = [
     Param {
         name: "private-key",
@@ -3044,6 +3105,99 @@ pub static REGISTRY: &[Entry] = &[
                 as not-approved, as it does Ed25519. Verification is strict in the same way \
                 as Ed25519's: a key or an R of small order, a non-canonical encoding of \
                 either, and an unreduced S are refused.",
+    },
+    Entry {
+        id: "mldsa44-ed25519-sha512",
+        name: "ML-DSA-44 + Ed25519 (composite)",
+        aliases: &["id-mldsa44-ed25519-sha512"],
+        summary: "ML-DSA-44 and Ed25519 over one message, both required: post-quantum with a classical hedge.",
+        class: Class::Signature,
+        family: "Composite ML-DSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation, Purpose::Integrity],
+        strength: Strength { classical: 128, quantum: 128 },
+        fips: FipsStatus::NotApproved,
+        status: NOT_APPROVED_STATUS,
+        standards: &["draft-ietf-lamps-pq-composite-sigs-19", "FIPS 204", "RFC 8032"],
+        params: &COMPOSITE_44_ED25519_P,
+        constraints: &COMPOSITE_CONSTRAINTS,
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "ml-dsa-44" },
+            Edge { relation: Relation::BuiltOn, target: "ed25519" },
+            Edge { relation: Relation::BuiltOn, target: "sha2-512" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: if_built("ic_sig::composite::Composite::MlDsa44Ed25519Sha512"),
+        example: if_built("ic_sig::composite::sign(Composite::MlDsa44Ed25519Sha512, &sk, msg, b\"\", &mut rng, &mut sig)?;\nic_sig::composite::verify(Composite::MlDsa44Ed25519Sha512, &pk, msg, b\"\", &sig)?;"),
+        notes: "id-MLDSA44-Ed25519-SHA512, 1.3.6.1.5.5.7.6.39, pre-hash SHA-512. Both halves sign `M' = Prefix || Label || len(ctx) || ctx || PH(M)`, ML-DSA \
+                under the label as its own context; a signature verifies only if \
+                both do, so it stands while either component does. The ontology's \
+                assumptions read it conservatively and list both. Draft 19, not yet an \
+                RFC: checked against its Appendix E vectors, whose public keys it \
+                derives and whose signatures it verifies; ML-DSA signing is hedged, so \
+                its own signatures differ from theirs. Not approved-mode, since the \
+                EdDSA component is not.",
+    },
+    Entry {
+        id: "mldsa65-ed25519-sha512",
+        name: "ML-DSA-65 + Ed25519 (composite)",
+        aliases: &["id-mldsa65-ed25519-sha512"],
+        summary: "ML-DSA-65 and Ed25519 over one message, both required: post-quantum with a classical hedge.",
+        class: Class::Signature,
+        family: "Composite ML-DSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation, Purpose::Integrity],
+        strength: Strength { classical: 192, quantum: 192 },
+        fips: FipsStatus::NotApproved,
+        status: NOT_APPROVED_STATUS,
+        standards: &["draft-ietf-lamps-pq-composite-sigs-19", "FIPS 204", "RFC 8032"],
+        params: &COMPOSITE_65_ED25519_P,
+        constraints: &COMPOSITE_CONSTRAINTS,
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "ml-dsa-65" },
+            Edge { relation: Relation::BuiltOn, target: "ed25519" },
+            Edge { relation: Relation::BuiltOn, target: "sha2-512" },
+        ],
+        performance: Performance::Moderate,
+        rust_path: if_built("ic_sig::composite::Composite::MlDsa65Ed25519Sha512"),
+        example: if_built("ic_sig::composite::sign(Composite::MlDsa65Ed25519Sha512, &sk, msg, b\"\", &mut rng, &mut sig)?;\nic_sig::composite::verify(Composite::MlDsa65Ed25519Sha512, &pk, msg, b\"\", &sig)?;"),
+        notes: "id-MLDSA65-Ed25519-SHA512, 1.3.6.1.5.5.7.6.48, pre-hash SHA-512. Both halves sign `M' = Prefix || Label || len(ctx) || ctx || PH(M)`, ML-DSA \
+                under the label as its own context; a signature verifies only if \
+                both do, so it stands while either component does. The ontology's \
+                assumptions read it conservatively and list both. Draft 19, not yet an \
+                RFC: checked against its Appendix E vectors, whose public keys it \
+                derives and whose signatures it verifies; ML-DSA signing is hedged, so \
+                its own signatures differ from theirs. Not approved-mode, since the \
+                EdDSA component is not.",
+    },
+    Entry {
+        id: "mldsa87-ed448-shake256",
+        name: "ML-DSA-87 + Ed448 (composite)",
+        aliases: &["id-mldsa87-ed448-shake256"],
+        summary: "ML-DSA-87 and Ed448 over one message, both required: post-quantum with a classical hedge.",
+        class: Class::Signature,
+        family: "Composite ML-DSA",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation, Purpose::Integrity],
+        strength: Strength { classical: 256, quantum: 256 },
+        fips: FipsStatus::NotApproved,
+        status: NOT_APPROVED_STATUS,
+        standards: &["draft-ietf-lamps-pq-composite-sigs-19", "FIPS 204", "RFC 8032"],
+        params: &COMPOSITE_87_ED448_P,
+        constraints: &COMPOSITE_CONSTRAINTS,
+        edges: &[
+            Edge { relation: Relation::BuiltOn, target: "ml-dsa-87" },
+            Edge { relation: Relation::BuiltOn, target: "ed448" },
+            Edge { relation: Relation::BuiltOn, target: "shake256" },
+        ],
+        performance: Performance::Slow,
+        rust_path: if_built("ic_sig::composite::Composite::MlDsa87Ed448Shake256"),
+        example: if_built("ic_sig::composite::sign(Composite::MlDsa87Ed448Shake256, &sk, msg, b\"\", &mut rng, &mut sig)?;\nic_sig::composite::verify(Composite::MlDsa87Ed448Shake256, &pk, msg, b\"\", &sig)?;"),
+        notes: "id-MLDSA87-Ed448-SHAKE256, 1.3.6.1.5.5.7.6.51, pre-hash SHAKE256 to 64 bytes. Both halves sign `M' = Prefix || Label || len(ctx) || ctx || PH(M)`, ML-DSA \
+                under the label as its own context; a signature verifies only if \
+                both do, so it stands while either component does. The ontology's \
+                assumptions read it conservatively and list both. Draft 19, not yet an \
+                RFC: checked against its Appendix E vectors, whose public keys it \
+                derives and whose signatures it verifies; ML-DSA signing is hedged, so \
+                its own signatures differ from theirs. Not approved-mode, since the \
+                EdDSA component is not.",
     },
     Entry {
         id: "aes-256-kw",

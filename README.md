@@ -358,7 +358,7 @@ leaving the stronger claim to stand for all of them.
 | Block ciphers | AES-128/192/256 |
 | Modes | CBC, CTR, PKCS#7, AES Key Wrap (KW and KWP) |
 | AEADs | AES-128/192/256-GCM, ChaCha20-Poly1305, XChaCha20-Poly1305, AES-128/256-GCM-SIV |
-| Post-quantum | ML-KEM-512, -768 and -1024 (FIPS 203), ML-DSA-44, -65 and -87 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205), all twelve parameter sets, pure and pre-hash, ACVP-checked |
+| Post-quantum | ML-KEM-512, -768 and -1024 (FIPS 203), ML-DSA-44, -65 and -87 (FIPS 204), each ACVP-checked. SLH-DSA (FIPS 205), all twelve parameter sets, pure and pre-hash, ACVP-checked. Composite ML-DSA with Ed25519 or Ed448 (draft-ietf-lamps-pq-composite-sigs-19), checked against the draft's vectors |
 | KDFs | HKDF, PBKDF2, SP 800-108 counter mode, scrypt, Argon2id/i/d at versions 1.3 and 1.0, with PHC strings for password storage, caller-provided memory, and lanes on threads -- what the `argon2` crate offers; bcrypt and yescrypt verification, and `ic_kdf::password` to verify any of these and move it to Argon2id |
 | DRBGs | HMAC_DRBG, CTR_DRBG, plus an OS-seeded auto-reseeding `Rng` |
 | Curves | P-256, P-384, and P-521 (ECDSA with RFC 6979 nonces, ECDH), X25519, Ed25519, Ed448 |

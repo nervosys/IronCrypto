@@ -937,6 +937,48 @@ fn ed448_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// The composites: one example each, differing only in the algorithm.
+#[cfg(not(ic_approved_only))]
+#[test]
+fn composite_examples_compile_and_match() -> Result<()> {
+    use ironcrypto::sig::composite::{self as ic_composite, Composite};
+    let msg: &[u8] = b"message";
+    let mut rng = drbg::Rng::from_entropy(&[0x21; 48], b"composite example")?;
+    for (id, alg, name) in [
+        (
+            "mldsa44-ed25519-sha512",
+            Composite::MlDsa44Ed25519Sha512,
+            "MlDsa44Ed25519Sha512",
+        ),
+        (
+            "mldsa65-ed25519-sha512",
+            Composite::MlDsa65Ed25519Sha512,
+            "MlDsa65Ed25519Sha512",
+        ),
+        (
+            "mldsa87-ed448-shake256",
+            Composite::MlDsa87Ed448Shake256,
+            "MlDsa87Ed448Shake256",
+        ),
+    ] {
+        let sk = vec![0x42u8; alg.private_key_len()];
+        let mut pk = vec![0u8; alg.public_key_len()];
+        ic_composite::public_key(alg, &sk, &mut pk)?;
+        let mut sig = vec![0u8; alg.signature_len()];
+
+        ic_composite::sign(alg, &sk, msg, b"", &mut rng, &mut sig)?;
+        ic_composite::verify(alg, &pk, msg, b"", &sig)?;
+        check_example(
+            id,
+            &format!(
+                "ic_sig::composite::sign(Composite::{name}, &sk, msg, b\"\", &mut rng, &mut sig)?;
+ic_sig::composite::verify(Composite::{name}, &pk, msg, b\"\", &sig)?;"
+            ),
+        );
+    }
+    Ok(())
+}
+
 /// Key wrapping, including the padded variant and the unwrap direction.
 #[test]
 fn key_wrap_examples_compile_and_match() -> Result<()> {

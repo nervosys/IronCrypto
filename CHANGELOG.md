@@ -25,6 +25,22 @@ all of them.
   (`testvectors/openssl-ed448.json`). `PublicKeyInfo` and `PrivateKeyInfo` are
   not `non_exhaustive`, so a caller matching them exhaustively must add the
   new arm. Certificate issuance under Ed448 is not added.
+- **Composite ML-DSA signatures** (`ic_sig::composite`, ontology
+  `mldsa44-ed25519-sha512`, `mldsa65-ed25519-sha512`,
+  `mldsa87-ed448-shake256`): id-MLDSA44-Ed25519-SHA512,
+  id-MLDSA65-Ed25519-SHA512 and id-MLDSA87-Ed448-SHAKE256 from
+  draft-ietf-lamps-pq-composite-sigs-19. ML-DSA and EdDSA both sign one
+  pre-hashed, labelled message, with a context of up to 255 bytes, and a
+  signature verifies only if both halves do. Keys are the draft's
+  concatenated seeds and public keys. The public keys derived from Appendix
+  E's private keys match, and Appendix E's signatures verify with and without
+  its context. ML-DSA signing is hedged, so the signatures made here differ
+  from the draft's. This is an Internet-Draft, and its labels and object
+  identifiers may change before it becomes an RFC. Not approved-mode, and
+  compiled out with `ic_approved_only`. Three new CASTs, so `TEST_COUNT` is
+  90 (still 65 approved-only). These are free functions for now: they are
+  not yet in `SignatureAlgorithm`, `ic_sig::verify`, SubjectPublicKeyInfo or
+  PKCS#8.
 - **Hardness assumptions in the ontology** (`ic_ontology::assumptions`):
   which problem each algorithm's security rests on (`module-lwe`,
   `module-sis`, `ec-discrete-log`, `rsa`, `aes`, `chacha`, `sha-2`, `keccak`,

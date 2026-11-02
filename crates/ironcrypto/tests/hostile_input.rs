@@ -210,6 +210,50 @@ fn ed25519_verification_is_total_and_sound() {
     assert!(deep > 80, "too few candidates reached Ed25519: {deep}");
 }
 
+/// The composites have no `SignatureScheme` impl -- they take a context --
+/// so this is `hammer_signature`'s three passes written out for them.
+#[cfg(not(ic_approved_only))]
+#[test]
+fn composite_verification_is_total_and_sound() {
+    use ironcrypto::sig::composite::{self, Composite};
+    let mut rng = Rng::new(0x5151);
+    let message = b"a message that was genuinely signed";
+    for alg in Composite::ALL {
+        let sk = vec![3u8; alg.private_key_len()];
+        let mut pk = vec![0u8; alg.public_key_len()];
+        composite::public_key(alg, &sk, &mut pk).unwrap();
+        let mut sig = vec![0u8; alg.signature_len()];
+        let mut seeded = drbg::Rng::from_entropy(&[0x51; 48], b"hostile composite").unwrap();
+        composite::sign(alg, &sk, message, b"", &mut seeded, &mut sig).unwrap();
+        let mut deep = 0;
+        for bad in hostile_inputs(&mut rng, sig.len(), 20) {
+            if bad.len() == sig.len() {
+                deep += 1;
+            }
+            assert!(
+                composite::verify(alg, &pk, message, b"", &bad).is_err(),
+                "{}",
+                alg.id()
+            );
+        }
+        for bad_pk in hostile_inputs(&mut rng, pk.len(), 20) {
+            let _ = composite::verify(alg, &bad_pk, message, b"", &sig);
+        }
+        for _ in 0..30 {
+            let mut bad = sig.clone();
+            let at = rng.below(bad.len());
+            bad[at] ^= 1 << rng.below(8);
+            deep += 1;
+            assert!(
+                composite::verify(alg, &pk, message, b"", &bad).is_err(),
+                "{}",
+                alg.id()
+            );
+        }
+        assert!(deep > 40, "too few candidates reached {}: {deep}", alg.id());
+    }
+}
+
 #[test]
 fn ed448_verification_is_total_and_sound() {
     let mut rng = Rng::new(0x4848);
@@ -600,6 +644,9 @@ fn hammered_here() -> Vec<&'static str> {
         "ecdsa-p521-sha512",
         "ed25519",
         "ed448",
+        "mldsa44-ed25519-sha512",
+        "mldsa65-ed25519-sha512",
+        "mldsa87-ed448-shake256",
         "rsa-pkcs1-sha256",
         "rsa-pss-sha256",
         "x25519",

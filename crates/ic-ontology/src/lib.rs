@@ -282,6 +282,7 @@ mod tests {
             "ic_lms::",
             "ic_slhdsa::",
             "ic_pkix::",
+            "ic_sig::",
         ];
         for e in REGISTRY
             .iter()

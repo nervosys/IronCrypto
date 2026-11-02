@@ -405,7 +405,13 @@ mod tests {
                 "ml-dsa-87",
                 "ml-kem-1024",
                 "ml-kem-512",
-                "ml-kem-768"
+                "ml-kem-768",
+                // The composites rest on ML-DSA and on a curve, and are
+                // listed under each: a lattice break leaves the EdDSA half
+                // standing, but it does touch them.
+                "mldsa44-ed25519-sha512",
+                "mldsa65-ed25519-sha512",
+                "mldsa87-ed448-shake256",
             ]
         );
         // nothing hash-based or symmetric is on that list, which is the

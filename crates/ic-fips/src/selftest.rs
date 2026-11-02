@@ -156,6 +156,12 @@ static CASTS: &[Cast] = &[
     ("ed25519", ic_ec::Ed25519::self_test),
     #[cfg(not(ic_approved_only))]
     ("ed448", ic_ec::Ed448::self_test),
+    #[cfg(not(ic_approved_only))]
+    ("mldsa44-ed25519-sha512", mldsa44_ed25519_sha512_self_test),
+    #[cfg(not(ic_approved_only))]
+    ("mldsa65-ed25519-sha512", mldsa65_ed25519_sha512_self_test),
+    #[cfg(not(ic_approved_only))]
+    ("mldsa87-ed448-shake256", mldsa87_ed448_shake256_self_test),
     ("ecdh-p256", ic_ec::p256::EcdhP256::self_test),
     ("ecdsa-p256-sha256", ic_ec::p256::EcdsaP256Sha256::self_test),
     ("ecdh-p384", ic_ec::p384::EcdhP384::self_test),
@@ -557,6 +563,21 @@ fn ml_dsa_44_self_test() -> Result<()> {
 ///
 /// Taken from usnistgov/ACVP-Server at 975de31eb83d. The same case is in
 /// testvectors/ml-dsa-87-keygen.json, where the full set of 25 is checked.
+#[cfg(not(ic_approved_only))]
+fn mldsa44_ed25519_sha512_self_test() -> Result<()> {
+    ic_sig::composite::self_test(ic_sig::composite::Composite::MlDsa44Ed25519Sha512)
+}
+
+#[cfg(not(ic_approved_only))]
+fn mldsa65_ed25519_sha512_self_test() -> Result<()> {
+    ic_sig::composite::self_test(ic_sig::composite::Composite::MlDsa65Ed25519Sha512)
+}
+
+#[cfg(not(ic_approved_only))]
+fn mldsa87_ed448_shake256_self_test() -> Result<()> {
+    ic_sig::composite::self_test(ic_sig::composite::Composite::MlDsa87Ed448Shake256)
+}
+
 fn ml_dsa_87_self_test() -> Result<()> {
     const SEED: &[u8] = b"\
          A16F5B0796703E2D1A0140A35CBF36EFABE70E752BA59B6A9A0E9C4B05302F73";
@@ -747,7 +768,7 @@ fn argon2id_self_test() -> Result<()> {
 /// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
 /// algorithms approved mode does not permit and their tests with them.
 #[cfg(not(ic_approved_only))]
-pub const TEST_COUNT: usize = 87;
+pub const TEST_COUNT: usize = 90;
 /// The number of known-answer tests in the suite.
 ///
 /// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
@@ -852,7 +873,7 @@ const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
 #[cfg(not(ic_approved_only))]
-const INTEGRITY_TAG: &str = "008496924719ea56897513ac685116f052588cf5e79f7e171d7002133028a95f";
+const INTEGRITY_TAG: &str = "8efd059a7d284f26f6b799689fd40b08f8876598389756262025d5c17d74f999";
 /// The expected integrity tag over the CAST table of an `ic_approved_only` build,
 /// which is a different table.
 #[cfg(ic_approved_only)]

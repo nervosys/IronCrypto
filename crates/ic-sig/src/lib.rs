@@ -77,6 +77,9 @@
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
+// ML-DSA beside EdDSA, which approved mode does not permit.
+#[cfg(not(ic_approved_only))]
+pub mod composite;
 pub mod signer;
 
 pub use signer::SoftwareSigner;

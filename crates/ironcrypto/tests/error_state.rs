@@ -153,6 +153,21 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     let ed448 = ecdsa!(ec::Ed448);
     let ed448_key = ec::Ed448Key::from_seed(&ed448.0).unwrap();
     let ed448_verify = ec::Ed448VerifyKey::from_bytes(&ed448.1).unwrap();
+    // Each composite: a private key, its public key, a signature.
+    let composites: Vec<_> = ironcrypto::sig::composite::Composite::ALL
+        .into_iter()
+        .map(|alg| {
+            use ironcrypto::sig::composite;
+            let sk = vec![0x5cu8; alg.private_key_len()];
+            let mut pk = vec![0u8; alg.public_key_len()];
+            composite::public_key(alg, &sk, &mut pk).unwrap();
+            let mut sig = vec![0u8; alg.signature_len()];
+            let mut seeded =
+                ironcrypto::drbg::Rng::from_entropy(&[0x5d; 48], b"composite").unwrap();
+            composite::sign(alg, &sk, message, b"", &mut seeded, &mut sig).unwrap();
+            (alg, sk, pk, sig)
+        })
+        .collect();
 
     macro_rules! ecdh {
         ($scheme:ty) => {{
@@ -881,6 +896,24 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         "from_seed",
         ec::Ed448Key::from_seed(&ed448.0).map(|_| ()),
     );
+    for (alg, sk, pk, signature) in &composites {
+        use ironcrypto::sig::composite;
+        let id = alg.id();
+        let mut buf = vec![0u8; alg.public_key_len()];
+        seen.refused(id, "public_key", composite::public_key(*alg, sk, &mut buf));
+        let mut buf = vec![0u8; alg.signature_len()];
+        seen.refused(
+            id,
+            "sign",
+            composite::sign(*alg, sk, message, b"", &mut rng, &mut buf),
+        );
+        assert!(buf.iter().all(|b| *b == 0), "{id}: nothing was signed");
+        seen.refused(
+            id,
+            "verify",
+            composite::verify(*alg, pk, message, b"", signature),
+        );
+    }
     seen.refused(
         "ecdsa-p256-sha256",
         "verify_prehash",

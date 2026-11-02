@@ -1423,6 +1423,21 @@ pub static STANDARDS: &[Standard] = &[
         requirements: &NO_REQS,
     },
     Standard {
+        id: "draft-ietf-lamps-pq-composite-sigs-19",
+        title: "Composite ML-DSA for use in X.509 Public Key Infrastructure",
+        body: Body::Ietf,
+        scope: Scope::Algorithm,
+        year: 2026,
+        status: StandardStatus::Informational,
+        superseded_by: &[],
+        url: "https://datatracker.ietf.org/doc/draft-ietf-lamps-pq-composite-sigs/19/",
+        summary: "ML-DSA and a traditional signature over one pre-hashed, labelled message, \
+                  both required. An Internet-Draft of the LAMPS working group, not yet an RFC: \
+                  its labels, prefix and object identifiers may change before it becomes one. \
+                  Appendix E carries the vectors this library is checked against.",
+        requirements: &NO_REQS,
+    },
+    Standard {
         id: "draft-irtf-cfrg-xchacha-03",
         title: "XChaCha: eXtended-nonce ChaCha and AEAD_XChaCha20_Poly1305",
         body: Body::Ietf,
