@@ -5,6 +5,8 @@
 //! * [`X25519`] — RFC 7748 key agreement.
 //! * [`Ed25519`] — RFC 8032 signatures.
 //!
+//! And [`Ed448`], RFC 8032 signatures on edwards448, on a field of its own.
+//!
 //! Both are built on a shared constant-time field implementation
 //! (`field::Fe`) with 51-bit limbs, and on x86-64 CPUs with BMI2 and ADX on a
 //! four-limb field (`fe64::Fe64`) whose multiplication is `MULX`/`ADX`
@@ -59,6 +61,8 @@
 // not permit, left out of that build; see `ic_core::APPROVED_ONLY`.
 #[cfg(not(ic_approved_only))]
 pub mod ed25519;
+#[cfg(not(ic_approved_only))]
+pub mod ed448;
 #[cfg(not(ic_approved_only))]
 pub mod hash_to_curve;
 #[cfg(not(ic_approved_only))]
@@ -130,6 +134,8 @@ pub mod x25519;
 
 #[cfg(not(ic_approved_only))]
 pub use ed25519::{Ed25519, Ed25519Key, Ed25519VerifyKey};
+#[cfg(not(ic_approved_only))]
+pub use ed448::{Ed448, Ed448Key, Ed448VerifyKey};
 pub use p256::{EcdhP256, EcdsaP256Sha256};
 pub use p384::{EcdhP384, EcdsaP384Sha384};
 #[cfg(not(ic_approved_only))]
@@ -242,6 +248,8 @@ pub const EC_IDS: &[&str] = &[
     "x25519",
     #[cfg(not(ic_approved_only))]
     "ed25519",
+    #[cfg(not(ic_approved_only))]
+    "ed448",
     "ecdh-p256",
     "ecdsa-p256-sha256",
     "ecdh-p384",

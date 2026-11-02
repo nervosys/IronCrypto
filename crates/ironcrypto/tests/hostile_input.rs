@@ -211,6 +211,19 @@ fn ed25519_verification_is_total_and_sound() {
 }
 
 #[test]
+fn ed448_verification_is_total_and_sound() {
+    let mut rng = Rng::new(0x4848);
+    let message = b"a message that was genuinely signed";
+    let sk = [3u8; 57];
+    let mut pk = [0u8; 57];
+    ec::Ed448::public_key(&sk, &mut pk).unwrap();
+    let mut sig = [0u8; 114];
+    ec::Ed448::sign(&sk, message, &mut sig).unwrap();
+    let deep = hammer_signature::<ec::Ed448>(&mut rng, &pk, &sig, message);
+    assert!(deep > 80, "too few candidates reached Ed448: {deep}");
+}
+
+#[test]
 fn rsa_verification_is_total_and_sound() {
     let mut rng = Rng::new(0x3333);
     let message = b"a message that was genuinely signed";
@@ -586,6 +599,7 @@ fn hammered_here() -> Vec<&'static str> {
         "ecdsa-p384-sha384",
         "ecdsa-p521-sha512",
         "ed25519",
+        "ed448",
         "rsa-pkcs1-sha256",
         "rsa-pss-sha256",
         "x25519",

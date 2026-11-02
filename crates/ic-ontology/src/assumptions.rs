@@ -165,6 +165,7 @@ pub static DIRECT: &[(&str, &[Assumption])] = &[
     // elliptic curves
     ("x25519", &[Assumption::EcDiscreteLog]),
     ("ed25519", &[Assumption::EcDiscreteLog]),
+    ("ed448", &[Assumption::EcDiscreteLog]),
     ("ecdh-p256", &[Assumption::EcDiscreteLog]),
     ("ecdh-p384", &[Assumption::EcDiscreteLog]),
     ("ecdh-p521", &[Assumption::EcDiscreteLog]),

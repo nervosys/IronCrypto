@@ -184,6 +184,7 @@ const MUST_WIPE_ON_DROP: &[&str] = &[
     "Core512",          // likewise
     "RsaPrivateKey",    // d, the primes and the CRT parameters
     "SigningKey",       // ML-DSA's seed and key hash; s1, s2, t0 are wiped per use
+    "Ed448Key",         // the pruned scalar and the nonce prefix
 ];
 
 /// Every type on that list must implement `Drop`.

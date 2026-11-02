@@ -154,6 +154,8 @@ static CASTS: &[Cast] = &[
     ("x25519", ic_ec::X25519::self_test),
     #[cfg(not(ic_approved_only))]
     ("ed25519", ic_ec::Ed25519::self_test),
+    #[cfg(not(ic_approved_only))]
+    ("ed448", ic_ec::Ed448::self_test),
     ("ecdh-p256", ic_ec::p256::EcdhP256::self_test),
     ("ecdsa-p256-sha256", ic_ec::p256::EcdsaP256Sha256::self_test),
     ("ecdh-p384", ic_ec::p384::EcdhP384::self_test),
@@ -745,7 +747,7 @@ fn argon2id_self_test() -> Result<()> {
 /// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
 /// algorithms approved mode does not permit and their tests with them.
 #[cfg(not(ic_approved_only))]
-pub const TEST_COUNT: usize = 86;
+pub const TEST_COUNT: usize = 87;
 /// The number of known-answer tests in the suite.
 ///
 /// Fewer in a build with `--cfg ic_approved_only`, which leaves out the
@@ -850,7 +852,7 @@ const INTEGRITY_KEY: &[u8] = b"IronCrypto/integrity/v1";
 
 /// The expected integrity tag over the CAST table.
 #[cfg(not(ic_approved_only))]
-const INTEGRITY_TAG: &str = "038261a7f7bf8f5a915b3987289941f08a6e7eeb03aaefc88f632d0bd7ec475b";
+const INTEGRITY_TAG: &str = "008496924719ea56897513ac685116f052588cf5e79f7e171d7002133028a95f";
 /// The expected integrity tag over the CAST table of an `ic_approved_only` build,
 /// which is a different table.
 #[cfg(ic_approved_only)]

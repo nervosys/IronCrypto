@@ -7,6 +7,16 @@ all of them.
 
 ### Added
 
+- **Ed448** (`ic_ec::Ed448`, ontology `ed448`): RFC 8032 pure Ed448 on
+  edwards448 with SHAKE256, through `SignatureScheme` with the empty context,
+  and `Ed448Key::sign_with_context` / `Ed448VerifyKey::verify_with_context`
+  for a context of up to 255 bytes. Portable and constant time: a field of
+  eight 56-bit limbs, the RFC's complete projective formulas, fixed four-bit
+  windows read by constant-time selection. Verification is strict as
+  Ed25519's is. All nine RFC 8032 §7.4 vectors pass. Not optimised: no
+  precomputed tables. Ed448ph is not implemented. Not approved-mode, as
+  Ed25519 is not. A new CAST, so `TEST_COUNT` is 87 (65 approved-only). The
+  classical half of the composite `id-MLDSA87-Ed448-SHAKE256`, to follow.
 - **Hardness assumptions in the ontology** (`ic_ontology::assumptions`):
   which problem each algorithm's security rests on (`module-lwe`,
   `module-sis`, `ec-discrete-log`, `rsa`, `aes`, `chacha`, `sha-2`, `keccak`,

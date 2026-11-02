@@ -489,6 +489,41 @@ const ED25519_P: [Param; 3] = [
     },
 ];
 
+const ED448_P: [Param; 4] = [
+    Param {
+        name: "private-key",
+        unit: Unit::Bytes,
+        min: 57,
+        max: 57,
+        recommended: 57,
+        note: "A 57-byte seed; the scalar and nonce prefix are derived from it.",
+    },
+    Param {
+        name: "public-key",
+        unit: Unit::Bytes,
+        min: 57,
+        max: 57,
+        recommended: 57,
+        note: "Compressed Edwards point.",
+    },
+    Param {
+        name: "signature",
+        unit: Unit::Bytes,
+        min: 114,
+        max: 114,
+        recommended: 114,
+        note: "R || S.",
+    },
+    Param {
+        name: "context",
+        unit: Unit::Bytes,
+        min: 0,
+        max: 255,
+        recommended: 0,
+        note: "Bound into both hashes; the verifier must give the same bytes.",
+    },
+];
+
 const P256_KA_P: [Param; 3] = [
     Param {
         name: "private-key",
@@ -2965,6 +3000,50 @@ pub static REGISTRY: &[Entry] = &[
                 ed25519-dalek's verify_strict and libsodium are: beyond RFC 8032's checks it \
                 refuses a public key or an R of small order, and a non-canonical encoding of \
                 either, so no signature verifies without a private key behind it.",
+    },
+    Entry {
+        id: "ed448",
+        name: "Ed448",
+        aliases: &["ed448-goldilocks"],
+        summary: "Deterministic signatures on edwards448, at about the 224-bit level.",
+        class: Class::Signature,
+        family: "Curve448",
+        purposes: &[Purpose::Authentication, Purpose::NonRepudiation, Purpose::Integrity],
+        strength: Strength::classical_only(224),
+        fips: FipsStatus::NotApproved,
+        status: NOT_APPROVED_STATUS,
+        standards: &["RFC 8032"],
+        params: &ED448_P,
+        constraints: &[
+            Constraint {
+                id: "reject-non-canonical-s",
+                requirement: "Reject signatures whose S component is not reduced modulo the group order.",
+                consequence: "The signature becomes malleable, breaking any system that treats a \
+                              signature as a unique identifier.",
+                severity: Severity::Serious,
+            },
+            Constraint {
+                id: "context-must-match",
+                requirement: "Verify with exactly the context the signer used, at most 255 bytes.",
+                consequence: "The context is hashed into the signature: a different one fails \
+                              verification, and a protocol that leaves it to the caller has \
+                              lost its domain separation.",
+                severity: Severity::Serious,
+            },
+        ],
+        edges: &[Edge { relation: Relation::BuiltOn, target: "shake256" }],
+        performance: Performance::Slow,
+        rust_path: if_built("ic_ec::Ed448"),
+        example: if_built("use ic_core::traits::SignatureScheme;\nic_ec::Ed448::sign(&seed, msg, &mut sig)?;\nic_ec::Ed448::verify(&pk, msg, &sig)?;"),
+        notes: "Pure Ed448; Ed448ph is not implemented. The trait signs with the empty context; \
+                `Ed448Key::sign_with_context` and `Ed448VerifyKey::verify_with_context` take \
+                one. The classical half of the composite id-MLDSA87-Ed448-SHAKE256. Written \
+                for clarity and constant time rather than speed, with no precomputed tables: \
+                prefer Ed25519 unless a specification asks for this. FIPS 186-5 approves \
+                EdDSA, but this implementation is not validated, and the ontology reports it \
+                as not-approved, as it does Ed25519. Verification is strict in the same way \
+                as Ed25519's: a key or an R of small order, a non-canonical encoding of \
+                either, and an unreduced S are refused.",
     },
     Entry {
         id: "aes-256-kw",

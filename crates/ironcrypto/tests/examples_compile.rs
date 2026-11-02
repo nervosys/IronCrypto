@@ -919,6 +919,24 @@ fn ed25519_example_compiles_and_matches() -> Result<()> {
     Ok(())
 }
 
+/// `ed448`, the same shape with 57-byte keys and 114-byte signatures.
+#[test]
+fn ed448_example_compiles_and_matches() -> Result<()> {
+    let seed = [0x03u8; 57];
+    let mut pk = [0u8; 57];
+    ec::Ed448::public_key(&seed, &mut pk)?;
+    let msg: &[u8] = b"message";
+    let mut sig = [0u8; 114];
+
+    ec::Ed448::sign(&seed, msg, &mut sig)?;
+    ec::Ed448::verify(&pk, msg, &sig)?;
+    check_example(
+        "ed448",
+        "ic_ec::Ed448::sign(&seed, msg, &mut sig)?;\nic_ec::Ed448::verify(&pk, msg, &sig)?;",
+    );
+    Ok(())
+}
+
 /// Key wrapping, including the padded variant and the unwrap direction.
 #[test]
 fn key_wrap_examples_compile_and_match() -> Result<()> {

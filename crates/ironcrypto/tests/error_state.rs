@@ -150,6 +150,9 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
     let ed = ecdsa!(ec::Ed25519);
     let ed_key = ec::Ed25519Key::from_seed(&ed.0).unwrap();
     let ed_verify = ec::Ed25519VerifyKey::from_bytes(&ed.1).unwrap();
+    let ed448 = ecdsa!(ec::Ed448);
+    let ed448_key = ec::Ed448Key::from_seed(&ed448.0).unwrap();
+    let ed448_verify = ec::Ed448VerifyKey::from_bytes(&ed448.1).unwrap();
 
     macro_rules! ecdh {
         ($scheme:ty) => {{
@@ -863,6 +866,20 @@ fn every_implemented_algorithm_refuses_in_the_error_state() {
         "ed25519",
         "from_seed",
         ec::Ed25519Key::from_seed(&ed.0).map(|_| ()),
+    );
+    signature!("ed448", ec::Ed448, ed448);
+    let mut sig448 = [0u8; 114];
+    seen.refused("ed448", "key sign", ed448_key.sign(message, &mut sig448));
+    assert_eq!(sig448, [0u8; 114], "ed448: nothing was signed");
+    seen.refused(
+        "ed448",
+        "key verify",
+        ed448_verify.verify(message, &ed448.2),
+    );
+    seen.refused(
+        "ed448",
+        "from_seed",
+        ec::Ed448Key::from_seed(&ed448.0).map(|_| ()),
     );
     seen.refused(
         "ecdsa-p256-sha256",
