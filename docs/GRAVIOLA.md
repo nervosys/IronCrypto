@@ -1313,6 +1313,13 @@ every input inside the kernel's documented contract:
   f[0] is odd at the exit, as the next round's precondition needs.
   Raising f's entry bound to 2P is refuted. Claiming F' >= -2^254, which
   is false, is not proved.
+  The normalisation's range is proved by the target
+  `ironcrypto.ic-ec.fe64.inv.normalize_range`: given d as `round_de_range`
+  leaves it (limbs 0-3 below 2^62, -2P < D < P), the four result words'
+  value W is k (D + sa P) + sb P with 0 <= W < P, where k = +-1 is f[4]'s
+  sign and sa, sb the two conditional additions of P: the canonical
+  residue of +-D. Widening the entry bound to -3P, or claiming W < P - 1,
+  is refuted.
 - P-256 and P-384: Montgomery multiplication and squaring on MULX/ADX
   (`2^k out == a b mod p`, canonical), the P-384 scalar-field
   multiplication, and the Jacobian doubling, in-place doubling, addition
@@ -1360,9 +1367,9 @@ Where this stops, and where Graviola remains ahead:
   inversion (that the f and g, and the d and e,
   bounds hold at every round's entry, since the targets prove one round
   and not the loop of rounds; zeta's bound at each entry, argued, as
-  zeta moves by at most 2 a divstep, so |zeta| <= 1201 over 600 of them;
-  and the normalisation's range) and the bound of 590
-  divsteps that makes its 600 enough, which is Bernstein and Yang's, argued;
+  zeta moves by at most 2 a divstep, so |zeta| <= 1201 over 600 of them)
+  and the bound of 590 divsteps that makes its 600 enough, leaving f[4]
+  +-1 and so W the inverse, which is Bernstein and Yang's, argued;
   the IFMA kernels (P-256, P-384, X25519 and RSA), RSA at 3072 and 4096
   bits and the whole exponentiation, the
   scalar-multiplication loops, ML-KEM's and ML-DSA's AVX2 code, and every
