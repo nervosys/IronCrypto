@@ -17,7 +17,7 @@
 //!
 //! Public keys are DER `SubjectPublicKeyInfo`. Signatures are in the form
 //! X.509 and TLS 1.3 both carry: an ASN.1 `Ecdsa-Sig-Value` for ECDSA, and the
-//! algorithm's own bytes for Ed25519, RSA, ML-DSA, SLH-DSA and HSS/LMS. One
+//! algorithm's own bytes for Ed25519, Ed448, RSA, ML-DSA, SLH-DSA and HSS/LMS. One
 //! encoding at the
 //! interface means a signer written for certificates serves a handshake
 //! unchanged.
@@ -43,6 +43,8 @@ pub enum SignatureAlgorithm {
     EcdsaP521Sha512,
     /// Ed25519.
     Ed25519,
+    /// Ed448 (RFC 8032), pure, with an empty context.
+    Ed448,
     /// RSASSA-PKCS1-v1_5 with SHA-256.
     RsaPkcs1Sha256,
     /// RSASSA-PKCS1-v1_5 with SHA-384.
@@ -97,6 +99,7 @@ impl SignatureAlgorithm {
         Self::EcdsaP384Sha384,
         Self::EcdsaP521Sha512,
         Self::Ed25519,
+        Self::Ed448,
         Self::RsaPkcs1Sha256,
         Self::RsaPkcs1Sha384,
         Self::RsaPkcs1Sha512,
@@ -128,6 +131,7 @@ impl SignatureAlgorithm {
             Self::EcdsaP384Sha384 => "ecdsa-p384-sha384",
             Self::EcdsaP521Sha512 => "ecdsa-p521-sha512",
             Self::Ed25519 => "ed25519",
+            Self::Ed448 => "ed448",
             Self::RsaPkcs1Sha256 => "rsa-pkcs1-sha256",
             Self::RsaPkcs1Sha384 => "rsa-pkcs1-sha384",
             Self::RsaPkcs1Sha512 => "rsa-pkcs1-sha512",
@@ -175,6 +179,7 @@ impl SignatureAlgorithm {
             Self::EcdsaP384Sha384 => 104,
             Self::EcdsaP521Sha512 => 139,
             Self::Ed25519 => 64,
+            Self::Ed448 => 114,
             Self::RsaPkcs1Sha256
             | Self::RsaPkcs1Sha384
             | Self::RsaPkcs1Sha512

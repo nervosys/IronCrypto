@@ -33,7 +33,7 @@
 //! # What it reads
 //!
 //! PKCS#8 (`OneAsymmetricKey`) for RSA, ECDSA over P-256, P-384 and P-521,
-//! Ed25519, ML-DSA and SLH-DSA. Three limits:
+//! Ed25519, Ed448, ML-DSA and SLH-DSA. Three limits:
 //!
 //! - **An ML-DSA key must carry its seed.** RFC 9881 allows a key to be the
 //!   seed, the expanded key, or both. The public key is derived from the
@@ -103,6 +103,8 @@ enum Key {
     P521(Zeroizing<[u8; 66]>),
     #[cfg(not(ic_approved_only))]
     Ed25519(Zeroizing<[u8; 32]>),
+    #[cfg(not(ic_approved_only))]
+    Ed448(Zeroizing<[u8; 57]>),
     Rsa(ic_rsa::RsaPrivateKey),
     MlDsa44(Zeroizing<[u8; ic_mldsa::sign44::SECRET_KEY_LEN]>),
     MlDsa65(Zeroizing<[u8; ic_mldsa::sign::SECRET_KEY_LEN]>),
@@ -164,6 +166,7 @@ impl SoftwareSigner {
                 public_key,
             } => Self::ec(algorithm, private_key, public_key),
             PrivateKeyInfo::Ed25519(seed) => Self::ed25519(seed),
+            PrivateKeyInfo::Ed448(seed) => Self::ed448(seed),
             PrivateKeyInfo::Unsupported { .. } => Self::post_quantum(der),
             _ => Err(err!(Unsupported, "not a signing key")),
         }
@@ -284,6 +287,32 @@ impl SoftwareSigner {
         Ok(Self::new(
             Key::Ed25519(held),
             SignatureAlgorithm::Ed25519,
+            spki,
+            len,
+        ))
+    }
+
+    #[cfg(ic_approved_only)]
+    fn ed448(_seed: &[u8]) -> Result<Self> {
+        Err(err!(
+            NotApprovedInFipsMode,
+            "Ed448 is not in this build: it was compiled with ic_approved_only"
+        ))
+    }
+
+    #[cfg(not(ic_approved_only))]
+    #[inline(never)]
+    fn ed448(seed: &[u8]) -> Result<Self> {
+        ensure!(seed.len() == 57, InvalidLength, "ed448 seed length");
+        let mut public = [0u8; 57];
+        <ic_ec::Ed448 as SignatureScheme>::public_key(seed, &mut public)?;
+        let mut held = Zeroizing::new([0u8; 57]);
+        held.get_mut().copy_from_slice(seed);
+        let mut spki = [0u8; MAX_SPKI];
+        let len = PublicKeyInfo::Ed448(&public).to_der(&mut spki)?;
+        Ok(Self::new(
+            Key::Ed448(held),
+            SignatureAlgorithm::Ed448,
             spki,
             len,
         ))
@@ -445,6 +474,16 @@ impl Signer for SoftwareSigner {
                 ensure!(out.len() >= 64, InvalidLength, "signature buffer too short");
                 <ic_ec::Ed25519 as SignatureScheme>::sign(seed.get(), message, &mut out[..64])?;
                 Ok(64)
+            }
+            #[cfg(not(ic_approved_only))]
+            Key::Ed448(seed) => {
+                ensure!(
+                    out.len() >= 114,
+                    InvalidLength,
+                    "signature buffer too short"
+                );
+                <ic_ec::Ed448 as SignatureScheme>::sign(seed.get(), message, &mut out[..114])?;
+                Ok(114)
             }
             Key::Rsa(key) => {
                 let size = key.size();

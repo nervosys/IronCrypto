@@ -17,6 +17,14 @@ all of them.
   precomputed tables. Ed448ph is not implemented. Not approved-mode, as
   Ed25519 is not. A new CAST, so `TEST_COUNT` is 87 (65 approved-only). The
   classical half of the composite `id-MLDSA87-Ed448-SHAKE256`, to follow.
+- **Ed448 keys and signatures through `ic_pkix` and `ic_sig`**:
+  `SignatureAlgorithm::Ed448`, `KeyAlgorithm::Ed448`, `PublicKeyInfo::Ed448`
+  and `PrivateKeyInfo::Ed448` (id-Ed448, 1.3.101.113, RFC 8410), `ic_sig`'s
+  `PublicKey::Ed448` and verification, and `SoftwareSigner` reading an Ed448
+  PKCS#8 key. Keys and signatures agree with OpenSSL 3.5.9 byte for byte
+  (`testvectors/openssl-ed448.json`). `PublicKeyInfo` and `PrivateKeyInfo` are
+  not `non_exhaustive`, so a caller matching them exhaustively must add the
+  new arm. Certificate issuance under Ed448 is not added.
 - **Hardness assumptions in the ontology** (`ic_ontology::assumptions`):
   which problem each algorithm's security rests on (`module-lwe`,
   `module-sis`, `ec-discrete-log`, `rsa`, `aes`, `chacha`, `sha-2`, `keccak`,

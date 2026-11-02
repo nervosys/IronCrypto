@@ -30,6 +30,9 @@ pub const P521: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x23];
 /// `id-Ed25519`, 1.3.101.112 (RFC 8410).
 pub const ED25519: &[u8] = &[0x2b, 0x65, 0x70];
 
+/// `id-Ed448`, 1.3.101.113 (RFC 8410).
+pub const ED448: &[u8] = &[0x2b, 0x65, 0x71];
+
 /// `id-X25519`, 1.3.101.110 (RFC 8410).
 pub const X25519: &[u8] = &[0x2b, 0x65, 0x6e];
 
@@ -122,6 +125,8 @@ pub enum KeyAlgorithm {
     EcP521,
     /// Ed25519 signatures.
     Ed25519,
+    /// Ed448 signatures.
+    Ed448,
     /// X25519 key agreement.
     X25519,
     /// An algorithm this build does not implement.
@@ -140,6 +145,7 @@ impl KeyAlgorithm {
             Self::EcP384 => "p384",
             Self::EcP521 => "p521",
             Self::Ed25519 => "ed25519",
+            Self::Ed448 => "ed448",
             Self::X25519 => "x25519",
             Self::Unknown => "unknown",
         }
@@ -154,6 +160,7 @@ impl KeyAlgorithm {
             // uncompressed point is 1 + 2 * 66.
             Self::EcP521 => Some(133),
             Self::Ed25519 | Self::X25519 => Some(32),
+            Self::Ed448 => Some(57),
             Self::Rsa | Self::Unknown => None,
         }
     }
@@ -165,6 +172,7 @@ impl KeyAlgorithm {
             Self::EcP384 => Some(48),
             Self::EcP521 => Some(66),
             Self::Ed25519 | Self::X25519 => Some(32),
+            Self::Ed448 => Some(57),
             Self::Rsa | Self::Unknown => None,
         }
     }
@@ -261,6 +269,7 @@ mod tests {
             (P384, &[1, 3, 132, 0, 34], "secp384r1"),
             (P521, &[1, 3, 132, 0, 35], "secp521r1"),
             (ED25519, &[1, 3, 101, 112], "id-Ed25519"),
+            (ED448, &[1, 3, 101, 113], "id-Ed448"),
             (X25519, &[1, 3, 101, 110], "id-X25519"),
             (
                 ECDSA_WITH_SHA256,
@@ -398,6 +407,7 @@ mod tests {
             P384,
             P521,
             ED25519,
+            ED448,
             X25519,
         ];
         for (i, a) in all.iter().enumerate() {

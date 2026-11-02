@@ -13,7 +13,7 @@
 //! - [`der`]: a strict DER reader and writer. Strict is the point — see the
 //!   module docs for what it refuses and why each refusal has a CVE behind it.
 //! - [`PublicKeyInfo`]: `SubjectPublicKeyInfo` for RSA, P-256, P-384, Ed25519,
-//!   and X25519, plus bare PKCS#1 `RSAPublicKey`.
+//!   Ed448 and X25519, plus bare PKCS#1 `RSAPublicKey`.
 //! - [`PrivateKeyInfo`]: PKCS#8 `PrivateKeyInfo`, and SEC1 `ECPrivateKey`.
 //! - [`ecdsa_signature`]: conversion between fixed-width `r || s` and the
 //!   `Ecdsa-Sig-Value` DER that X.509 and TLS carry.

@@ -72,6 +72,8 @@ pub enum PrivateKeyInfo<'a> {
     },
     /// An Ed25519 seed, 32 bytes.
     Ed25519(&'a [u8]),
+    /// An Ed448 seed, 57 bytes.
+    Ed448(&'a [u8]),
     /// An X25519 scalar, 32 bytes.
     X25519(&'a [u8]),
     /// A key whose algorithm this build does not implement.
@@ -107,6 +109,7 @@ impl core::fmt::Debug for PrivateKeyInfo<'_> {
                 .field("public_key", public_key)
                 .finish_non_exhaustive(),
             Self::Ed25519(_) => f.write_str("Ed25519(..)"),
+            Self::Ed448(_) => f.write_str("Ed448(..)"),
             Self::X25519(_) => f.write_str("X25519(..)"),
             Self::Unsupported { oid } => f.debug_struct("Unsupported").field("oid", oid).finish(),
         }
@@ -165,7 +168,9 @@ impl PartialEq for PrivateKeyInfo<'_> {
                     public_key: q2,
                 },
             ) => a1 == a2 && q1 == q2 && same(k1, k2),
-            (Self::Ed25519(a), Self::Ed25519(b)) | (Self::X25519(a), Self::X25519(b)) => same(a, b),
+            (Self::Ed25519(a), Self::Ed25519(b))
+            | (Self::Ed448(a), Self::Ed448(b))
+            | (Self::X25519(a), Self::X25519(b)) => same(a, b),
             (Self::Unsupported { oid: a }, Self::Unsupported { oid: b }) => a == b,
             _ => false,
         }
@@ -181,6 +186,7 @@ impl<'a> PrivateKeyInfo<'a> {
             Self::Rsa { .. } => KeyAlgorithm::Rsa,
             Self::Ec { algorithm, .. } => *algorithm,
             Self::Ed25519(_) => KeyAlgorithm::Ed25519,
+            Self::Ed448(_) => KeyAlgorithm::Ed448,
             Self::X25519(_) => KeyAlgorithm::X25519,
             Self::Unsupported { .. } => KeyAlgorithm::Unknown,
         }
@@ -244,6 +250,16 @@ impl<'a> PrivateKeyInfo<'a> {
             } else {
                 PrivateKeyInfo::X25519(raw)
             });
+        }
+
+        if algorithm_oid == oid::ED448 {
+            alg.finish()?;
+            // RFC 8410 §7: the inner value is itself an OCTET STRING.
+            let mut curve_key = Reader::new(inner);
+            let raw = curve_key.octet_string()?;
+            curve_key.finish()?;
+            ensure!(raw.len() == 57, MalformedEncoding, "ed448 key length");
+            return Ok(PrivateKeyInfo::Ed448(raw));
         }
 
         Ok(PrivateKeyInfo::Unsupported { oid: algorithm_oid })
@@ -338,6 +354,16 @@ impl<'a> PrivateKeyInfo<'a> {
                 } else {
                     oid::X25519
                 })?;
+                w.push_wrapper(der::SEQUENCE, alg_start)?;
+            }
+            Self::Ed448(key) => {
+                ensure!(key.len() == 57, InvalidLength, "ed448 key length");
+                // Two nested OCTET STRINGs: CurvePrivateKey inside privateKey.
+                w.push_octet_string(key)?;
+                w.push_header(der::OCTET_STRING, key.len() + 2)?;
+
+                let alg_start = w.len();
+                w.push_oid(oid::ED448)?;
                 w.push_wrapper(der::SEQUENCE, alg_start)?;
             }
             Self::Unsupported { .. } => {

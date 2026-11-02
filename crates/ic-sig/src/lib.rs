@@ -106,6 +106,8 @@ pub enum PublicKey<'a> {
     EcP521(&'a [u8]),
     /// Ed25519, 32 bytes.
     Ed25519(&'a [u8]),
+    /// Ed448, 57 bytes.
+    Ed448(&'a [u8]),
     /// RSA: the modulus, big-endian, and the exponent.
     Rsa {
         /// Big-endian modulus.
@@ -192,6 +194,7 @@ impl<'a> PublicKey<'a> {
                 _ => Err(err!(Unsupported, "public key on an unsupported curve")),
             },
             PublicKeyInfo::Ed25519(key) => Ok(Self::Ed25519(key)),
+            PublicKeyInfo::Ed448(key) => Ok(Self::Ed448(key)),
             PublicKeyInfo::Unsupported { .. } => Self::post_quantum_from_spki(spki),
             _ => Err(err!(Unsupported, "not a signature verification key")),
         }
@@ -268,6 +271,7 @@ impl<'a> PublicKey<'a> {
             Self::EcP384(_) => "ecdsa-p384",
             Self::EcP521(_) => "ecdsa-p521",
             Self::Ed25519(_) => "ed25519",
+            Self::Ed448(_) => "ed448",
             Self::Rsa { .. } => "rsa",
             Self::MlDsa44(_) => "ml-dsa-44",
             Self::MlDsa65(_) => "ml-dsa-65",
@@ -303,6 +307,7 @@ impl<'a> PublicKey<'a> {
             Self::EcP256(_) | Self::Ed25519(_) | Self::MlDsa44(_) => 128,
             Self::EcP384(_) | Self::MlDsa65(_) => 192,
             Self::EcP521(_) | Self::MlDsa87(_) => 256,
+            Self::Ed448(_) => 224,
             Self::SlhDsa(set, _) => match set.category() {
                 1 => 128,
                 3 => 192,
@@ -339,6 +344,7 @@ impl<'a> PublicKey<'a> {
                 | (Self::EcP384(_), A::EcdsaP384Sha384)
                 | (Self::EcP521(_), A::EcdsaP521Sha512)
                 | (Self::Ed25519(_), A::Ed25519)
+                | (Self::Ed448(_), A::Ed448)
                 | (Self::MlDsa44(_), A::MlDsa44)
                 | (Self::MlDsa65(_), A::MlDsa65)
                 | (Self::MlDsa87(_), A::MlDsa87)
@@ -385,6 +391,7 @@ pub fn verify(
         (PublicKey::EcP384(pk), _) => verify_p384(pk, message, signature),
         (PublicKey::EcP521(pk), _) => verify_p521(pk, message, signature),
         (PublicKey::Ed25519(pk), _) => verify_ed25519(pk, message, signature),
+        (PublicKey::Ed448(pk), _) => verify_ed448(pk, message, signature),
         (PublicKey::MlDsa44(pk), _) => verify_ml_dsa_44(pk, message, signature),
         (PublicKey::MlDsa65(pk), _) => verify_ml_dsa_65(pk, message, signature),
         (PublicKey::MlDsa87(pk), _) => verify_ml_dsa_87(pk, message, signature),
@@ -455,6 +462,21 @@ fn verify_ed25519(_pk: &[u8], _message: &[u8], _signature: &[u8]) -> Result<()> 
     Err(err!(
         NotApprovedInFipsMode,
         "Ed25519 is not in this build: it was compiled with ic_approved_only"
+    ))
+}
+
+#[cfg(not(ic_approved_only))]
+#[inline(never)]
+fn verify_ed448(pk: &[u8], message: &[u8], signature: &[u8]) -> Result<()> {
+    rejected(ic_ec::Ed448::verify(pk, message, signature))
+}
+
+/// Refused by name in an approved-only build, as Ed25519 is.
+#[cfg(ic_approved_only)]
+fn verify_ed448(_pk: &[u8], _message: &[u8], _signature: &[u8]) -> Result<()> {
+    Err(err!(
+        NotApprovedInFipsMode,
+        "Ed448 is not in this build: it was compiled with ic_approved_only"
     ))
 }
 

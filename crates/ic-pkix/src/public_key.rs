@@ -23,7 +23,7 @@
 //! |---|---|
 //! | RSA | `NULL`, and it must be present (RFC 4055 §2.1) |
 //! | EC | the named-curve OID; a key without one is not usable |
-//! | Ed25519, X25519 | absent entirely (RFC 8410 §3), not `NULL` |
+//! | Ed25519, Ed448, X25519 | absent entirely (RFC 8410 §3), not `NULL` |
 
 use crate::der::{self, Reader, Writer};
 use crate::oid::{self, KeyAlgorithm};
@@ -49,6 +49,8 @@ pub enum PublicKeyInfo<'a> {
     },
     /// An Ed25519 public key, 32 bytes.
     Ed25519(&'a [u8]),
+    /// An Ed448 public key, 57 bytes.
+    Ed448(&'a [u8]),
     /// An X25519 public key, 32 bytes.
     X25519(&'a [u8]),
     /// A key whose algorithm this build does not implement.
@@ -71,6 +73,7 @@ impl<'a> PublicKeyInfo<'a> {
             Self::Rsa { .. } => KeyAlgorithm::Rsa,
             Self::Ec { algorithm, .. } => *algorithm,
             Self::Ed25519(_) => KeyAlgorithm::Ed25519,
+            Self::Ed448(_) => KeyAlgorithm::Ed448,
             Self::X25519(_) => KeyAlgorithm::X25519,
             Self::Unsupported { .. } => KeyAlgorithm::Unknown,
         }
@@ -141,6 +144,13 @@ impl<'a> PublicKeyInfo<'a> {
             });
         }
 
+        if algorithm_oid == oid::ED448 {
+            // RFC 8410 §3: parameters are absent, not NULL.
+            alg.finish()?;
+            ensure!(key_bits.len() == 57, MalformedEncoding, "ed448 key length");
+            return Ok(PublicKeyInfo::Ed448(key_bits));
+        }
+
         Ok(PublicKeyInfo::Unsupported { oid: algorithm_oid })
     }
 
@@ -189,6 +199,13 @@ impl<'a> PublicKeyInfo<'a> {
                 } else {
                     oid::X25519
                 })?;
+                w.push_wrapper(der::SEQUENCE, alg_start)?;
+            }
+            Self::Ed448(key) => {
+                ensure!(key.len() == 57, InvalidLength, "ed448 key length");
+                w.push_bit_string(key)?;
+                let alg_start = w.len();
+                w.push_oid(oid::ED448)?;
                 w.push_wrapper(der::SEQUENCE, alg_start)?;
             }
             Self::Unsupported { .. } => {
