@@ -83,6 +83,11 @@ pub fn ed25519_reduce_wide(x: &[u8; 64]) -> [u8; 32] {
     crate::scalar::reduce_wide(x)
 }
 
+/// Ed448's signing: field, table read, recoding, group operations and
+/// scalar arithmetic modulo L.
+#[cfg(not(ic_approved_only))]
+pub use crate::ed448::probes as ed448;
+
 /// `(a * b + c) mod L`, which is `S = k * s + r` in Ed25519 signing.
 #[cfg(not(ic_approved_only))]
 #[inline(always)]

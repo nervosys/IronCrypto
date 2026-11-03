@@ -9,17 +9,22 @@
 //! [`Point::mul_scalar`] does 456 doublings and 128 additions.
 //!
 //! Each entry is affine, `(x, y)` with `z = 1`, so adding one skips a
-//! multiplication ([`Point::add_affine`]). A lookup reads all eight entries
+//! multiplication ([`Point::add_affine_assign`]). A lookup reads all eight entries
 //! of its window and selects with conditional moves, and a negative digit
 //! negates `x` the same way. No address depends on the scalar.
 //!
 //! The windows are 57 KiB. They live in statics behind `std`, one `OnceLock`
 //! per window, built on first use or by [`crate::prepare`]. Without `std`
-//! the basepoint goes through [`Point::mul_scalar`] like any other point.
+//! the basepoint goes through [`Point::mul_scalar`] like any other point;
+//! the selection and the recoding still compile under `ct-probes`, for the
+//! compiled-code gate, which builds without `std`.
 
+#[cfg(feature = "std")]
 use std::sync::OnceLock;
 
-use super::{Fe, Point, LEN};
+#[cfg(feature = "std")]
+use super::Point;
+use super::{Fe, LEN};
 use ic_core::ct::Choice;
 
 /// Digits per scalar, radix 16 over 456 bits.
@@ -29,6 +34,7 @@ const DIGITS: usize = 2 * LEN;
 const ENTRIES: usize = 8;
 
 /// One window per pair of digits.
+#[cfg(feature = "std")]
 const WINDOWS: usize = DIGITS / 2;
 
 /// A point with `z = 1`.
@@ -46,13 +52,14 @@ impl Affine {
 }
 
 /// `1..=8` times some fixed multiple of the basepoint.
-struct Window([Affine; ENTRIES]);
+pub(super) struct Window(pub(super) [Affine; ENTRIES]);
 
 impl Window {
     /// The multiples of `base`, made affine with one inversion between them.
     ///
     /// The inversions, one per window, are not most of what building the
     /// table costs: sharing one between four windows measured the same.
+    #[cfg(feature = "std")]
     fn new(base: &Point) -> Self {
         let mut multiples = [*base; ENTRIES];
         for i in 1..ENTRIES {
@@ -85,7 +92,7 @@ impl Window {
 
     /// `digit` times the window's base, for `digit` in `[-8, 8]`, without
     /// indexing by it.
-    fn select(&self, digit: i8) -> Affine {
+    pub(super) fn select(&self, digit: i8) -> Affine {
         let negative = Choice::from_u8((digit as u8) >> 7);
         let magnitude = ((digit as i16 ^ (digit as i16 >> 7)) - (digit as i16 >> 7)) as u64;
 
@@ -103,14 +110,17 @@ impl Window {
 }
 
 /// The windows, filled by [`prepare`] or one at a time by [`window`].
+#[cfg(feature = "std")]
 static TABLE: [OnceLock<Window>; WINDOWS] = [const { OnceLock::new() }; WINDOWS];
 
 /// Whether [`prepare`] has run.
+#[cfg(feature = "std")]
 static BUILT: OnceLock<()> = OnceLock::new();
 
 /// Fill every window, in order, sharing the doublings between them: eight
 /// per window, seven additions and one inversion each, once. A second caller
 /// waits for the first.
+#[cfg(feature = "std")]
 pub(crate) fn prepare() {
     BUILT.get_or_init(|| {
         let mut base = Point::basepoint();
@@ -128,6 +138,7 @@ pub(crate) fn prepare() {
 
 /// Window `i`. Filled by [`prepare`]; were it somehow not, it is built here on
 /// its own, more slowly and with the same result, rather than panicking.
+#[cfg(feature = "std")]
 fn window(i: usize) -> &'static Window {
     TABLE[i].get_or_init(|| {
         let mut base = Point::basepoint();
@@ -162,6 +173,7 @@ pub(super) fn signed_digits(k: &[u8; LEN]) -> [i8; DIGITS] {
 }
 
 /// `[k]B`, for `k` below 2^455, in constant time.
+#[cfg(feature = "std")]
 pub(super) fn mul(k: &[u8; LEN]) -> Point {
     prepare();
     let digits = signed_digits(k);
@@ -170,13 +182,13 @@ pub(super) fn mul(k: &[u8; LEN]) -> Point {
     // even ones. Both halves read the same windows.
     let mut acc = Point::IDENTITY;
     for i in (1..DIGITS).step_by(2) {
-        acc = acc.add_affine(&window(i / 2).select(digits[i]));
+        acc.add_affine_assign(&window(i / 2).select(digits[i]));
     }
     for _ in 0..4 {
-        acc = acc.double();
+        acc.double_assign();
     }
     for i in (0..DIGITS).step_by(2) {
-        acc = acc.add_affine(&window(i / 2).select(digits[i]));
+        acc.add_affine_assign(&window(i / 2).select(digits[i]));
     }
     acc
 }

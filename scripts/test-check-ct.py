@@ -123,6 +123,22 @@ class TargetSymbolTests(unittest.TestCase):
         self.assertFalse(set(audit.X86_ONLY) & set(audit.symbols_for("riscv32imac-unknown-none-elf")))
 
 
+class Ed448SymbolTests(unittest.TestCase):
+    """Ed448's probes are required on the 64-bit targets and not on the
+    32-bit ones."""
+
+    def test_required_on_64_bit_targets_only(self):
+        for target in audit.TARGETS:
+            with self.subTest(target):
+                wide = target.startswith(("x86_64", "aarch64"))
+                self.assertEqual(set(audit.ED448) <= set(audit.symbols_for(target)), wide)
+                self.assertFalse(not wide and set(audit.ED448) & set(audit.symbols_for(target)))
+        asm = assembly().replace(f"{audit.ED448[0]}:", "unrelated:")
+        with self.assertRaisesRegex(ValueError, "missing probe"):
+            audit.inspect(asm, "aarch64-unknown-linux-gnu")
+        self.assertEqual(audit.inspect(asm, "riscv32imac-unknown-none-elf"), [])
+
+
 class Aarch64SymbolTests(unittest.TestCase):
     """The aarch64-only probes are required there and nowhere else, and
     aarch64 runs every probe that is not x86-64-only."""
@@ -135,7 +151,8 @@ class Aarch64SymbolTests(unittest.TestCase):
         self.assertEqual(audit.inspect(asm, "x86_64-unknown-linux-gnu"), [])
         self.assertEqual(audit.inspect(asm, "riscv32imac-unknown-none-elf"), [])
         common = set(audit.symbols_for("thumbv7em-none-eabihf"))
-        self.assertEqual(set(audit.symbols_for(a64)), common | set(audit.AARCH64_ONLY))
+        self.assertEqual(set(audit.symbols_for(a64)),
+                         common | set(audit.AARCH64_ONLY) | set(audit.ED448))
         self.assertFalse(set(audit.AARCH64_ONLY) & set(audit.symbols_for("x86_64-unknown-linux-gnu")))
         self.assertIn(a64, audit.TARGETS)
 
@@ -359,6 +376,58 @@ class X86LoopTests(unittest.TestCase):
                 self.assertTrue(failures, name)
                 self.assertFalse(excused.get((probe, "counter loop")), (name, excused))
 
+    HELPER = ("\t.type _RNv4test6helper,@function\n_RNv4test6helper:\n\tretq\n"
+              "\t.size _RNv4test6helper, .-_RNv4test6helper\n")
+    # A symbol defined in the file under a name written by hand.
+    HAND = "\t.type helper,@function\nhelper:\n\tretq\n\t.size helper, .-helper\n"
+
+    def run_with_helper(self, lines, helper_body="retq"):
+        probe = self.ADX
+        body = "".join(line + "\n" if line.endswith(":") else f"\t{line}\n" for line in lines)
+        asm = assembly("retq").replace(f"{probe}:\n\tretq\n", f"{probe}:\n{body}")
+        asm += "\n" + self.HELPER.replace("\tretq\n", f"\t{helper_body}\n") + "\n" + self.HAND
+        excused = collections.Counter()
+        failures = audit.inspect(asm, self.X86, excused)
+        return failures + audit.over_ceiling(self.X86, excused), excused
+
+    def test_a_call_to_a_function_in_the_file_keeps_a_preserved_counter(self):
+        # As `square_n` compiles: the counter in ebx, a call to `square`.
+        for counter in ("%ebx", "%rbp", "%r12", "%r15d"):
+            with self.subTest(counter):
+                failures, excused = self.run_with_helper([
+                    f"movl $48, {counter}", ".LBB0_1:", "movq %r15, %rdi", "callq _RNv4test6helper",
+                    f"decl {counter}", "jne .LBB0_1", "retq"])
+                self.assertEqual(failures, [])
+                self.assertEqual(excused, collections.Counter({(self.ADX, "counter loop"): 1}))
+
+    def test_but_not_one_the_call_may_change(self):
+        cases = {
+            "counter in a caller-saved register": [
+                ".LBB0_1:", "callq _RNv4test6helper", "decq %r9", "jne .LBB0_1", "retq"],
+            "counter in rcx": [".LBB0_1:", "callq _RNv4test6helper", "decq %rcx", "jne .LBB0_1", "retq"],
+            "a call through a register": [
+                ".LBB0_1:", "callq *%rax", "decl %ebx", "jne .LBB0_1", "retq"],
+            "a call to memcpy": [
+                ".LBB0_1:", "callq *memcpy@GOTPCREL(%rip)", "decl %ebx", "jne .LBB0_1", "retq"],
+            "a call to a symbol not in the file": [
+                ".LBB0_1:", "callq elsewhere", "decl %ebx", "jne .LBB0_1", "retq"],
+            "flags set before the call": [
+                ".LBB0_1:", "decl %ebx", "callq _RNv4test6helper", "jne .LBB0_1", "retq"],
+            "a callee named by hand": [
+                ".LBB0_1:", "callq helper", "decl %ebx", "jne .LBB0_1", "retq"],
+        }
+        for name, lines in cases.items():
+            with self.subTest(name):
+                failures, excused = self.run_with_helper(lines)
+                self.assertTrue(failures, name)
+                self.assertFalse(excused.get((self.ADX, "counter loop")), (name, excused))
+
+    def test_the_callee_is_still_read(self):
+        failures, _ = self.run_with_helper([
+            "movl $48, %ebx", ".LBB0_1:", "callq _RNv4test6helper", "decl %ebx", "jne .LBB0_1", "retq"],
+            helper_body="jne .L9")
+        self.assertEqual(failures, [f"{self.ADX} -> _RNv4test6helper: jne .L9"])
+
     def test_intel_syntax_gets_no_excuse(self):
         failures, _ = self.run_on([".intel_syntax noprefix", "mov r9d, 32", ".LBB0_1:",
                                    "dec r9", "jne .LBB0_1", ".att_syntax", "retq"])
@@ -390,7 +459,7 @@ class X86LoopTests(unittest.TestCase):
                 self.assertTrue(failures)
                 self.assertFalse(excused)
         self.assertNotIn("ct_reduce_q", audit.X86_EXCUSE_CEILINGS)
-        self.assertTrue(set(audit.X86_EXCUSE_CEILINGS) <= set(audit.X86_ONLY))
+        self.assertTrue(set(audit.X86_EXCUSE_CEILINGS) <= set(audit.X86_ONLY) | set(audit.ED448))
         self.assertEqual(len(audit.over_ceiling(
             self.X86, collections.Counter({("ct_reduce_q", "counter loop"): 1}))), 1)
 
@@ -598,6 +667,39 @@ class Aarch64LoopTests(unittest.TestCase):
                 self.assertTrue(failures, name)
                 self.assertFalse(excused.get((self.TWO, "counter loop")), (name, excused))
 
+    HELPER = ("\t.type _RNv4test6helper,%function\n_RNv4test6helper:\n\tret\n"
+              "\t.size _RNv4test6helper, .-_RNv4test6helper\n"
+              "\t.type helper,%function\nhelper:\n\tret\n\t.size helper, .-helper\n")
+
+    def test_a_call_to_a_function_in_the_file_keeps_a_preserved_counter(self):
+        for counter in ("x19", "x24", "x28"):
+            with self.subTest(counter):
+                failures, excused = self.run_on([
+                    f"mov {counter}, #114", ".LBB0_1:", "mov x0, x20", "bl _RNv4test6helper",
+                    f"sub {counter}, {counter}, #1", f"cbnz {counter}, .LBB0_1", "ret"],
+                    extra="\n" + self.HELPER)
+                self.assertEqual(failures, [])
+                self.assertEqual(excused, collections.Counter({(self.TWO, "counter loop"): 1}))
+
+    def test_but_not_one_the_call_may_change(self):
+        cases = {
+            "counter in x8": [".LBB0_1:", "bl _RNv4test6helper", "sub x8, x8, #1", "cbnz x8, .LBB0_1", "ret"],
+            "counter in x18": [".LBB0_1:", "bl _RNv4test6helper", "subs x18, x18, #1", "b.ne .LBB0_1", "ret"],
+            "a call through a register": [
+                ".LBB0_1:", "blr x9", "sub x19, x19, #1", "cbnz x19, .LBB0_1", "ret"],
+            "a call to memcpy": [
+                ".LBB0_1:", "bl memcpy", "sub x19, x19, #1", "cbnz x19, .LBB0_1", "ret"],
+            "flags set before the call": [
+                ".LBB0_1:", "subs x19, x19, #1", "bl _RNv4test6helper", "b.ne .LBB0_1", "ret"],
+            "a callee named by hand": [
+                ".LBB0_1:", "bl helper", "sub x19, x19, #1", "cbnz x19, .LBB0_1", "ret"],
+        }
+        for name, lines in cases.items():
+            with self.subTest(name):
+                failures, excused = self.run_on(lines, extra="\n" + self.HELPER)
+                self.assertTrue(failures, name)
+                self.assertFalse(excused.get((self.TWO, "counter loop")), (name, excused))
+
     def test_one_more_than_the_ceiling_fails(self):
         two = self.SUBS[:-1] + [line.replace("LBB0_1", "LBB0_2") for line in self.SUBS]
         failures, excused = self.run_on(two, self.ONE)
@@ -622,14 +724,18 @@ class Aarch64LoopTests(unittest.TestCase):
                     self.assertTrue(failures)
                     self.assertFalse(excused)
             self.assertNotIn(probe, audit.AARCH64_EXCUSE_CEILINGS)
-        self.assertTrue(set(audit.AARCH64_EXCUSE_CEILINGS) <= set(audit.AARCH64_ONLY))
+        self.assertTrue(set(audit.AARCH64_EXCUSE_CEILINGS)
+                        <= set(audit.AARCH64_ONLY) | set(audit.ED448))
 
     def test_x86_ceilings_do_not_apply_on_aarch64(self):
         # A probe with an x86-64 ceiling and no aarch64 one excuses nothing
         # here, and the reverse.
         failures, excused = self.run_on(self.SUBS, "ct_reduce_q")
         self.assertTrue(failures)
-        self.assertFalse(set(audit.AARCH64_EXCUSE_CEILINGS) & set(audit.X86_EXCUSE_CEILINGS))
+        # Only Ed448's portable probes compile on both, and each target's
+        # ceilings were read from its own assembly.
+        self.assertTrue(set(audit.AARCH64_EXCUSE_CEILINGS) & set(audit.X86_EXCUSE_CEILINGS)
+                        <= set(audit.ED448))
 
     def test_a_counter_branch_inside_the_loop_is_not(self):
         failures, excused = self.run_on([

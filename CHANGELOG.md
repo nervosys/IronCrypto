@@ -26,6 +26,19 @@ all of them.
   first use or by `ic_ec::prepare`. Ed448ph is not implemented. Not approved-mode, as
   Ed25519 is not. A new CAST, so `TEST_COUNT` is 87 (65 approved-only). The
   classical half of the composite `id-MLDSA87-Ed448-SHAKE256`, to follow.
+- **Ed448 in the compiled-code gate** (`scripts/check-ct.py`), on x86-64
+  and aarch64: eleven probes covering the field, the table read and
+  recoding, the point formulas, the windowed multiplication, and the scalar
+  arithmetic modulo L. To pass, the point formulas now update in place
+  (a 192-byte point copied whole is a `memcpy` call), the reduction modulo L
+  and `mul_add` no longer branch on an index, and two loop bodies are out of
+  line so their counters stay in registers. The gate's loop rule now accepts
+  a direct call to a function in the same file when the counter is in a
+  register the call preserves. Not covered on the 32-bit targets, where the
+  128-bit field arithmetic compiles to multi-word loops and runtime-library
+  copies (`docs/CONSTANT_TIME.md`, "Ed448 on the 64-bit targets"). Signing
+  and verification measured at parity against the previous revision, five
+  alternated rounds each.
 - **Ed448 keys and signatures through `ic_pkix` and `ic_sig`**:
   `SignatureAlgorithm::Ed448`, `KeyAlgorithm::Ed448`, `PublicKeyInfo::Ed448`
   and `PrivateKeyInfo::Ed448` (id-Ed448, 1.3.101.113, RFC 8410), `ic_sig`'s

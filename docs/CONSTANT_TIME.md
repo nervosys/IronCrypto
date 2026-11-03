@@ -22,9 +22,9 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-eighty-six more on x86-64, and seven more on aarch64: 313 gating probe/target
-checks in all, 130 on x86-64, 51 on aarch64, and 44 on each of the three other
-targets. Their public sizes
+102 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
+targets: 351 gating probe/target checks in all, 157 on x86-64, 62 on aarch64,
+and 44 on each of the three other targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
 each probe. Integer overflow checks are off, as in an ordinary consumer's
@@ -50,6 +50,11 @@ release profile; this is not the workspace binary's overflow-checked profile.
   is `S`. Straight-line on all five targets; see "Ed25519 scalar reduction"
   below. On x86-64 these are the 64-bit Barrett form, elsewhere the portable
   21-bit fold; see "Ed25519 signing on AVX2".
+- Ed448 signing on x86-64 and aarch64 only: the field's multiplication,
+  squaring, inversion and encoding, the table read and the recoding of the
+  secret nonce, the mixed addition and the doubling, the windowed
+  multiplication, and the scalar arithmetic modulo L. See "Ed448 on the
+  64-bit targets" below, which says why the 32-bit targets are not covered.
 - On x86-64 only, the Curve25519 backends that exist only there: the
   MULX/ADX field's multiplication, squaring, addition, subtraction,
   multiplication by 121666 and divstep inversion, each from and back to
@@ -712,7 +717,19 @@ the header is in it), and excuses three shapes:
   be a counter and the other written nowhere in the loop. A loop that
   contains a call, a string instruction, or an instruction without operands
   that the checker does not know, excuses nothing: it cannot list what those
-  write.
+  write. The one exception, from 2026-11-03 ("Ed448 on the 64-bit
+  targets"): a direct `call` to a function whose body is in the same file
+  and whose name is Rust-mangled (`_R...`, `_ZN...`). The gate follows that
+  call and holds the callee to the same checks, and the compiler built the
+  callee under the System V ABI, which preserves rbx, rbp, r12 to r15 and
+  rsp; such a call is taken to write every other general-purpose register.
+  A counter in a preserved register survives it. A name written by hand, as
+  `global_asm!` or `#[no_mangle]` defines one, gets no such trust: nothing
+  checks that its code keeps the ABI (an independent review raised this;
+  the repository has no `global_asm!` today, and the rule does not rely on
+  that). A call through a register, through the GOT (`memcpy`), or to a
+  symbol not in the file still voids the loop, and the call ends the search
+  backwards for the instruction that set the branch's flags.
 - **unconditional jump**: `jmp` to a label in the same function. It has no
   condition; the branches that decide whether it is reached are checked.
 - **constant memset**: a call to `memset` whose length was loaded into rdx
@@ -893,7 +910,10 @@ wider, applied only in the probes `AARCH64_EXCUSE_CEILINGS` names:
   can list (`A64_KNOWN`: integer and SIMD data processing, the crypto
   instructions, loads and stores with their writeback). A call, an
   indirect branch or any instruction not in the list voids the excuse for
-  that loop.
+  that loop. Since 2026-11-03 a `bl` to a Rust-mangled function in the
+  same file is the exception, as on x86-64: it is taken to write x0 to x18 and the link
+  register, which AAPCS64 lets a callee change, so a counter in x19 to x28
+  survives it. `blr`, and `bl` to anything not in the file, still void it.
 
 Never excused: `tbz`/`tbnz` (a branch on one bit, data or counter),
 `ccmp`/`ccmn` chains, `tst`, `ands`, flags from carries (`adcs`, `sbcs`),
@@ -1937,3 +1957,111 @@ per-call timings above are the figures to use.
 - The ML-KEM and ML-DSA scrubs are `std`-only, because a 16 to 64 KiB frame
   does not belong on a constrained stack. KMAC's 2 KiB scrub runs in every
   build.
+
+## Ed448 on the 64-bit targets, 2026-11-03
+
+Ed448 signing joins the gate on x86-64 and aarch64: eleven probes, required
+on both and on neither 32-bit target.
+
+| Probe | What it is |
+| --- | --- |
+| `ct_ed448_fe_mul`, `ct_ed448_fe_square` | the field's product and square |
+| `ct_ed448_fe_invert` | the inversion by a fixed exponent, which compresses R and the key |
+| `ct_ed448_fe_to_bytes` | the encoding, with its conditional subtraction of p |
+| `ct_ed448_select` | a table window's entry by the secret digit, and its negation |
+| `ct_ed448_signed_digits` | the secret nonce's signed radix-16 digits |
+| `ct_ed448_add_affine`, `ct_ed448_double` | the mixed addition and the doubling |
+| `ct_ed448_mul_scalar` | the windowed multiplication: the basepoint's without `std` |
+| `ct_ed448_reduce` | `x mod L` of the 114-byte hash: the nonce r |
+| `ct_ed448_mul_add` | `(k s + r) mod L`: S |
+
+The precomputed basepoint table's multiplication, signing's path with `std`,
+is not one probe: its windows live in `OnceLock` statics, which the `no_std`
+harness does not build. It is the table read, the recoding, the mixed
+addition and four doublings, each probed. Verification is variable time by
+design, on public inputs, and is not probed.
+
+### What had to change
+
+First run, with the probes on the code as it was: about 200 findings on
+x86-64 and 94 on aarch64, then, once each probe was allowed its loops, 60 and
+25. What remained, and what removed it:
+
+- **`memcpy` of whole points.** A point is 192 bytes; `p = p.double()`
+  builds it in a temporary and x86-64 copies that back by calling `memcpy`,
+  as it did the probes' return values and the 16 copies of the identity
+  filling `mul_scalar`'s table. The formulas now update a point in place, a
+  coordinate (64 bytes, copied inline) at a time (`add_assign`,
+  `add_affine_assign`, `double_assign`); `add` and `double` remain as
+  wrappers for verification. `mul_scalar` keeps its multiples as three
+  arrays of coordinates and builds each from the identity, one addition more
+  than it needs, since even `*self` copied whole is a `memcpy`. The probes
+  write through an output pointer.
+- **Spilled counters.** `reduce`'s loops over bytes and bits, and
+  `mul_scalar`'s loop over windows, kept their counters on the stack: with
+  30 words or a table live, the compiler had no register left. The rule
+  follows registers. `reduce` is now one loop over bits around
+  `reduce_step`, and `mul_scalar` one loop around `window`, both
+  `#[inline(never)]`; each loop holds a counter and pointers.
+- **Loops around calls.** The three long squaring chains of the inversion
+  (48, 96 and 223) and `mul_scalar`'s loop call `square`, `double_assign`
+  and `add_assign`. The rule voided any loop with a call in it; it now
+  accepts a direct call to a function in the file, the counter in a
+  register the call preserves ("Loops on x86-64", "The ARMv8 backends").
+- **Branches on a public index.** `reduce` copied its result out under
+  `if 4 * i + j < LEN`, and `mul_add` added `c[i]` under `if i < 15`. Both
+  are now loops over fixed ranges. `reduce` takes a fixed-size array, so the
+  loop over its input is a count, not a slice's length.
+
+### The ceilings, read on 2026-11-03, rustc 1.99.0
+
+| Probe | x86-64 counter loop | x86-64 unconditional jump | aarch64 counter loop |
+| --- | --- | --- | --- |
+| `ct_ed448_fe_mul` | 1 | 0 | 1 |
+| `ct_ed448_fe_square` | 0 | 0 | 0 |
+| `ct_ed448_fe_invert` | 16 | 0 | 16 |
+| `ct_ed448_fe_to_bytes` | 0 | 0 | 0 |
+| `ct_ed448_select` | 1 | 0 | 1 |
+| `ct_ed448_signed_digits` | 1 | 1 | 1 |
+| `ct_ed448_add_affine` | 10 | 0 | 10 |
+| `ct_ed448_double` | 3 | 0 | 3 |
+| `ct_ed448_mul_scalar` | 14 | 0 | 14 |
+| `ct_ed448_reduce` | 2 | 1 | 2 |
+| `ct_ed448_mul_add` | 6 | 4 | 6 |
+
+Every loop counts something fixed in the source. The field multiplication
+keeps its eight rows as a loop (`cmpq $64` on a stepped offset), and every
+probe that multiplies counts that loop once per inlined copy: the inversion's
+16 are 13 multiplications and the three squaring chains, whose counters are
+constants loaded before them (`movl $48, %ebx`). The others are the eight
+entries of a table read, the 113 carries of the recoding, the 15 rows of
+`mul_add`'s product, `reduce`'s 912 or 960 bits, `mul_scalar`'s 114 windows
+and 15 additions, and the sixteen entries each window reads. The jumps enter
+or leave those loops.
+
+### Why not the 32-bit targets
+
+The field is eight 56-bit limbs with 128-bit products and columns. On
+Cortex-M and RISC-V each of those is several words, in loops the 32-bit
+rules were written for P-256's Montgomery word loop and do not accept, and
+the arithmetic clears and copies its arrays by calling `__aeabi_memclr8`,
+`__aeabi_memcpy8`, `memset` and `memcpy`. With these probes added, the
+32-bit targets reported 749 (thumbv6m), 566 (thumbv7em) and 1065
+(riscv32imac) findings. The scalar probes alone, the smallest, still clear
+and copy through those calls. Covering them needs a 32-bit field
+representation or a reviewed rule per shape, not a ceiling on what is there.
+Until then Ed448 on those targets is outside this gate.
+
+### Checks
+
+- `test-check-ct.py`: the call in a loop is accepted with the counter in
+  ebx, rbp, r12 or r15d on x86-64 and x19, x24 or x28 on aarch64, and
+  refused with it in r9, rcx, x8 or x18, for a call through a register, to
+  `memcpy`, to a symbol not in the file, or to one in the file under a name
+  written by hand, and where the flags were set before the call; the callee
+  is still read. Ed448's probes are required on
+  the 64-bit targets and not the others. Breaking the checker six ways --
+  a call writing nothing on either architecture, any call target accepted on
+  either, calls refused again on x86-64, Ed448 required on 32-bit targets,
+  and a hand-named callee accepted on either architecture -- fails the tests
+  each time.

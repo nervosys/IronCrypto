@@ -183,6 +183,64 @@ p256_probes!(
     m::{ fn_reduce, fn_add, fn_sub, fn_mul, fn_neg, fn_cmov, fn_eq, fn_is_odd }
 );
 
+// Ed448's signing, portable on every target: the field, the table read and
+// the recoding of the secret nonce, the group operations, the windowed
+// multiplication, and the scalar arithmetic modulo L.
+#[no_mangle]
+pub fn ct_ed448_fe_mul(a: &[u64; 8], b: &[u64; 8]) -> [u64; 8] {
+    ic_ec::ct_probes::ed448::fe_mul(a, b)
+}
+
+#[no_mangle]
+pub fn ct_ed448_fe_square(a: &[u64; 8]) -> [u64; 8] {
+    ic_ec::ct_probes::ed448::fe_square(a)
+}
+
+#[no_mangle]
+pub fn ct_ed448_fe_invert(a: &[u64; 8]) -> [u64; 8] {
+    ic_ec::ct_probes::ed448::fe_invert(a)
+}
+
+#[no_mangle]
+pub fn ct_ed448_fe_to_bytes(a: &[u64; 8]) -> [u8; 56] {
+    ic_ec::ct_probes::ed448::fe_to_bytes(a)
+}
+
+#[no_mangle]
+pub fn ct_ed448_select(window: &[[u64; 16]; 8], digit: i8) -> [u64; 16] {
+    ic_ec::ct_probes::ed448::select(window, digit)
+}
+
+#[no_mangle]
+pub fn ct_ed448_signed_digits(k: &[u8; 57]) -> [i8; 114] {
+    ic_ec::ct_probes::ed448::signed_digits_of(k)
+}
+
+#[no_mangle]
+pub fn ct_ed448_add_affine(out: &mut [u64; 24], p: &[u64; 24], q: &[u64; 16]) {
+    ic_ec::ct_probes::ed448::add_affine(out, p, q)
+}
+
+#[no_mangle]
+pub fn ct_ed448_double(out: &mut [u64; 24], p: &[u64; 24]) {
+    ic_ec::ct_probes::ed448::double(out, p)
+}
+
+#[no_mangle]
+pub fn ct_ed448_mul_scalar(out: &mut [u64; 24], p: &[u64; 24], k: &[u8; 57]) {
+    ic_ec::ct_probes::ed448::mul_scalar(out, p, k)
+}
+
+#[no_mangle]
+pub fn ct_ed448_reduce(x: &[u8; 114]) -> [u8; 57] {
+    ic_ec::ct_probes::ed448::reduce_hash(x)
+}
+
+#[no_mangle]
+pub fn ct_ed448_mul_add(k: &[u8; 57], s: &[u8; 57], r: &[u8; 57]) -> [u8; 57] {
+    ic_ec::ct_probes::ed448::mul_add_of(k, s, r)
+}
+
 // Ed25519's scalar arithmetic modulo L: the nonce and S are secret.
 #[no_mangle]
 pub fn ct_ed25519_reduce_wide(x: &[u8; 64]) -> [u8; 32] {

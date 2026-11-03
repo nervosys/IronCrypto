@@ -42,6 +42,22 @@ SYMBOLS += P256
 # Ed25519 scalar arithmetic modulo L, on the secret nonce and S.
 ED25519 = ("ct_ed25519_reduce_wide", "ct_ed25519_mul_add")
 SYMBOLS += ED25519
+# Ed448 signing, portable: the field, the table read and the recoding of the
+# secret nonce, the group operations, the windowed multiplication, and the
+# scalar arithmetic modulo L. Required on the 64-bit targets only. Its field
+# is eight 56-bit limbs with 128-bit products; on the 32-bit targets each
+# product is a multi-word loop, and the arithmetic clears and copies through
+# runtime-library calls, which these rules do not read (docs/CONSTANT_TIME.md,
+# "Ed448").
+ED448 = tuple(
+    f"ct_ed448_{op}"
+    for op in (
+        "fe_mul", "fe_square", "fe_invert", "fe_to_bytes", "select",
+        "signed_digits", "add_affine", "double", "mul_scalar", "reduce",
+        "mul_add",
+    )
+)
+SYMBOLS += ED448
 # The x86-64 Curve25519 backends: the MULX/ADX field, X25519's ladder step and
 # signing's group operations on it, and the AVX-512 IFMA four-lane forms.
 # They compile for x86-64 only, so they are required there and nowhere else.
@@ -185,7 +201,8 @@ def symbols_for(target):
         return tuple(s for s in SYMBOLS if s not in AARCH64_ONLY)
     if target.startswith("aarch64"):
         return tuple(s for s in SYMBOLS if s not in X86_ONLY)
-    return tuple(s for s in SYMBOLS if s not in X86_ONLY and s not in AARCH64_ONLY)
+    return tuple(s for s in SYMBOLS
+                 if s not in X86_ONLY and s not in AARCH64_ONLY and s not in ED448)
 
 # Runtime-library routines a probe may call on a target, because their bodies
 # are disassembled from that target's compiler_builtins and held to the same
@@ -219,6 +236,24 @@ EXCUSE_CEILINGS = {
 # ceiling fails. Counted per probe, following calls. Read on 2026-10-13,
 # rustc 1.99.0.
 X86_EXCUSE_CEILINGS = {
+    # Ed448 (docs/CONSTANT_TIME.md, "Ed448"). Every loop here runs a count
+    # fixed in the source: the 8 x 8 limb products of a field multiplication
+    # (one loop, the rows; the columns are unrolled), the squarings between
+    # an inversion's multiplications (`square_n`, called with constants, its
+    # loop around a call to `square`), the eight entries of a table read, the
+    # 113 carries of the recoding, the 15 x 15 words of `mul_add`, the bits
+    # of `reduce` (912 or 960, its step out of line), and the 114 windows of
+    # `mul_scalar` (its window out of line) and the 15 additions building its
+    # table. The jumps enter or leave those loops.
+    "ct_ed448_fe_mul": {"counter loop": 1},
+    "ct_ed448_fe_invert": {"counter loop": 16},
+    "ct_ed448_select": {"counter loop": 1},
+    "ct_ed448_signed_digits": {"counter loop": 1, "unconditional jump": 1},
+    "ct_ed448_add_affine": {"counter loop": 10},
+    "ct_ed448_double": {"counter loop": 3},
+    "ct_ed448_mul_scalar": {"counter loop": 14},
+    "ct_ed448_reduce": {"counter loop": 2, "unconditional jump": 1},
+    "ct_ed448_mul_add": {"counter loop": 6, "unconditional jump": 4},
     # MULX/ADX at 2048 bits: the three 1024-bit products or squares of
     # Karatsuba, the absolute differences and the recombination are
     # straight-line; what loops is the reduction, each of its four blocks
@@ -333,6 +368,16 @@ X86_EXCUSE_CEILINGS = {
 # ceiling fails. Counted per probe, following calls.
 # Read on 2026-10-14, rustc 1.99.0.
 AARCH64_EXCUSE_CEILINGS = {
+    # Ed448: the loops of X86_EXCUSE_CEILINGS', as they compile here.
+    "ct_ed448_fe_mul": {"counter loop": 1},
+    "ct_ed448_fe_invert": {"counter loop": 16},
+    "ct_ed448_select": {"counter loop": 1},
+    "ct_ed448_signed_digits": {"counter loop": 1},
+    "ct_ed448_add_affine": {"counter loop": 10},
+    "ct_ed448_double": {"counter loop": 3},
+    "ct_ed448_mul_scalar": {"counter loop": 14},
+    "ct_ed448_reduce": {"counter loop": 2},
+    "ct_ed448_mul_add": {"counter loop": 6},
     # The loop over the three groups of eight blocks: `subs x11, x11, #128;
     # b.ne` on the remaining length, x11 set to 384 before it.
     "ct_ghash_pmull_absorb8": {"counter loop": 1},
@@ -584,7 +629,15 @@ def excuse(target, ins, i):
 # register must be a counter of that loop: every instruction in the loop that
 # writes it is `inc`, `dec`, `add $imm`, `sub $imm` or `lea imm(r), r` on it, and
 # at least one does. For `cmp` of two registers the other must not be written
-# anywhere in the loop. A loop with a call in it excuses nothing.
+# anywhere in the loop. A loop with a call in it excuses nothing, except a
+# direct call to a function whose body is in the same file and whose name is
+# Rust-mangled (`_R`, `_ZN`): the gate follows that call and holds the callee
+# to the same checks, and the compiler built the callee under the System V
+# ABI, which preserves rbx, rbp, r12 to r15 and rsp, so such a call is taken
+# to write the other general-purpose registers and nothing else. A counter in
+# a preserved register survives it. A symbol named by hand, as `global_asm!`
+# or a `#[no_mangle]` function defines one, is not taken on trust: nothing
+# checks that it keeps the ABI.
 #
 # "unconditional jump": `jmp` to a label in the same function. It has no
 # condition; which path reaches it is decided by the branches that are checked.
@@ -687,6 +740,14 @@ _NULLARY = {"nop", "ud2", "int3", "hlt", "pause", "lfence", "mfence", "sfence", 
             "stc", "cmc", "cld", "std", "sahf", "vzeroupper", "vzeroall", "endbr64"}
 
 
+# What a direct call to a compiled Rust function in the same file may write:
+# the System V caller-saved registers, and on AArch64 x0 to x18 and the link
+# register.
+_RUST_MANGLED = ("_R", "_ZN")
+_X86_CALL_WRITES = frozenset({"a", "c", "d", "si", "di", "r8", "r9", "r10", "r11"})
+_A64_CALL_WRITES = frozenset({f"x{k}" for k in range(19)} | {"x30"})
+
+
 def _writes(op, operands):
     """Register families an AT&T instruction may write; None if it may write
     registers this cannot list (a call, a string instruction, an interrupt)."""
@@ -733,8 +794,9 @@ class X86Body:
     findings in it that the x86-64 rules excuse, by index into
     `instructions_of(lines)`."""
 
-    def __init__(self, lines):
+    def __init__(self, lines, defined=()):
         self.rules = {}
+        self.defined = defined
         self.ins, labels = [], {}
         for line in lines:
             text = line.strip()
@@ -828,12 +890,13 @@ class X86Body:
     def _counter(self, body, family):
         """Whether `family` is a counter of the loop `body`: written there only
         by constant steps, and stepped at least once. None of the loop may be
-        a call or otherwise write registers this cannot see."""
+        a call, other than one `_loop_writes` allows, or otherwise write
+        registers this cannot see."""
         stepped = False
         for b in body:
             for i in self.blocks[b]:
                 op, operands = self.ins[i]
-                written = _writes(op, operands)
+                written = self._loop_writes(op, operands)
                 if written is None:
                     return False
                 if family in written:
@@ -845,10 +908,19 @@ class X86Body:
     def _invariant(self, body, family):
         for b in body:
             for i in self.blocks[b]:
-                written = _writes(*self.ins[i])
+                written = self._loop_writes(*self.ins[i])
                 if written is None or family in written:
                     return False
         return True
+
+    def _loop_writes(self, op, operands):
+        """What an instruction in a loop may write, for the counter rule: as
+        `_writes`, except that a direct call to a function in the same file
+        writes the caller-saved registers."""
+        name = operands[0].removesuffix("@PLT") if len(operands) == 1 else ""
+        if op in {"call", "callq"} and name in self.defined and name.startswith(_RUST_MANGLED):
+            return _X86_CALL_WRITES
+        return _writes(op, operands)
 
     def _excuse(self, i, op, operands):
         if op in {"jmp", "jmpq"}:
@@ -1132,8 +1204,9 @@ class A64Body(X86Body):
     the findings in it the AArch64 rule excuses, by index into
     `instructions_of(lines)`."""
 
-    def __init__(self, lines):
+    def __init__(self, lines, defined=()):
         self.rules = {}
+        self.defined = defined
         self.ins, labels = [], {}
         for line in lines:
             text = line.strip()
@@ -1191,7 +1264,7 @@ class A64Body(X86Body):
         for b in body:
             for i in self.blocks[b]:
                 op, operands = self.ins[i]
-                written = _a64_writes(op, operands)
+                written = self._loop_writes(op, operands)
                 if written is None:
                     return False
                 if family in written:
@@ -1203,10 +1276,18 @@ class A64Body(X86Body):
     def _invariant(self, body, family):
         for b in body:
             for i in self.blocks[b]:
-                written = _a64_writes(*self.ins[i])
+                written = self._loop_writes(*self.ins[i])
                 if written is None or family in written:
                     return False
         return True
+
+    def _loop_writes(self, op, operands):
+        """As `X86Body._loop_writes`: a `bl` to a function in the same file
+        writes x0 to x18 and the link register, as the AAPCS64 lets it."""
+        if (op == "bl" and len(operands) == 1 and operands[0] in self.defined
+                and operands[0].startswith(_RUST_MANGLED)):
+            return _A64_CALL_WRITES
+        return _a64_writes(op, operands)
 
     def _excused(self, i, op, operands):
         b = self.block_of[i]
@@ -1322,8 +1403,8 @@ def inspect(assembly, target, excused=None):
     def walk(probe, name, lines, seen):
         ins = instructions_of(lines)
         pools = pool_jumps(lines) if target.startswith("thumb") else set()
-        loops = (X86Body(lines).rules if x86 and probe in X86_EXCUSE_CEILINGS
-                 else A64Body(lines).rules if a64 and probe in AARCH64_EXCUSE_CEILINGS
+        loops = (X86Body(lines, functions).rules if x86 and probe in X86_EXCUSE_CEILINGS
+                 else A64Body(lines, functions).rules if a64 and probe in AARCH64_EXCUSE_CEILINGS
                  else {})
         ceilings = (X86_EXCUSE_CEILINGS if x86 else AARCH64_EXCUSE_CEILINGS).get(probe, {})
         for i, line in enumerate(ins):

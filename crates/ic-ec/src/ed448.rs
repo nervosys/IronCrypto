@@ -28,7 +28,7 @@ use ic_core::traits::{Algorithm, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Shake256;
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "ct-probes"))]
 mod basepoint_table;
 #[cfg(test)]
 mod rfc8032_vectors;
@@ -332,8 +332,21 @@ impl Point {
         }
     }
 
+    // The formulas update a point in place, a coordinate at a time. A whole
+    // point is 192 bytes, and `p = p.double()` builds it in a temporary and
+    // copies it back, which on x86-64 is a call to `memcpy`: one the
+    // compiled-code gate cannot read, inside the loops it has to excuse.
+    // A coordinate, 64 bytes, is copied inline.
+
     /// RFC 8032 section 5.2.4: complete for every pair of points.
     fn add(&self, o: &Point) -> Point {
+        let mut p = *self;
+        p.add_assign(o);
+        p
+    }
+
+    /// `self = self + o`, as [`Point::add`].
+    fn add_assign(&mut self, o: &Point) {
         let a = self.z.mul(&o.z);
         let b = a.square();
         let c = self.x.mul(&o.x);
@@ -342,16 +355,15 @@ impl Point {
         let f = b.sub(&e);
         let g = b.add(&e);
         let h = self.x.add(&self.y).mul(&o.x.add(&o.y));
-        Point {
-            x: a.mul(&f).mul(&h.sub(&c).sub(&d)),
-            y: a.mul(&g).mul(&d.sub(&c)),
-            z: f.mul(&g),
-        }
+        self.x = a.mul(&f).mul(&h.sub(&c).sub(&d));
+        self.y = a.mul(&g).mul(&d.sub(&c));
+        self.z = f.mul(&g);
     }
 
-    /// [`Point::add`] with `o.z = 1`, which saves its first multiplication.
-    #[cfg(feature = "std")]
-    fn add_affine(&self, o: &basepoint_table::Affine) -> Point {
+    /// `self = self + o` with `o.z = 1`, which saves the first
+    /// multiplication of [`Point::add`].
+    #[cfg(any(feature = "std", feature = "ct-probes"))]
+    fn add_affine_assign(&mut self, o: &basepoint_table::Affine) {
         let a = self.z;
         let b = a.square();
         let c = self.x.mul(&o.x);
@@ -360,26 +372,29 @@ impl Point {
         let f = b.sub(&e);
         let g = b.add(&e);
         let h = self.x.add(&self.y).mul(&o.x.add(&o.y));
-        Point {
-            x: a.mul(&f).mul(&h.sub(&c).sub(&d)),
-            y: a.mul(&g).mul(&d.sub(&c)),
-            z: f.mul(&g),
-        }
+        self.x = a.mul(&f).mul(&h.sub(&c).sub(&d));
+        self.y = a.mul(&g).mul(&d.sub(&c));
+        self.z = f.mul(&g);
     }
 
     /// RFC 8032 section 5.2.4's doubling.
     fn double(&self) -> Point {
+        let mut p = *self;
+        p.double_assign();
+        p
+    }
+
+    /// `self = 2 self`, as [`Point::double`].
+    fn double_assign(&mut self) {
         let b = self.x.add(&self.y).square();
         let c = self.x.square();
         let d = self.y.square();
         let e = c.add(&d);
         let h = self.z.square();
         let j = e.sub(&h.add(&h));
-        Point {
-            x: b.sub(&e).mul(&j),
-            y: e.mul(&c.sub(&d)),
-            z: e.mul(&j),
-        }
+        self.x = b.sub(&e).mul(&j);
+        self.y = e.mul(&c.sub(&d));
+        self.z = e.mul(&j);
     }
 
     fn negate(&self) -> Point {
@@ -390,42 +405,68 @@ impl Point {
         }
     }
 
-    /// `other` if `c` is set, `self` otherwise.
-    fn select(&self, other: &Point, c: Choice) -> Point {
-        Point {
-            x: self.x.select(&other.x, c),
-            y: self.y.select(&other.y, c),
-            z: self.z.select(&other.z, c),
-        }
-    }
-
     /// `[k]self`, for a little-endian `k` below 2^456, in constant time:
     /// the same doublings and additions for every `k`, and every table entry
     /// read on every window.
     #[cfg_attr(all(feature = "std", not(test)), allow(dead_code))]
     fn mul_scalar(&self, k: &[u8; LEN]) -> Point {
-        let mut table = [Point::IDENTITY; 16];
-        table[1] = *self;
-        for i in 2..16 {
-            table[i] = table[i - 1].add(self);
+        // `0..=15` times `self`, a coordinate to an array, and every point
+        // here built a coordinate at a time: see `add_assign`. Copying
+        // `self` whole is such a copy too, so the multiples are summed from
+        // the identity, (0, 1, 1), one addition more than they need.
+        let mut xs = [Fe::ONE; 16];
+        let mut ys = [Fe::ONE; 16];
+        let mut zs = [Fe::ONE; 16];
+        xs[0] = Fe::ZERO;
+        let mut p = Point {
+            x: Fe::ZERO,
+            y: Fe::ONE,
+            z: Fe::ONE,
+        };
+        for i in 1..16 {
+            p.add_assign(self);
+            xs[i] = p.x;
+            ys[i] = p.y;
+            zs[i] = p.z;
         }
-        let mut acc = Point::IDENTITY;
+        let mut acc = Point {
+            x: Fe::ZERO,
+            y: Fe::ONE,
+            z: Fe::ONE,
+        };
         for i in (0..2 * LEN).rev() {
-            for _ in 0..4 {
-                acc = acc.double();
-            }
             let nibble = u32::from((k[i / 2] >> ((i & 1) * 4)) & 15);
-            let mut t = Point::IDENTITY;
-            for (j, entry) in table.iter().enumerate() {
-                // `j == nibble`, without a comparison the compiler could
-                // branch on.
-                let diff = j as u32 ^ nibble;
-                let hit = Choice::from_u8((diff.wrapping_sub(1) >> 31) as u8);
-                t = t.select(entry, hit);
-            }
-            acc = acc.add(&t);
+            Point::window(&mut acc, [&xs, &ys, &zs], nibble);
         }
         acc
+    }
+
+    /// One window of [`Point::mul_scalar`]: four doublings of `acc`, then the
+    /// addition of `nibble` times the point, read from every entry of its
+    /// multiples.
+    ///
+    /// Out of line so that the loop over the windows keeps its counter in a
+    /// register, as `reduce_step` is for the same reason.
+    #[inline(never)]
+    fn window(acc: &mut Point, [xs, ys, zs]: [&[Fe; 16]; 3], nibble: u32) {
+        for _ in 0..4 {
+            acc.double_assign();
+        }
+        let mut t = Point {
+            x: Fe::ZERO,
+            y: Fe::ONE,
+            z: Fe::ONE,
+        };
+        for j in 0..16 {
+            // `j == nibble`, without a comparison the compiler could
+            // branch on.
+            let diff = j as u32 ^ nibble;
+            let hit = Choice::from_u8((diff.wrapping_sub(1) >> 31) as u8);
+            t.x = t.x.select(&xs[j], hit);
+            t.y = t.y.select(&ys[j], hit);
+            t.z = t.z.select(&zs[j], hit);
+        }
+        acc.add_assign(&t);
     }
 
     /// RFC 8032 section 5.2.2: y in 56 bytes, then a byte holding x's low bit
@@ -611,48 +652,57 @@ fn double_mul_vartime(p: &Point, k: &[u8; LEN], s: &[u8; LEN]) -> Point {
     acc
 }
 
-/// `x mod L`, for a little-endian `x` of any length, in constant time.
+/// `x mod L`, for a little-endian `x` of any fixed length, in constant time.
 ///
 /// Bit by bit from the top: double, add the bit, subtract L if that reached
 /// it. The accumulator stays below L, so one subtraction is always enough.
 /// Slower than folding at 2^446, and much simpler to check; it runs three
 /// times a signature, each a few tens of microseconds at most.
-fn reduce(x: &[u8]) -> [u8; LEN] {
+fn reduce<const N: usize>(x: &[u8; N]) -> [u8; LEN] {
     let l = l_words();
     let mut acc = [0u32; 15];
     let mut t = [0u32; 15];
-    for byte in x.iter().rev() {
-        for bit in (0..8).rev() {
-            let mut carry = u32::from((byte >> bit) & 1);
-            for w in acc.iter_mut() {
-                let v = (u64::from(*w) << 1) | u64::from(carry);
-                *w = v as u32;
-                carry = (v >> 32) as u32;
-            }
-            let mut borrow = 0i64;
-            for i in 0..15 {
-                let v = i64::from(acc[i]) - i64::from(l[i]) + borrow;
-                t[i] = v as u32;
-                borrow = v >> 32;
-            }
-            // All ones if acc < L: keep acc, otherwise take acc - L.
-            let keep = core::hint::black_box(borrow as u32);
-            for i in 0..15 {
-                acc[i] = (acc[i] & keep) | (t[i] & !keep);
-            }
-        }
+    for n in (0..8 * N).rev() {
+        reduce_step(&mut acc, &mut t, &l, u32::from((x[n / 8] >> (n % 8)) & 1));
+    }
+    // Below L, so the 60 bytes of `acc` end in three zeros.
+    let mut bytes = [0u8; 60];
+    for (chunk, w) in bytes.chunks_exact_mut(4).zip(acc.iter()) {
+        chunk.copy_from_slice(&w.to_le_bytes());
     }
     let mut out = [0u8; LEN];
-    for (i, w) in acc.iter().enumerate() {
-        for (j, b) in w.to_le_bytes().iter().enumerate() {
-            if 4 * i + j < LEN {
-                out[4 * i + j] = *b;
-            }
-        }
-    }
+    out.copy_from_slice(&bytes[..LEN]);
     acc.zeroize();
     t.zeroize();
+    bytes.zeroize();
     out
+}
+
+/// One bit of [`reduce`]: `acc = 2 acc + bit`, less L if that reached it.
+///
+/// Out of line so that the loop over the bits, with the step's words held
+/// here, keeps its counter in a register: the compiled-code gate excuses a
+/// loop by its counter, and one the compiler spilled to the stack it cannot
+/// follow.
+#[inline(never)]
+fn reduce_step(acc: &mut [u32; 15], t: &mut [u32; 15], l: &[u32; 15], bit: u32) {
+    let mut carry = bit;
+    for w in acc.iter_mut() {
+        let v = (u64::from(*w) << 1) | u64::from(carry);
+        *w = v as u32;
+        carry = (v >> 32) as u32;
+    }
+    let mut borrow = 0i64;
+    for i in 0..15 {
+        let v = i64::from(acc[i]) - i64::from(l[i]) + borrow;
+        t[i] = v as u32;
+        borrow = v >> 32;
+    }
+    // All ones if acc < L: keep acc, otherwise take acc - L.
+    let keep = core::hint::black_box(borrow as u32);
+    for i in 0..15 {
+        acc[i] = (acc[i] & keep) | (t[i] & !keep);
+    }
 }
 
 /// L in fifteen 32-bit words.
@@ -689,8 +739,13 @@ fn mul_add(k: &[u8; LEN], s: &[u8; LEN], r: &[u8; LEN]) -> [u8; LEN] {
         w[i + 15] = carry as u32;
     }
     let mut carry = 0u64;
-    for (i, x) in w.iter_mut().enumerate() {
-        let v = u64::from(*x) + u64::from(if i < 15 { c[i] } else { 0 }) + carry;
+    for (x, y) in w[..15].iter_mut().zip(c.iter()) {
+        let v = u64::from(*x) + u64::from(*y) + carry;
+        *x = v as u32;
+        carry = v >> 32;
+    }
+    for x in w[15..].iter_mut() {
+        let v = u64::from(*x) + carry;
         *x = v as u32;
         carry = v >> 32;
     }
@@ -975,6 +1030,107 @@ impl SelfTest for Ed448 {
             "ed448"
         );
         Ok(())
+    }
+}
+
+/// What signing does with secrets, for the compiled-code gate
+/// (`scripts/check-ct.py`), through [`crate::ct_probes`]. Field elements are
+/// eight limbs, points their coordinates' limbs in order.
+#[cfg(feature = "ct-probes")]
+#[doc(hidden)]
+pub mod probes {
+    use super::basepoint_table::{signed_digits, Affine, Window};
+    use super::{mul_add, reduce, Fe, Point, LEN};
+
+    fn point(l: &[u64; 24]) -> Point {
+        let mut c = [[0u64; 8]; 3];
+        for (i, limb) in l.iter().enumerate() {
+            c[i / 8][i % 8] = *limb;
+        }
+        Point {
+            x: Fe(c[0]),
+            y: Fe(c[1]),
+            z: Fe(c[2]),
+        }
+    }
+
+    /// Written in place: a 192-byte point returned by value is copied out
+    /// with `memcpy`, which the gate cannot read.
+    fn limbs(p: &Point, out: &mut [u64; 24]) {
+        out[..8].copy_from_slice(&p.x.0);
+        out[8..16].copy_from_slice(&p.y.0);
+        out[16..].copy_from_slice(&p.z.0);
+    }
+
+    fn affine(l: &[u64; 16]) -> Affine {
+        let (mut x, mut y) = ([0u64; 8], [0u64; 8]);
+        x.copy_from_slice(&l[..8]);
+        y.copy_from_slice(&l[8..]);
+        Affine { x: Fe(x), y: Fe(y) }
+    }
+
+    /// The field multiplication.
+    pub fn fe_mul(a: &[u64; 8], b: &[u64; 8]) -> [u64; 8] {
+        Fe(*a).mul(&Fe(*b)).0
+    }
+
+    /// The field squaring.
+    pub fn fe_square(a: &[u64; 8]) -> [u64; 8] {
+        Fe(*a).square().0
+    }
+
+    /// The inversion, by a fixed exponent: what compresses R and the key.
+    pub fn fe_invert(a: &[u64; 8]) -> [u64; 8] {
+        Fe(*a).invert().0
+    }
+
+    /// The canonical encoding, with its conditional subtraction of p.
+    pub fn fe_to_bytes(a: &[u64; 8]) -> [u8; 56] {
+        Fe(*a).to_bytes()
+    }
+
+    /// The table read: a window's entry by the secret digit.
+    pub fn select(window: &[[u64; 16]; 8], digit: i8) -> [u64; 16] {
+        let w = Window(core::array::from_fn(|i| affine(&window[i])));
+        let a = w.select(digit);
+        let mut out = [0u64; 16];
+        out[..8].copy_from_slice(&a.x.0);
+        out[8..].copy_from_slice(&a.y.0);
+        out
+    }
+
+    /// The secret scalar's signed radix-16 digits.
+    pub fn signed_digits_of(k: &[u8; LEN]) -> [i8; 2 * LEN] {
+        signed_digits(k)
+    }
+
+    /// The addition of a table entry.
+    pub fn add_affine(out: &mut [u64; 24], p: &[u64; 24], q: &[u64; 16]) {
+        let mut p = point(p);
+        p.add_affine_assign(&affine(q));
+        limbs(&p, out)
+    }
+
+    /// The doubling.
+    pub fn double(out: &mut [u64; 24], p: &[u64; 24]) {
+        let mut p = point(p);
+        p.double_assign();
+        limbs(&p, out)
+    }
+
+    /// The windowed multiplication, the basepoint's without `std`.
+    pub fn mul_scalar(out: &mut [u64; 24], p: &[u64; 24], k: &[u8; LEN]) {
+        limbs(&point(p).mul_scalar(k), out)
+    }
+
+    /// `x mod L` for a 114-byte hash: what makes the nonce r.
+    pub fn reduce_hash(x: &[u8; 2 * LEN]) -> [u8; LEN] {
+        reduce(x)
+    }
+
+    /// `(k s + r) mod L`: S, from the secret scalar and nonce.
+    pub fn mul_add_of(k: &[u8; LEN], s: &[u8; LEN], r: &[u8; LEN]) -> [u8; LEN] {
+        mul_add(k, s, r)
     }
 }
 
@@ -1276,17 +1432,27 @@ mod tests {
 
     #[test]
     fn reduce_agrees_with_reference() {
-        let l_be = le_to_be(&L_BYTES);
-        for len in [1usize, 56, 57, 58, 114, 120] {
+        fn check<const N: usize>() {
+            let l_be = le_to_be(&L_BYTES);
             let mut x = Shake256::default();
-            x.update(&[len as u8]);
-            let mut bytes = vec![0u8; len];
+            x.update(&[N as u8]);
+            let mut bytes = [0u8; N];
             x.finalize_xof(&mut bytes);
             let got = reduce(&bytes);
             // got < L, and got = bytes mod L: bytes - got is a multiple of
             // L. Checked as: big_mod_l(bytes) == got.
-            assert_eq!(le_to_be(&got), big_mod_by(&le_to_be(&bytes), &l_be));
+            assert_eq!(
+                le_to_be(&got),
+                big_mod_by(&le_to_be(&bytes), &l_be),
+                "{N} bytes"
+            );
         }
+        check::<1>();
+        check::<56>();
+        check::<57>();
+        check::<58>();
+        check::<114>();
+        check::<120>();
         assert_eq!(reduce(&L_BYTES), [0u8; LEN]);
         assert_eq!(reduce(&l_minus(1)), l_minus(1));
     }
@@ -1326,6 +1492,26 @@ mod tests {
             &big_add(&big_mul(&le_to_be(&k), &le_to_be(&s)), &le_to_be(&r)),
             &l_be,
         );
+        assert_eq!(le_to_be(&got), want);
+    }
+
+    /// Adding r to the low 480 bits of k s carries into word 15 only when
+    /// they are within r of 2^480, which random scalars almost never are.
+    /// k = r = L - 1 and s = 2^34 put them there: (L - 1) 2^34 is below
+    /// 2^480 by 2^34 (2^446 - L + 1), about 2^258, far less than r.
+    #[test]
+    fn mul_add_carries_out_of_the_low_words() {
+        let l_be = le_to_be(&L_BYTES);
+        let (k, r) = (l_minus(1), l_minus(1));
+        let mut s = [0u8; LEN];
+        s[4] = 4;
+        // The carry is there: the low 480 bits of k s, plus r, reach 2^480.
+        let prod = big_mul(&le_to_be(&k), &le_to_be(&s));
+        let low = &prod[prod.len() - 60..];
+        let sum = big_add(low, &le_to_be(&r));
+        assert!(sum.len() > 60 && sum[..sum.len() - 60].iter().any(|b| *b != 0));
+        let got = mul_add(&k, &s, &r);
+        let want = big_mod_by(&big_add(&prod, &le_to_be(&r)), &l_be);
         assert_eq!(le_to_be(&got), want);
     }
 
