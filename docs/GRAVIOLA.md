@@ -23,6 +23,88 @@ Neither library is CMVP validated.
 
 ## Speed
 
+### Re-check after the key wipes, 2026-11-03, master d338706
+
+b85b96c and c70bf00 (2026-10-29) wipe hardware AES round keys and SHA-512's
+message schedule, which could cost AES-GCM, SHA-512 and HMAC. The two modes
+that hold those rows, `graviola` and `graviola-gcm`, ran five rounds in each
+build as the consolidated run does: the default build and
+`RUSTFLAGS="--cfg ic_no_avx512"`, built from d338706 with rustc 1.99.1
+(SHA-256 `f8018f83...` and `7b9a9287...`), the build order alternating by
+round, 30 seconds between runs, Graviola 0.4.1 from crates.io. The host was
+busier than on 2026-10-23: other sessions held the CPU at 76 to 100 percent
+throughout, and some rows show it (P-256 ECDH from bytes without AVX-512
+ranging 0.18 to 1.53, X25519 0.93 to 5.65).
+
+| operation (bench mode) | default, min-median-max | without AVX-512, min-median-max |
+|---|---|---|
+| aes-256-gcm, 4 MiB (`graviola-gcm`) | 0.74-1.43-1.45 level | 0.79-0.84-0.88 behind |
+| aes-256-gcm, 1 KiB (`graviola-gcm`) | 1.31-1.51-1.55 ahead | 1.02-1.04-1.18 level |
+| aes-256-gcm, 64 B (`graviola-gcm`) | 2.09-2.15-3.19 ahead | 2.03-2.12-2.20 ahead |
+| aes-256-gcm, 4 MiB (`graviola`) | 0.78-1.35-1.38 level | 0.65-0.75-0.93 behind |
+| chacha20-poly1305, 4 MiB (`graviola`) | 2.70-3.29-3.41 ahead | 1.69-1.75-1.83 ahead |
+| aes-256-gcm, 1 KiB (`graviola`) | 1.44-1.47-1.70 ahead | 1.02-1.06-1.13 ahead |
+| chacha20-poly1305, 1 KiB (`graviola`) | 1.96-2.19-2.48 ahead | 1.39-1.54-1.56 ahead |
+| aes-256-gcm, 64 B (`graviola`) | 2.10-2.25-2.43 ahead | 1.98-2.10-2.18 ahead |
+| chacha20-poly1305, 64 B (`graviola`) | 2.23-2.57-2.76 ahead | 2.11-2.65-2.95 ahead |
+| sha-256 (`graviola`) | 1.00-1.01-1.05 level | 0.97-0.99-1.02 level |
+| sha-512 (`graviola`) | 0.92-1.20-1.34 level | 1.13-1.32-1.49 ahead |
+| sha3-256 (`graviola`) | 0.72-0.99-1.06 level | 0.91-1.00-1.08 level |
+| hmac-sha256, 4 MiB (`graviola`) | 0.97-0.98-1.00 level | 0.94-0.99-1.01 level |
+| hmac-sha256, 200 B (`graviola`) | 1.13-1.20-1.27 ahead | 0.73-1.08-1.21 level |
+| sha-256, 64 B (`graviola`) | 0.95-1.08-1.40 level | 0.94-0.97-1.92 level |
+| x25519 agree (`graviola`) | 1.39-1.53-1.60 ahead | 0.93-1.00-5.65 level |
+| p-256 ecdh (`graviola`) | 1.24-1.30-1.57 ahead | 0.39-1.03-1.46 level |
+| p-256 ecdh, from bytes (`graviola`) | 1.32-1.40-1.44 ahead | 0.18-1.10-1.53 level |
+| p-256 ecdh, key prepared (`graviola`) | 2.68-2.82-3.09 ahead | 2.05-2.50-5.27 ahead |
+| ecdsa p-256 sign (`graviola`) | 1.24-1.31-1.39 ahead | 0.99-1.08-1.15 level |
+| ecdsa p-256 verify (`graviola`) | 1.08-1.19-1.28 ahead | 1.08-1.22-2.02 ahead |
+| p-384 ecdh (`graviola`) | 0.90-1.21-1.54 level | 1.01-1.09-1.20 ahead |
+| p-384 ecdh, from bytes (`graviola`) | 1.03-1.23-1.61 ahead | 0.94-1.13-1.33 level |
+| p-384 ecdh, key prepared (`graviola`) | 2.95-3.05-3.59 ahead | 1.69-2.22-2.75 ahead |
+| p-384 key preparation (`graviola`) | 0.04-0.05-0.05 behind | 0.03-0.04-0.05 behind |
+| ecdsa p-384 sign (`graviola`) | 2.87-3.14-3.33 ahead | 2.16-2.54-3.82 ahead |
+| ecdsa p-384 verify (`graviola`) | 2.16-2.33-2.39 ahead | 1.89-2.32-2.55 ahead |
+| ed25519 sign (`graviola`) | 1.27-1.40-1.44 ahead | 0.98-1.03-1.37 level |
+| ed25519 verify (`graviola`) | 1.27-1.53-1.60 ahead | 0.94-0.98-1.11 level |
+| ed25519 verify, key held (`graviola`) | 1.37-1.71-1.82 ahead | 1.05-1.14-1.27 ahead |
+| keygen (ironcrypto with pairwise test) (`graviola`) | 0.50-0.55-0.61 behind | 0.36-0.40-0.58 behind |
+| keygen (like for like, no pairwise test) (`graviola`) | 1.06-1.21-1.33 ahead | 0.85-0.91-1.05 behind |
+| ml-kem-768 encaps, from bytes, both (`graviola`) | 1.55-1.71-1.97 ahead | 1.10-1.32-1.68 ahead |
+| ml-kem-768 encaps, parsed once, both (`graviola`) | 2.20-2.29-2.32 ahead | 1.56-1.86-2.02 ahead |
+| ml-kem-768 decaps, parsed once, both (`graviola`) | 1.23-1.33-1.37 ahead | 0.96-1.12-1.15 level |
+| rsa-2048 sign (`graviola`) | 1.42-1.61-1.64 ahead | 1.03-1.17-1.80 ahead |
+| rsa-2048 verify (`graviola`) | 1.72-1.88-1.97 ahead | 0.88-1.09-1.95 level |
+
+Read against 2026-10-23, in the default build every row is in the class it
+had, except three that fell from ahead to level on one slow round each, in
+different rounds and modes: AES-256-GCM at 4 MiB (`graviola` 0.78 in round
+1, `graviola-gcm` 0.74 in round 2, the other four at 1.24 to 1.45), SHA-512
+(0.92 in round 2, the others 1.11 to 1.34) and P-384 ECDH (0.90 once).
+Without AVX-512 more rows moved, both ways, with spreads like those above.
+The summary is left on the consolidated run.
+
+The row the wipes could plausibly have moved is AES-256-GCM at 4 MiB without
+AVX-512, behind in both runs, here at a median of 0.84 (`graviola-gcm`) and
+0.75 (`graviola`) against 0.90 and 0.91. An alternated A/B of the commit
+before the wipes (daafc6e) against d338706, both without AVX-512, five
+rounds of `graviola-gcm` 20 seconds apart, measured 0.77-0.78-0.85 before
+and 0.75-0.80-0.88 after at 4 MiB, 1.00-1.06-1.14 against 1.03-1.11-1.18 at
+1 KiB, and 2.00-2.14-2.52 against 1.97-2.10-2.20 at 64 B: parity. A wipe runs
+once per key, 240 bytes against 4 MiB of data. The lower ratio is the host's,
+not the change's.
+
+ML-KEM-768 key generation like for like without AVX-512 read
+0.85-0.91-1.05 (behind) here against 0.98-1.01-1.35 (level) then. No commit
+between the two runs touched ML-KEM or Keccak, but b85b96c changed how the
+DRBG wipes its copies, and this row draws each key's seed from
+`ic_drbg::Rng`. The same alternated A/B, five rounds of `graviola` without
+AVX-512, put IronCrypto's own time per key at 8.1 to 10.6 us before
+(median 10.4) and 7.8 to 10.2 us after (median 9.7): parity. What moves the
+ratio is Graviola's side, which measured either 5.4 to 6.0 us or 8.6 to
+10.8 us from run to run on this host, two modes rather than a spread. The
+row stays level in the summary; a quiet host is what would settle it.
+
 ### Consolidated run, 2026-10-23, master c04c63f
 
 The run of 2026-10-16, below, repeated the same way on master c04c63f. Every
