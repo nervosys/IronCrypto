@@ -22,8 +22,8 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-102 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
-targets: 351 gating probe/target checks in all, 157 on x86-64, 62 on aarch64,
+104 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
+targets: 353 gating probe/target checks in all, 159 on x86-64, 62 on aarch64,
 and 44 on each of the three other targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -66,7 +66,11 @@ release profile; this is not the workspace binary's overflow-checked profile.
   MULX/ADCX/ADOX, and the doubling, addition and mixed addition that are
   each one block of that assembly (`ct_p256_fp_mul_adx`,
   `ct_p256_fp_square_adx`, `ct_p256_point_double_adx`,
-  `ct_p256_point_add_adx`, `ct_p256_point_add_affine_adx`). The common
+  `ct_p256_point_add_adx`, `ct_p256_point_add_affine_adx`), and the
+  field's addition and subtraction on words (`ct_p256_fp_add_words`,
+  `ct_p256_fp_sub_words`): the same assembly the byte-level probes reach,
+  without the Montgomery conversions around it, so that IronProof can
+  state the kernel alone. The common
   P-256 probes are built without `std`, so there is no run-time detection
   and they compile to the baseline `mul`/`adc` assembly; these name the
   other sequences directly. Likewise P-384's: the field's multiplication

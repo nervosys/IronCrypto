@@ -81,6 +81,9 @@ X86_ONLY = (
     # inversion by divsteps exist only here. So do the divsteps inversions
     # of P-256's two rings: 64-bit only, and x86-64 is the 64-bit target.
     "ct_p256_fp_mul_adx", "ct_p256_fp_square_adx",
+    # The field's addition and subtraction on words: the assembly that
+    # p256_field dispatches to, without the conversions around it.
+    "ct_p256_fp_add_words", "ct_p256_fp_sub_words",
     "ct_p256_point_double_adx", "ct_p256_point_add_adx",
     "ct_p256_point_add_affine_adx", "ct_p256_fp_invert", "ct_p256_fn_invert",
     "ct_p384_fp_mul_adx", "ct_p384_fp_sqr_adx", "ct_p384_fn_mul_adx",

@@ -262,6 +262,22 @@ pub mod x86 {
 // require BMI2 and ADX. The probes only compile them; nothing runs them.
 #[cfg(target_arch = "x86_64")]
 pub use crate::nist::p256_x86::{mul_adx as fp_mul_adx, square_adx as fp_square_adx};
+
+/// P-256's field addition on x86-64, on words below p: the assembly
+/// `p256_field` dispatches to, without the Montgomery conversions that the
+/// byte-level probes above add around it.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub fn fp_add_words(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    crate::nist::p256_x86::add(a, b)
+}
+
+/// P-256's field subtraction on x86-64, as [`fp_add_words`].
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub fn fp_sub_words(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    crate::nist::p256_x86::sub(a, b)
+}
 #[cfg(target_arch = "x86_64")]
 pub use crate::nist::p256_x86_point::{
     add_adx as point_add_adx, add_affine_adx as point_add_affine_adx,

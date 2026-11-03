@@ -449,6 +449,17 @@ mod x86_p256 {
         unsafe { ic_ec::ct_probes::fp_mul_adx(a, b) }
     }
 
+    // The field's addition and subtraction on words, the assembly alone.
+    #[no_mangle]
+    pub fn ct_p256_fp_add_words(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+        ic_ec::ct_probes::fp_add_words(a, b)
+    }
+
+    #[no_mangle]
+    pub fn ct_p256_fp_sub_words(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+        ic_ec::ct_probes::fp_sub_words(a, b)
+    }
+
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
