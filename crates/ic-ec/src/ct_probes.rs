@@ -272,6 +272,22 @@ pub fn fp_add_words(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     crate::nist::p256_x86::add(a, b)
 }
 
+/// P-256's Montgomery multiplication on x86-64 without ADX, on words below
+/// p: the `mul` sequence `p256_x86::mul` runs where the CPU lacks BMI2 or ADX.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub fn fp_mul_plain_words(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    crate::nist::p256_x86::mul_plain(a, b)
+}
+
+/// P-256's Montgomery squaring on x86-64 without ADX, as
+/// [`fp_mul_plain_words`].
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub fn fp_square_plain_words(a: &[u64; 4]) -> [u64; 4] {
+    crate::nist::p256_x86::square_plain(a)
+}
+
 /// P-256's field subtraction on x86-64, as [`fp_add_words`].
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]

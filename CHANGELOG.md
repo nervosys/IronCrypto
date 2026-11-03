@@ -26,10 +26,13 @@ all of them.
   first use or by `ic_ec::prepare`. Ed448ph is not implemented. Not approved-mode, as
   Ed25519 is not. A new CAST, so `TEST_COUNT` is 87 (65 approved-only). The
   classical half of the composite `id-MLDSA87-Ed448-SHAKE256`, to follow.
-- **P-256's x86-64 field addition and subtraction as probes on their own**
-  (`ct_p256_fp_add_words`, `ct_p256_fp_sub_words`): the assembly
-  `p256_field` dispatches to, on words, without the conversions the
-  byte-level probes add. For IronProof's functional targets.
+- **P-256's x86-64 field arithmetic as probes on their own**
+  (`ct_p256_fp_add_words`, `ct_p256_fp_sub_words`,
+  `ct_p256_fp_mul_plain_words`, `ct_p256_fp_square_plain_words`): the
+  addition and subtraction `p256_field` dispatches to, and the
+  multiplication and squaring it runs where the CPU lacks BMI2 or ADX, on
+  words, without the conversions the byte-level probes add. For IronProof's
+  functional targets.
 - **Ed448 in the compiled-code gate** (`scripts/check-ct.py`), on x86-64
   and aarch64: eleven probes covering the field, the table read and
   recoding, the point formulas, the windowed multiplication, and the scalar

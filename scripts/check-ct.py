@@ -84,6 +84,8 @@ X86_ONLY = (
     # The field's addition and subtraction on words: the assembly that
     # p256_field dispatches to, without the conversions around it.
     "ct_p256_fp_add_words", "ct_p256_fp_sub_words",
+    # Its multiplication and squaring without ADX, on words, likewise.
+    "ct_p256_fp_mul_plain_words", "ct_p256_fp_square_plain_words",
     "ct_p256_point_double_adx", "ct_p256_point_add_adx",
     "ct_p256_point_add_affine_adx", "ct_p256_fp_invert", "ct_p256_fn_invert",
     "ct_p384_fp_mul_adx", "ct_p384_fp_sqr_adx", "ct_p384_fn_mul_adx",

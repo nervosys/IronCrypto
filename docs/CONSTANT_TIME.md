@@ -22,8 +22,8 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-104 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
-targets: 353 gating probe/target checks in all, 159 on x86-64, 62 on aarch64,
+106 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
+targets: 355 gating probe/target checks in all, 161 on x86-64, 62 on aarch64,
 and 44 on each of the three other targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -67,8 +67,10 @@ release profile; this is not the workspace binary's overflow-checked profile.
   each one block of that assembly (`ct_p256_fp_mul_adx`,
   `ct_p256_fp_square_adx`, `ct_p256_point_double_adx`,
   `ct_p256_point_add_adx`, `ct_p256_point_add_affine_adx`), and the
-  field's addition and subtraction on words (`ct_p256_fp_add_words`,
-  `ct_p256_fp_sub_words`): the same assembly the byte-level probes reach,
+  field's addition, subtraction, and multiplication and squaring without
+  ADX, on words (`ct_p256_fp_add_words`, `ct_p256_fp_sub_words`,
+  `ct_p256_fp_mul_plain_words`, `ct_p256_fp_square_plain_words`): the
+  same assembly the byte-level probes reach,
   without the Montgomery conversions around it, so that IronProof can
   state the kernel alone. The common
   P-256 probes are built without `std`, so there is no run-time detection

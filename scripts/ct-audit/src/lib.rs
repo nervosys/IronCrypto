@@ -460,6 +460,17 @@ mod x86_p256 {
         ic_ec::ct_probes::fp_sub_words(a, b)
     }
 
+    // The multiplication and squaring without ADX, on words.
+    #[no_mangle]
+    pub fn ct_p256_fp_mul_plain_words(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+        ic_ec::ct_probes::fp_mul_plain_words(a, b)
+    }
+
+    #[no_mangle]
+    pub fn ct_p256_fp_square_plain_words(a: &[u64; 4]) -> [u64; 4] {
+        ic_ec::ct_probes::fp_square_plain_words(a)
+    }
+
     /// # Safety
     /// Requires BMI2 and ADX.
     #[no_mangle]
