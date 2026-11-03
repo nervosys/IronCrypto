@@ -18,8 +18,12 @@ all of them.
   recoding. It runs in variable time, since every input is public. Field
   squaring has its own routine, which needs 36 limb products where a
   multiplication takes 64. Measured A/B in `bench` (`ed448` mode): verify
-  531 to 236 us, sign 317 to 271 us. Signing has no precomputed basepoint
-  table yet. Ed448ph is not implemented. Not approved-mode, as
+  531 to 236 us, sign 317 to 271 us. Under `std`, signing reads a
+  precomputed basepoint table, 57 windows of `1..=8` times `16^(2j) B` read
+  by constant-time selection: 114 additions and 4 doublings per `[r]B`.
+  That took signing from 245-262 us to 99-118 us over three alternated
+  runs on a loaded host, for 57 KiB of statics built once, in 1 to 2 ms, on
+  first use or by `ic_ec::prepare`. Ed448ph is not implemented. Not approved-mode, as
   Ed25519 is not. A new CAST, so `TEST_COUNT` is 87 (65 approved-only). The
   classical half of the composite `id-MLDSA87-Ed448-SHAKE256`, to follow.
 - **Ed448 keys and signatures through `ic_pkix` and `ic_sig`**:

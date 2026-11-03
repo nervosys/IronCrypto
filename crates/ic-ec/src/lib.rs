@@ -223,9 +223,10 @@ pub use nist::ecdsa::min_prehash_len;
 /// Build every precomputed table now, rather than on first use.
 ///
 /// Under `std`, the generator tables for P-256, P-384 and P-521 and the
-/// Ed25519 basepoint tables are built the first time an operation needs them:
-/// about one scalar multiplication per curve, a few hundred microseconds in
-/// all on a host. They live in statics, so building them allocates nothing
+/// Ed25519 and Ed448 basepoint tables are built the first time an operation
+/// needs them: about one scalar multiplication per curve, a few hundred
+/// microseconds in all on a host, and for Ed448's 57 windows one to two
+/// milliseconds more. They live in statics, so building them allocates nothing
 /// whenever it happens. What this changes is *when* the time is spent: a
 /// caller that wants its first handshake to cost what every later one does can
 /// pay it at start-up instead.
@@ -240,6 +241,8 @@ pub fn prepare() {
     p521::P521::prepare_generator_table();
     #[cfg(all(feature = "std", not(ic_approved_only)))]
     ed25519::prepare_tables();
+    #[cfg(all(feature = "std", not(ic_approved_only)))]
+    ed448::prepare_table();
 }
 
 /// Ontology identifiers for the schemes implemented here.

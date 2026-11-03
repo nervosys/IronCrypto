@@ -12,9 +12,10 @@
 //! therefore one branch-free loop over fixed four-bit windows, each entry of
 //! the table read by a constant-time select.
 //!
-//! Written for clarity and constant time rather than speed: there is no
-//! precomputed basepoint table, and verification computes its two scalar
-//! multiplications separately on the same constant-time path.
+//! Under `std`, multiples of the basepoint come from a precomputed table
+//! (`basepoint_table`), read by constant-time selects. Verification computes
+//! `[S]B + [k](-A)` in one variable-time pass over both scalars, as every
+//! input to it is public.
 //!
 //! Verification is strict, as [`crate::Ed25519`]'s is: a non-canonical
 //! encoding of a key or of R, a key or an R of small order, and an S that is
@@ -27,6 +28,8 @@ use ic_core::traits::{Algorithm, SelfTest, SignatureScheme};
 use ic_core::{ensure, Result, Zeroize};
 use ic_hash::Shake256;
 
+#[cfg(feature = "std")]
+mod basepoint_table;
 #[cfg(test)]
 mod rfc8032_vectors;
 
@@ -346,6 +349,24 @@ impl Point {
         }
     }
 
+    /// [`Point::add`] with `o.z = 1`, which saves its first multiplication.
+    #[cfg(feature = "std")]
+    fn add_affine(&self, o: &basepoint_table::Affine) -> Point {
+        let a = self.z;
+        let b = a.square();
+        let c = self.x.mul(&o.x);
+        let d = self.y.mul(&o.y);
+        let e = Fe(D).mul(&c).mul(&d);
+        let f = b.sub(&e);
+        let g = b.add(&e);
+        let h = self.x.add(&self.y).mul(&o.x.add(&o.y));
+        Point {
+            x: a.mul(&f).mul(&h.sub(&c).sub(&d)),
+            y: a.mul(&g).mul(&d.sub(&c)),
+            z: f.mul(&g),
+        }
+    }
+
     /// RFC 8032 section 5.2.4's doubling.
     fn double(&self) -> Point {
         let b = self.x.add(&self.y).square();
@@ -381,6 +402,7 @@ impl Point {
     /// `[k]self`, for a little-endian `k` below 2^456, in constant time:
     /// the same doublings and additions for every `k`, and every table entry
     /// read on every window.
+    #[cfg_attr(all(feature = "std", not(test)), allow(dead_code))]
     fn mul_scalar(&self, k: &[u8; LEN]) -> Point {
         let mut table = [Point::IDENTITY; 16];
         table[1] = *self;
@@ -469,14 +491,27 @@ impl Point {
     }
 }
 
-/// `[k]B`, in constant time.
+/// `[k]B`, for `k` below 2^455, in constant time: through the table under
+/// `std`, by [`Point::mul_scalar`] without it.
 ///
 /// Every multiplication of the basepoint goes through here, as Ed25519's do
-/// through its `mul_basepoint`, so that a precomputed table, when there is
-/// one, has one place to go. There is none yet.
+/// through its `mul_basepoint`, so the two paths cannot drift apart.
 fn mul_basepoint(k: &[u8; LEN]) -> Point {
-    let base = Point::basepoint();
-    base.mul_scalar(k)
+    #[cfg(feature = "std")]
+    {
+        basepoint_table::mul(k)
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        let base = Point::basepoint();
+        base.mul_scalar(k)
+    }
+}
+
+/// Fill the basepoint table now; see [`crate::prepare`].
+#[cfg(feature = "std")]
+pub(crate) fn prepare_table() {
+    basepoint_table::prepare();
 }
 
 /// The width-5 NAF of a little-endian scalar below 2^456: odd digits in
@@ -1085,10 +1120,13 @@ mod tests {
                 }
             }
         }
+        // Some scalars here are above 2^455, the table's bound, so `[s]B`
+        // is the windowed multiplication's.
+        let base = Point::basepoint();
         let p = mul_basepoint(&scalars[6]);
         for k in &scalars {
             for s in scalars.iter().step_by(3) {
-                let want = mul_basepoint(s).add(&p.mul_scalar(k));
+                let want = base.mul_scalar(s).add(&p.mul_scalar(k));
                 assert!(double_mul_vartime(&p, k, s).eq(&want));
             }
         }
