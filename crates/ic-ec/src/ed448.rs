@@ -154,6 +154,28 @@ impl Fe {
                 c[i + j] += u128::from(a[i]) * u128::from(b[j]);
             }
         }
+        Fe::reduce_wide(c)
+    }
+
+    /// `self * self`, with each cross product computed once and doubled:
+    /// 36 limb products where `mul` takes 64. Each column holds what `mul`'s
+    /// would, so the bounds `reduce_wide` relies on are the same.
+    fn square(&self) -> Fe {
+        let a = &self.0;
+        let mut c = [0u128; 15];
+        for i in 0..8 {
+            c[2 * i] += u128::from(a[i]) * u128::from(a[i]);
+            // Below 2^58: the doubling happens before the product, in 64 bits.
+            let twice = a[i] << 1;
+            for j in i + 1..8 {
+                c[i + j] += u128::from(twice) * u128::from(a[j]);
+            }
+        }
+        Fe::reduce_wide(c)
+    }
+
+    /// The 15 columns of a product, each below 2^117, reduced to limbs.
+    fn reduce_wide(mut c: [u128; 15]) -> Fe {
         // 2^448 = 2^224 + 1: limb k >= 8 goes to limbs k - 4 and k - 8. From
         // the top down, so that what lands on limbs 8 to 10 is folded again.
         for k in (8..15).rev() {
@@ -180,10 +202,6 @@ impl Fe {
             *x = *y as u64;
         }
         Fe::carry(l)
-    }
-
-    fn square(&self) -> Fe {
-        self.mul(self)
     }
 
     /// `self` squared `n` times.
@@ -459,6 +477,103 @@ impl Point {
 fn mul_basepoint(k: &[u8; LEN]) -> Point {
     let base = Point::basepoint();
     base.mul_scalar(k)
+}
+
+/// The width-5 NAF of a little-endian scalar below 2^456: odd digits in
+/// -15..=15, least significant first, with at least four zeros after each
+/// non-zero one. Variable time, and so for public scalars only.
+///
+/// A negative digit adds to the remainder, which can then reach 2^456 but
+/// not pass it, so 457 digits always suffice; the eight limbs hold 512 bits.
+fn wnaf5(k: &[u8; LEN]) -> [i8; 8 * LEN + 1] {
+    let mut x = [0u64; 8];
+    for (i, b) in k.iter().enumerate() {
+        x[i / 8] |= u64::from(*b) << (8 * (i % 8));
+    }
+    let mut naf = [0i8; 8 * LEN + 1];
+    let mut i = 0;
+    while x.iter().any(|w| *w != 0) {
+        if x[0] & 1 == 1 {
+            let mut d = (x[0] & 31) as i64;
+            if d >= 16 {
+                d -= 32;
+            }
+            naf[i] = d as i8;
+            // x -= d, which leaves the low five bits zero.
+            let (v, mut carry) = if d > 0 {
+                (d as u64, false)
+            } else {
+                (d.unsigned_abs(), true)
+            };
+            if carry {
+                let (r, mut c) = x[0].overflowing_add(v);
+                x[0] = r;
+                for w in x.iter_mut().skip(1) {
+                    let (r, c2) = w.overflowing_add(u64::from(c));
+                    *w = r;
+                    c = c2;
+                }
+                carry = c;
+            } else {
+                let (r, mut b) = x[0].overflowing_sub(v);
+                x[0] = r;
+                for w in x.iter_mut().skip(1) {
+                    let (r, b2) = w.overflowing_sub(u64::from(b));
+                    *w = r;
+                    b = b2;
+                }
+                carry = b;
+            }
+            debug_assert!(!carry, "the scalar left the eight limbs");
+        }
+        for j in 0..7 {
+            x[j] = (x[j] >> 1) | (x[j + 1] << 63);
+        }
+        x[7] >>= 1;
+        i += 1;
+    }
+    naf
+}
+
+/// `[1]P, [3]P .. [15]P`.
+fn odd_multiples(p: &Point) -> [Point; 8] {
+    let twice = p.double();
+    let mut t = [*p; 8];
+    for i in 1..8 {
+        t[i] = t[i - 1].add(&twice);
+    }
+    t
+}
+
+/// `[s]B + [k]P`, with one chain of doublings for both. Variable time: for
+/// verification, where all of `s`, `k` and `P` are public.
+fn double_mul_vartime(p: &Point, k: &[u8; LEN], s: &[u8; LEN]) -> Point {
+    let (odd_p, odd_b) = (odd_multiples(p), odd_multiples(&Point::basepoint()));
+    let (naf_k, naf_s) = (wnaf5(k), wnaf5(s));
+    let add = |acc: &Point, table: &[Point; 8], digit: i8| {
+        let t = &table[usize::from(digit.unsigned_abs() / 2)];
+        if digit > 0 {
+            acc.add(t)
+        } else {
+            acc.add(&t.negate())
+        }
+    };
+    // From the highest digit either has: doubling the identity is wasted.
+    let top = (0..naf_k.len())
+        .rev()
+        .find(|i| naf_k[*i] != 0 || naf_s[*i] != 0)
+        .unwrap_or(0);
+    let mut acc = Point::IDENTITY;
+    for i in (0..=top).rev() {
+        acc = acc.double();
+        if naf_k[i] != 0 {
+            acc = add(&acc, &odd_p, naf_k[i]);
+        }
+        if naf_s[i] != 0 {
+            acc = add(&acc, &odd_b, naf_s[i]);
+        }
+    }
+    acc
 }
 
 /// `x mod L`, for a little-endian `x` of any length, in constant time.
@@ -776,7 +891,7 @@ impl Ed448VerifyKey {
         );
 
         let k = hash_to_scalar(context, &[&big_r, &self.compressed, message]);
-        let lhs = mul_basepoint(&s).add(&self.neg_a.mul_scalar(&k));
+        let lhs = double_mul_vartime(&self.neg_a, &k, &s);
         ensure!(lhs.eq(&r), AuthenticationFailed, "ed448");
         Ok(())
     }
@@ -915,9 +1030,92 @@ mod tests {
                 assert_eq!(le_to_be(&a.add(b).to_bytes()), want_add);
                 let want_mul = big_mod(&big_mul(&be(a), &be(b)));
                 assert_eq!(le_to_be(&a.mul(b).to_bytes()), want_mul);
+                // a * a both ways, and the square against the reference.
+                assert_eq!(
+                    le_to_be(&a.square().to_bytes()),
+                    big_mod(&big_mul(&be(a), &be(a)))
+                );
                 // a - b = c exactly when c + b = a.
                 assert!(bool::from(a.sub(b).add(b).ct_eq(a)));
             }
+        }
+    }
+
+    /// The joint multiplication verification uses, against the constant-time
+    /// pair it replaced, at the extremes of the scalar range and at random
+    /// scalars; and each recoding obeys the NAF rules.
+    #[test]
+    fn double_mul_vartime_matches_the_constant_time_pair() {
+        let mut state = 0x0bad_cafe_dead_beefu64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut scalars: Vec<[u8; LEN]> = vec![[0; LEN], [0xff; LEN]];
+        let mut one = [0u8; LEN];
+        one[0] = 1;
+        scalars.push(one);
+        let mut l_minus_1 = [0u8; LEN];
+        l_minus_1.copy_from_slice(&L_BYTES);
+        l_minus_1[0] -= 1;
+        scalars.push(l_minus_1);
+        // Runs of ones, where the recoding carries furthest.
+        let mut runs = [0u8; LEN];
+        runs[..56].fill(0xff);
+        scalars.push(runs);
+        for _ in 0..12 {
+            let mut k = [0u8; LEN];
+            for b in k.iter_mut() {
+                *b = next() as u8;
+            }
+            scalars.push(k);
+        }
+        for k in &scalars {
+            let naf = wnaf5(k);
+            let mut last = None;
+            for (i, d) in naf.iter().enumerate() {
+                if *d != 0 {
+                    assert!(d % 2 != 0 && d.unsigned_abs() <= 15, "digit {d}");
+                    if let Some(j) = last {
+                        assert!(i - j >= 5, "digits at {j} and {i}");
+                    }
+                    last = Some(i);
+                }
+            }
+        }
+        let p = mul_basepoint(&scalars[6]);
+        for k in &scalars {
+            for s in scalars.iter().step_by(3) {
+                let want = mul_basepoint(s).add(&p.mul_scalar(k));
+                assert!(double_mul_vartime(&p, k, s).eq(&want));
+            }
+        }
+    }
+
+    /// `square` against `mul` at the widest limbs the representation allows,
+    /// where the doubled cross products are largest, and at random limbs of
+    /// every width up to it.
+    #[test]
+    fn square_agrees_with_mul_at_the_limb_bound() {
+        let top = (1u64 << 57) - 1;
+        let mut cases = vec![Fe([top; 8]), Fe([MASK; 8])];
+        let mut state = 0x1234_5678_9abc_def0u64;
+        for _ in 0..2000 {
+            let mut l = [0u64; 8];
+            for x in l.iter_mut() {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *x = state & top;
+            }
+            cases.push(Fe(l));
+        }
+        for x in &cases {
+            assert_eq!(x.square().to_bytes(), x.mul(x).to_bytes());
+            // And the result is again within the bound.
+            assert!(x.square().0.iter().all(|l| *l <= top));
         }
     }
 

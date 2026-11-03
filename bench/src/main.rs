@@ -118,6 +118,10 @@ fn main() {
         graviola::run();
         return;
     }
+    if std::env::args().nth(1).as_deref() == Some("ed448") {
+        ed448();
+        return;
+    }
     if std::env::args().nth(1).as_deref() == Some("ecdh") {
         ecdh::run();
         return;
@@ -563,4 +567,22 @@ Edwards point primitives (lower is better)"
         println!("  RUSTFLAGS=\"--cfg aes_force_soft\" cargo run --release -- soft");
         println!();
     }
+}
+
+/// Ed448 alone: nothing else here implements it to compare against, so this
+/// is for comparing a change with itself.
+fn ed448() {
+    let seed = [7u8; 57];
+    let msg = b"a message of modest length, as a certificate's would be";
+    let key = ironcrypto::ec::Ed448Key::from_seed(&seed).unwrap();
+    let mut pk = [0u8; 57];
+    <ic_ec::Ed448 as ic_core::traits::SignatureScheme>::public_key(&seed, &mut pk).unwrap();
+    let mut sig = [0u8; 114];
+    per_op("ironcrypto ed448 sign (cached key)", 300, 7, || {
+        key.sign(msg, &mut sig).unwrap();
+    });
+    let vk = ironcrypto::ec::Ed448VerifyKey::from_bytes(&pk).unwrap();
+    per_op("ironcrypto ed448 verify", 300, 7, || {
+        vk.verify(msg, &sig).unwrap();
+    });
 }

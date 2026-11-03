@@ -13,8 +13,13 @@ all of them.
   for a context of up to 255 bytes. Portable and constant time: a field of
   eight 56-bit limbs, the RFC's complete projective formulas, fixed four-bit
   windows read by constant-time selection. Verification is strict as
-  Ed25519's is. All nine RFC 8032 §7.4 vectors pass. Not optimised: no
-  precomputed tables. Ed448ph is not implemented. Not approved-mode, as
+  Ed25519's is. All nine RFC 8032 §7.4 vectors pass. Verification uses a
+  single chain of doublings for `[S]B` and `[k]A`, with width-5 NAF
+  recoding. It runs in variable time, since every input is public. Field
+  squaring has its own routine, which needs 36 limb products where a
+  multiplication takes 64. Measured A/B in `bench` (`ed448` mode): verify
+  531 to 236 us, sign 317 to 271 us. Signing has no precomputed basepoint
+  table yet. Ed448ph is not implemented. Not approved-mode, as
   Ed25519 is not. A new CAST, so `TEST_COUNT` is 87 (65 approved-only). The
   classical half of the composite `id-MLDSA87-Ed448-SHAKE256`, to follow.
 - **Ed448 keys and signatures through `ic_pkix` and `ic_sig`**:
