@@ -23,7 +23,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 Forty-four exported probes call the actual implementations on every target,
 106 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
-targets: 356 gating probe/target checks in all, 162 on x86-64, 62 on aarch64,
+targets: 362 gating probe/target checks in all, 168 on x86-64, 62 on aarch64,
 and 44 on each of the three other targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -124,6 +124,11 @@ release profile; this is not the workspace binary's overflow-checked profile.
   `ct_p256_table_add`). See "P-256 and P-384 without IFMA, on one buffer"
   below.
 
+- On x86-64 only, the AES-NI backend at AES-256, one block each way, a batch
+  of eight and counter mode over one (`ct_aes256_aesni_encrypt`, `_decrypt`,
+  `_encrypt8`, `_ctr8`), and AES-GCM's short path: a 31-byte message with 13
+  bytes of AAD, sealed and opened (`ct_gcm_short_seal`, `ct_gcm_short_open`).
+  See "AES-NI and AES-GCM's short path" below.
 - On x86-64 only, AES-GCM's eight-block (AES-NI, `PCLMULQDQ`) and
   sixteen-block (VAES, `VPCLMULQDQ` on `ymm`) loops at AES-256: sealing and
   opening a fixed three groups (`ct_gcm_clmul8_seal`, `ct_gcm_clmul8_open`,
@@ -1290,6 +1295,45 @@ Two mutations, each restored afterwards:
 Probe count: thirty-five on x86-64 alone, where there were thirty-four. All
 seventy-nine pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 79 + 3 x 44 = 211 gating probe/target checks.
+
+## AES-NI and AES-GCM's short path
+
+Added 2026-11-03. Until then the gate read AES-GCM's bulk loops
+(`gcm_x86_asm`) and the ARMv8 AES backend, but not `aes/x86.rs`, nor the
+intrinsics of `gcm_x86.rs` that every message runs outside those loops: the
+AAD's GHASH, the tail's counter blocks and keystream, the partial block, the
+length block and the tag. Only `docs/CTGRIND.md`'s run covered them, on the
+paths it took. No leak was known, and none was found.
+
+Both modules need `std` for their detection, so they now also compile under
+`ct-probes`, as `gcm_x86_asm` does, with detection reporting false there; the
+probes run nothing. What ships with `std` is unchanged.
+
+All six are straight-line after compilation, with no finding to excuse: each
+loads its keys from fixed AES-256 round keys, and the round count and lengths
+fold away. Counted in the listing: 14 AES rounds a block, 112 for eight, 42
+for the short path's three blocks (`J0` and two of tail), and 16 `PCLMULQDQ`
+for its four GHASH blocks (AAD, two of tail, the length).
+
+`gcm_x86::probe_short` writes out what `run_narrow` does with no bulk part,
+because `run_narrow` itself does not inline. Read in that form, it keeps
+branches on the round count (its bounds and its loop) and on `encrypting`,
+which the gate properly refuses to take on trust. Those are public, by reading
+the listing on the day, and are not gated in that form. A test compares the
+probes with FIPS 197 C.3, the portable backend and `seal_or_open`, so that what
+the gate reads is the code that does the job.
+
+Each mutation below is a branch on a value's low bit, applied, the gate run
+and restored. On the state after AES's first round key, in `Keys::encrypt`:
+fails `ct_aes256_aesni_encrypt` alone, as the batches have their own round
+loops. On GHASH's input, in `Pending::flush`: fails both short probes, with
+`flush` no longer inlined. On the partial block's output, in `finish`: fails
+both short probes with `je`. The round loops of `encrypt8`, `ctr8` and
+`decrypt` were not mutated.
+
+Not probed: AES-128 and AES-192, which the same source compiles with other
+round counts; other message lengths, which change only which blocks exist; and
+`compute_powers`, at key setup, whose use of `H` is read only in `ct_gcm_twist`.
 
 ## AES-GCM on x86-64, 2026-10-13
 

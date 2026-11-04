@@ -62,8 +62,12 @@ pub mod aes;
 #[allow(unsafe_code)]
 #[cfg(not(ic_approved_only))]
 pub mod chacha;
-#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[cfg(all(
+    target_arch = "x86_64",
+    any(feature = "std", all(feature = "ct-probes", not(ic_approved_only)))
+))]
 // The carry-less multiply instruction.
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[allow(unsafe_code)]
 mod clmul;
 // The ARMv8 `PMULL` GHASH, behind the `aarch64-crypto` feature and runtime
@@ -97,10 +101,15 @@ pub mod ct_probes;
 pub mod gcm;
 #[cfg(not(ic_approved_only))]
 pub mod gcm_siv;
-#[cfg(all(target_arch = "x86_64", feature = "std"))]
 // AES-GCM as one fused pass: AES-NI or VAES rounds interleaved with the
 // carry-less multiply, behind runtime detection. The wide instructions are
-// inline assembly because their intrinsics postdate the MSRV.
+// inline assembly because their intrinsics postdate the MSRV. Without `std`
+// there is no detection, and it is here only for `ct_probes` to reach.
+#[cfg(all(
+    target_arch = "x86_64",
+    any(feature = "std", all(feature = "ct-probes", not(ic_approved_only)))
+))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[allow(unsafe_code)]
 mod gcm_x86;
 // The 128- and 256-bit fused kernels' bulk loops, in assembly. Needs no `std`

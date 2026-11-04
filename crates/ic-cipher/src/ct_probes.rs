@@ -10,12 +10,239 @@
 //! public. Never executed: they need AVX-512F, AVX2, VAES or AES-NI, and are
 //! compiled to be read.
 
+#[cfg(all(target_arch = "x86_64", not(ic_approved_only)))]
+pub use aesni::*;
 #[cfg(all(target_arch = "aarch64", feature = "aarch64-crypto"))]
 pub use armv8::*;
 #[cfg(target_arch = "x86_64")]
 pub use gcm::*;
 #[cfg(target_arch = "x86_64")]
 pub use x86::*;
+
+/// The AES-NI backend at AES-256, and the short path of AES-GCM on it: what
+/// a message runs outside the bulk loops below, on every x86-64 CPU. Each
+/// fixes the round count by loading the keys here.
+#[cfg(all(target_arch = "x86_64", not(ic_approved_only)))]
+mod aesni {
+    use crate::aes::portable::Schedule;
+    use crate::aes::x86::{self as aes, Keys};
+    use crate::gcm_x86::{self, HashKey};
+
+    /// The per-key table of powers, opaque to the harness.
+    pub struct GcmKey(pub(crate) HashKey);
+
+    /// The round keys into registers, and the inverse cipher's through
+    /// `AESIMC`. Read inlined into the probes: returning the keys would copy
+    /// them out with a call to `memcpy`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI.
+    #[target_feature(enable = "aes")]
+    #[inline]
+    unsafe fn load(round_keys: &[u8; 240]) -> Keys {
+        let sched = Schedule::from_aes256_round_keys(round_keys);
+        // SAFETY: as the caller guarantees.
+        unsafe { Keys::load(&sched) }
+    }
+
+    /// One block encrypted under an AES-256 key.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI.
+    #[target_feature(enable = "aes")]
+    pub unsafe fn aes256_aesni_encrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = load(round_keys);
+            // The length is the block's, so this cannot fail.
+            let _ = aes::encrypt_block(&keys, block);
+        }
+    }
+
+    /// One block decrypted under an AES-256 key.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI.
+    #[target_feature(enable = "aes")]
+    pub unsafe fn aes256_aesni_decrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = load(round_keys);
+            let _ = aes::decrypt_block(&keys, block);
+        }
+    }
+
+    /// One batch of `PARALLEL_BLOCKS` (eight) blocks encrypted together.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI.
+    #[target_feature(enable = "aes")]
+    pub unsafe fn aes256_aesni_encrypt8(round_keys: &[u8; 240], data: &mut [u8; 128]) {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = load(round_keys);
+            let _ = aes::encrypt_blocks(&keys, data);
+        }
+    }
+
+    /// Counter mode over one batch of eight blocks.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI.
+    #[target_feature(enable = "aes")]
+    pub unsafe fn aes256_aesni_ctr8(
+        round_keys: &[u8; 240],
+        counter: &mut [u8; 16],
+        data: &mut [u8; 128],
+    ) {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = load(round_keys);
+            aes::ctr32_xor(&keys, counter, data);
+        }
+    }
+
+    /// A 31-byte message sealed with 13 bytes of AAD, shorter than a group:
+    /// the AAD's and the tail's GHASH, the partial block, the length block,
+    /// and the tag.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI, `PCLMULQDQ` and SSSE3.
+    #[target_feature(enable = "aes,pclmulqdq,ssse3")]
+    pub unsafe fn gcm_short_seal(
+        round_keys: &[u8; 240],
+        hk: &GcmKey,
+        j0: &[u8; 16],
+        aad: &[u8; 13],
+        data: &mut [u8; 31],
+    ) -> [u8; 16] {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = load(round_keys);
+            gcm_x86::probe_short(&keys, &hk.0, j0, aad, data, true)
+        }
+    }
+
+    /// The same message opened: GHASH reads the input, not the output.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must have AES-NI, `PCLMULQDQ` and SSSE3.
+    #[target_feature(enable = "aes,pclmulqdq,ssse3")]
+    pub unsafe fn gcm_short_open(
+        round_keys: &[u8; 240],
+        hk: &GcmKey,
+        j0: &[u8; 16],
+        aad: &[u8; 13],
+        data: &mut [u8; 31],
+    ) -> [u8; 16] {
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            let keys = load(round_keys);
+            gcm_x86::probe_short(&keys, &hk.0, j0, aad, data, false)
+        }
+    }
+}
+
+// The probes are read, not run, by the gate; these run them on the CPU they
+// were compiled for, so that what the gate reads is the code that does the job.
+#[cfg(all(test, target_arch = "x86_64", feature = "std", not(ic_approved_only)))]
+mod aesni_probe_tests {
+    use super::aesni::*;
+    use crate::aes::{portable, x86};
+    use crate::gcm_x86::{self, HashKey, Kernel};
+
+    /// FIPS 197, Appendix C.3: AES-256, key 00 01 .. 1f, plaintext
+    /// 00 11 22 .. ff, ciphertext 8e a2 b7 ca 51 67 45 bf ea fc 49 90 4b 49 60 89.
+    const C3_CIPHERTEXT: [u8; 16] = [
+        0x8e, 0xa2, 0xb7, 0xca, 0x51, 0x67, 0x45, 0xbf, 0xea, 0xfc, 0x49, 0x90, 0x4b, 0x49, 0x60,
+        0x89,
+    ];
+
+    fn setup() -> Option<(portable::Schedule, [u8; 240])> {
+        let have = std::arch::is_x86_feature_detected!("aes")
+            && std::arch::is_x86_feature_detected!("pclmulqdq")
+            && std::arch::is_x86_feature_detected!("ssse3");
+        if !have {
+            return None;
+        }
+        let key: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let sched = portable::Schedule::expand(&key).unwrap();
+        let mut rk = [0u8; 240];
+        for (r, chunk) in rk.chunks_exact_mut(16).enumerate() {
+            chunk.copy_from_slice(sched.round_key(r));
+        }
+        Some((sched, rk))
+    }
+
+    #[test]
+    fn aes_probes_match_fips197_and_the_portable_backend() {
+        let Some((sched, rk)) = setup() else { return };
+        let plain: [u8; 16] = core::array::from_fn(|i| (i as u8).wrapping_mul(0x11));
+
+        let mut enc = plain;
+        // SAFETY: `setup` found AES-NI.
+        unsafe { aes256_aesni_encrypt(&rk, &mut enc) };
+        assert_eq!(enc, C3_CIPHERTEXT);
+        let mut dec = C3_CIPHERTEXT;
+        // SAFETY: as above.
+        unsafe { aes256_aesni_decrypt(&rk, &mut dec) };
+        assert_eq!(dec, plain);
+
+        let mut batch: [u8; 128] = core::array::from_fn(|i| (i as u8).wrapping_mul(7));
+        let mut want = batch;
+        for block in want.chunks_exact_mut(16) {
+            portable::encrypt_block(&sched, block).unwrap();
+        }
+        // SAFETY: as above.
+        unsafe { aes256_aesni_encrypt8(&rk, &mut batch) };
+        assert_eq!(batch, want);
+
+        let start: [u8; 16] = core::array::from_fn(|i| 0xf0 + i as u8);
+        let (mut counter, mut data) = (start, [0u8; 128]);
+        // SAFETY: as above.
+        unsafe { aes256_aesni_ctr8(&rk, &mut counter, &mut data) };
+        for (i, ks) in data.chunks_exact(16).enumerate() {
+            let mut want = start;
+            let n = u32::from_be_bytes([start[12], start[13], start[14], start[15]]);
+            want[12..].copy_from_slice(&n.wrapping_add(i as u32).to_be_bytes());
+            portable::encrypt_block(&sched, &mut want).unwrap();
+            assert_eq!(ks, want, "keystream block {i}");
+        }
+    }
+
+    #[test]
+    fn short_gcm_probes_match_the_shipped_path() {
+        let Some((sched, rk)) = setup() else { return };
+        // SAFETY: `setup` found AES-NI.
+        let keys = unsafe { x86::Keys::load(&sched) };
+        // SAFETY: `setup` found AES-NI, PCLMULQDQ and SSSE3.
+        let hk = GcmKey(unsafe { HashKey::new(&keys, Kernel::Clmul8) });
+        let j0: [u8; 16] = core::array::from_fn(|i| if i == 15 { 1 } else { 0x40 + i as u8 });
+        let aad: [u8; 13] = core::array::from_fn(|i| 0xa0 + i as u8);
+        let plain: [u8; 31] = core::array::from_fn(|i| (i as u8).wrapping_mul(13));
+
+        let mut want = plain;
+        // SAFETY: `hk` was made above, on this CPU.
+        let want_tag = unsafe { gcm_x86::seal_or_open(&keys, &hk.0, &j0, &aad, &mut want, true) };
+
+        let mut sealed = plain;
+        // SAFETY: as `setup` found.
+        let tag = unsafe { gcm_short_seal(&rk, &hk, &j0, &aad, &mut sealed) };
+        assert_eq!((sealed, tag), (want, want_tag));
+
+        let mut opened = sealed;
+        // SAFETY: as `setup` found.
+        let tag = unsafe { gcm_short_open(&rk, &hk, &j0, &aad, &mut opened) };
+        assert_eq!((opened, tag), (plain, want_tag));
+    }
+}
 
 /// The 128-, 256- and 512-bit AES-GCM loops (`gcm_x86_asm`) at AES-256, and
 /// the twist of a power of `H`. Each seal and open runs its loop over a fixed

@@ -93,8 +93,10 @@ impl Schedule {
     /// `ct_probes`: the probe fixes the round count, so the compiled code
     /// read is the one AES-256 runs. Not API.
     #[cfg(all(
-        target_arch = "aarch64",
-        feature = "aarch64-crypto",
+        any(
+            all(target_arch = "aarch64", feature = "aarch64-crypto"),
+            target_arch = "x86_64"
+        ),
         feature = "ct-probes",
         not(ic_approved_only)
     ))]

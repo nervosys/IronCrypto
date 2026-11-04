@@ -144,7 +144,11 @@ macro_rules! cached_detect {
             1 => true,
             2 => false,
             _ => {
+                #[cfg(feature = "std")]
                 let have = true $(&& std::arch::is_x86_feature_detected!($f))+;
+                // Only `ct_probes` builds without `std`, and it runs nothing.
+                #[cfg(not(feature = "std"))]
+                let have = false;
                 CACHED.store(u8::from(!have) + 1, Ordering::Relaxed);
                 have
             }
@@ -808,6 +812,36 @@ fn run_narrow(
         aad.len(),
         data_len,
         encrypting,
+    )
+}
+
+/// What [`run_narrow`] does with no bulk part, at a fixed 13 bytes of AAD and
+/// 31 of data, for `ct_probes`: the path a short message takes and every
+/// message's tail, a partial block included. Written out so that the lengths
+/// and the round count are constants when [`finish`] inlines. Not API; a test
+/// in `ct_probes` compares it with [`seal_or_open`].
+///
+/// # Safety
+///
+/// The CPU must have AES-NI, `PCLMULQDQ` and SSSE3.
+#[cfg(all(feature = "ct-probes", not(ic_approved_only)))]
+#[target_feature(enable = "aes,pclmulqdq,ssse3")]
+#[inline]
+pub(crate) unsafe fn probe_short(
+    keys: &Keys,
+    hk: &HashKey,
+    j0: &[u8; BLOCK],
+    aad: &[u8; 13],
+    data: &mut [u8; 31],
+    encrypting: bool,
+) -> [u8; BLOCK] {
+    // SAFETY: `j0` is 16 bytes; the load is unaligned.
+    let j0 = unsafe { _mm_loadu_si128(j0.as_ptr() as *const __m128i) };
+    let mut g = Pending::new();
+    g.push_padded(hk, aad);
+    let mut ctr = Counter::after(j0);
+    finish(
+        keys, hk, &mut g, &mut ctr, j0, None, data, 13, 31, encrypting,
     )
 }
 

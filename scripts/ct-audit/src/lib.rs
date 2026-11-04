@@ -1351,6 +1351,81 @@ mod x86_rsa {
 // read, never run. The loops' back edges are excused by the counter-loop
 // rule, one per probe that loops.
 #[cfg(target_arch = "x86_64")]
+mod x86_aesni {
+    use ic_cipher::ct_probes as p;
+
+    /// # Safety
+    /// Requires AES-NI.
+    #[no_mangle]
+    pub unsafe fn ct_aes256_aesni_encrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI.
+        unsafe { p::aes256_aesni_encrypt(round_keys, block) }
+    }
+
+    /// # Safety
+    /// Requires AES-NI.
+    #[no_mangle]
+    pub unsafe fn ct_aes256_aesni_decrypt(round_keys: &[u8; 240], block: &mut [u8; 16]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI.
+        unsafe { p::aes256_aesni_decrypt(round_keys, block) }
+    }
+
+    /// # Safety
+    /// Requires AES-NI.
+    #[no_mangle]
+    pub unsafe fn ct_aes256_aesni_encrypt8(round_keys: &[u8; 240], data: &mut [u8; 128]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI.
+        unsafe { p::aes256_aesni_encrypt8(round_keys, data) }
+    }
+
+    /// # Safety
+    /// Requires AES-NI.
+    #[no_mangle]
+    pub unsafe fn ct_aes256_aesni_ctr8(
+        round_keys: &[u8; 240],
+        counter: &mut [u8; 16],
+        data: &mut [u8; 128],
+    ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI.
+        unsafe { p::aes256_aesni_ctr8(round_keys, counter, data) }
+    }
+
+    /// # Safety
+    /// Requires AES-NI, PCLMULQDQ and SSSE3.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_short_seal(
+        round_keys: &[u8; 240],
+        hk: &p::GcmKey,
+        j0: &[u8; 16],
+        aad: &[u8; 13],
+        data: &mut [u8; 31],
+    ) -> [u8; 16] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI, PCLMULQDQ and SSSE3.
+        unsafe { p::gcm_short_seal(round_keys, hk, j0, aad, data) }
+    }
+
+    /// # Safety
+    /// Requires AES-NI, PCLMULQDQ and SSSE3.
+    #[no_mangle]
+    pub unsafe fn ct_gcm_short_open(
+        round_keys: &[u8; 240],
+        hk: &p::GcmKey,
+        j0: &[u8; 16],
+        aad: &[u8; 13],
+        data: &mut [u8; 31],
+    ) -> [u8; 16] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AES-NI, PCLMULQDQ and SSSE3.
+        unsafe { p::gcm_short_open(round_keys, hk, j0, aad, data) }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
 mod x86_gcm {
     use core::arch::x86_64::__m128i;
     use ic_cipher::ct_probes as p;

@@ -170,6 +170,9 @@ X86_ONLY = (
     # thirty-two blocks. The loops' back edges are excused by the x86-64
     # counter-loop rule below.
     "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
+    # AES-NI at AES-256 outside the bulk loops, and AES-GCM's short path.
+    "ct_aes256_aesni_encrypt", "ct_aes256_aesni_decrypt", "ct_aes256_aesni_encrypt8",
+    "ct_aes256_aesni_ctr8", "ct_gcm_short_seal", "ct_gcm_short_open",
     "ct_gcm_vaes256_seal", "ct_gcm_vaes256_open", "ct_gcm_vaes256_group",
     "ct_gcm_vaes512_seal", "ct_gcm_vaes512_open",
     "ct_gcm_vaes512x32_seal", "ct_gcm_vaes512x32_open",

@@ -55,6 +55,16 @@ pub mod x86;
     target_feature = "aes"
 ))]
 pub mod x86;
+// Also compiled, without `std` and without the detection that selects it, for
+// `ct-probes`, so `scripts/ct-audit` can read it.
+#[cfg(all(
+    target_arch = "x86_64",
+    not(feature = "std"),
+    not(target_feature = "aes"),
+    feature = "ct-probes",
+    not(ic_approved_only)
+))]
+pub mod x86;
 
 // Also compiled, without `std` and without the detection that selects it,
 // for `ct-probes`, so `scripts/ct-audit` can read it.
