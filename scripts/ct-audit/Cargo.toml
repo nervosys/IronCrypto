@@ -13,7 +13,7 @@ crate-type = ["staticlib"]
 [dependencies]
 ic-core = { path = "../../crates/ic-core", default-features = false }
 ic-mldsa = { path = "../../crates/ic-mldsa", default-features = false }
-ic-mlkem = { path = "../../crates/ic-mlkem", default-features = false }
+ic-mlkem = { path = "../../crates/ic-mlkem", default-features = false, features = ["ct-probes"] }
 ic-ec = { path = "../../crates/ic-ec", default-features = false, features = ["ct-probes"] }
 ic-rsa = { path = "../../crates/ic-rsa", default-features = false, features = ["ct-probes"] }
 # `aarch64-crypto` compiles the ARMv8 backends, read on aarch64 only; on every

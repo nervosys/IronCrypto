@@ -265,7 +265,7 @@ fn scan_sse2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
 ///
 /// The CPU must support AVX2, and `W` must be a multiple of four.
 #[target_feature(enable = "avx2")]
-unsafe fn scan_avx2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
+pub(crate) unsafe fn scan_avx2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
     use core::arch::x86_64::*;
     // Up to twelve words, P-384's affine point, in whole lanes: `lanes` has
     // three. Above that, `take(W / 4)` would stop short and drop words.
@@ -1454,6 +1454,26 @@ pub(crate) fn sub(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
 mod tests {
     use super::*;
     use crate::nist::p256_field::{self as rust, P};
+
+    /// Both scans take exactly the masked entry, every word of it, and nothing
+    /// under no mask: a zero digit's case.
+    #[test]
+    fn the_avx2_and_sse2_scans_select_the_masked_entry() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let entries: [[u64; 8]; 32] = core::array::from_fn(|i| {
+            core::array::from_fn(|j| (i as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ j as u64)
+        });
+        for pick in 0..=32 {
+            let masks: [u64; 32] = core::array::from_fn(|i| if i == pick { !0 } else { 0 });
+            let want = entries.get(pick).copied().unwrap_or([0; 8]);
+            // SAFETY: AVX2 was just detected, and 8 is a multiple of four.
+            assert_eq!(unsafe { scan_avx2(&entries, &masks) }, want, "AVX2, {pick}");
+            // SAFETY: SSE2 is part of the x86-64 baseline.
+            assert_eq!(unsafe { scan_sse2(&entries, &masks) }, want, "SSE2, {pick}");
+        }
+    }
 
     /// SplitMix64.
     fn next(state: &mut u64) -> u64 {

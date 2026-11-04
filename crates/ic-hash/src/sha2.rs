@@ -23,7 +23,8 @@ mod x86;
 
 // SHA-512's schedule, four words at a time. Same reasoning as `x86`: only
 // under `std`, because the detection needs it.
-#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
+#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod avx2_512;
 
 // The guard the SHA-NI short paths hold their padded tails and pads in, so
@@ -58,6 +59,19 @@ mod aarch64;
 #[doc(hidden)]
 #[allow(missing_docs)]
 pub mod ct_probes {
+    /// SHA-512's compression on AVX2, of one block: what HMAC-SHA512, HKDF and
+    /// Ed25519's nonce hash put secrets through.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    pub unsafe fn sha512_avx2_compress(h: &mut [u64; 8], w: &mut [u64; 80], block: &[u8; 128]) {
+        // SAFETY: as the caller guarantees, and `block` is 128 bytes.
+        unsafe { super::avx2_512::compress(h, w, block) }
+    }
+
     /// HMAC-SHA256's two key-pad compressions, the outer pad made from the
     /// inner in registers.
     ///

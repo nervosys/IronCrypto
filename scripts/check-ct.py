@@ -170,6 +170,20 @@ X86_ONLY = (
     # thirty-two blocks. The loops' back edges are excused by the x86-64
     # counter-loop rule below.
     "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
+    # P-256's generator table scan and SHA-512's compression, on AVX2.
+    "ct_p256_scan_avx2", "ct_sha512_avx2_compress",
+    # ML-KEM's AVX2 routines that see secrets.
+    "ct_mlkem_avx2_ntt",
+    "ct_mlkem_avx2_inv_ntt",
+    "ct_mlkem_avx2_basemul_add",
+    "ct_mlkem_avx2_compress_1",
+    "ct_mlkem_avx2_compress_11",
+    "ct_mlkem_avx2_decode12",
+    "ct_mlkem_avx2_cbd2",
+    "ct_mlkem_avx2_normalize",
+    "ct_mlkem_avx2_to_mont",
+    "ct_mlkem_avx2_add_assign",
+    "ct_mlkem_avx2_reduce",
     # Argon2's compression function on AVX2, writing and XORing.
     "ct_argon2_avx2_compress", "ct_argon2_avx2_compress_xor",
     # AES-NI at AES-256 outside the bulk loops, and AES-GCM's short path.
@@ -318,6 +332,24 @@ X86_EXCUSE_CEILINGS = {
     # work area; and the `memset` that zeroes it on the stack.
     # Argon2's compression on AVX2, each mode its own instance: the eight rows
     # and the eight columns.
+    # P-256's generator table scan: `addq $16`/`cmpq $256`/`jne` over the
+    # thirty-two entries, rax indexing the masks. The digit decides only the masks.
+    "ct_p256_scan_avx2": {"counter loop": 1},
+    # SHA-512 on AVX2: `addq $5, %r15`/`cmpq $80`/`jne`, the five rounds to a
+    # schedule group, over the eighty. The data decide no branch.
+    "ct_sha512_avx2_compress": {"counter loop": 1},
+    # ML-KEM's AVX2 routines, over the polynomial's sixteen registers:
+    # `addq $32`/`cmpq $256 or $512`/`jne` (`decode12` `addq $24`/`cmpq $384`).
+    # `cbd2`, `normalize`, `add_assign` and `reduce` unroll to none. The NTT's
+    # one is its eight register pairs; the inverse's two are its eight pairs
+    # and the last pass over the sixteen registers. Read on 2026-11-04.
+    "ct_mlkem_avx2_ntt": {"counter loop": 1},
+    "ct_mlkem_avx2_inv_ntt": {"counter loop": 2},
+    "ct_mlkem_avx2_basemul_add": {"counter loop": 1},
+    "ct_mlkem_avx2_compress_1": {"counter loop": 1},
+    "ct_mlkem_avx2_compress_11": {"counter loop": 1},
+    "ct_mlkem_avx2_decode12": {"counter loop": 1},
+    "ct_mlkem_avx2_to_mont": {"counter loop": 1},
     "ct_argon2_avx2_compress": {"counter loop": 2},
     "ct_argon2_avx2_compress_xor": {"counter loop": 2},
     "ct_rsa_ifma_pow_1024": {"counter loop": 9, "constant memset": 1},

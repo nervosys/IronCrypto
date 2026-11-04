@@ -386,6 +386,21 @@ pub fn p256_table_new(public_key: &[u8; 65]) -> Option<P256Table> {
 mod adx_steps {
     use super::{P256Table, P256Window, P384Comb};
 
+    /// The generator table's window scan on AVX2, which `scan` takes on any CPU
+    /// that has it: every one of thirty-two entries, under the digit's masks.
+    /// The probes of the additions see `scan_sse2`, since detection reports no
+    /// AVX2 without `std`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    pub unsafe fn p256_scan_avx2(entries: &[[u64; 8]; 32], masks: &[u64; 32]) -> [u64; 8] {
+        // SAFETY: as the caller guarantees, and 8 is a multiple of four.
+        unsafe { crate::nist::p256_x86::scan_avx2(entries, masks) }
+    }
+
     /// One digit's addition in P-384's multiplication on MULX/ADX, the digit
     /// secret: the entry's read from an affine window -- here a prepared key's
     /// first, the same kind of window as the one the multiplication builds --
@@ -452,7 +467,7 @@ mod adx_steps {
     }
 }
 #[cfg(target_arch = "x86_64")]
-pub use adx_steps::{p256_ladder_add, p256_table_add, p384_ladder_add};
+pub use adx_steps::{p256_ladder_add, p256_scan_avx2, p256_table_add, p384_ladder_add};
 
 /// P-256's two inversions by divsteps, the same way: the field's, on ECDH's
 /// and every public key's `Z`, and the scalar ring's, on ECDSA's secret

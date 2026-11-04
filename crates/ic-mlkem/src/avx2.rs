@@ -319,10 +319,26 @@ unsafe fn swap32(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
 /// The CPU must support AVX2.
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn ntt(c: &mut [i16; N]) {
-    let mut r = [_mm256_setzero_si256(); 16];
-    for (i, v) in r.iter_mut().enumerate() {
-        *v = load(c, i);
-    }
+    // Written out: as a loop the compiler makes this a call to `memcpy`, on the
+    // secret polynomial, which `scripts/check-ct.py` refuses.
+    let mut r = [
+        load(c, 0),
+        load(c, 1),
+        load(c, 2),
+        load(c, 3),
+        load(c, 4),
+        load(c, 5),
+        load(c, 6),
+        load(c, 7),
+        load(c, 8),
+        load(c, 9),
+        load(c, 10),
+        load(c, 11),
+        load(c, 12),
+        load(c, 13),
+        load(c, 14),
+        load(c, 15),
+    ];
 
     // len 128, 64, 32, 16: whole registers, `dist` apart, one zeta per group.
     let mut k = 1;

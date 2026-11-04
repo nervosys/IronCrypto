@@ -22,8 +22,8 @@ previous result's name failed two tests; restoring it passed all eight.
 ## What it checks
 
 Forty-four exported probes call the actual implementations on every target,
-106 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
-targets: 364 gating probe/target checks in all, 170 on x86-64, 62 on aarch64,
+119 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
+targets: 377 gating probe/target checks in all, 183 on x86-64, 62 on aarch64,
 and 44 on each of the three other targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -124,6 +124,10 @@ release profile; this is not the workspace binary's overflow-checked profile.
   `ct_p256_table_add`). See "P-256 and P-384 without IFMA, on one buffer"
   below.
 
+- On x86-64 only, on AVX2, P-256's generator table scan
+  (`ct_p256_scan_avx2`), SHA-512's compression (`ct_sha512_avx2_compress`) and
+  ML-KEM's routines that see secrets (`ct_mlkem_avx2_*`, eleven). See "ML-KEM,
+  P-256's table scan and SHA-512 on AVX2" below.
 - On x86-64 only, Argon2's compression function on AVX2, writing and XORing
   (`ct_argon2_avx2_compress`, `ct_argon2_avx2_compress_xor`). See "Argon2 on
   AVX2" below.
@@ -242,11 +246,9 @@ through, compiled its sign mask into a comparison and `blo`. It replaced a
 `compress` fixed it, and all twenty-six probes then passed on all four
 targets.
 
-The AVX2 forms of these routines (`ic-mlkem/src/avx2.rs`) are outside this
-gate: they exist only in `std` x86-64 builds behind runtime detection, and
-their loops branch on loop counters. They are vector instructions with no
-data-dependent branch or index; each is compared exactly against the scalar
-form on every input the tests reach.
+The AVX2 forms of these routines (`ic-mlkem/src/avx2.rs`) were outside this
+gate until 2026-11-04; see "ML-KEM, P-256's table scan and SHA-512 on AVX2".
+Each is compared exactly against the scalar form on every input the tests reach.
 The functional test checks masks, byte selection and four-byte copy/swap for
 all 256 flag inputs, including noncanonical nonzero values. This adds
 compiler regression coverage, not hardware timing evidence or a guarantee
@@ -1361,6 +1363,64 @@ both short probes with `je`. The round loops of `encrypt8`, `ctr8` and
 Not probed: AES-128 and AES-192, which the same source compiles with other
 round counts; other message lengths, which change only which blocks exist; and
 `compute_powers`, at key setup, whose use of `H` is read only in `ct_gcm_twist`.
+
+## ML-KEM, P-256's table scan and SHA-512 on AVX2
+
+Added 2026-11-04. Three things every AVX2 CPU runs on secrets had no probe,
+because each exists only under `std`, or only where detection finds AVX2, and
+the gate builds without `std`:
+
+- `p256_x86::scan_avx2::<8>`, the generator table's window read, indexed by a
+  digit of the secret scalar in signing. `ct_p256_table_add` reads the scan, but
+  with detection reporting no AVX2 it reads `scan_sse2`.
+- `avx2_512::compress`, SHA-512's compression, which HMAC-SHA512, HKDF and
+  Ed25519's nonce hash put secrets through.
+- `ic-mlkem/src/avx2.rs`: the NTT and its inverse, base multiplication,
+  compression (to one bit and to eleven), twelve-bit decoding, `cbd2`,
+  `normalize`, `to_mont`, `add_assign` and `reduce`. This section replaces what
+  "ML-KEM decode regression" used to say, that they were outside the gate.
+
+`ic-mlkem` gains a `ct-probes` feature for it, and these modules also compile
+under `ct-probes`, as `gcm_x86_asm` does. What ships with `std` is unchanged but
+for the one fix below.
+
+The first run found one thing. `ntt` copied the polynomial into its sixteen
+registers' array in a loop, and the compiler made the loop a call to `memcpy`,
+on `s` during key generation and encapsulation's `y`. The length is fixed, so
+this is not known to leak: it ran a libc routine the gate cannot read, on secret
+data, inside a function documented as vector instructions. The loads are now
+written out. Key generation, which runs the NTT most, measured as parity: 7.73
+against 7.80 microseconds at ML-KEM-768, sixteen alternated runs a side, medians,
+with a spread of 6.6 to 11.4.
+
+What is left after that is loops over counters, excused by rule and held to the
+counts in `X86_EXCUSE_CEILINGS`; `cbd2`, `normalize`, `add_assign` and `reduce`
+compile to none. A test compares both scans with the masked entry, including a
+zero digit's no entry at all, and the existing tests compare each ML-KEM routine
+with its scalar form. The probes forward to the routines and run nothing else.
+
+### Mutations
+
+Each applied alone, the gate run on x86-64 as `check.sh` runs it, and reverted:
+
+- A `continue` on a zero mask in `scan_avx2`: four findings in
+  `ct_p256_scan_avx2`.
+- An early return on `w[0]` in SHA-512's `compress`: one finding in
+  `ct_sha512_avx2_compress`.
+- An early return on secret input in `cbd2`, `decode12`, `ntt` and
+  `basemul_add`: one finding in each one's probe.
+- The loop put back in `ntt`: `callq *memcpy` in `ct_mlkem_avx2_ntt`.
+- A table index on data in SHA-512 (`K512[(a & 63) as usize]`): one finding, but
+  on the loop's back edge, not on the load. The gate looks at branches and calls
+  and has no rule for an index, so this kill is incidental, and an index that
+  left the loop's shape alone would pass it. The "no data-dependent index" above
+  rests on reading these listings, and on the prover where IronProof has a target.
+
+Not probed: `rej_uniform` and `all_below_q_12`, which read the public matrix and
+the public encapsulation key; compression to the widths between one and eleven,
+which change a shift count and a mask; and whether `ntt` and `inv_ntt` leave the
+polynomial in their stack arrays, which the gate does not look at. They do not
+wipe them.
 
 ## AES-GCM on x86-64, 2026-10-13
 

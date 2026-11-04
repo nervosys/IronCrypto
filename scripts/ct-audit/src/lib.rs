@@ -1350,6 +1350,135 @@ mod x86_rsa {
 // groups, one group alone, and the twist of a power of H. Compiled to be
 // read, never run. The loops' back edges are excused by the counter-loop
 // rule, one per probe that loops.
+// x86-64: ML-KEM's AVX2 routines that see secrets. Compiled to be read, never
+// run.
+#[cfg(target_arch = "x86_64")]
+mod x86_mlkem {
+    use ic_mlkem::ct_probes as k;
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_ntt(c: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::ntt(c) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_inv_ntt(c: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::inv_ntt(c) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_basemul_add(acc: &mut [i16; 256], a: &[i16; 256], b: &[i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::basemul_add(acc, a, b) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_compress_1(c: &[i16; 256], out: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::compress_1(c, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_compress_11(c: &[i16; 256], out: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::compress_11(c, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_decode12(bytes: &[u8; 384], out: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::decode12(bytes, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_cbd2(bytes: &[u8; 128], out: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::cbd2(bytes, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_normalize(c: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::normalize(c) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_to_mont(c: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::to_mont(c) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_add_assign(a: &mut [i16; 256], b: &[i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::add_assign(a, b) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_mlkem_avx2_reduce(c: &mut [i16; 256]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { k::reduce(c) }
+    }
+}
+
+// x86-64: P-256's generator table scan and SHA-512's compression, on AVX2.
+// Compiled to be read, never run.
+#[cfg(target_arch = "x86_64")]
+mod x86_avx2_gaps {
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_p256_scan_avx2(entries: &[[u64; 8]; 32], masks: &[u64; 32]) -> [u64; 8] {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { ic_ec::ct_probes::p256_scan_avx2(entries, masks) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_sha512_avx2_compress(h: &mut [u64; 8], w: &mut [u64; 80], block: &[u8; 128]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { ic_hash::ct_probes::sha512_avx2_compress(h, w, block) }
+    }
+}
+
 // x86-64: Argon2's compression function on AVX2, writing and XORing. Compiled
 // to be read, never run. `ic-kdf` needs `alloc` for what surrounds it, so the
 // link needs an allocator; nothing here calls one, and this one only refuses.
