@@ -134,6 +134,21 @@ unsafe fn p(a: &mut __m256i, b: &mut __m256i, c: &mut __m256i, d: &mut __m256i) 
 /// The CPU must support AVX2.
 #[target_feature(enable = "avx2")]
 pub(super) unsafe fn compress(x: &Block, y: &Block, out: &mut Block, xor: bool) {
+    if xor {
+        compress_as::<true>(x, y, out)
+    } else {
+        compress_as::<false>(x, y, out)
+    }
+}
+
+/// [`compress`] for one of its two modes, so that `ct_probes` can read each
+/// without a test of the flag.
+///
+/// # Safety
+///
+/// The CPU must support AVX2.
+#[target_feature(enable = "avx2")]
+pub(super) unsafe fn compress_as<const XOR: bool>(x: &Block, y: &Block, out: &mut Block) {
     let mut r = [0u64; BLOCK_WORDS];
     for ((slot, a), b) in r.iter_mut().zip(x.iter()).zip(y.iter()) {
         *slot = a ^ b;
@@ -181,7 +196,7 @@ pub(super) unsafe fn compress(x: &Block, y: &Block, out: &mut Block, xor: bool) 
         store(d, 6, 7);
     }
 
-    if xor {
+    if XOR {
         for ((o, a), b) in out.iter_mut().zip(q.iter()).zip(r.iter()) {
             *o ^= a ^ b;
         }

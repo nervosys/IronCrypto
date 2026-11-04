@@ -21,6 +21,11 @@ ic-rsa = { path = "../../crates/ic-rsa", default-features = false, features = ["
 ic-cipher = { path = "../../crates/ic-cipher", default-features = false, features = ["ct-probes", "aarch64-crypto"] }
 ic-hash = { path = "../../crates/ic-hash", default-features = false, features = ["ct-probes", "aarch64-crypto"] }
 
+# Read on x86-64 only, and it needs an allocator (src/lib.rs); the 32-bit and
+# aarch64 builds do not take it.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+ic-kdf = { path = "../../crates/ic-kdf", default-features = false, features = ["ct-probes"] }
+
 [profile.release]
 opt-level = 3
 lto = "fat"

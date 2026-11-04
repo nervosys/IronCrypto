@@ -41,9 +41,45 @@ pub mod phc;
 // Argon2's compression function with AVX2, behind runtime detection. The
 // only unsafe code in this crate; see `avx2` for what it computes and how
 // it is checked.
-#[cfg(all(target_arch = "x86_64", feature = "std"))]
+#[cfg(all(target_arch = "x86_64", any(feature = "std", feature = "ct-probes")))]
 #[allow(unsafe_code)]
 mod avx2;
+
+/// Argon2's AVX2 compression function, for `scripts/ct-audit` to read after
+/// LTO. Not API, not covered by semver. Never executed.
+///
+/// One call of `G`, writing and XORing, as the two forms the passes use. Which
+/// block it reads is the choice of Argon2's indexing, not of this function:
+/// data-dependent by design in Argon2d and in Argon2id's later passes, and
+/// not what these read.
+#[cfg(all(target_arch = "x86_64", feature = "ct-probes"))]
+#[allow(unsafe_code)]
+#[doc(hidden)]
+pub mod ct_probes {
+    use super::{avx2, Block};
+
+    /// `G(x, y)` written to `out`.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    #[target_feature(enable = "avx2")]
+    pub unsafe fn compress(x: &Block, y: &Block, out: &mut Block) {
+        // SAFETY: as the caller guarantees.
+        unsafe { avx2::compress_as::<false>(x, y, out) }
+    }
+
+    /// `G(x, y)` XORed into `out`, as the passes after the first do.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2.
+    #[target_feature(enable = "avx2")]
+    pub unsafe fn compress_xor(x: &Block, y: &Block, out: &mut Block) {
+        // SAFETY: as the caller guarantees.
+        unsafe { avx2::compress_as::<true>(x, y, out) }
+    }
+}
 
 use alloc::vec::Vec;
 use ic_core::{ensure, Result, Zeroize};

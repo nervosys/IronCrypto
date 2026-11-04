@@ -1350,6 +1350,51 @@ mod x86_rsa {
 // groups, one group alone, and the twist of a power of H. Compiled to be
 // read, never run. The loops' back edges are excused by the counter-loop
 // rule, one per probe that loops.
+// x86-64: Argon2's compression function on AVX2, writing and XORing. Compiled
+// to be read, never run. `ic-kdf` needs `alloc` for what surrounds it, so the
+// link needs an allocator; nothing here calls one, and this one only refuses.
+#[cfg(target_arch = "x86_64")]
+mod x86_argon2 {
+    use core::alloc::{GlobalAlloc, Layout};
+    use ic_kdf::argon2::{ct_probes as p, Block};
+
+    struct Refuse;
+
+    // SAFETY: a null return is how an allocator reports failure, and `dealloc`
+    // is never reached, since nothing was ever allocated.
+    unsafe impl GlobalAlloc for Refuse {
+        /// # Safety
+        /// As `GlobalAlloc::alloc`; this touches nothing and returns null.
+        unsafe fn alloc(&self, _: Layout) -> *mut u8 {
+            core::ptr::null_mut()
+        }
+        /// # Safety
+        /// As `GlobalAlloc::dealloc`; this touches nothing.
+        unsafe fn dealloc(&self, _: *mut u8, _: Layout) {}
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Refuse = Refuse;
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_argon2_avx2_compress(x: &Block, y: &Block, out: &mut Block) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { p::compress(x, y, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX2.
+    #[no_mangle]
+    pub unsafe fn ct_argon2_avx2_compress_xor(x: &Block, y: &Block, out: &mut Block) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2.
+        unsafe { p::compress_xor(x, y, out) }
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 mod x86_aesni {
     use ic_cipher::ct_probes as p;

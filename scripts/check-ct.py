@@ -170,6 +170,8 @@ X86_ONLY = (
     # thirty-two blocks. The loops' back edges are excused by the x86-64
     # counter-loop rule below.
     "ct_gcm_clmul8_seal", "ct_gcm_clmul8_open", "ct_gcm_clmul8_group",
+    # Argon2's compression function on AVX2, writing and XORing.
+    "ct_argon2_avx2_compress", "ct_argon2_avx2_compress_xor",
     # AES-NI at AES-256 outside the bulk loops, and AES-GCM's short path.
     "ct_aes256_aesni_encrypt", "ct_aes256_aesni_decrypt", "ct_aes256_aesni_encrypt8",
     "ct_aes256_aesni_ctr8", "ct_gcm_short_seal", "ct_gcm_short_open",
@@ -314,6 +316,10 @@ X86_EXCUSE_CEILINGS = {
     # counter from `exp_bits`); the masking of the exponent (64 words, two a
     # time); the conversion out of radix 2^52 (16 words); the wipe of the
     # work area; and the `memset` that zeroes it on the stack.
+    # Argon2's compression on AVX2, each mode its own instance: the eight rows
+    # and the eight columns.
+    "ct_argon2_avx2_compress": {"counter loop": 2},
+    "ct_argon2_avx2_compress_xor": {"counter loop": 2},
     "ct_rsa_ifma_pow_1024": {"counter loop": 9, "constant memset": 1},
     # At 1536 bits, through amm4, the same nine (30 rows, 30 words, 24 words),
     # and two the 1024-bit copy unrolls: the modulus's and the out-of-line

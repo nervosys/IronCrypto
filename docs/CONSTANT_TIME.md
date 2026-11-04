@@ -23,7 +23,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 Forty-four exported probes call the actual implementations on every target,
 106 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
-targets: 362 gating probe/target checks in all, 168 on x86-64, 62 on aarch64,
+targets: 364 gating probe/target checks in all, 170 on x86-64, 62 on aarch64,
 and 44 on each of the three other targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -124,6 +124,9 @@ release profile; this is not the workspace binary's overflow-checked profile.
   `ct_p256_table_add`). See "P-256 and P-384 without IFMA, on one buffer"
   below.
 
+- On x86-64 only, Argon2's compression function on AVX2, writing and XORing
+  (`ct_argon2_avx2_compress`, `ct_argon2_avx2_compress_xor`). See "Argon2 on
+  AVX2" below.
 - On x86-64 only, the AES-NI backend at AES-256, one block each way, a batch
   of eight and counter mode over one (`ct_aes256_aesni_encrypt`, `_decrypt`,
   `_encrypt8`, `_ctr8`), and AES-GCM's short path: a 31-byte message with 13
@@ -1295,6 +1298,30 @@ Two mutations, each restored afterwards:
 Probe count: thirty-five on x86-64 alone, where there were thirty-four. All
 seventy-nine pass on x86-64, and the forty-four on each 32-bit target are
 unchanged: 79 + 3 x 44 = 211 gating probe/target checks.
+
+## Argon2 on AVX2
+
+Added 2026-11-03. `G` on AVX2 (`ic-kdf/src/argon2/avx2.rs`) had no probe. Each
+mode is its own instance, `compress_as`, so that the probes read it without a
+test of the flag; `compress` chooses between them on the public mode. The only
+branches are the two loops, `subq $-128; cmpq $1120` from 96, and `addq $16;
+cmpq $1024` from zero, eight passes each. Nothing was known to be wrong, and
+nothing was found.
+
+This is the compression function and nothing around it. Which block `G` reads
+is Argon2's indexing, which is data-dependent by design in Argon2d and in
+Argon2id after its first half-pass: that is the algorithm's own trade-off, and
+no probe of this function speaks to it. Neither do these cover the memory
+filling, BLAKE2b, or `H'`.
+
+Each mutation applied, the gate run and restored. A branch on BlaMka's first
+output in `g`: fails both probes. A branch on a word in the writing mode's
+final loop: fails `ct_argon2_avx2_compress` alone, with the third loop and the
+`memset` and `memcpy` the changed code brings. A third loop before the columns:
+fails both, 3 findings against the 2 reviewed.
+
+`ic-kdf` needs `alloc`, so `scripts/ct-audit` links an allocator that only
+refuses, and takes the crate on x86-64 alone. Nothing the probes read calls it.
 
 ## AES-NI and AES-GCM's short path
 
