@@ -1317,6 +1317,21 @@ mod x86_rsa {
     /// # Safety
     /// Requires AVX-512F, IFMA and BMI2.
     #[no_mangle]
+    pub unsafe fn ct_rsa_ifma_pow_1536(
+        m: &Modulus,
+        base: &Uint,
+        exp: &Uint,
+        exp_bits: usize,
+        out: &mut [u64; 32],
+    ) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX-512F, IFMA and BMI2.
+        unsafe { p::ifma_pow_1536(m, base, exp, exp_bits, out) }
+    }
+
+    /// # Safety
+    /// Requires AVX-512F, IFMA and BMI2.
+    #[no_mangle]
     pub unsafe fn ct_rsa_ifma_pow_2048(
         m: &Modulus,
         base: &Uint,

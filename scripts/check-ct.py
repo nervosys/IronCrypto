@@ -154,9 +154,10 @@ X86_ONLY = (
     # the reduction in the whole product does.
     "ct_rsa_redc_block_2048", "ct_rsa_redc_2048",
     # RSA's whole exponentiation on AVX-512 IFMA, compiled once per width:
-    # at 1024 bits, each of RSA-2048's two CRT exponentiations, and at 2048
-    # bits, its modulus. Its loops are excused the same way.
-    "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_2048",
+    # at 1024 bits, each of RSA-2048's two CRT exponentiations, at 1536 bits,
+    # each of RSA-3072's, through its own kernel, and at 2048 bits, RSA-2048's
+    # modulus. Its loops are excused the same way.
+    "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_1536", "ct_rsa_ifma_pow_2048",
     # The secret digit's read of a prepared P-384 key's window, in ECDH. Its
     # loop over the sixteen entries is excused by the x86-64 rules below, up
     # to X86_EXCUSE_CEILINGS. The additions after it are the point formulas
@@ -311,6 +312,11 @@ X86_EXCUSE_CEILINGS = {
     # time); the conversion out of radix 2^52 (16 words); the wipe of the
     # work area; and the `memset` that zeroes it on the stack.
     "ct_rsa_ifma_pow_1024": {"counter loop": 9, "constant memset": 1},
+    # At 1536 bits, through amm4, the same nine (30 rows, 30 words, 24 words),
+    # and two the 1024-bit copy unrolls: the modulus's and the out-of-line
+    # conversion into radix 2^52 (29 limbs each). The masked subtraction at the
+    # end stays unrolled here, which is the one this has fewer than 2048 bits.
+    "ct_rsa_ifma_pow_1536": {"counter loop": 11, "constant memset": 1},
     # At 2048 bits the same nine (40 rows, 40 words, 32 words), and three that
     # the 1024-bit copy unrolls: the modulus's and the out-of-line conversion
     # into radix 2^52 (39 limbs each), and the masked subtraction at the end
@@ -1476,7 +1482,7 @@ X86_WIPED = (
     "ct_ed25519_fe64_scan", "ct_ed25519_fe64_madd_ext2_scan",
     "ct_rsa_select_2048", "ct_rsa_select32_2048", "ct_rsa_select32_avx2_1024",
     "ct_rsa_select32_avx2_1536", "ct_rsa_select32_avx2_2048",
-    "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_2048",
+    "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_1536", "ct_rsa_ifma_pow_2048",
     "ct_chacha20_zmm_group", "ct_keccak_x8_permute",
 )
 

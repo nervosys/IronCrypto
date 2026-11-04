@@ -23,7 +23,7 @@ previous result's name failed two tests; restoring it passed all eight.
 
 Forty-four exported probes call the actual implementations on every target,
 106 more on x86-64, seven more on aarch64, and Ed448's eleven on both 64-bit
-targets: 355 gating probe/target checks in all, 161 on x86-64, 62 on aarch64,
+targets: 356 gating probe/target checks in all, 162 on x86-64, 62 on aarch64,
 and 44 on each of the three other targets. Their public sizes
 and algorithm parameters are fixed; secret inputs remain runtime arguments.
 Release optimization with fat LTO exposes the called implementation inside
@@ -106,8 +106,9 @@ release profile; this is not the workspace binary's overflow-checked profile.
   "RSA-4096's primes by Karatsuba" below.
 - On x86-64 only, RSA's whole exponentiation on AVX-512 IFMA, from the
   modulus, base and secret exponent to the reduced result, at 1024 bits
-  (`ct_rsa_ifma_pow_1024`, each of RSA-2048's two CRT exponentiations) and
-  2048 bits (`ct_rsa_ifma_pow_2048`, its modulus): under the same rule, with
+  (`ct_rsa_ifma_pow_1024`, each of RSA-2048's two CRT exponentiations), 1536
+  bits (`ct_rsa_ifma_pow_1536`, each of RSA-3072's) and 2048 bits
+  (`ct_rsa_ifma_pow_2048`, RSA-2048's modulus): under the same rule, with
   no branch but a loop's own counter. See "The IFMA exponentiation" below.
 
 - On x86-64 only, the window read of a prepared P-384 public key in ECDH
@@ -1117,6 +1118,7 @@ on them (`cmpq $3, %rax; je` to `amm3`), bounds checks on the width
 | Probe | counter loop | constant memset |
 | --- | --- | --- |
 | `ct_rsa_ifma_pow_1024` | 9 | 1 |
+| `ct_rsa_ifma_pow_1536` | 11 | 1 |
 | `ct_rsa_ifma_pow_2048` | 12 | 1 |
 
 `ct_rsa_ifma_pow_1024` (`pow_fixed::<24>`, 20 limbs of 52 bits, 16
@@ -1153,7 +1155,20 @@ limbs taking bits from the word above; the fortieth is straight-line), and
 the masked subtraction in `leave::<40>`, `addq $2, %rax; cmpq $33, %rax;
 jne` from `movl $1, %eax`. And `memset` of 7232 bytes on the stack.
 
-The exponent length is an argument to both probes, as it is to
+`ct_rsa_ifma_pow_1536` (`pow_fixed::<32>`, 30 limbs, 24 words) was added on
+2026-11-03: `amm4`, the kernel only this width uses, had reached no probe,
+although it is what RSA-3072's two CRT exponentiations run on these CPUs. The
+kernel macro is shared, but `amm4` has its own register tables, so the other
+two widths said nothing about its instructions. It has the same nine, with 30
+rows, a 30-word table read, the conversion out to 1536 bits (`addq $64;
+cmpq $1536`) and a wipe of 5888 bytes from 56 to 5944; and two loops the
+1024-bit copy unrolls: the conversion of the modulus into the context and
+`to_radix52::<64, 32>`, each `addq $52; cmpq $1508; jne` from zero (29 limbs).
+The masked subtraction in `leave::<32>` is unrolled, 24 `sbbq` with no branch,
+which is the one loop fewer than 2048 bits. And `memset` of 5888 bytes on the
+stack.
+
+The exponent length is an argument to all three probes, as it is to
 `Modulus::pow`; the window loop's count is computed from it, without a
 branch, and the rule's limit -- it does not establish where a counter
 starts -- is answered for it by the reading above.
@@ -1163,6 +1178,12 @@ starts -- is answered for it by the reading above.
 Each applied to `pow_fixed`, the gate run as `check.sh` runs it, and
 restored:
 
+- On `ct_rsa_ifma_pow_1536`, on the x86-64 gate, 2026-11-03: a test of a
+  column sum and `jz` in the kernel macro's row loop fails it with `je` in the
+  body and in `mul_raw`; the wipe done twice fails it with 12 findings against
+  11; and a branch on the window's digit before the table read fails it with
+  `jae`. The first shows `amm4` itself is what the probe reads. Those below
+  predate it.
 - `if digit & 1 != 0 { black_box(digit) }` on the window's digit before the
   table read: fails `ct_rsa_ifma_pow_1024: jae .LBB70_7` and
   `ct_rsa_ifma_pow_2048: jae .LBB71_9` (the test is a `bt`).

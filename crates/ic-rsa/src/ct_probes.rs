@@ -335,6 +335,23 @@ pub mod x86 {
         unsafe { ifma::pow_fixed::<24>(m, base, exp, exp_bits, out) }
     }
 
+    /// The same at 1536 bits, a prime of RSA-3072, through the kernel only
+    /// this width uses (`amm4`). `m` must be 24 words wide.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX-512F, IFMA and BMI2.
+    pub unsafe fn ifma_pow_1536(
+        m: &Modulus,
+        base: &Uint,
+        exp: &Uint,
+        exp_bits: usize,
+        out: &mut [u64; 32],
+    ) {
+        // SAFETY: as the caller guarantees.
+        unsafe { ifma::pow_fixed::<32>(m, base, exp, exp_bits, out) }
+    }
+
     /// The same at 2048 bits, the modulus of RSA-2048 or a prime of RSA-4096.
     /// `m` must be 32 words wide.
     ///

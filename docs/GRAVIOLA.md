@@ -1517,8 +1517,9 @@ same one branch, and so does a third, `ic-rsa-4096-sign-adx`, on the 32-word
 Karatsuba kernels. Valgrind does not emulate AVX-512, so it cannot reach the
 IFMA path; the compiled-code gate reads it instead: the IFMA Montgomery
 product (`ct_rsa_ifma_amm_2048`), whose one loop branch is on the row count,
-and the whole exponentiation at 1024 and 2048 bits (`ct_rsa_ifma_pow_1024`,
-`ct_rsa_ifma_pow_2048`), in which every branch is a loop's own counter
+and the whole exponentiation at 1024, 1536 and 2048 bits
+(`ct_rsa_ifma_pow_1024`, `ct_rsa_ifma_pow_1536`, `ct_rsa_ifma_pow_2048`), in
+which every branch is a loop's own counter
 (docs/CONSTANT_TIME.md, "The IFMA exponentiation"). Graviola's RSA is not in the harness,
 and its README states that its RSA key generation is not side-channel
 safe.
