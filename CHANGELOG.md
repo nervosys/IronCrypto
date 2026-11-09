@@ -72,9 +72,9 @@ the workspace that matches the `ic-pkix` key enums exhaustively.
   and `PrivateKeyInfo::Ed448` (id-Ed448, 1.3.101.113, RFC 8410), `ic_sig`'s
   `PublicKey::Ed448` and verification, and `SoftwareSigner` reading an Ed448
   PKCS#8 key. Keys and signatures agree with OpenSSL 3.5.9 byte for byte
-  (`testvectors/openssl-ed448.json`). `PublicKeyInfo` and `PrivateKeyInfo` are
-  not `non_exhaustive`, so a caller matching them exhaustively must add the
-  new arm. Certificate issuance under Ed448 is not added.
+  (`testvectors/openssl-ed448.json`). The new variants break a caller that
+  matches these enums exhaustively, which is why this release is 0.4.0 (see
+  Breaking). Certificate issuance under Ed448 is not added.
 - **Composite ML-DSA signatures** (`ic_sig::composite`, ontology
   `mldsa44-ed25519-sha512`, `mldsa65-ed25519-sha512`,
   `mldsa87-ed448-shake256`): id-MLDSA44-Ed25519-SHA512,
