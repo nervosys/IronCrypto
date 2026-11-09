@@ -1104,6 +1104,9 @@ fn ontology_entry(algorithm: ic_pkix::KeyAlgorithm) -> Option<&'static str> {
         ic_pkix::KeyAlgorithm::Ed448 => Some("ed448"),
         ic_pkix::KeyAlgorithm::X25519 => Some("x25519"),
         ic_pkix::KeyAlgorithm::Rsa | ic_pkix::KeyAlgorithm::Unknown => None,
+        // `KeyAlgorithm` is non-exhaustive: an algorithm added later has no
+        // entry here until one is written for it.
+        _ => None,
     }
 }
 

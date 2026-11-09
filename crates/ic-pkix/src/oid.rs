@@ -112,8 +112,12 @@ pub const CLIENT_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02]
 ///
 /// A closed vocabulary rather than a raw OID slice: an unknown OID becomes
 /// [`KeyAlgorithm::Unknown`] at the parse boundary, so downstream code matches
-/// exhaustively instead of comparing byte strings at each use.
+/// on a variant instead of comparing byte strings at each use.
+///
+/// Non-exhaustive: a release that adds an algorithm adds a variant, so a match
+/// outside this crate needs a wildcard arm. Ed448 was one such addition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyAlgorithm {
     /// RSA, any padding. The key itself does not fix the padding.
     Rsa,

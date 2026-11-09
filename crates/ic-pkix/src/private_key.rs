@@ -38,7 +38,10 @@ use ic_core::{ensure, Result};
 ///
 /// `Debug` prints the algorithm and the public parts only, and equality
 /// compares the secret parts in constant time.
+///
+/// Non-exhaustive, as [`KeyAlgorithm`] is: a new key type adds a variant.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum PrivateKeyInfo<'a> {
     /// An RSA private key, with every field PKCS#1 defines for the two-prime
     /// case.

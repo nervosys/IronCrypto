@@ -5,6 +5,27 @@ all of them.
 
 ## Unreleased
 
+The next release is 0.4.0, not 0.3.3: it breaks compilation for code outside
+the workspace that matches the `ic-pkix` key enums exhaustively.
+
+### Breaking
+
+- **`ic_pkix::PrivateKeyInfo`, `PublicKeyInfo` and `KeyAlgorithm` gain an
+  `Ed448` variant and are now `#[non_exhaustive]`.** A `match` on any of them
+  outside `ic-pkix` needs a wildcard arm. Ed448 alone would have broken such a
+  match; marking the enums non-exhaustive means the next added algorithm will
+  not. Found by AirCom's build: IronSocketLayer 0.7.2 matches
+  `PrivateKeyInfo` exhaustively in `SigningKey::from_pkcs8_der` and fails with
+  E0004 against this release, so it needs a release of its own with the new
+  arm. Inside the workspace, `ic-cli`'s map from key algorithm to ontology
+  entry took the wildcard.
+
+### Fixed
+
+- **`ic-fips`:** the ML-DSA-87 known-answer test's doc comment sat on the
+  composite ML-DSA-44 + Ed25519 self-test after the composites were added
+  between them; it is back on `ml_dsa_87_self_test`.
+
 ### Added
 
 - **Ed448** (`ic_ec::Ed448`, ontology `ed448`): RFC 8032 pure Ed448 on

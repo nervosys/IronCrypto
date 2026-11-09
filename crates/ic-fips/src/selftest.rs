@@ -555,14 +555,6 @@ fn ml_dsa_44_self_test() -> Result<()> {
     Ok(())
 }
 
-/// ML-DSA-87 known-answer test: ACVP ML-DSA-keyGen-FIPS204, tcId 51.
-///
-/// The same construction as [`ml_dsa_65_self_test`], for the parameter set
-/// that shares ML-DSA-65's code: key generation is deterministic in the seed
-/// and pins every parameter-dependent layer at once.
-///
-/// Taken from usnistgov/ACVP-Server at 975de31eb83d. The same case is in
-/// testvectors/ml-dsa-87-keygen.json, where the full set of 25 is checked.
 #[cfg(not(ic_approved_only))]
 fn mldsa44_ed25519_sha512_self_test() -> Result<()> {
     ic_sig::composite::self_test(ic_sig::composite::Composite::MlDsa44Ed25519Sha512)
@@ -578,6 +570,14 @@ fn mldsa87_ed448_shake256_self_test() -> Result<()> {
     ic_sig::composite::self_test(ic_sig::composite::Composite::MlDsa87Ed448Shake256)
 }
 
+/// ML-DSA-87 known-answer test: ACVP ML-DSA-keyGen-FIPS204, tcId 51.
+///
+/// The same construction as [`ml_dsa_65_self_test`], for the parameter set
+/// that shares ML-DSA-65's code: key generation is deterministic in the seed
+/// and pins every parameter-dependent layer at once.
+///
+/// Taken from usnistgov/ACVP-Server at 975de31eb83d. The same case is in
+/// testvectors/ml-dsa-87-keygen.json, where the full set of 25 is checked.
 fn ml_dsa_87_self_test() -> Result<()> {
     const SEED: &[u8] = b"\
          A16F5B0796703E2D1A0140A35CBF36EFABE70E752BA59B6A9A0E9C4B05302F73";

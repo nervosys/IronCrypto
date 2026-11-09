@@ -30,7 +30,10 @@ use crate::oid::{self, KeyAlgorithm};
 use ic_core::{ensure, Result};
 
 /// A parsed public key, borrowing from the DER it was read out of.
+///
+/// Non-exhaustive, as [`KeyAlgorithm`] is: a new key type adds a variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PublicKeyInfo<'a> {
     /// An RSA key: the modulus, big-endian and minimal, plus the exponent.
     Rsa {
