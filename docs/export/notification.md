@@ -685,6 +685,41 @@ UTC. The published source commit is `6431251`, clean in the VCS metadata of
 the packages read (`ic-core`, `ironcrypto`, `ic-cli`). At publication that
 commit and the `v0.3.2` tag were not yet on GitHub.
 
+## Notification submission for 0.4.0
+
+On 2026-11-09 the maintainer wrote "publish". Asked whether the earlier
+notice covers 0.4.0, which adds no package but adds Ed448, composite ML-DSA
+signatures and PBES2-encrypted PKCS#8, or whether an updated notice should be
+printed first, they chose "Print updated notice (Recommended)". This agent
+saved the text now in `docs/export/update-0.4.0-as-printed.md`, addressed to
+`crypt@bis.doc.gov` and `enc@nsa.gov`, naming the GitHub repository and the
+same twenty-two crates.io packages, with the contact fields and the date of
+the previous notification left blank. The maintainer wrote "Print the
+notification here", it was printed in full, and they replied "Sent".
+
+When printing it, this agent pointed out that its Encodings line says
+certificates are issued "signed with the algorithms above" while issuance
+under Ed448 is not implemented, and offered to amend it. The maintainer
+replied "Sent" without amending, so the text was sent, if as printed, with
+that line.
+
+This records that reply. It does not record the sent message, its completed
+fields, its sending time or its recipients, none of which have been supplied
+here.
+
+## 0.4.0 release authorization
+
+0.4.0 adds no package: the locations are the twenty-two already named, and
+no manifest adds or renames one. It adds cryptographic functionality 0.3.2
+did not have: Ed448 (RFC 8032), the composite ML-DSA signatures of
+draft-ietf-lamps-pq-composite-sigs-19, and PBES2-encrypted PKCS#8 (RFC 8018,
+RFC 5958). It is a breaking release: three `ic-pkix` enums gained a variant
+and became `#[non_exhaustive]`.
+
+The maintainer wrote "publish", and then "Sent" for the notice above.
+Publication proceeds on them. The push, tag and publish are the
+maintainer's to run; their outcome is not yet recorded.
+
 ## Determination
 
 `docs/EXPORT.md` sets out why, since the 2021 amendment, §742.15(b) may not

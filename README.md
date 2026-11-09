@@ -116,11 +116,17 @@ to one that still does not.
 
 ```toml
 [dependencies]
-ironcrypto = "0.3.2"
+ironcrypto = "0.4.0"
 ```
 
-The current release is **0.3.2**, published for all twenty-two crates on
-crates.io. It is compatible with 0.3.1 and adds no algorithm: ML-KEM's
+The current release is **0.4.0**, published for all twenty-two crates on
+crates.io. It is **breaking** for code that matches `ic_pkix`'s
+`PrivateKeyInfo`, `PublicKeyInfo` or `KeyAlgorithm` exhaustively: each gains
+an `Ed448` variant and is now `#[non_exhaustive]`, so add a wildcard arm. It
+adds Ed448 signatures (RFC 8032), composite ML-DSA signatures with Ed25519
+or Ed448 (draft-ietf-lamps-pq-composite-sigs-19), and password-encrypted
+PKCS#8 keys under PBES2, and makes ML-KEM key generation faster.
+**0.3.2** was compatible with 0.3.1 and added no algorithm: ML-KEM's
 Keccak calls run eight lanes wide on AVX-512, preparing a NIST-curve ECDH
 public key takes one field inversion instead of four, and 25 new Kani
 proofs cover ML-KEM's arithmetic and P-384's field addition, subtraction and
@@ -149,17 +155,17 @@ directly if you want a smaller graph:
 
 ```toml
 [dependencies]
-ic-cipher = "0.3.2"   # AES, ChaCha20, the AEADs
-ic-hash = "0.3.2"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
-ic-ec = "0.3.2"       # the NIST curves, X25519, Ed25519
-ic-hpke = "0.3.2"     # HPKE, RFC 9180
-ic-sig = "0.3.2"      # verify any signature over an X.509 public key
-ic-lms = "0.3.2"      # verify HSS/LMS hash-based signatures
-ic-slhdsa = "0.3.2"   # SLH-DSA, FIPS 205
+ic-cipher = "0.4.0"   # AES, ChaCha20, the AEADs
+ic-hash = "0.4.0"     # SHA-2, SHA-3, SHAKE, BLAKE2, BLAKE3
+ic-ec = "0.4.0"       # the NIST curves, X25519, Ed25519
+ic-hpke = "0.4.0"     # HPKE, RFC 9180
+ic-sig = "0.4.0"      # verify any signature over an X.509 public key
+ic-lms = "0.4.0"      # verify HSS/LMS hash-based signatures
+ic-slhdsa = "0.4.0"   # SLH-DSA, FIPS 205
 ```
 
 ```console
-$ cargo install ic-cli --version 0.3.2   # the `ic` CLI and MCP server
+$ cargo install ic-cli --version 0.4.0   # the `ic` CLI and MCP server
 ```
 
 **The facade was renamed in 0.2.8.** It was `iron-crypto`, imported as
@@ -170,7 +176,7 @@ The repository's release procedure requires recording a BIS/NSA notification
 before publication. [docs/RELEASING.md](docs/RELEASING.md) describes the procedure,
 and [docs/EXPORT.md](docs/EXPORT.md) its export considerations. The
 [notification record](docs/export/notification.md) records the user's reported
-submission and the 0.3.2 publication.
+submission and the 0.4.0 publication.
 
 The [source repository](https://github.com/nervosys/IronCrypto) is public.
 

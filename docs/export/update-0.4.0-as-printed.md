@@ -1,9 +1,10 @@
-# Updated notification for 0.4.0: the text printed
+# Updated notification for 0.4.0: the text printed, reported sent
 
 The text of an updated notification under 15 CFR §742.15(b), drafted by this
 agent on 2026-11-09 for IronCrypto 0.4.0 and printed for the maintainer that
-day. **This is the text as printed, with its blanks, not the message as
-sent**: the contact fields and the date of the previous notification are the
+day. The maintainer asked for it to be printed in the conversation, and
+then replied "Sent". **This is the text as printed, with its blanks, not the
+message as sent**: the contact fields and the date of the previous notification are the
 maintainer's to fill in and are not inferred here. Whether and when it was
 sent, and to whom, is recorded in `docs/export/notification.md` only as the
 maintainer reports it.

@@ -3,10 +3,10 @@
 All twenty-two crates share a version and are released together, so this covers
 all of them.
 
-## Unreleased
+## 0.4.0
 
-The next release is 0.4.0, not 0.3.3: it breaks compilation for code outside
-the workspace that matches the `ic-pkix` key enums exhaustively.
+0.4.0, not 0.3.3: it breaks compilation for code outside the workspace that
+matches the `ic-pkix` key enums exhaustively.
 
 ### Breaking
 
