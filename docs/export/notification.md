@@ -79,6 +79,7 @@ for `ic-core`, the first crate of each release to upload:
 | 0.3.0 | 2026-10-14 00:19:44 | all twenty-two crates published from `3571ffa` by the maintainer, after the updated notice printed for them was reported "Sent" and they wrote "Release 0.3.0 in the meantime"; adds no location; adds algorithms (see the 0.3.0 entries below) |
 | 0.3.1 | 2026-10-17 03:54:00 | all twenty-two crates published from `0bc08d0` by the maintainer, after writing "release 0.3.1" and answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
 | 0.3.2 | 2026-10-18 04:53:02 | all twenty-two crates published from `6431251` by the maintainer, after answering, on the notice, "Earlier notice suffices"; adds no location, no algorithm and no cryptographic functionality |
+| 0.4.0 | 2026-11-10 01:12:49 | all twenty-two crates published from `2ae9912` by the maintainer, after writing "publish" and replying "Sent" to the updated notice printed for them; adds no location; adds Ed448, composite ML-DSA signatures and PBES2-encrypted PKCS#8 |
 
 The first upload came 3 minutes 42 seconds after `332320e`.
 
@@ -717,8 +718,16 @@ RFC 5958). It is a breaking release: three `ic-pkix` enums gained a variant
 and became `#[non_exhaustive]`.
 
 The maintainer wrote "publish", and then "Sent" for the notice above.
-Publication proceeds on them. The push, tag and publish are the
-maintainer's to run; their outcome is not yet recorded.
+Publication proceeds on them.
+
+The maintainer ran `git push origin master`, `git tag v0.4.0`, `git push
+origin v0.4.0` and `cargo publish --workspace`, chained so that each ran only
+if the one before succeeded; the pre-push hook ran the full check and passed.
+GitHub shows `master` and `v0.4.0` at `2ae9912`. The crates.io API confirmed
+all twenty-two 0.4.0 packages live and not yanked. The first upload was
+`ic-core` at 2026-11-10 01:12:49 UTC and the last `ic-cli` at 01:13:47 UTC.
+The published source commit is `2ae9912`, named in the VCS metadata of the
+packages read (`ic-core`, `ironcrypto`, `ic-cli`).
 
 ## Determination
 
