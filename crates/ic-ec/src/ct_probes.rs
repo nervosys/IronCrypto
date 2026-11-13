@@ -396,9 +396,9 @@ mod adx_steps {
     /// The CPU must support AVX2.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
-    pub unsafe fn p256_scan_avx2(entries: &[[u64; 8]; 32], masks: &[u64; 32]) -> [u64; 8] {
+    pub unsafe fn p256_scan_avx2(out: &mut [u64; 8], entries: &[[u64; 8]; 32], masks: &[u64; 32]) {
         // SAFETY: as the caller guarantees, and 8 is a multiple of four.
-        unsafe { crate::nist::p256_x86::scan_avx2(entries, masks) }
+        unsafe { crate::nist::p256_x86::scan_avx2(out, entries, masks) }
     }
 
     /// One digit's addition in P-384's multiplication on MULX/ADX, the digit

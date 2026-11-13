@@ -223,7 +223,8 @@ pub(crate) fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64;
         // same array; the CPU has AVX2.
         unsafe {
             let entries8 = core::slice::from_raw_parts(entries.as_ptr().cast::<[u64; 8]>(), n);
-            let r = scan_avx2::<8>(entries8, masks);
+            let mut r = [0u64; 8];
+            scan_avx2::<8>(&mut r, entries8, masks);
             core::ptr::read(&r as *const [u64; 8] as *const [u64; W])
         }
     } else {
@@ -259,33 +260,60 @@ fn scan_sse2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
     acc
 }
 
-/// [`scan`] in AVX2.
+/// [`scan`] in AVX2, into `out`.
+///
+/// The result is written through `out` rather than returned: returned, it is
+/// copied to the caller with `vmovups`.
 ///
 /// # Safety
 ///
 /// The CPU must support AVX2, and `W` must be a multiple of four.
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn scan_avx2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
+pub(crate) unsafe fn scan_avx2<const W: usize>(
+    out: &mut [u64; W],
+    entries: &[[u64; W]],
+    masks: &[u64],
+) {
     use core::arch::x86_64::*;
     // Up to twelve words, P-384's affine point, in whole lanes: `lanes` has
     // three. Above that, `take(W / 4)` would stop short and drop words.
     const { assert!(W.is_multiple_of(4) && W <= 12) };
-    let mut acc = [0u64; W];
+    // The masking and the final stores are in assembly: as intrinsics, LLVM
+    // emits them in the float domain (`vandps`, `vorps`, `vmovups`), which
+    // Intel's list of data-operand-independent timing instructions does not
+    // name. `vpand`, `vpor` and `vmovdqu` it does.
     let mut lanes = [_mm256_setzero_si256(); 3];
     for (entry, &mask) in entries.iter().zip(masks) {
         let m = _mm256_set1_epi64x(mask as i64);
         for (j, lane) in lanes.iter_mut().enumerate().take(W / 4) {
             // SAFETY: `entry` is `W` words and `W` is a multiple of four, so
-            // words 4j to 4j + 3 are in it for every j below W / 4.
-            let v = unsafe { _mm256_loadu_si256(entry.as_ptr().add(4 * j).cast()) };
-            *lane = _mm256_or_si256(*lane, _mm256_and_si256(v, m));
+            // words 4j to 4j + 3 are in it for every j below W / 4; the load
+            // is unaligned.
+            unsafe {
+                asm!(
+                    "vpand {t}, {m}, ymmword ptr [{e}]",
+                    "vpor {l}, {l}, {t}",
+                    l = inout(ymm_reg) *lane,
+                    m = in(ymm_reg) m,
+                    e = in(reg) entry.as_ptr().add(4 * j),
+                    t = out(ymm_reg) _,
+                    options(pure, readonly, nostack, preserves_flags),
+                );
+            }
         }
     }
     for (j, lane) in lanes.iter().enumerate().take(W / 4) {
-        // SAFETY: as above, into `acc`.
-        unsafe { _mm256_storeu_si256(acc.as_mut_ptr().add(4 * j).cast(), *lane) };
+        // SAFETY: as above, into `out`, which is `W` words; every word is
+        // written.
+        unsafe {
+            asm!(
+                "vmovdqu ymmword ptr [{a}], {l}",
+                a = in(reg) out.as_mut_ptr().add(4 * j),
+                l = in(ymm_reg) *lane,
+                options(nostack, preserves_flags),
+            );
+        }
     }
-    acc
 }
 
 /// [`scan`] over affine P-256 points, as their eight words.
@@ -1468,10 +1496,31 @@ mod tests {
         for pick in 0..=32 {
             let masks: [u64; 32] = core::array::from_fn(|i| if i == pick { !0 } else { 0 });
             let want = entries.get(pick).copied().unwrap_or([0; 8]);
+            // Every word of `out` is written, whatever it held.
+            let mut out = [0xa5a5_a5a5_a5a5_a5a5u64; 8];
             // SAFETY: AVX2 was just detected, and 8 is a multiple of four.
-            assert_eq!(unsafe { scan_avx2(&entries, &masks) }, want, "AVX2, {pick}");
+            unsafe { scan_avx2(&mut out, &entries, &masks) };
+            assert_eq!(out, want, "AVX2, {pick}");
             // SAFETY: SSE2 is part of the x86-64 baseline.
             assert_eq!(unsafe { scan_sse2(&entries, &masks) }, want, "SSE2, {pick}");
+        }
+        // Two masks at once: the scans OR the masked entries, which a single
+        // mask cannot tell from XOR or from overwriting.
+        for pick in 0..32 {
+            let other = (pick + 5) % 32;
+            let masks: [u64; 32] =
+                core::array::from_fn(|i| if i == pick || i == other { !0 } else { 0 });
+            let want: [u64; 8] = core::array::from_fn(|j| entries[pick][j] | entries[other][j]);
+            let mut out = [0u64; 8];
+            // SAFETY: AVX2 was just detected, and 8 is a multiple of four.
+            unsafe { scan_avx2(&mut out, &entries, &masks) };
+            assert_eq!(out, want, "AVX2, {pick} and {other}");
+            // SAFETY: SSE2 is part of the x86-64 baseline.
+            assert_eq!(
+                unsafe { scan_sse2(&entries, &masks) },
+                want,
+                "SSE2, {pick} and {other}"
+            );
         }
     }
 

@@ -1463,10 +1463,14 @@ mod x86_avx2_gaps {
     /// # Safety
     /// Requires AVX2.
     #[no_mangle]
-    pub unsafe fn ct_p256_scan_avx2(entries: &[[u64; 8]; 32], masks: &[u64; 32]) -> [u64; 8] {
+    pub unsafe fn ct_p256_scan_avx2(
+        out: &mut [u64; 8],
+        entries: &[[u64; 8]; 32],
+        masks: &[u64; 32],
+    ) {
         // SAFETY: forwards the `# Safety` precondition of the function above, which
         // requires AVX2.
-        unsafe { ic_ec::ct_probes::p256_scan_avx2(entries, masks) }
+        unsafe { ic_ec::ct_probes::p256_scan_avx2(out, entries, masks) }
     }
 
     /// # Safety
