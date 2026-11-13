@@ -176,6 +176,7 @@ pub(crate) fn has_adx() -> bool {
 }
 
 /// Whether this CPU has AVX2, asked once; as `has_adx` for `no_std`.
+#[cfg(target_feature = "sse2")]
 #[inline]
 fn has_avx2() -> bool {
     #[cfg(feature = "std")]
@@ -218,20 +219,22 @@ pub(crate) fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64;
     // whatever `W` is: a call on `W` would instantiate the kernel for every
     // width `scan` is used at, and its own bound, `W <= 12`, would refuse the
     // wider ones at compile time. The branch is for `W == 8` alone.
+    // `scan_avx2` passes vectors to `asm!`, which a target without SSE2
+    // registers (`x86_64-unknown-none`, soft-float) cannot compile.
+    #[cfg(target_feature = "sse2")]
     if W == 8 && has_avx2() {
         // SAFETY: `W` is 8, so each entry is `[u64; 8]` and `[u64; W]` is that
         // same array; the CPU has AVX2.
-        unsafe {
+        return unsafe {
             let entries8 = core::slice::from_raw_parts(entries.as_ptr().cast::<[u64; 8]>(), n);
             let mut r = [0u64; 8];
             scan_avx2::<8>(&mut r, entries8, masks);
             core::ptr::read(&r as *const [u64; 8] as *const [u64; W])
-        }
-    } else {
-        // SAFETY: SSE2 is part of the x86-64 baseline; every CPU this
-        // module can run on has it.
-        unsafe { scan_sse2(entries, masks) }
+        };
     }
+    // SAFETY: SSE2 is part of the x86-64 baseline; every CPU this
+    // module can run on has it.
+    unsafe { scan_sse2(entries, masks) }
 }
 
 /// [`scan`] in SSE2, which every x86-64 CPU has and every x86-64 target
@@ -268,6 +271,7 @@ fn scan_sse2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
 /// # Safety
 ///
 /// The CPU must support AVX2, and `W` must be a multiple of four.
+#[cfg(target_feature = "sse2")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn scan_avx2<const W: usize>(
     out: &mut [u64; W],
