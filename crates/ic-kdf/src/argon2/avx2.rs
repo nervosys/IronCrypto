@@ -24,7 +24,9 @@
 //! Nothing here depends on secret data for control flow or addressing: the
 //! function is a fixed sequence of arithmetic, like the scalar one.
 
+use core::arch::asm;
 use core::arch::x86_64::*;
+use core::mem::MaybeUninit;
 
 use super::{Block, BLOCK_WORDS};
 
@@ -141,6 +143,24 @@ pub(super) unsafe fn compress(x: &Block, y: &Block, out: &mut Block, xor: bool) 
     }
 }
 
+/// Runs `$body` with `$i` bound to each word offset 0, 4, ..., 124 of a block,
+/// written out, so that the code has no loop.
+macro_rules! each_quad {
+    ($i:ident => $body:block) => {
+        each_quad!(@ $i $body; 0 4 8 12 16 20 24 28 32 36 40 44 48 52 56 60
+            64 68 72 76 80 84 88 92 96 100 104 108 112 116 120 124)
+    };
+    (@ $i:ident $body:block; $($n:literal)*) => {
+        $({
+            let $i: usize = $n;
+            $body
+        })*
+    };
+}
+
+// `each_quad!` covers a block of 128 words.
+const _: () = assert!(BLOCK_WORDS == 128);
+
 /// [`compress`] for one of its two modes, so that `ct_probes` can read each
 /// without a test of the flag.
 ///
@@ -149,12 +169,34 @@ pub(super) unsafe fn compress(x: &Block, y: &Block, out: &mut Block, xor: bool) 
 /// The CPU must support AVX2.
 #[target_feature(enable = "avx2")]
 pub(super) unsafe fn compress_as<const XOR: bool>(x: &Block, y: &Block, out: &mut Block) {
-    let mut r = [0u64; BLOCK_WORDS];
-    for ((slot, a), b) in r.iter_mut().zip(x.iter()).zip(y.iter()) {
-        *slot = a ^ b;
-    }
-    let mut q = r;
-    let qp = q.as_mut_ptr();
+    // The block-wide XORs and the copy are in assembly. Written in Rust, as
+    // scalar loops or as integer intrinsics alike, LLVM emits them in the
+    // float domain (`vmovups`, `vxorps`), which Intel's list of
+    // data-operand-independent timing instructions does not name; `vmovdqu`
+    // and `vpxor` it does.
+    // Left uninitialised: the loop below writes every word of both before
+    // anything reads them, and zeroing them first is a `memset` call.
+    let mut r = MaybeUninit::<Block>::uninit();
+    let mut q = MaybeUninit::<Block>::uninit();
+    let (xp, yp) = (x.as_ptr(), y.as_ptr());
+    let rp = r.as_mut_ptr().cast::<u64>();
+    let qp = q.as_mut_ptr().cast::<u64>();
+    // Each offset is a multiple of four below 128, so each four-word access
+    // is within the 128-word blocks. Unrolled, so the code is straight-line.
+    each_quad!(i => {
+        asm!(
+            "vmovdqu {v}, ymmword ptr [{x}]",
+            "vpxor {v}, {v}, ymmword ptr [{y}]",
+            "vmovdqu ymmword ptr [{r}], {v}",
+            "vmovdqu ymmword ptr [{q}], {v}",
+            x = in(reg) xp.add(i),
+            y = in(reg) yp.add(i),
+            r = in(reg) rp.add(i),
+            q = in(reg) qp.add(i),
+            v = out(ymm_reg) _,
+            options(preserves_flags),
+        );
+    });
 
     // Rows: words 16*row .. 16*row + 16, four registers. Every offset below
     // is at most 16*7 + 12, and each load is four words, so within 128.
@@ -196,13 +238,31 @@ pub(super) unsafe fn compress_as<const XOR: bool>(x: &Block, y: &Block, out: &mu
         store(d, 6, 7);
     }
 
-    if XOR {
-        for ((o, a), b) in out.iter_mut().zip(q.iter()).zip(r.iter()) {
-            *o ^= a ^ b;
+    let op = out.as_mut_ptr();
+    each_quad!(i => {
+        if XOR {
+            asm!(
+                "vmovdqu {v}, ymmword ptr [{q}]",
+                "vpxor {v}, {v}, ymmword ptr [{r}]",
+                "vpxor {v}, {v}, ymmword ptr [{o}]",
+                "vmovdqu ymmword ptr [{o}], {v}",
+                q = in(reg) qp.add(i),
+                r = in(reg) rp.add(i),
+                o = in(reg) op.add(i),
+                v = out(ymm_reg) _,
+                options(preserves_flags),
+            );
+        } else {
+            asm!(
+                "vmovdqu {v}, ymmword ptr [{q}]",
+                "vpxor {v}, {v}, ymmword ptr [{r}]",
+                "vmovdqu ymmword ptr [{o}], {v}",
+                q = in(reg) qp.add(i),
+                r = in(reg) rp.add(i),
+                o = in(reg) op.add(i),
+                v = out(ymm_reg) _,
+                options(preserves_flags),
+            );
         }
-    } else {
-        for ((o, a), b) in out.iter_mut().zip(q.iter()).zip(r.iter()) {
-            *o = a ^ b;
-        }
-    }
+    });
 }
