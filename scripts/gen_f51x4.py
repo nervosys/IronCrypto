@@ -40,14 +40,18 @@ X25519 code (`f51x4`'s tests and `ed25519`'s).
 
 # The proof maps
 
-`scripts/f51x4_proof_map/{add,double}.json` is what IronProof's functional
+`scripts/f51x4_proof_map/{add,double,select,ladder_step}.json` is what IronProof's functional
 targets need of a kernel: the scheduled graph, what each node means (tags
 `M<m>.x<i>`, `.y<j>`, `.lo<k>`, `.hi<k>`, `.t<k>` for multiplication m and
-`R<n>.z<k>`, `.r<k>` for reduction n), the instruction and register that
-define each node, and every multiply-add with the nodes it multiplies. The
+`R<n>.z<k>`, `.r<k>` for reduction n, `B<n>.c<k>` for blend n, `K<n>.*` for
+multiplication n by 121666), the instruction and register that define each
+node, and every multiply-add with the nodes it multiplies. Where the low and
+high multiply-add of a pair take their operands in different orders (the
+allocator's choice; ladder_step has one), `pairs_in_both_orders` lists the
+pair. The
 tags come from a backend that builds the same graph as `GraphBackend`, so
-the generated Rust is unchanged by them. `--check` fails if either the Rust
-file or a map differs from what the script would write.
+the generated Rust is unchanged by them. `--check` fails if the Rust
+file or any of the four maps differs from what the script would write.
 
 # The field
 
@@ -453,7 +457,7 @@ def check(name, fn, prog, ins, nmasks, trials):
 # ---------------------------------------------------------------------------
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-MAP_KERNELS = ("add", "double")
+MAP_KERNELS = ("add", "double", "select", "ladder_step")
 MAP_DIR = os.path.join(_HERE, "f51x4_proof_map")
 RUST_PATH = os.path.join(_HERE, "..", "crates", "ic-ec", "src", "f51x4_kernels.rs")
 MAP_ABOUT = ("Proof map of the f51x4 kernel `%s`: the scheduled graph, what each node means, "
@@ -467,14 +471,18 @@ class Tagging(GraphBackend):
     `.y<j>` (operand limbs of multiplication m; a square has no `.y`),
     `.lo<k>`, `.hi<k>` (the columns), `.t<k>` (the combined columns);
     `R<n>.z<k>` and `.r<k>` (the input and output limbs of reduction n, in
-    program order, those inside multiplications included). The graph is the
-    same as `GraphBackend`'s."""
+    program order, those inside multiplications included); `B<n>.c<k>`
+    (limb k of the nth blend); `K<n>.e<i>`, `.d<i>`, `.lo<i>`, `.hi<i>` (the
+    multiplicand, the accumulator start and the multiply-adds of the nth
+    multiplication by 121666). The graph is the same as `GraphBackend`'s."""
 
     def __init__(self, g):
         super().__init__(g)
         self.tags = {}  # node id -> [tag]
         self.nmul = 0
         self.nreduce = 0
+        self.nblend = 0
+        self.nk = 0
 
     def tag(self, n, t):
         self.tags.setdefault(n.id, []).append(t)
@@ -519,6 +527,36 @@ class Tagging(GraphBackend):
             self.tag(x, f"M{m}.x{i}")
         return super().square(a)
 
+    def blendv(self, a, b, m):
+        n = self.nblend
+        self.nblend += 1
+        out = super().blendv(a, b, m)
+        for k, x in enumerate(out):
+            self.tag(x, f"B{n}.c{k}")
+        return out
+
+    def mul121666_add(self, e, d):
+        """The graph of `GraphBackend.mul121666_add`, step for step."""
+        n = self.nk
+        self.nk += 1
+        g = self.g
+        k = g.const_b(121_666)
+        lo = [g.lo(d[i], e[i], k) for i in range(N)]
+        hi = [g.hi(g.zero(), e[i], k) for i in range(N)]
+        for i in range(N):
+            self.tag(e[i], f"K{n}.e{i}")
+            self.tag(d[i], f"K{n}.d{i}")
+            self.tag(lo[i], f"K{n}.lo{i}")
+            self.tag(hi[i], f"K{n}.hi{i}")
+        h4 = g.add(hi[4], hi[4])
+        return self.reduce([
+            g.add(lo[0], self.times19(h4)),
+            g.add(lo[1], g.add(hi[0], hi[0])),
+            g.add(lo[2], g.add(hi[1], hi[1])),
+            g.add(lo[3], g.add(hi[2], hi[2])),
+            g.add(lo[4], g.add(hi[3], hi[3])),
+        ])
+
 
 class MapAlloc(G.Alloc):
     """`Alloc` that records, per emitted instruction, the node it was
@@ -536,6 +574,10 @@ class MapAlloc(G.Alloc):
             for s in srcs:
                 if s[0] == "reg":
                     ops.append({"node": self.holder[s[1]].id, "reg": s[1]})
+                elif s[0] == "const_b":
+                    c = [x for x in self.g.nodes if x.op == "bcast" and x.imm == s[1]]
+                    assert len(c) == 1
+                    ops.append({"node": c[0].id, "const": s[1]})
                 elif s[0] == "mem" and s[1] == "t":
                     nid = [k for k, v in self.spill.items() if v == s[2]]
                     ops.append({"node": nid[-1], "spill": s[2]})
@@ -583,18 +625,28 @@ def proof_map(name, fn):
             d["tags"] = bk.tags[n.id]
         nodes.append(d)
     madds = [dict(r, prog=i) for i, r in enumerate(al.rec) if r["op"] in ("lo", "hi")]
-    # the low and the high instruction of a pair must take their operands in
-    # one order, or they are two products
+    # The low and the high instruction of a pair multiply the same two
+    # nodes. They need not take them in the same order: multiplication
+    # commutes, and the allocator may hold the two in different registers or
+    # spills at the two instructions (ladder_step: x1 limb 1 with y2 limb 2).
+    # Changing the schedule to force one order would change the generated
+    # assembly, so the pairs that appear in both orders are recorded in the
+    # map, for the consumer to treat as products. What would be a real bug,
+    # and fails here, is an instruction whose operands are not the two nodes
+    # the graph says it multiplies.
     seen = {}
     for m in madds:
         n = byid[m["node"]]
         key = frozenset((n.args[1].id, n.args[2].id))
         pair = tuple(o["node"] for o in m["operands"])
-        assert seen.setdefault(key, pair) == pair, f"{name}: operand order differs within a pair {sorted(key)}"
+        assert frozenset(pair) == key and len(pair) == 2, (
+            f"{name}: madd at node {n.id} multiplies {pair}, the graph says {sorted(key)}")
+        seen.setdefault(key, set()).add(pair)
+    both = sorted(sorted(k) for k, v in seen.items() if len(v) > 1)
     consts = G.Consts()
     G.register_consts(prog, consts)
     consts.layout()
-    return {
+    m = {
         "about": MAP_ABOUT % name,
         "kernel": name,
         "nodes": nodes,
@@ -602,6 +654,9 @@ def proof_map(name, fn):
         "madds": madds,
         "text": G.to_text(prog, consts),
     }
+    if both:  # absent, not empty, where there are none: the committed maps stay as they were
+        m["pairs_in_both_orders"] = both
+    return m
 
 
 def map_text(m):
