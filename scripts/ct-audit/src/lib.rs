@@ -417,6 +417,14 @@ mod x86 {
         // SAFETY: never executed; compiled to be read.
         unsafe { p::ifma::double(a) }
     }
+
+    /// # Safety
+    /// Requires AVX-512 IFMA.
+    #[no_mangle]
+    pub unsafe fn ct_ed25519_ifma_negate(n: &p::ifma::Lanes) -> p::ifma::Lanes {
+        // SAFETY: never executed; compiled to be read.
+        unsafe { p::ifma::negate(n) }
+    }
 }
 
 // RSA's windowed-exponentiation table read (ic-rsa) at 2048 bits: the masked

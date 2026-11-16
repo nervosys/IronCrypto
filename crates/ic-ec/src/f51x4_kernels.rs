@@ -1471,7 +1471,7 @@ pub(crate) unsafe fn double(
 /// The CPU must have AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA. `a`
 /// must be readable for 20 words; `o` must be writable for 20 words. `o` must
 /// not overlap the inputs.
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "ct-probes"))]
 #[inline(never)]
 pub(crate) unsafe fn negate(
     a: *const u64,

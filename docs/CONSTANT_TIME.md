@@ -60,8 +60,10 @@ release profile; this is not the workspace binary's overflow-checked profile.
   multiplication by 121666 and divstep inversion, each from and back to
   bytes; X25519's ladder step and its doubling alone on it; signing's
   table read and group operations on it; and
-  the AVX-512 IFMA four-lane ladder step, table selection, mixed addition and
-  doubling. See "Curve25519 on x86-64" below.
+  the AVX-512 IFMA four-lane ladder step, table selection, mixed addition,
+  doubling and negation. See "Curve25519 on x86-64" below. (Negation serves
+  only verification, on public data; its probe exists so that IronProof can
+  read the compiled kernel.)
 - On x86-64 only: P-256's field multiplication and squaring on
   MULX/ADCX/ADOX, and the doubling, addition and mixed addition that are
   each one block of that assembly (`ct_p256_fp_mul_adx`,

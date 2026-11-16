@@ -187,6 +187,27 @@ unsafe fn double_into(o: &mut MaybeUninit<F4>, p: &P4) {
     }
 }
 
+/// `o = -n`, the operand of the negated point.
+///
+/// # Safety
+///
+/// The CPU must have what `Ifma::get` checks.
+#[cfg(any(feature = "std", feature = "ct-probes"))]
+#[inline]
+unsafe fn negate_into(o: &mut MaybeUninit<F4>, n: &N4) {
+    let mut t = Spill::uninit();
+    // SAFETY: as in `ladder_step_into`.
+    unsafe {
+        k::negate(
+            n.0.ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+            o.as_mut_ptr().cast(),
+            t.as_mut_ptr().cast(),
+        )
+    }
+}
+
 /// The table selection's masks, each all ones or zero, computed without a
 /// branch: entry `i`'s where the digit's magnitude is `i + 1`, and the
 /// sign's ninth.
@@ -353,16 +374,9 @@ impl Ifma {
     #[inline]
     pub fn negate(self, n: &N4) -> N4 {
         let mut o = MaybeUninit::<F4>::uninit();
-        let mut t = Spill::uninit();
         // SAFETY: as in `double`.
         unsafe {
-            k::negate(
-                n.0.ptr(),
-                core::ptr::null(),
-                core::ptr::null(),
-                o.as_mut_ptr().cast(),
-                t.as_mut_ptr().cast(),
-            );
+            negate_into(&mut o, n);
             N4(o.assume_init())
         }
     }
@@ -505,6 +519,20 @@ pub mod probes {
         // SAFETY: as the caller guarantees.
         unsafe {
             double_into(&mut o, &P4(load(p)));
+            store(o.assume_init_ref())
+        }
+    }
+
+    /// The operand of a negated point.
+    ///
+    /// # Safety
+    ///
+    /// As [`ladder_step`].
+    pub unsafe fn negate(n: &Lanes) -> Lanes {
+        let mut o = MaybeUninit::uninit();
+        // SAFETY: as the caller guarantees.
+        unsafe {
+            negate_into(&mut o, &N4(load(n)));
             store(o.assume_init_ref())
         }
     }

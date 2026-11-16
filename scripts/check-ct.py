@@ -71,7 +71,7 @@ X86_ONLY = (
     # with the next read inside its additions, and the digits themselves.
     "ct_ed25519_fe64_scan", "ct_ed25519_fe64_madd_ext2_scan", "ct_ed25519_digits32",
     "ct_x25519_ifma_step", "ct_ed25519_ifma_select", "ct_ed25519_ifma_add",
-    "ct_ed25519_ifma_double",
+    "ct_ed25519_ifma_double", "ct_ed25519_ifma_negate",
     # P-256's field multiplication and squaring on MULX/ADCX/ADOX, chosen at
     # run time where the CPU has BMI2 and ADX, and the point formulas that are
     # whole blocks of that assembly; the P-256 probes above, built without

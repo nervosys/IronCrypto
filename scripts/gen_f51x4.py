@@ -385,11 +385,9 @@ KERNELS = [
     ("square", k_square, {"a": 1}, 0),
 ]
 TEST_ONLY = {"mul", "square"}
-# The Edwards operations serve the `std` tables and the probes; a `no_std`
-# build uses only the ladder. Negation serves only `std` verification, which
-# no probe reaches.
-STD_ONLY = {"add", "double", "select"}
-STD_ONLY_NO_PROBE = {"negate"}
+# The Edwards operations serve the `std` tables, `std` verification and the
+# probes; a `no_std` build uses only the ladder.
+STD_ONLY = {"add", "double", "select", "negate"}
 
 
 # ---------------------------------------------------------------------------
@@ -809,8 +807,6 @@ def write_rust(path, results):
             w("#[cfg(test)]")
         if name in STD_ONLY:
             w('#[cfg(any(feature = "std", feature = "ct-probes"))]')
-        if name in STD_ONLY_NO_PROBE:
-            w('#[cfg(feature = "std")]')
         w("#[inline(never)]")
         params = []
         for r in ("a", "b", "m"):
