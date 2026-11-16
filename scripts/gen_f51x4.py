@@ -457,7 +457,7 @@ def check(name, fn, prog, ins, nmasks, trials):
 # ---------------------------------------------------------------------------
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-MAP_KERNELS = ("add", "double", "select", "ladder_step")
+MAP_KERNELS = ("add", "double", "select", "ladder_step", "negate", "mul", "square")
 MAP_DIR = os.path.join(_HERE, "f51x4_proof_map")
 RUST_PATH = os.path.join(_HERE, "..", "crates", "ic-ec", "src", "f51x4_kernels.rs")
 MAP_ABOUT = ("Proof map of the f51x4 kernel `%s`: the scheduled graph, what each node means, "
