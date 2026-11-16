@@ -148,7 +148,11 @@ if command -v cargo-audit >/dev/null 2>&1 || cargo audit --version >/dev/null 2>
     done
 
     audit_err=$(mktemp)
-    audit_json=$(cargo audit --json 2>"$audit_err" || true)
+    # Without git's own variables: under a git hook, GIT_INDEX_FILE names the
+    # commit's index, and the advisory database's fetch writes its checkout
+    # into whatever index that names, so the commit took the whole RustSec
+    # tree in place of the change.
+    audit_json=$(env -u GIT_INDEX_FILE -u GIT_DIR -u GIT_WORK_TREE -u GIT_PREFIX         -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY cargo audit --json 2>"$audit_err" || true)
 
     # Reads cargo audit's JSON on stdin and prints one tab-separated record per
     # line: DB (database loaded), VULN (a vulnerability), WARN (an unmaintained,
