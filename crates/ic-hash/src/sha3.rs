@@ -506,6 +506,19 @@ pub mod ct_probes {
         // SAFETY: forwards the precondition above.
         unsafe { super::x86::permute(state) }
     }
+
+    /// `x86::permute_avx512vl`, the four-way permutation the dispatcher takes
+    /// where the CPU has AVX-512VL.
+    ///
+    /// # Safety
+    ///
+    /// The CPU must support AVX2, AVX-512F and AVX-512VL.
+    #[cfg(not(ic_approved_only))]
+    #[allow(unsafe_code)]
+    pub unsafe fn keccak_x4_permute_avx512vl(state: &mut [[u64; 4]; 25]) {
+        // SAFETY: forwards the precondition above.
+        unsafe { super::x86::permute_avx512vl(state) }
+    }
 }
 
 /// Keccak-f[1600] over four interleaved states: `state[w][s]` is word `w` of

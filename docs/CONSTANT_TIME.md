@@ -2223,3 +2223,14 @@ Until then Ed448 on those targets is outside this gate.
   either, calls refused again on x86-64, Ed448 required on 32-bit targets,
   and a hand-named callee accepted on either architecture -- fails the tests
   each time.
+
+## Keccak four-way on AVX-512VL, 2026-11-16
+
+`ct_keccak_x4_permute_avx512vl` reads `sha3::x86::permute_avx512vl`, the
+four-state permutation that `keccak_f1600_x4` selects where the CPU has
+AVX-512VL, and which no probe reached before: `ct_keccak_x4_permute` reads
+the AVX2 form. Its one branch is the back edge over eleven passes of two
+rounds (`addq $2`/`cmpq $22`/`jne`, the first and last rounds peeled),
+excused as a counter loop like its AVX2 sibling's. It passes on x86-64, the
+only target it compiles for. The probe also gives IronProof the compiled
+kernel to prove.

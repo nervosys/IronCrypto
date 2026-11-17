@@ -118,6 +118,9 @@ X86_ONLY = (
     # four-lane permutation ML-KEM's and SHAKE's batched squeezes take where
     # AVX-512 is absent.
     "ct_keccak_x4_permute",
+    # The same on AVX-512VL, the form the dispatcher takes where the CPU has
+    # it: rotations in one instruction, chi in one ternary logic each.
+    "ct_keccak_x4_permute_avx512vl",
     # Short messages: ChaCha20's two-block AVX2 kernel, two blocks side by
     # side in each register and its rounds written out, once and as two
     # pairs; ChaCha20's eight-block AVX2 kernel over a 512-byte group; the
@@ -403,6 +406,10 @@ X86_EXCUSE_CEILINGS = {
     # back edge over the twelve passes of two rounds, `%rax` written nowhere
     # else in the loop.
     "ct_keccak_x4_permute": {"counter loop": 1},
+    # The same on AVX-512VL: the `addq $2`/`cmpq $22`/`jne` back edge over
+    # the eleven passes of two rounds between the peeled first and last
+    # rounds, `%rax` written nowhere else in the loop.
+    "ct_keccak_x4_permute_avx512vl": {"counter loop": 1},
     "ct_gcm_vaes256_seal": {"counter loop": 1},
     "ct_gcm_vaes256_open": {"counter loop": 1},
     # The IFMA multiplication's window read (`nist::ifma::scan_avx2`): the

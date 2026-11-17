@@ -1059,6 +1059,15 @@ mod x86_keccak {
         // requires AVX2.
         unsafe { ic_hash::sha3_ct_probes::keccak_x4_permute(state) }
     }
+
+    /// # Safety
+    /// Requires AVX2, AVX-512F and AVX-512VL.
+    #[no_mangle]
+    pub unsafe fn ct_keccak_x4_permute_avx512vl(state: &mut [[u64; 4]; 25]) {
+        // SAFETY: forwards the `# Safety` precondition of the function above, which
+        // requires AVX2, AVX-512F and AVX-512VL.
+        unsafe { ic_hash::sha3_ct_probes::keccak_x4_permute_avx512vl(state) }
+    }
 }
 
 // RSA's Montgomery products at 2048 bits: the portable CIOS product on every
