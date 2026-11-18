@@ -13,13 +13,15 @@
 //! AVX2 has no 64-bit rotate, so there a rotation is two shifts and an or.
 //! AVX-512VL has one, `vprolq`, and a three-input logic instruction,
 //! `vpternlogq`, that does chi's `a ^ (!b & c)` in one; where the CPU has
-//! them they are used on the same 256-bit registers. Measured on a Zen 5
-//! part, over 21 squeezed blocks of four streams: 6.6 us with AVX2, 5.1 us
+//! them they are used on the same 256-bit registers, in the assembly of
+//! [`super::zmm`] (`permute_x4`), which holds all twenty-five words in
+//! registers. Measured, as intrinsics, on a Zen 5 part, over 21 squeezed blocks of four streams: 6.6 us with AVX2, 5.1 us
 //! with AVX-512VL, against 3.9 us for one scalar stream.
 //!
 //! # A row at a time
 //!
-//! Both forms compute each round an output row at a time, into a second
+//! The AVX2 form, which this file still holds, and the intrinsics form the
+//! AVX-512VL path had, compute each round an output row at a time, into a second
 //! state, rather than as the scalar listing is written: all twenty-five
 //! rho-and-pi words, then chi. Theta needs the whole input state, but each
 //! output row needs only five gathered words, so computing a row and then its
@@ -46,11 +48,14 @@
 //! [`permute_avx512vl`] on one without AVX-512F and AVX-512VL as well.
 //! [`super::keccak_f1600_x4`] asks once and caches the answers. The loads and
 //! stores are unaligned and stay inside the 800-byte state the reference
-//! points to. The AVX-512 instructions are inline assembly, because their
-//! intrinsics were stabilised after this workspace's minimum Rust version;
-//! each is register to register, touches no memory and no flags.
+//! points to. The AVX-512 path is inline assembly, because its intrinsics were
+//! stabilised after this workspace's minimum Rust version; see
+//! [`super::zmm`] for what it reads and writes.
 //!
 //! # What is left on the stack
+//!
+//! This is the AVX2 form; the AVX-512VL assembly keeps all the state in
+//! registers, spills nothing, and zeroes them before it returns.
 //!
 //! `a` and `e` are not arrays in the compiled code: the compiler splits them
 //! into twenty-five values each and keeps them in registers, and what does
@@ -89,45 +94,6 @@ macro_rules! chi_avx2 {
     ($a:expr, $b:expr, $c:expr) => {
         _mm256_xor_si256($a, _mm256_andnot_si256($b, $c))
     };
-}
-
-/// `vprolq`: rotate each 64-bit lane left by `$n`, in one instruction.
-macro_rules! vprolq {
-    ($x:expr, $n:literal) => {{
-        let out: __m256i;
-        // SAFETY: a register-to-register instruction with no memory operand.
-        // The caller has established AVX-512F and AVX-512VL; see
-        // `permute_avx512vl`.
-        unsafe {
-            core::arch::asm!(
-                "vprolq {o}, {i}, {n}",
-                o = lateout(ymm_reg) out,
-                i = in(ymm_reg) $x,
-                n = const $n,
-                options(pure, nomem, nostack, preserves_flags),
-            )
-        };
-        out
-    }};
-}
-
-/// `a ^ (!b & c)` in one `vpternlogq`: `0xd2` is that function's truth table,
-/// indexed by `a b c` as a three-bit number.
-macro_rules! chi_ternlog {
-    ($a:expr, $b:expr, $c:expr) => {{
-        let mut r: __m256i = $a;
-        // SAFETY: as for `vprolq!`.
-        unsafe {
-            core::arch::asm!(
-                "vpternlogq {r}, {b}, {c}, 0xd2",
-                r = inout(ymm_reg) r,
-                b = in(ymm_reg) $b,
-                c = in(ymm_reg) $c,
-                options(pure, nomem, nostack, preserves_flags),
-            )
-        };
-        r
-    }};
 }
 
 macro_rules! xor2 {
@@ -283,12 +249,13 @@ pub(super) unsafe fn permute(state: &mut [[u64; 4]; 25]) {
 }
 
 /// [`permute`], with AVX-512VL's rotate and three-input logic on the same
-/// registers.
+/// registers, as the assembly in [`super::zmm`].
 ///
 /// # Safety
 ///
 /// The CPU must support AVX2, AVX-512F and AVX-512VL.
 #[target_feature(enable = "avx2")]
 pub(super) unsafe fn permute_avx512vl(state: &mut [[u64; 4]; 25]) {
-    permute_with!(state, vprolq, chi_ternlog);
+    // SAFETY: the caller guarantees AVX-512F and AVX-512VL.
+    unsafe { super::zmm::permute_x4(state) }
 }

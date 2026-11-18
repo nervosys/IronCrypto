@@ -406,9 +406,9 @@ X86_EXCUSE_CEILINGS = {
     # back edge over the twelve passes of two rounds, `%rax` written nowhere
     # else in the loop.
     "ct_keccak_x4_permute": {"counter loop": 1},
-    # The same on AVX-512VL: the `addq $2`/`cmpq $22`/`jne` back edge over
-    # the eleven passes of two rounds between the peeled first and last
-    # rounds, `%rax` written nowhere else in the loop.
+    # The same on AVX-512VL, now the `ymm` form of the eight-state assembly
+    # (`zmm::permute_x4`): the `decq`/`jne` back edge over the twelve passes of
+    # two rounds, the counter written nowhere else in the loop.
     "ct_keccak_x4_permute_avx512vl": {"counter loop": 1},
     "ct_gcm_vaes256_seal": {"counter loop": 1},
     "ct_gcm_vaes256_open": {"counter loop": 1},
@@ -1531,7 +1531,7 @@ X86_WIPED = (
     "ct_rsa_select_2048", "ct_rsa_select32_2048", "ct_rsa_select32_avx2_1024",
     "ct_rsa_select32_avx2_1536", "ct_rsa_select32_avx2_2048",
     "ct_rsa_ifma_pow_1024", "ct_rsa_ifma_pow_1536", "ct_rsa_ifma_pow_2048",
-    "ct_chacha20_zmm_group", "ct_keccak_x8_permute",
+    "ct_chacha20_zmm_group", "ct_keccak_x8_permute", "ct_keccak_x4_permute_avx512vl",
 )
 
 _VECTOR_REGISTER = re.compile(r"%[xyz]mm(\d+)\b")
