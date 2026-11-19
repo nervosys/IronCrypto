@@ -3,7 +3,8 @@
 formulas on AVX-512 IFMA, four field elements to a vector, as Rust `asm!`.
 
     python scripts/gen_nist_ifma.py crates/ic-ec/src/nist/ifma_kernels.rs
-    python scripts/gen_nist_ifma.py --check      # simulate only, write nothing
+    python scripts/gen_nist_ifma.py --check      # simulate, write nothing, and
+                                                 # compare the committed files
 
 # What this does
 
@@ -37,8 +38,10 @@ The generator
    modulo p, and every output's limbs and value with the bounds claimed for
    them. Nothing is written unless every kernel agrees.
 
-`--check` stops after the simulation; `--mix` adds each kernel's instruction
-mix; `estimate` prints a critical path and a port-limited cycle count, an
+`--check` stops after the simulation and compares the Rust file and the proof
+maps (`scripts/nist_ifma_proof_map/`, what IronProof's functional targets read
+of a kernel: see "The proof maps" below) with what would be written; `--mix`
+adds each kernel's instruction mix; `estimate` prints a critical path and a port-limited cycle count, an
 idealised out-of-order model that guided the choices below, not a
 measurement.
 
@@ -88,6 +91,8 @@ address is a base register plus a constant. Selections between results are
 `VPBLENDVB` under masks the caller computes without branching.
 """
 
+import json
+import os
 import random
 import re
 import sys
@@ -301,6 +306,10 @@ class Graph:
     def output(self, base, off, node):
         self.outputs.append((base, off, node))
 
+    def note(self, kind, **data):
+        """What a lowering step meant, for the proof maps (`MapGraph`). Nothing
+        here: the graph is the same with or without the notes."""
+
 
 # ---------------------------------------------------------------------------
 # The fields
@@ -500,8 +509,11 @@ class P256(Field):
         v = list(v)
         n = self.n
         lo, hi = self.value_bounds(v, used, vb)
+        # What each step did, for the proof maps: the limbs going in, the
+        # multiple of p added (0 for none) and the limbs after it, the fold.
+        steps = {"v_in": list(v), "bias1": (0, None), "fold": None, "bias2": (0, None)}
 
-        def make_positive(v, lo, hi):
+        def make_positive(v, lo, hi, slot):
             if lo >= 0:
                 return v, lo, hi
             k = 1
@@ -509,25 +521,30 @@ class P256(Field):
                 k *= 2
             bias = limbs_of(k * self.p, n, 52)
             v = [g.add(x, g.const_b(c)) if c else x for x, c in zip(v, bias)]
+            steps[slot] = (k, list(v))
             return v, lo + k * self.p, hi + k * self.p
 
-        v, lo, hi = make_positive(v, lo, hi)
+        v, lo, hi = make_positive(v, lo, hi, "bias1")
         if hi >= 1 << 258:
             t = g.sra(v[n - 1], 48)
             v[n - 1] = g.add(g.mask(v[n - 1], M48), g.sll(t, 16))
             v[3] = g.sub(v[3], g.sll(t, 36))
             v[1] = g.sub(v[1], g.sll(t, 44))
             v[0] = g.add(v[0], t)
+            steps["fold"] = (t, list(v))
             # The fold changes the value; its bounds now come from the limbs.
             lo, hi = self.value_bounds(v, used, None)
-            v, lo, hi = make_positive(v, lo, hi)
+            v, lo, hi = make_positive(v, lo, hi, "bias2")
         assert lo >= 0
         # The chain. The value is non-negative, so every carry out of a limb
         # below the top is the floor of a signed division.
         out = []
+        chain = []
         for k in range(n - 1):
+            chain.append(v[k])
             out.append(g.mask(v[k], M52))
             v[k + 1] = g.add(v[k + 1], g.sra(v[k], 52))
+        chain.append(v[n - 1])
         top = v[n - 1]
         # Below the top every limb is in [0, 2^52), so the top limb is the
         # value over 2^208, whatever its interval says.
@@ -536,6 +553,7 @@ class P256(Field):
         if not self.within(out, used):
             raise AssertionError(f"p256r52: normalised value outside the contract: {[x.bounds for x in out]}")
         self.last_vb = (lo, hi)
+        g.note("pass", used=used, chain=chain, out=list(out), vb=(lo, hi), **steps)
         return out
 
     def mul(self, g, a, b, used=(True,) * NL):
@@ -554,6 +572,7 @@ class P256(Field):
         carry = None
         x = None
         low_next = None
+        steps = []
         for s in range(n):
             parts = [c[s]]
             if r[s] is not None:
@@ -573,6 +592,7 @@ class P256(Field):
             acc(s + 4, lambda q: g.hi(q, x, k36, low52=True))
             acc(s + 4, lambda q: g.lo(q, x, kk, low52=True))
             acc(s + 5, lambda q: g.hi(q, x, kk, low52=True))
+            steps.append((x, carry, low_next))
         out = []
         for k in range(n):
             parts = [c[n + k]]
@@ -582,6 +602,7 @@ class P256(Field):
                 parts += [carry, low_next]
             out.append(collect(g, [(q, 1) for q in parts]))
         assert r[2 * n] is None
+        g.note("mul", a=list(a), b=list(b), cols=list(c), steps=steps, out=list(out), used=used)
         # Unnormalised: whoever uses the product normalises it, once, with
         # whatever it is combined with.
         return out
@@ -1079,7 +1100,12 @@ class GraphBackend:
         v = Vec(self.f.mul(self.g, av.data, bv.data, used), vb, raw=self.f.lazy)
         self.g.tag = "other"
         v.used = used
+        self.mul_done(av, bv, v)
         return v
+
+    def mul_done(self, av, bv, v):
+        """Called with the two operand vectors of a multiplication and its
+        result; nothing here (`MapBackend` keeps them for the proof maps)."""
 
     def select(self, m, if_set, if_clear):
         g = self.g
@@ -2091,6 +2117,342 @@ def estimate(prog, ports=True):
     return end
 
 
+# ---------------------------------------------------------------------------
+# Proof maps
+# ---------------------------------------------------------------------------
+#
+# What IronProof's functional target for a kernel needs of it: the scheduled
+# graph, the instruction and register that define each node, every multiply-add
+# with the nodes it multiplies (`MapAlloc`), and what the nodes mean: the
+# multiplications, the carry chains and the blends the formula was lowered to
+# (`MapBackend`, which sees each step the lowering takes and writes it down).
+# None of this changes the graph: the notes the fields leave (`Graph.note`) are
+# dropped by `Graph` and kept by `MapGraph`, and `--check` compares
+# the instructions a map was made from with those that went into the Rust file.
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+MAP_KERNELS = (("p256", "add"),)
+MAP_DIR = os.path.join(_HERE, "nist_ifma_proof_map")
+RUST_PATH = os.path.join(_HERE, "..", "crates", "ic-ec", "src", "nist", "ifma_kernels.rs")
+MAP_ABOUT = ("Proof map of the kernel `%s`: the scheduled graph, what each node means, the "
+             "instruction and register defining each node, every multiply-add with the nodes it "
+             "multiplies, and the lowering's vectors and steps. Generated by "
+             "scripts/gen_nist_ifma.py for IronProof's functional targets; edit that, not this.")
+
+
+class MapGraph(Graph):
+    """A `Graph` that keeps the notes the fields leave."""
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.notes = []
+
+    def note(self, kind, **data):
+        self.notes.append((kind, data))
+
+
+def _ids(xs):
+    return [x.id for x in xs]
+
+
+def note_json(kind, d):
+    """A note with its nodes as ids, and nothing else changed."""
+    if kind == "pass":
+        out = {"kind": "pass", "used": list(d["used"]), "v_in": _ids(d["v_in"]), "chain": _ids(d["chain"]),
+               "out": _ids(d["out"]), "vb": [d["vb"][0], d["vb"][1]]}
+        for slot in ("bias1", "bias2"):
+            k, v = d[slot]
+            out[slot] = [k, None if v is None else _ids(v)]
+        f = d["fold"]
+        out["fold"] = None if f is None else {"t": f[0].id, "limbs": _ids(f[1])}
+        return out
+    if kind == "mul":
+        return {"kind": "mul", "a": _ids(d["a"]), "b": _ids(d["b"]), "cols": _ids(d["cols"]),
+                "steps": [[x.id, c.id, l.id] for (x, c, l) in d["steps"]], "out": _ids(d["out"]),
+                "used": list(d["used"])}
+    raise AssertionError(kind)
+
+
+class MapBackend(GraphBackend):
+    """`GraphBackend` that writes down the vectors it makes and how: inputs,
+    constants, linear combinations (with the normalisation each needed),
+    multiplications, selections and outputs, in the order it made them. The
+    graph is the same as `GraphBackend`'s."""
+
+    def __init__(self, field, graph):
+        super().__init__(field, graph)
+        self.events = []
+        self.vecs = {}
+        self.keep = []
+
+    def vid(self, v):
+        k = id(v)
+        if k not in self.vecs:
+            self.vecs[k] = len(self.vecs)
+            self.keep.append(v)
+        return self.vecs[k]
+
+    def vec_json(self, v):
+        return {"vec": self.vid(v), "limbs": _ids(v.data),
+                "vb": None if v.vb is None else [None if b is None else [b[0], b[1]] for b in v.vb]}
+
+    def notes_since(self, n0):
+        return [note_json(k, d) for (k, d) in self.g.notes[n0:]]
+
+    def input(self, name, kind):
+        v = super().input(name, kind)
+        self.events.append(dict(ev="input", name=name, kind=kind, **self.vec_json(v)))
+        return v
+
+    def constant(self, lanes):
+        v = super().constant(lanes)
+        self.events.append(dict(ev="const", lanes=list(lanes), **self.vec_json(v)))
+        return v
+
+    def lin(self, ops, for_mul):
+        n0 = len(self.g.notes)
+        v = super().lin(ops, for_mul)
+        if id(v) not in self.vecs:
+            terms = [None if e is None else sorted([self.vid(vec), lane, c] for (vec, lane), c in e.terms.items())
+                     for e in ops]
+            self.events.append(dict(ev="lin", ops=terms, for_mul=bool(for_mul), notes=self.notes_since(n0),
+                                    **self.vec_json(v)))
+        return v
+
+    def mul_done(self, av, bv, v):
+        note = [(k, d) for (k, d) in self.g.notes if k == "mul"][-1]
+        self.events.append(dict(ev="mul", a=self.vid(av), b=self.vid(bv), mul=note_json(*note),
+                                used=list(v.used), **self.vec_json(v)))
+
+    def select(self, m, if_set, if_clear):
+        v = super().select(m, if_set, if_clear)
+        self.events.append(dict(ev="select", mask=m, set=self.vid(if_set), clear=self.vid(if_clear),
+                                **self.vec_json(v)))
+        return v
+
+    def select_lanes(self, m, if_set, if_clear):
+        v = super().select_lanes(m, if_set, if_clear)
+        self.events.append(dict(ev="select_lanes", mask=m, set=self.vid(if_set), clear=self.vid(if_clear),
+                                **self.vec_json(v)))
+        return v
+
+    def output(self, name, vec, lanes, slot=0):
+        n0 = len(self.g.notes)
+        super().output(name, vec, lanes, slot)
+        self.events.append(dict(ev="output", name=name, vec=self.vid(vec), lanes=lanes, slot=slot,
+                                notes=self.notes_since(n0),
+                                limbs=[n.id for (_, _, n) in self.g.outputs[-self.f.n:]]))
+
+
+def name_nodes(g):
+    """What each node is, by the notes: `M<m>.x<i>`, `.y<j>` (operand limbs of
+    multiplication m; a square has both), `.c<k>` (column k of the product),
+    `.q<s>` (the value whose low 52 bits are step s's quotient digit), `.o<k>`
+    (the unnormalised result's limbs); `N<n>.z<k>` (the limbs going into
+    normalisation n), `.w<k>` (those entering its carry chain), `.t` (the
+    fold's carry) and `.r<k>` (the limbs coming out)."""
+    tags = {}
+
+    def tag(n, t):
+        tags.setdefault(n.id, []).append(t)
+
+    m = p = 0
+    for kind, d in g.notes:
+        if kind == "mul":
+            for i, x in enumerate(d["a"]):
+                tag(x, f"M{m}.x{i}")
+            for j, y in enumerate(d["b"]):
+                tag(y, f"M{m}.y{j}")
+            for k, c in enumerate(d["cols"]):
+                tag(c, f"M{m}.c{k}")
+            for s, (x, _, _) in enumerate(d["steps"]):
+                tag(x, f"M{m}.q{s}")
+            for k, o in enumerate(d["out"]):
+                tag(o, f"M{m}.o{k}")
+            m += 1
+        elif kind == "pass":
+            for k, x in enumerate(d["v_in"]):
+                tag(x, f"N{p}.z{k}")
+            for k, x in enumerate(d["chain"]):
+                tag(x, f"N{p}.w{k}")
+            if d["fold"] is not None:
+                tag(d["fold"][0], f"N{p}.t")
+            for k, x in enumerate(d["out"]):
+                tag(x, f"N{p}.r{k}")
+            p += 1
+    return tags
+
+
+class MapAlloc(Alloc):
+    """`Alloc` that records, per emitted instruction, the node it was
+    emitted for and, for a multiply-add, the node each operand holds."""
+
+    def __init__(self, g, order):
+        super().__init__(g, order)
+        self.rec = []
+
+    def emit(self, op, dst, srcs, imm=None):
+        n = self.order[self.pos]
+        r = {"op": op, "dst": dst, "node": n.id}
+        if op in ("lo", "hi"):
+            ops = []
+            for s in srcs:
+                if s[0] == "reg":
+                    ops.append({"node": self.holder[s[1]].id, "reg": s[1]})
+                elif s[0] == "const_b":
+                    c = [x for x in self.g.nodes if x.op == "bcast" and x.imm == s[1]]
+                    assert len(c) == 1
+                    ops.append({"node": c[0].id, "const": s[1]})
+                elif s[0] == "mem" and s[1] == "t":
+                    nid = [k for k, v in self.spill.items() if v == s[2]]
+                    ops.append({"node": nid[-1], "spill": s[2]})
+                elif s[0] == "mem":
+                    m = [x for x in self.g.nodes if x.op == "load" and x.base == s[1] and x.off == s[2]]
+                    ops.append({"node": m[0].id, "mem": [s[1], s[2]]})
+                else:
+                    raise AssertionError(s)
+            r["operands"] = ops
+        super().emit(op, dst, srcs, imm)
+        self.rec.append(r)
+
+
+def sched_mode(field, name):
+    """How `main` orders a kernel's instructions."""
+    return "id" if (field.name, name) in BUILD_ORDER or field.name in BUILD_ORDER else "height"
+
+
+def proof_map(field, name, fn, consts):
+    """The proof map of kernel `name`, as a dict, and the instructions it was
+    made from. `consts` is the field's constant table, as the Rust file has it."""
+    global SCHED
+    SCHED = sched_mode(field, name)
+    g = MapGraph(f"{field.name}_{name}")
+    bk = MapBackend(field, g)
+    fn(Program(bk), field)
+    order = schedule(g)
+    al = MapAlloc(g, order)
+    prog = al.run()
+    assert len(prog) == len(al.rec)
+    byid = {x.id: x for x in g.nodes}
+    # the defining instruction of a node: the one that writes its register
+    # while the allocator is at that node and is its own op
+    defs = {}
+    for i, r in enumerate(al.rec):
+        n = byid[r["node"]]
+        if r["op"] == n.op and r["dst"] is not None:
+            defs[n.id] = {"prog": i, "reg": r["dst"]}
+    used = set()
+    for n in order:
+        used.add(n.id)
+        used.update(a.id for a in n.args)
+    tags = name_nodes(g)
+    nodes = []
+    for n in [x for x in g.nodes if x.id in used]:
+        d = {"id": n.id, "op": n.op, "args": [a.id for a in n.args]}
+        if n.imm is not None:
+            d["imm"] = list(n.imm) if isinstance(n.imm, tuple) else n.imm
+        if n.base is not None:
+            d["base"], d["off"] = n.base, n.off
+        if n.bounds is not None:
+            d["bounds"] = [None if b is None else [b[0], b[1]] for b in n.bounds]
+        if n.id in defs:
+            d["def"] = defs[n.id]
+        if n.id in tags:
+            d["tags"] = tags[n.id]
+        nodes.append(d)
+    madds = [dict(r, prog=i) for i, r in enumerate(al.rec) if r["op"] in ("lo", "hi")]
+    # The low and the high instruction of a pair multiply the same two nodes,
+    # not always in the same order (the allocator may hold the two in different
+    # registers or spills at the two instructions): the pairs that appear in
+    # both orders are recorded, for the consumer to treat as products. An
+    # instruction whose operands are not the two nodes the graph says it
+    # multiplies is a bug, and fails here.
+    seen = {}
+    for md in madds:
+        n = byid[md["node"]]
+        key = frozenset((n.args[1].id, n.args[2].id))
+        pair = tuple(o["node"] for o in md["operands"])
+        assert frozenset(pair) == key and len(pair) == 2, (
+            f"{name}: madd at node {n.id} multiplies {pair}, the graph says {sorted(key)}")
+        seen.setdefault(key, set()).add(pair)
+    both = sorted(sorted(k) for k, v in seen.items() if len(v) > 1)
+    m = {
+        "about": MAP_ABOUT % f"{field.name}_{name}",
+        "kernel": f"{field.name}_{name}",
+        "nodes": nodes,
+        "outputs": [{"base": b, "off": o, "node": n.id} for (b, o, n) in g.outputs],
+        "madds": madds,
+        "events": bk.events,
+        "text": to_text(prog, consts),
+    }
+    if both:
+        m["pairs_in_both_orders"] = both
+    return m, prog
+
+
+def map_text(m):
+    """One node, madd, event or text line per line, keys sorted, trailing newline."""
+
+    def dump(x):
+        return json.dumps(x, sort_keys=True)
+
+    out = ["{"]
+    keys = sorted(m)
+    for i, k in enumerate(keys):
+        comma = "," if i < len(keys) - 1 else ""
+        v = m[k]
+        if isinstance(v, list):
+            out.append(f"{dump(k)}: [")
+            out.extend("  " + dump(x) + ("," if j < len(v) - 1 else "") for j, x in enumerate(v))
+            out.append("]" + comma)
+        else:
+            out.append(f"{dump(k)}: {dump(v)}{comma}")
+    out.append("}")
+    return "\n".join(out) + "\n"
+
+
+def field_consts(field, results):
+    """The field's constant table, as `write_rust` lays it out."""
+    consts = Consts()
+    for (name, _, _) in KERNELS:
+        register_consts(results[(field.name, name)][1], consts)
+    consts.layout()
+    return consts
+
+
+def proof_maps(results):
+    """`{file name: text}` for every kernel in `MAP_KERNELS`; each map is
+    made from the instructions the Rust file has, and fails if it is not."""
+    fields = {f.name: f for f in (P256(), P384())}
+    kernels = {nm: fn for (nm, fn, _) in KERNELS}
+    out = {}
+    for fname, name in MAP_KERNELS:
+        field = fields[fname]
+        m, prog = proof_map(field, name, kernels[name], field_consts(field, results))
+        assert prog == results[(fname, name)][1], f"{fname}_{name}: the proof map was made from other instructions"
+        out[f"{fname}_{name}.json"] = map_text(m)
+    return out
+
+
+def compare_committed(fields, results):
+    """Fail if the committed Rust file or maps differ from what would be written."""
+    import tempfile
+    bad = []
+    with tempfile.TemporaryDirectory() as d:
+        tmp = os.path.join(d, "ifma_kernels.rs")
+        write_rust(tmp, fields, results)
+        if open(tmp, newline="").read() != open(RUST_PATH, newline="").read():
+            bad.append(os.path.normpath(RUST_PATH))
+    for fname, text in proof_maps(results).items():
+        path = os.path.join(MAP_DIR, fname)
+        if not os.path.exists(path) or open(path, newline="").read() != text:
+            bad.append(path)
+    if bad:
+        print("out of date, rerun scripts/gen_nist_ifma.py:\n  " + "\n  ".join(bad), file=sys.stderr)
+        sys.exit(1)
+    print("committed Rust file and proof maps match", file=sys.stderr)
+
+
 def main():
     global SCHED
     check_only = "--check" in sys.argv
@@ -2124,8 +2486,12 @@ def main():
             results[(field.name, name)] = (g, prog, nspill)
     print("all kernels agree with the field arithmetic", file=sys.stderr)
     if check_only:
+        compare_committed(fields, results)
         return
     write_rust(sys.argv[1], fields, results)
+    os.makedirs(MAP_DIR, exist_ok=True)
+    for fname, text in proof_maps(results).items():
+        open(os.path.join(MAP_DIR, fname), "w", newline="\n").write(text)
 
 
 FEATURES = "AVX2, AVX-512F, AVX-512VL, AVX-512DQ and AVX-512 IFMA"
