@@ -117,8 +117,8 @@ impl Uint {
     /// Constant-time test for zero, over `limbs` active limbs.
     pub fn is_zero(&self, limbs: usize) -> Choice {
         let mut acc = 0u64;
-        for i in 0..limbs {
-            acc |= self.0[i];
+        for &limb in &self.0[..limbs] {
+            acc |= limb;
         }
         Choice::from_u8(((acc | acc.wrapping_neg()) >> 63) as u8).not()
     }
@@ -995,8 +995,8 @@ impl Modulus {
         let mut lo = Uint::ZERO;
         lo.0[..limbs].copy_from_slice(&wide.0[..limbs]);
         let mut hi = Uint::ZERO;
-        for i in 0..limbs {
-            hi.0[i] = wide.0.get(limbs + i).copied().unwrap_or(0);
+        for (i, slot) in hi.0[..limbs].iter_mut().enumerate() {
+            *slot = wide.0.get(limbs + i).copied().unwrap_or(0);
         }
 
         let lo = self.reduce_once(&lo);

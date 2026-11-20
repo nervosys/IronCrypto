@@ -102,8 +102,8 @@ impl Blowfish {
     /// not empty: `ExpandKey` in Provos and Mazieres' paper.
     fn expand(&mut self, salt: &[u8], key: &[u8]) {
         let mut j = 0;
-        for i in 0..18 {
-            self.p[i] ^= stream_word(key, &mut j);
+        for p in self.p.iter_mut() {
+            *p ^= stream_word(key, &mut j);
         }
         // The running block, in an array so that it can be wiped: it is
         // derived from the key.

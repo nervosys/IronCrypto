@@ -450,9 +450,9 @@ mod tests {
         // i64, not i32: 256 terms of up to 3328^2 each would overflow 32 bits
         // if the signs happened to line up.
         let mut acc = [0i64; N];
-        for i in 0..N {
-            for j in 0..N {
-                let prod = (a.c[i] as i64) * (b.c[j] as i64);
+        for (i, &ai) in a.c.iter().enumerate() {
+            for (j, &bj) in b.c.iter().enumerate() {
+                let prod = (ai as i64) * (bj as i64);
                 let k = i + j;
                 if k < N {
                     acc[k] += prod;
