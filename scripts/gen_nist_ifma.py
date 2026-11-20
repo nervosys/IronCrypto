@@ -2131,7 +2131,7 @@ def estimate(prog, ports=True):
 # the instructions a map was made from with those that went into the Rust file.
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-MAP_KERNELS = (("p256", "add"),)
+MAP_KERNELS = (("p256", "add"), ("p256", "double"))
 MAP_DIR = os.path.join(_HERE, "nist_ifma_proof_map")
 RUST_PATH = os.path.join(_HERE, "..", "crates", "ic-ec", "src", "nist", "ifma_kernels.rs")
 MAP_ABOUT = ("Proof map of the kernel `%s`: the scheduled graph, what each node means, the "
