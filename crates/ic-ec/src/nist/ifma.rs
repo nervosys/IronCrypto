@@ -153,7 +153,21 @@ impl<const L: usize> Vector for Lanes<L> {
     /// As [`Vector::scan`]: the CPU must support AVX2.
     unsafe fn scan(w: &[Self; ENTRIES], masks: &[u64; ENTRIES], out: &mut Self) {
         // SAFETY: the caller guarantees AVX2.
-        unsafe { scan_avx2(w, masks, out) }
+        #[cfg(target_feature = "sse2")]
+        unsafe {
+            scan_avx2(w, masks, out)
+        }
+        // A target without SSE2 registers cannot enable AVX2 (rustc 1.100,
+        // `x86_softfloat_sse`); `Ifma::get` never grants a token there, so
+        // this is never reached, and is the same masked OR a word at a time.
+        #[cfg(not(target_feature = "sse2"))]
+        for (entry, &m) in w.iter().zip(masks) {
+            for (o, row) in out.0.iter_mut().zip(entry.0.iter()) {
+                for (a, &x) in o.iter_mut().zip(row) {
+                    *a |= x & m;
+                }
+            }
+        }
     }
 }
 
@@ -166,6 +180,7 @@ impl<const L: usize> Vector for Lanes<L> {
 /// The CPU must have AVX2. Its only caller is `Lanes::scan`, which receives an `Ifma`
 /// token, and `Ifma::get` grants one only where AVX2 was detected. Each row is 32-byte
 /// aligned, being four words of an `align(32)` `Lanes`.
+#[cfg(target_feature = "sse2")]
 #[target_feature(enable = "avx2")]
 unsafe fn scan_avx2<const L: usize>(
     w: &[Lanes<L>; ENTRIES],

@@ -118,8 +118,8 @@ impl Keys {
     #[inline]
     unsafe fn encrypt(&self, block: __m128i) -> __m128i {
         let mut b = _mm_xor_si128(block, self.enc[0]);
-        for r in 1..self.rounds {
-            b = _mm_aesenc_si128(b, self.enc[r]);
+        for &rk in &self.enc[1..self.rounds] {
+            b = _mm_aesenc_si128(b, rk);
         }
         _mm_aesenclast_si128(b, self.enc[self.rounds])
     }
@@ -133,8 +133,8 @@ impl Keys {
     #[inline]
     unsafe fn decrypt(&self, block: __m128i) -> __m128i {
         let mut b = _mm_xor_si128(block, self.dec[0]);
-        for r in 1..self.rounds {
-            b = _mm_aesdec_si128(b, self.dec[r]);
+        for &rk in &self.dec[1..self.rounds] {
+            b = _mm_aesdec_si128(b, rk);
         }
         _mm_aesdeclast_si128(b, self.dec[self.rounds])
     }
@@ -206,8 +206,7 @@ pub unsafe fn encrypt_blocks(keys: &Keys, data: &mut [u8]) -> Result<()> {
         for slot in b.iter_mut() {
             *slot = _mm_xor_si128(*slot, keys.enc[0]);
         }
-        for r in 1..keys.rounds {
-            let rk = keys.enc[r];
+        for &rk in &keys.enc[1..keys.rounds] {
             for slot in b.iter_mut() {
                 *slot = _mm_aesenc_si128(*slot, rk);
             }
@@ -272,8 +271,7 @@ pub unsafe fn ctr32_xor(keys: &Keys, counter: &mut [u8; BLOCK_LEN], data: &mut [
                 keys.enc[0],
             );
         }
-        for r in 1..keys.rounds {
-            let rk = keys.enc[r];
+        for &rk in &keys.enc[1..keys.rounds] {
             for slot in b.iter_mut() {
                 *slot = _mm_aesenc_si128(*slot, rk);
             }

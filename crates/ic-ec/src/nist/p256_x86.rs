@@ -219,26 +219,47 @@ pub(crate) fn scan<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64;
     // whatever `W` is: a call on `W` would instantiate the kernel for every
     // width `scan` is used at, and its own bound, `W <= 12`, would refuse the
     // wider ones at compile time. The branch is for `W == 8` alone.
-    // `scan_avx2` passes vectors to `asm!`, which a target without SSE2
-    // registers (`x86_64-unknown-none`, soft-float) cannot compile.
+    // A target without SSE2 registers (`x86_64-unknown-none`, soft-float)
+    // can enable neither: rustc 1.100 refuses `target_feature(enable =
+    // "sse2")` there (`x86_softfloat_sse`), so it takes the word loop.
     #[cfg(target_feature = "sse2")]
-    if W == 8 && has_avx2() {
-        // SAFETY: `W` is 8, so each entry is `[u64; 8]` and `[u64; W]` is that
-        // same array; the CPU has AVX2.
-        return unsafe {
-            let entries8 = core::slice::from_raw_parts(entries.as_ptr().cast::<[u64; 8]>(), n);
-            let mut r = [0u64; 8];
-            scan_avx2::<8>(&mut r, entries8, masks);
-            core::ptr::read(&r as *const [u64; 8] as *const [u64; W])
-        };
+    {
+        if W == 8 && has_avx2() {
+            // SAFETY: `W` is 8, so each entry is `[u64; 8]` and `[u64; W]` is
+            // that same array; the CPU has AVX2.
+            return unsafe {
+                let entries8 = core::slice::from_raw_parts(entries.as_ptr().cast::<[u64; 8]>(), n);
+                let mut r = [0u64; 8];
+                scan_avx2::<8>(&mut r, entries8, masks);
+                core::ptr::read(&r as *const [u64; 8] as *const [u64; W])
+            };
+        }
+        // SAFETY: SSE2 is enabled on this target.
+        unsafe { scan_sse2(entries, masks) }
     }
-    // SAFETY: SSE2 is part of the x86-64 baseline; every CPU this
-    // module can run on has it.
-    unsafe { scan_sse2(entries, masks) }
+    #[cfg(not(target_feature = "sse2"))]
+    {
+        scan_words(entries, masks)
+    }
+}
+
+/// [`scan`] a word at a time, for a target without SSE2 registers: the same
+/// AND and OR, masks and data only.
+#[cfg(any(test, not(target_feature = "sse2")))]
+#[inline]
+fn scan_words<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
+    let mut acc = [0u64; W];
+    for (entry, &mask) in entries.iter().zip(masks) {
+        for (a, &w) in acc.iter_mut().zip(entry) {
+            *a |= w & mask;
+        }
+    }
+    acc
 }
 
 /// [`scan`] in SSE2, which every x86-64 CPU has and every x86-64 target
-/// enables.
+/// enables but the soft-float one.
+#[cfg(target_feature = "sse2")]
 #[inline]
 #[target_feature(enable = "sse2")]
 fn scan_sse2<const W: usize>(entries: &[[u64; W]], masks: &[u64]) -> [u64; W] {
@@ -1487,10 +1508,10 @@ mod tests {
     use super::*;
     use crate::nist::p256_field::{self as rust, P};
 
-    /// Both scans take exactly the masked entry, every word of it, and nothing
+    /// The scans take exactly the masked entry, every word of it, and nothing
     /// under no mask: a zero digit's case.
     #[test]
-    fn the_avx2_and_sse2_scans_select_the_masked_entry() {
+    fn the_avx2_sse2_and_word_scans_select_the_masked_entry() {
         if !std::is_x86_feature_detected!("avx2") {
             return;
         }
@@ -1507,6 +1528,7 @@ mod tests {
             assert_eq!(out, want, "AVX2, {pick}");
             // SAFETY: SSE2 is part of the x86-64 baseline.
             assert_eq!(unsafe { scan_sse2(&entries, &masks) }, want, "SSE2, {pick}");
+            assert_eq!(scan_words(&entries, &masks), want, "words, {pick}");
         }
         // Two masks at once: the scans OR the masked entries, which a single
         // mask cannot tell from XOR or from overwriting.
@@ -1524,6 +1546,11 @@ mod tests {
                 unsafe { scan_sse2(&entries, &masks) },
                 want,
                 "SSE2, {pick} and {other}"
+            );
+            assert_eq!(
+                scan_words(&entries, &masks),
+                want,
+                "words, {pick} and {other}"
             );
         }
     }

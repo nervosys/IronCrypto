@@ -295,11 +295,11 @@ pub fn encrypt_group(keys: &RoundKeys, data: &mut [u8]) {
     for (slot, k) in s.iter_mut().zip(keys.planes[0].iter()) {
         *slot ^= k;
     }
-    for r in 1..keys.rounds {
+    for round_planes in &keys.planes[1..keys.rounds] {
         s = sbox(&s);
         s = shift_rows(&s);
         s = mix_columns(&s);
-        for (slot, k) in s.iter_mut().zip(keys.planes[r].iter()) {
+        for (slot, k) in s.iter_mut().zip(round_planes.iter()) {
             *slot ^= k;
         }
     }
